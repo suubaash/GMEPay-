@@ -1,0 +1,4 @@
+// lib-rate: the 3-currency USD-pivot rate engine (RATE-04). Pure domain — depends only on lib-money.
+dependencies {
+    implementation project(':libs:lib-money')
+}

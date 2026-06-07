@@ -1,0 +1,14 @@
+// rate-fx service: exposes the rate engine over REST (Rate & FX Engine).
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation project(':libs:lib-rate')
+    implementation project(':libs:lib-money')
+    implementation project(':libs:lib-errors')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}

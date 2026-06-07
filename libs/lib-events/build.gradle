@@ -1,0 +1,1 @@
+// lib-events: domain event base + publisher interface. Kafka is wired behind this at integration.

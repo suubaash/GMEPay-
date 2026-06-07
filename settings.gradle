@@ -1,0 +1,21 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+    plugins {
+        id 'org.springframework.boot' version '3.3.4'
+        id 'io.spring.dependency-management' version '1.1.6'
+    }
+}
+
+rootProject.name = 'gmepay'
+
+// Shared libraries (the contracts every service binds to)
+include 'libs:lib-money'
+include 'libs:lib-errors'
+include 'libs:lib-events'
+include 'libs:lib-rate'
+
+// Services (one Spring Boot module per microservice — expanded in F1)
+include 'services:rate-fx'
