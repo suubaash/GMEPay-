@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 2.3, 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7, 14.8, 16.1, 16.4, 16.6  ·  **Tickets:** 352  ·  **Est:** 258.4h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** n/a
+- **APIs / events I EXPOSE:** CI/CD, K8s, IaC, observability, environments for all services
+- **APIs / events I CONSUME:** — (platform)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 2.3 — Coding standards, repo, branching, CI scaffold

@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 12.3  ·  **Tickets:** 240  ·  **Est:** 154.8h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** none (browser client)
+- **APIs / events I EXPOSE:** Partner self-service web app (React/Next.js)
+- **APIs / events I CONSUME:** bff + service APIs (read), sync
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 11.1 — Portal shell, scoped auth & isolation

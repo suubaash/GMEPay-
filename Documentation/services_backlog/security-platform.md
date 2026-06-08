@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 3.6, 13.1, 13.3, 13.4, 13.5, 13.6, 13.10  ·  **Tickets:** 199  ·  **Est:** 146.2h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** audit store (shared pipeline)
+- **APIs / events I EXPOSE:** security controls, Vault policies, RBAC model, audit pipeline
+- **APIs / events I CONSUME:** — (cross-cutting; integrates with every service)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 3.6 — Audit log tables (immutable)

@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 8.1, 8.5, 8.8, 8.9, 8.10  ·  **Tickets:** 135  ·  **Est:** 83.6h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** none (stateless edge); Redis for rate-limit/idempotency
+- **APIs / events I EXPOSE:** public /v1/* partner API surface
+- **APIs / events I CONSUME:** routes to all public services (sync); auth-identity (sync)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 8.1 — API gateway & versioning framework

@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 12.1, 12.4, 12.5  ·  **Tickets:** 89  ·  **Est:** 57.2h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** none
+- **APIs / events I EXPOSE:** shared React component library (npm package)
+- **APIs / events I CONSUME:** — (build-time import by the UIs)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 12.1 — Design system & component library

@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 8.6  ·  **Tickets:** 26  ·  **Est:** 17.2h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** delivery log + DLQ
+- **APIs / events I EXPOSE:** webhook config API
+- **APIs / events I CONSUME:** events payment.*, settlement.completed, prefunding.low (async)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 8.6 — Webhooks: events, signing, retry

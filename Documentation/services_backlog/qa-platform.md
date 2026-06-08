@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8, 15.9, 15.10  ·  **Tickets:** 363  ·  **Est:** 251.2h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** n/a
+- **APIs / events I EXPOSE:** test strategy, data, integration/E2E/perf harness, UAT
+- **APIs / events I CONSUME:** all services (under test, via their APIs)
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 15.1 — Test strategy, plan & environments

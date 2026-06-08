@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 7.1, 7.4, 7.6, 9.8  ·  **Tickets:** 119  ·  **Est:** 85.7h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** PostgreSQL `settlement` (batches, recon state)
+- **APIs / events I EXPOSE:** /v1/settlements, recon status; emits settlement.completed
+- **APIs / events I CONSUME:** transaction-mgmt (sync/event); scheme-adapter files
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 7.1 — Settlement model: net vs gross

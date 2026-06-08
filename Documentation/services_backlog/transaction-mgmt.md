@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 3.3, 5.1, 5.7  ·  **Tickets:** 73  ·  **Est:** 46.6h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** PostgreSQL `txn` (transactions, event trail, outbox)
+- **APIs / events I EXPOSE:** /v1/transactions/{id}, state ops; events transaction.*
+- **APIs / events I CONSUME:** —
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 3.3 — Transaction & event tables (8-step trail)

@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 8.3  ·  **Tickets:** 118  ·  **Est:** 65.7h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** Redis (quote TTL); no owned RDBMS
+- **APIs / events I EXPOSE:** POST /v1/rates (quote); event rate.quoted
+- **APIs / events I CONSUME:** config-registry (rule margins + treasury rates, sync) — or values passed in request
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 4.1 — Treasury rate sourcing model

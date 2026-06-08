@@ -4,7 +4,14 @@
 
 **Owned WBS work-packages:** 9.1, 9.2, 9.4, 9.5, 9.6, 9.7, 9.9, 9.10  ·  **Tickets:** 234  ·  **Est:** 157.8h
 
-> Self-contained backlog for this service. Build in its own module against `shared-libs` contracts. Each ticket has a deliverable + acceptance checks.
+## Service contract (MSA: own DB, API-only communication)
+
+- **Datastore (owned by this service):** Object storage (SFTP files)
+- **APIs / events I EXPOSE:** /internal/scheme/zeropay/submit; SFTP batch; events scheme.result
+- **APIs / events I CONSUME:** merchant-qr-data (sync); emits results to payment-executor via event
+- **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
+
+> Self-contained backlog for this service. Build it as its own repo/module with its own DB + Flyway migrations, against the `shared-libs` contracts (lib-money / lib-errors / lib-events / lib-api-contracts only). Each ticket has a deliverable + acceptance checks.
 
 
 ## WBS 9.1 — Scheme Adapter abstraction
