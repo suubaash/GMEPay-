@@ -28,8 +28,13 @@ public final class CurrencyScale {
         }
     }
 
-    /** Round a value to its currency's scale using HALF_UP. */
+    /** Round a value to its currency's scale using HALF_UP (default policy). */
     public static BigDecimal round(BigDecimal value, String currency) {
         return value.setScale(scale(currency), RoundingMode.HALF_UP);
+    }
+
+    /** Round a value to its currency's scale using an explicit rounding mode (e.g. a partner's policy). */
+    public static BigDecimal round(BigDecimal value, String currency, RoundingMode mode) {
+        return value.setScale(scale(currency), mode);
     }
 }

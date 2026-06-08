@@ -31,6 +31,7 @@ public class LedgerPostingService {
     private static final String ACC_GME_FEE_SHARE    = "REVENUE_GME_FEE_SHARE";
     private static final String ACC_RECEIVABLE       = "RECEIVABLE_PARTNER";
     private static final String ACC_PAYABLE_SCHEME   = "PAYABLE_SCHEME";
+    private static final String ACC_ROUNDING         = "REVENUE_ROUNDING"; // rounding gain/loss vs partner booking
 
     private final JournalStore journalStore;
     private final SchemeFeeSplitCalculator calculator;
@@ -38,6 +39,35 @@ public class LedgerPostingService {
     public LedgerPostingService(JournalStore journalStore, SchemeFeeSplitCalculator calculator) {
         this.journalStore = Objects.requireNonNull(journalStore);
         this.calculator = Objects.requireNonNull(calculator);
+    }
+
+    /**
+     * Post the rounding residual that arises when a partner books its settlement liability under a
+     * different rounding rule than GMEPay+'s precise computed amount. {@code residual = precise - booked}.
+     * Positive residual = rounding GAIN (we booked less liability than precise); negative = rounding LOSS.
+     * Returns {@code null} when the residual is zero (nothing to post).
+     */
+    public Journal postRoundingResidual(String reference, BigDecimal residual, String currency) {
+        Objects.requireNonNull(reference, "reference required");
+        Objects.requireNonNull(residual, "residual required");
+        Objects.requireNonNull(currency, "currency required");
+        if (residual.signum() == 0) {
+            return null;
+        }
+        BigDecimal amount = residual.abs();
+        List<LedgerEntry> entries;
+        if (residual.signum() > 0) {
+            // booked liability < precise -> GME keeps the difference: rounding GAIN
+            entries = List.of(
+                new LedgerEntry(ACC_RECEIVABLE, amount, currency, EntryType.DEBIT,  reference),
+                new LedgerEntry(ACC_ROUNDING,   amount, currency, EntryType.CREDIT, reference));
+        } else {
+            // booked liability > precise -> GME absorbs the difference: rounding LOSS
+            entries = List.of(
+                new LedgerEntry(ACC_ROUNDING,   amount, currency, EntryType.DEBIT,  reference),
+                new LedgerEntry(ACC_RECEIVABLE, amount, currency, EntryType.CREDIT, reference));
+        }
+        return journalStore.save(Journal.post(entries));
     }
 
     /**
