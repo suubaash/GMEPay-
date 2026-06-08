@@ -2,7 +2,7 @@
 
 **Scope:** Txn state machine, 8-step event trail, idempotency, outbox
 
-**Owned WBS work-packages:** 3.3, 5.1, 5.7  ·  **Tickets:** 73  ·  **Est:** 46.6h
+**Owned WBS work-packages:** 3.3, 5.1, 5.7  ·  **Tickets:** 74  ·  **Est:** 47.1h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -267,6 +267,15 @@
 - No duplicate Flyway migration version numbers in V9-V13
 - Flyway migrate runs all 5 migrations (V9,V10,V11,V12,V13) in version order without error
 **Depends on:** 3.3-T05
+
+### 3.3-T22 — Add rounding lock fields to transaction table  _(30 min)_
+**Context:** At commit the booked settlement amount, the partner rounding mode used, and the residual must be permanently recorded (rate-lock) for audit and reconciliation.
+**Steps:** Add columns booked_settlement_amount NUMERIC, settlement_rounding_mode VARCHAR, rounding_residual NUMERIC via Flyway; Mark them immutable post-commit
+**Deliverable:** Flyway migration adding txn rounding-lock columns
+**Acceptance / logic checks:**
+- columns non-null after commit
+- values immutable (no update after APPROVED)
+**Depends on:** 3.3
 
 
 ## WBS 5.1 — Transaction state machine

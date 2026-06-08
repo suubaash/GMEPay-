@@ -113,3 +113,7 @@ Tickets from the service-partitioned backlog. % is rough build completion.
 2. Build **Tier 0 → Tier 1** services from `services_backlog/*.md`, each green + committed + pushed.
 3. Stand up **`docker-compose`** local stack and begin Phase-2 contract/E2E tests (in an environment with Docker).
 4. Keep this scorecard + `PROGRESS.md` current at each checkpoint.
+5. Wire per-partner settlement rounding into the commit path (config-registry → payment-executor → transaction-mgmt → revenue-ledger) — see Addendum 001.
+
+## 9. Change log
+- **2026-06-08 — Addendum 001: Per-partner settlement rounding.** Added `Partner.settlement_rounding_mode` (default HALF_UP); settlement liability booked under the partner's rule with the residual posted to `REVENUE_ROUNDING`. Enabling code built+tested (`lib-money`, `lib-domain`, `revenue-ledger`); WBS WPs 3.2/3.3/4.8/5.5/7.3/10.3/15.3 annotated; **+12 backlog tickets** (3,432→3,444). See `Documentation/ADDENDUM-001-settlement-rounding.md` + `docs/MONEY_CONVENTION.md`. Live commit-path wiring pending (Phase 2).

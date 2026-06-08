@@ -2,7 +2,7 @@
 
 **Scope:** Double-entry ledger, 70/30 fee share, FX margin capture
 
-**Owned WBS work-packages:** 7.2, 7.3  ·  **Tickets:** 45  ·  **Est:** 28.8h
+**Owned WBS work-packages:** 7.2, 7.3  ·  **Tickets:** 46  ·  **Est:** 29.2h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -560,3 +560,11 @@
 - PoolIdentityValidator.assertValid() Javadoc labels POOL_IDENTITY_FAILURE as an internal programming error requiring investigation.
 - No Javadoc contradicts the passing unit/integration tests for this work-package.
 **Depends on:** 7.3-T04, 7.3-T07, 7.3-T08
+
+### 7.3-T27 — Register REVENUE_ROUNDING in chart of accounts + report  _(30 min)_
+**Context:** Rounding gains/losses post to REVENUE_ROUNDING. Ensure the account is in the chart of accounts and surfaced in GET /v1/revenue.
+**Steps:** Add REVENUE_ROUNDING to chart of accounts; Include rounding gain/loss in the revenue summary
+**Deliverable:** REVENUE_ROUNDING reported in /v1/revenue
+**Acceptance / logic checks:**
+- account present
+- rounding total in revenue report reconciles to sum of residuals

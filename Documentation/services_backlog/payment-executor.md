@@ -2,7 +2,7 @@
 
 **Scope:** CPM/MPM orchestration, CommitTransaction, cancel, direction handling
 
-**Owned WBS work-packages:** 5.2, 5.5, 5.6, 5.8, 8.4  ·  **Tickets:** 147  ·  **Est:** 96.2h
+**Owned WBS work-packages:** 5.2, 5.5, 5.6, 5.8, 8.4  ·  **Tickets:** 150  ·  **Est:** 97.9h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -781,6 +781,34 @@
 - Conditional note for prefund_deducted_usd: present for OVERSEAS partners only
 - At-least-once delivery guarantee and idempotency requirement documented
 **Depends on:** 5.5-T17, 5.5-T35
+
+### 5.5-T37 — Resolve partner settlement rounding mode at commit  _(30 min)_
+**Context:** payment-executor calls config-registry GET /v1/partners/{id} to get settlementRoundingMode (default HALF_UP). Stub the client until integration.
+**Steps:** Add PartnerConfigClient interface + call at commit; Default HALF_UP if unavailable
+**Deliverable:** PartnerConfigClient returning the rounding mode
+**Acceptance / logic checks:**
+- mode resolved per partner
+- fallback HALF_UP on miss
+**Depends on:** 8.4
+
+### 5.5-T38 — Book settlement amount under partner rule + lock on transaction  _(40 min)_
+**Context:** Use lib-money SettlementRounding.book(preciseSettlementAmount, scale, mode) to compute booked + residual; persist booked + mode + residual onto the transaction (rate-lock).
+**Steps:** Call SettlementRounding.book(...) at CommitTransaction; Set booked_settlement_amount, settlement_rounding_mode, rounding_residual on the txn
+**Deliverable:** Commit path books settlement under partner rule and locks values
+**Acceptance / logic checks:**
+- booked == precise rounded by partner mode
+- residual == precise - booked
+- values locked on txn
+**Depends on:** 3.3
+
+### 5.5-T39 — Emit rounding residual to revenue-ledger on commit  _(30 min)_
+**Context:** After booking, call revenue-ledger postRoundingResidual(ref, residual, ccy) (via event or sync) so the rounding gain/loss is posted to REVENUE_ROUNDING.
+**Steps:** On commit, publish residual to revenue-ledger; Handle zero residual (no post)
+**Deliverable:** Residual emitted to revenue-ledger at commit
+**Acceptance / logic checks:**
+- non-zero residual posted
+- zero residual posts nothing
+**Depends on:** 7.3
 
 
 ## WBS 5.6 — Same-day cancellation

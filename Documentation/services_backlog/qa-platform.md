@@ -2,7 +2,7 @@
 
 **Scope:** Test strategy/data, integration/E2E/perf harness, UAT
 
-**Owned WBS work-packages:** 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8, 15.9, 15.10  ·  **Tickets:** 363  ·  **Est:** 251.2h
+**Owned WBS work-packages:** 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8, 15.9, 15.10  ·  **Tickets:** 365  ·  **Est:** 252.5h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -1224,6 +1224,24 @@
 - Error-expected vectors (RV-06, RV-08) show error_code_actual matching error_code_expected and status=PASS
 - Report file is regenerated on every CI run (not a static artifact)
 **Depends on:** 15.3-T15
+
+### 15.3-T25 — Rounding-residual reconciliation test  _(45 min)_
+**Context:** Verify across a batch that sum(booked) + sum(residual) == sum(precise) and that REVENUE_ROUNDING equals the net residual, proving no money is silently lost.
+**Steps:** Generate N transactions with mixed partner rounding modes; Assert booked+residual reconstructs precise; Assert REVENUE_ROUNDING net == sum(residual)
+**Deliverable:** Reconciliation test for rounding residual
+**Acceptance / logic checks:**
+- booked+residual == precise for all
+- REVENUE_ROUNDING net == sum residual
+**Depends on:** 7.3, 5.5
+
+### 15.3-T26 — Partner round-down booking scenario test  _(35 min)_
+**Context:** A partner configured DOWN(2dp) on a precise 10500.567 settlement books 10500.56 with +0.007 residual posted as a rounding gain.
+**Steps:** Configure partner mode DOWN; Run a settlement of precise 10500.567; Assert booked 10500.56 and residual 0.007 gain posted
+**Deliverable:** End-to-end round-down booking test
+**Acceptance / logic checks:**
+- booked == 10500.56
+- residual 0.007 credited to REVENUE_ROUNDING
+**Depends on:** 5.5
 
 
 ## WBS 15.4 — Functional test suites per component

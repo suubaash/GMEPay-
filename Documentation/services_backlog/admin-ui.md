@@ -2,7 +2,7 @@
 
 **Scope:** Ops/Admin portal (React/Next.js): schemes, partners, mapping page, monitoring
 
-**Owned WBS work-packages:** 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 10.10, 10.11, 12.2  ·  **Tickets:** 360  ·  **Est:** 246.6h
+**Owned WBS work-packages:** 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 10.10, 10.11, 12.2  ·  **Tickets:** 361  ·  **Est:** 247.2h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -1106,6 +1106,16 @@
 - Step 7: EmailSendPort.send called with suggested top-up = 5000.00 (threshold 10000 - balance 5000)
 - Audit log contains prefunding.account_created event immediately after partner.created
 **Depends on:** 10.3-T14, 10.3-T16, 10.3-T36
+
+### 10.3-T38 — Add settlement-rounding-mode selector to partner onboarding/edit  _(40 min)_
+**Context:** Admin UI partner form gets a 'Settlement rounding mode' dropdown (HALF_UP default, plus HALF_DOWN/HALF_EVEN/DOWN/UP/CEILING/FLOOR), saved to config-registry and audit-logged.
+**Steps:** Add dropdown bound to partner.settlementRoundingMode; Default HALF_UP; show help text; Persist via config-registry API; audit the change
+**Deliverable:** Partner form rounding-mode selector
+**Acceptance / logic checks:**
+- selection persisted
+- default HALF_UP shown
+- change recorded in audit log
+**Depends on:** 10.3
 
 
 ## WBS 10.4 — Rule/Mapping page — 4 sections

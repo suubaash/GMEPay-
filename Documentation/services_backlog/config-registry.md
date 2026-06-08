@@ -2,7 +2,7 @@
 
 **Scope:** Scheme/Partner/Rule/Treasury registries; config-driven onboarding
 
-**Owned WBS work-packages:** 2.5, 3.2, 3.4  ·  **Tickets:** 92  ·  **Est:** 50.7h
+**Owned WBS work-packages:** 2.5, 3.2, 3.4  ·  **Tickets:** 96  ·  **Est:** 52.4h
 
 ## Service contract (MSA: own DB, API-only communication)
 
@@ -831,6 +831,39 @@
 - Outbox row event_type='RuleActivatedEvent' with status='PENDING' present in same DB transaction
 - Redis cache for rule key is evicted after activation (RedisTemplate check returns null)
 **Depends on:** 3.2-T21, 3.2-T23, 3.2-T24, 3.2-T34
+
+### 3.2-T36 — Add settlement_rounding_mode column to partner table (Flyway)  _(30 min)_
+**Context:** Partners may book settlement liabilities under different rounding rules (e.g. round-DOWN to 2dp). config-registry owns the partner table; add a settlement_rounding_mode column (VARCHAR, e.g. HALF_UP) defaulting to HALF_UP.
+**Steps:** Add Flyway migration Vnnn__partner_rounding_mode.sql adding settlement_rounding_mode VARCHAR(12) NOT NULL DEFAULT 'HALF_UP'; Backfill existing rows to HALF_UP
+**Deliverable:** Flyway migration adding partner.settlement_rounding_mode
+**Acceptance / logic checks:**
+- column exists, NOT NULL, default HALF_UP
+- existing partners backfilled to HALF_UP
+**Depends on:** 3.2
+
+### 3.2-T37 — Add settlementRoundingMode to Partner entity/DTO  _(30 min)_
+**Context:** Expose the per-partner rounding mode (java.math.RoundingMode) on the Partner model and the partner DTO returned by the API. Default HALF_UP when null.
+**Steps:** Add settlementRoundingMode to Partner entity + DTO; Default to HALF_UP if absent
+**Deliverable:** Partner entity/DTO carrying settlementRoundingMode
+**Acceptance / logic checks:**
+- round-trips via API
+- null defaults to HALF_UP
+
+### 3.2-T38 — Validate settlement_rounding_mode against allowed enum  _(25 min)_
+**Context:** On partner create/update, reject any value not in {HALF_UP,HALF_DOWN,HALF_EVEN,DOWN,UP,CEILING,FLOOR} with VALIDATION_ERROR.
+**Steps:** Add enum validation in the partner create/update handler; Return ApiError VALIDATION_ERROR on bad value
+**Deliverable:** Validation rule for settlement_rounding_mode
+**Acceptance / logic checks:**
+- valid modes accepted
+- invalid mode -> 422 VALIDATION_ERROR
+
+### 3.2-T39 — Expose settlement_rounding_mode in GET /v1/partners/{id}  _(20 min)_
+**Context:** Other services (payment-executor) read the partner's rounding mode via config-registry's API, never its DB.
+**Steps:** Include settlementRoundingMode in the partner response payload; Add a contract test
+**Deliverable:** Partner API response includes settlementRoundingMode
+**Acceptance / logic checks:**
+- field present in response
+- contract test passes
 
 
 ## WBS 3.4 — Treasury/FX rate tables (effective-dated)
