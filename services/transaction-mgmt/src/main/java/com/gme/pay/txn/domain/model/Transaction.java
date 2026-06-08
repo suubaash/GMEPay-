@@ -24,6 +24,10 @@ public class Transaction {
     private TransactionStatus status;
     private final Instant createdAt;
     private Instant updatedAt;
+    // Rate-locked settlement booking (set once at commit; see MONEY_CONVENTION.md)
+    private BigDecimal bookedSettlementAmount;
+    private String settlementRoundingMode;
+    private BigDecimal roundingResidual;
 
     /** Creates a new transaction in {@link TransactionStatus#CREATED} state. */
     public Transaction(
@@ -73,6 +77,21 @@ public class Transaction {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Locks the partner settlement booking at commit. The booked amount is the liability recorded
+     * with the partner (rounded under the partner's rule); the residual is posted to REVENUE_ROUNDING.
+     * Immutable once set.
+     */
+    public void lockSettlementBooking(BigDecimal booked, String roundingMode, BigDecimal residual) {
+        if (this.bookedSettlementAmount != null) {
+            throw new IllegalStateException("settlement booking already locked for " + txnRef);
+        }
+        this.bookedSettlementAmount = Objects.requireNonNull(booked, "booked");
+        this.settlementRoundingMode = Objects.requireNonNull(roundingMode, "roundingMode");
+        this.roundingResidual = Objects.requireNonNull(residual, "residual");
+        this.updatedAt = Instant.now();
+    }
+
     // --- accessors ---
 
     public String txnRef()       { return txnRef; }
@@ -84,4 +103,7 @@ public class Transaction {
     public TransactionStatus status() { return status; }
     public Instant createdAt()   { return createdAt; }
     public Instant updatedAt()   { return updatedAt; }
+    public BigDecimal bookedSettlementAmount() { return bookedSettlementAmount; }
+    public String settlementRoundingMode()     { return settlementRoundingMode; }
+    public BigDecimal roundingResidual()        { return roundingResidual; }
 }

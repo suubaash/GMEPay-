@@ -50,6 +50,9 @@ public interface TransactionClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             BigDecimal prefundDeductedUsd,
-            Instant approvedAt
+            Instant approvedAt,
+            BigDecimal bookedSettlementAmount,
+            String settlementRoundingMode,
+            BigDecimal roundingResidual
     ) {}
 }

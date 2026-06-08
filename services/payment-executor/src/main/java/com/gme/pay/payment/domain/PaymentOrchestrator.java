@@ -33,6 +33,7 @@ public class PaymentOrchestrator {
     private final QrClient qrClient;
     private final SchemeClient schemeClient;
     private final TransactionClient transactionClient;
+    private final com.gme.pay.payment.domain.settlement.SettlementBookingService settlementBookingService;
 
     public PaymentOrchestrator(
             RateClient rateClient,
@@ -40,11 +41,22 @@ public class PaymentOrchestrator {
             QrClient qrClient,
             SchemeClient schemeClient,
             TransactionClient transactionClient) {
+        this(rateClient, prefundingClient, qrClient, schemeClient, transactionClient, null);
+    }
+
+    public PaymentOrchestrator(
+            RateClient rateClient,
+            PrefundingClient prefundingClient,
+            QrClient qrClient,
+            SchemeClient schemeClient,
+            TransactionClient transactionClient,
+            com.gme.pay.payment.domain.settlement.SettlementBookingService settlementBookingService) {
         this.rateClient = rateClient;
         this.prefundingClient = prefundingClient;
         this.qrClient = qrClient;
         this.schemeClient = schemeClient;
         this.transactionClient = transactionClient;
+        this.settlementBookingService = settlementBookingService;
     }
 
     /**
@@ -106,26 +118,34 @@ public class PaymentOrchestrator {
             }
             transactionClient.commitStatus(txn.txnRef(),
                     new TransactionClient.StatusPatch(
-                            PaymentStatus.FAILED, null, null, null, null));
+                            PaymentStatus.FAILED, null, null, null, null, null, null, null));
             throw ex;
         } catch (SchemeTimeoutException ex) {
             // Leave deduction in place; mark UNCERTAIN for batch reconciliation
             transactionClient.commitStatus(txn.txnRef(),
                     new TransactionClient.StatusPatch(
                             PaymentStatus.UNCERTAIN, null, null,
-                            deduction != null ? deduction.deductedUsd() : null, null));
+                            deduction != null ? deduction.deductedUsd() : null, null, null, null, null));
             throw ex;
         }
 
-        // Step 6: Commit APPROVED
+        // Step 6: Book the settlement liability under the partner's rounding rule, then commit APPROVED.
         BigDecimal deductedUsd = deduction != null ? deduction.deductedUsd() : null;
+        com.gme.pay.payment.domain.settlement.SettlementBooking booking =
+                settlementBookingService != null
+                        ? settlementBookingService.book(
+                                cmd.partnerId(), quote.collectionAmount(), quote.collectionCurrency())
+                        : null;
         transactionClient.commitStatus(txn.txnRef(),
                 new TransactionClient.StatusPatch(
                         PaymentStatus.APPROVED,
                         schemeResponse.schemeTxnRef(),
                         schemeResponse.schemeApprovalCode(),
                         deductedUsd,
-                        schemeResponse.approvedAt()
+                        schemeResponse.approvedAt(),
+                        booking != null ? booking.booked() : null,
+                        booking != null ? booking.mode().name() : null,
+                        booking != null ? booking.residual() : null
                 )
         );
 
@@ -178,7 +198,7 @@ public class PaymentOrchestrator {
 
         transactionClient.commitStatus(txnRef,
                 new TransactionClient.StatusPatch(
-                        PaymentStatus.REVERSED, schemeTxnRef, null, returnedUsd, null));
+                        PaymentStatus.REVERSED, schemeTxnRef, null, returnedUsd, null, null, null, null));
 
         return new CancelResult(paymentId, PaymentStatus.CANCELLED, Instant.now(), returnedUsd);
     }
