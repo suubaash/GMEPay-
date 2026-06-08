@@ -1,0 +1,4 @@
+// lib-domain: core entities (Scheme, Partner, Rule, Direction) and their invariants.
+dependencies {
+    implementation project(':libs:lib-errors')
+}

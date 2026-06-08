@@ -16,6 +16,8 @@ include 'libs:lib-money'
 include 'libs:lib-errors'
 include 'libs:lib-events'
 include 'libs:lib-rate'
+include 'libs:lib-domain'
 
 // Services (one Spring Boot module per microservice — expanded in F1)
 include 'services:rate-fx'
+include 'services:config-registry'

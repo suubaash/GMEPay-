@@ -1,0 +1,13 @@
+// config-registry service: Scheme/Partner/Rule/Treasury registries (config-driven onboarding).
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation project(':libs:lib-domain')
+    implementation project(':libs:lib-errors')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
