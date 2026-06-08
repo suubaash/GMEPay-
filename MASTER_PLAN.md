@@ -1,7 +1,7 @@
 # GMEPay+ — Master Plan & Launch-Readiness Scorecard
 
 **Target go-live:** 10 Oct 2026 (GME Remit domestic) · overseas partners Oct–Dec 2026
-**Last updated:** 2026-06-08 · **Overall readiness (build-to-launch): ~4%**
+**Last updated:** 2026-06-08 · **Overall readiness (build-to-launch): ~11%** (16 service modules now compile + unit-test green)
 **Status legend:** ✅ done/green · 🟡 in progress/partial · ⬜ not started · 🔒 blocked on external party
 
 > Living document. Update the status columns and `PROGRESS.md` as each service goes green. Build = AI agents; calendar-bound certification/regulatory/UAT/infra = GME team + external parties.
@@ -20,7 +20,7 @@
 | Phase | Objective | Primary owner | Exit gate | Status |
 |---|---|---|---|---|
 | **0. Foundation & contracts** | Monorepo, shared libs, frozen API/event contracts | AI agents | Contracts frozen, build green | 🟡 ~70% |
-| **1. Per-service build** | All 22 services built, unit-tested, green | AI agents | Every service green | 🟡 ~10% |
+| **1. Per-service build** | All 22 services built, unit-tested, green | AI agents | Every service green | 🟡 ~35% (15 backend modules scaffolded green; UI + persistence remain) |
 | **2. Integration** | API/event wiring, contract tests, E2E money path on local stack | AI agents + GME CI | Money path E2E passes | ⬜ |
 | **3. Infrastructure** | Postgres/Mongo/Redis/Kafka, K8s, CI/CD GitOps, observability | GME DevOps (agents author IaC) | Deploys to staging | ⬜ |
 | **4. Hardening** | Auth/Vault/RBAC, performance/load, resilience, pen test | Agents author; GME validates | Perf + security pass | ⬜ |
@@ -40,18 +40,18 @@ Tickets from the service-partitioned backlog. % is rough build completion.
 | 1 | `config-registry` | 92 | 🟡 | 10 | Rule + margin validation + endpoint; entities/treasury/persistence pending |
 | 1 | `rate-fx` | 118 | 🟡 | 55 | 5-step engine + pool identity + `POST /v1/rates` green; sourcing/TTL/partner-B/persistence pending |
 | 1 | `prefunding` | 160 | 🟡 | 30 | atomic deduction logic + service; DB-atomic, top-up flows, endpoints pending |
-| 1 | `qr-service` | 47 | ⬜ | 0 | EMVCo parse, CPM generate |
+| 1 | `qr-service` | 47 | 🟡 | 25 | module + API + EMVCo parse/CPM + 4 unit tests green; persistence pending |
 | 1 | `smart-router` | 89* | 🟡 | 40 | routing + `GET /v1/route` green (*incl. UX design tickets) |
-| 1 | `auth-identity` | 80 | ⬜ | 0 | HMAC, OAuth2/JWT, RBAC, key lifecycle |
-| 2 | `payment-executor` | 147 | ⬜ | 0 | CPM/MPM orchestration, commit |
-| 2 | `transaction-mgmt` | 73 | ⬜ | 0 | state machine, event trail, outbox |
-| 2 | `merchant-qr-data` | 30 | ⬜ | 0 | merchant/QR store + sync |
-| 2 | `scheme-adapter-zeropay` | 234 | ⬜ | 0 | ZeroPay REST+SFTP, ZP00xx |
-| 2 | `notification-webhook` | 26 | ⬜ | 0 | signed webhooks, retry/DLQ |
-| 3 | `settlement-reconciliation` | 119 | ⬜ | 0 | net/gross settlement, recon |
-| 3 | `revenue-ledger` | 45 | ⬜ | 0 | double-entry, 70/30, FX margin |
-| 3 | `reporting-compliance` | 77 | ⬜ | 0 | BOK FX1014/1015, reports |
-| 4 | `api-gateway` | 135 | ⬜ | 0 | Spring Cloud Gateway, HMAC, /v1 |
+| 1 | `auth-identity` | 80 | 🟡 | 25 | module + /internal/auth/verify + HMAC/JWT + 3 tests green; RBAC/Vault pending |
+| 2 | `payment-executor` | 147 | 🟡 | 25 | orchestrator + endpoints + prefund-before-scheme test green; real clients pending |
+| 2 | `transaction-mgmt` | 73 | 🟡 | 25 | state machine + outbox record + transition tests green; persistence pending |
+| 2 | `merchant-qr-data` | 30 | 🟡 | 25 | GET /v1/merchants/{qr} + lookup + tests green; Mongo + sync pending |
+| 2 | `scheme-adapter-zeropay` | 234 | 🟡 | 20 | adapter iface + ZP0011 format/parse + code mapping + tests green; SFTP/full ZP00xx pending |
+| 2 | `notification-webhook` | 26 | 🟡 | 25 | webhook signing + backoff/DLQ + tests green; Kafka consumers pending |
+| 3 | `settlement-reconciliation` | 119 | 🟡 | 20 | net/gross calc + line matcher + 4 tests green; ZP file recon pending |
+| 3 | `revenue-ledger` | 45 | 🟡 | 25 | double-entry posting + 70/30 split + tests green; persistence pending |
+| 3 | `reporting-compliance` | 77 | 🟡 | 20 | FX1014/1015 field mapping + tests green; format pending OI-03 🔒 |
+| 4 | `api-gateway` | 135 | 🟡 | 20 | Spring Cloud Gateway + HMAC/idempotency filters + tests green; routing/wiring pending |
 | 4 | `ui-design-system` | 89 | ⬜ | 0 | React design system |
 | 4 | `admin-ui` | 360 | ⬜ | 0 | Ops/Admin portal |
 | 4 | `partner-portal-ui` | 240 | ⬜ | 0 | partner self-service |
