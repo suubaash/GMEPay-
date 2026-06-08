@@ -20,7 +20,7 @@ Legend: ✅ green (compiles + tests pass) · 🟡 scaffolded · ⬜ not started.
 | services/config-registry | ✅ | POST /v1/rules/validate |
 | libs/lib-prefunding | ✅ | PrefundingAccount deduct/credit/low-balance, 5 tests |
 | services/prefunding | ✅ | Spring Boot app (DB-atomic SELECT FOR UPDATE impl pending — needs Postgres) |
-| services/smart-router | ⬜ | country_code -> scheme, NO_SCHEME_FOR_LOCATION |
+| services/smart-router | ✅ | country_code -> scheme, NO_SCHEME_FOR_LOCATION, 3 tests |
 | services/payment-executor | ⬜ | CPM/MPM orchestration, CommitTransaction |
 | services/transaction-mgmt | ⬜ | state machine, 8-step trail, idempotency |
 | services/scheme-adapter (zeropay) | ⬜ | ACL: REST + SFTP, ZP00xx |
