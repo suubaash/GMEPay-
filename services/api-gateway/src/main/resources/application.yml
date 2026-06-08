@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: false        # manual route registration only
+      default-filters:
+        - AddRequestHeader=X-Gateway-Version, v1
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: true
+  metrics:
+    tags:
+      application: api-gateway
+
+otel:
+  service:
+    name: api-gateway
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+
+# Per-API-version deprecation config (Phase 1: v1 is live, not deprecated)
+api:
+  versions:
+    v1:
+      deprecated: false
+
+# Replay-protection fail-open flag (true = allow request if Redis is unreachable)
+gateway:
+  replay-protection:
+    fail-open: true
+  trust-proxy: false

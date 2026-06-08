@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: scheme-adapter-zeropay
+
+server:
+  port: 8090
+
+management:
+  server:
+    port: 8091
+  endpoint:
+    health:
+      show-details: always
+
+adapter:
+  zeropay:
+    enabled: true
+    scheme-id: ZEROPAY
+    scheme-name: ZeroPay
+    operator-name: KFTC
+    payout-currency: KRW
+    realtime-api-base-url: ""
+    sftp-host: ""
+    sftp-port: 22
+    mai-tag: "29"

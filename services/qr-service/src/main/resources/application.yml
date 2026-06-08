@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: qr-service
+
+server:
+  port: 8084
+
+qr:
+  zeropay:
+    mai-tag: 26
+    cpm-token-ttl-seconds: 60
+
+internal:
+  api:
+    token: changeme-internal-token

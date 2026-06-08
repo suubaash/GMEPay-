@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: transaction-mgmt
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/txn}
+    username: ${SPRING_DATASOURCE_USERNAME:txn}
+    password: ${SPRING_DATASOURCE_PASSWORD:txn}
+
+server:
+  port: ${SERVER_PORT:8083}
+
+logging:
+  level:
+    com.gme.pay.txn: DEBUG

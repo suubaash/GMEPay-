@@ -1,0 +1,14 @@
+// reporting-compliance service: BOK FX1014/1015 reporting and revenue compliance exports.
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation project(':libs:lib-money')
+    implementation project(':libs:lib-errors')
+    implementation project(':libs:lib-events')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}

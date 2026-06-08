@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: merchant-qr-data
+
+server:
+  port: 8083

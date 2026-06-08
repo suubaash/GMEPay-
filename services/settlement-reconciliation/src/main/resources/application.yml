@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: settlement-reconciliation
+
+server:
+  port: 8085
+
+settlement:
+  morning-cutoff: "04:30"
+  afternoon-cutoff: "13:30"
+  timezone: "Asia/Seoul"
+  scheme:
+    zeropay:
+      # ZeroPay's share of the international merchant fee (monthly invoice cycle)
+      international-fee-share-rate: "0.0021"

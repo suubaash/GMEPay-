@@ -1,0 +1,15 @@
+// scheme-adapter-zeropay: ACL adapter for ZeroPay (ZP00xx batch files, REST submission)
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation project(':libs:lib-money')
+    implementation project(':libs:lib-errors')
+    implementation project(':libs:lib-events')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.mockito:mockito-core'
+}
