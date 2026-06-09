@@ -6,7 +6,13 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

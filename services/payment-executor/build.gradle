@@ -8,4 +8,8 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+
+    // Pulls in spring-test (MockRestServiceServer), JUnit, AssertJ — needed by the
+    // REST-adapter tests. No other new runtime deps were introduced for Phase-1 wiring.
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

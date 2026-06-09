@@ -39,6 +39,29 @@ public final class Journal {
         return new Journal(UUID.randomUUID().toString(), Instant.now(), List.copyOf(entries));
     }
 
+    /**
+     * Re-hydrate a previously persisted journal from storage.
+     *
+     * <p>Used by the persistence layer (see {@code persistence.JpaJournalStore}) to reconstruct
+     * a domain {@link Journal} with its original {@code journalId} and {@code postedAt}
+     * preserved — {@link #post(List)} mints a new UUID + timestamp so it is not suitable for
+     * read-back. Entries are still validated for balance.
+     *
+     * @param journalId stored journal id (must not be null)
+     * @param postedAt  original posted timestamp (must not be null)
+     * @param entries   the stored entries (validated for balance)
+     */
+    public static Journal rehydrate(String journalId, Instant postedAt, List<LedgerEntry> entries) {
+        Objects.requireNonNull(journalId, "journalId required");
+        Objects.requireNonNull(postedAt, "postedAt required");
+        Objects.requireNonNull(entries, "entries required");
+        if (entries.size() < 2) {
+            throw new IllegalArgumentException("A journal requires at least 2 entries");
+        }
+        assertBalanced(entries);
+        return new Journal(journalId, postedAt, List.copyOf(entries));
+    }
+
     private static void assertBalanced(List<LedgerEntry> entries) {
         // Group by currency and check debit sum == credit sum for each currency
         var currencies = entries.stream().map(LedgerEntry::currency).distinct().toList();

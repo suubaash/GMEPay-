@@ -1,5 +1,6 @@
 package com.gme.pay.notify.domain;
 
+import com.gme.pay.notify.persistence.WebhookPersistenceService;
 import com.gme.pay.notify.signing.WebhookSigningService;
 
 import java.nio.charset.StandardCharsets;
@@ -28,12 +29,36 @@ public class WebhookSender {
     private final WebhookHttpClient httpClient;
     private final Clock clock;
 
+    /**
+     * Optional Phase-1 persistence collaborator. When {@code null} the sender behaves
+     * exactly as before (existing unit tests stay green); when non-null each delivery
+     * attempt + DLQ promotion is durably recorded.
+     */
+    private final WebhookPersistenceService persistenceService;
+
+    /**
+     * Backwards-compatible constructor — no persistence. Existing callers and tests
+     * continue to work; persistence is simply skipped.
+     */
     public WebhookSender(WebhookSigningService signingService,
                          WebhookHttpClient httpClient,
                          Clock clock) {
+        this(signingService, httpClient, clock, null);
+    }
+
+    /**
+     * Constructor with the optional Phase-1 persistence collaborator.
+     *
+     * @param persistenceService may be {@code null} to disable persistence (no-op mode)
+     */
+    public WebhookSender(WebhookSigningService signingService,
+                         WebhookHttpClient httpClient,
+                         Clock clock,
+                         WebhookPersistenceService persistenceService) {
         this.signingService = Objects.requireNonNull(signingService);
         this.httpClient = Objects.requireNonNull(httpClient);
         this.clock = Objects.requireNonNull(clock);
+        this.persistenceService = persistenceService; // optional: may be null
     }
 
     /**
@@ -48,6 +73,28 @@ public class WebhookSender {
      */
     public WebhookDeliveryResult send(String eventId, String targetUrl,
                                       byte[] payload, String secret) {
+        return sendWithAttempt(eventId, null, targetUrl, payload, secret, 1);
+    }
+
+    /**
+     * Phase-1 persistence-aware variant: in addition to dispatching the webhook this
+     * overload records the attempt outcome (and promotes to DLQ on exhaustion) when a
+     * {@link WebhookPersistenceService} was supplied at construction time. If no
+     * persistence service is wired the behaviour is identical to {@link #send}.
+     *
+     * @param eventId    globally unique event id (also used as {@code webhook_id})
+     * @param eventType  domain event type, e.g. {@code payment.approved}; may be {@code null}
+     * @param targetUrl  HTTPS URL of the partner endpoint
+     * @param payload    serialized JSON payload bytes
+     * @param secret     plaintext HMAC signing secret
+     * @param attempt    1-based attempt number for retry accounting
+     */
+    public WebhookDeliveryResult sendWithAttempt(String eventId,
+                                                 String eventType,
+                                                 String targetUrl,
+                                                 byte[] payload,
+                                                 String secret,
+                                                 int attempt) {
         Objects.requireNonNull(eventId, "eventId must not be null");
         Objects.requireNonNull(targetUrl, "targetUrl must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
@@ -70,7 +117,22 @@ public class WebhookSender {
                 eventId
         );
 
-        return httpClient.post(request);
+        WebhookDeliveryResult result = httpClient.post(request);
+
+        if (persistenceService != null) {
+            String body = new String(payload, StandardCharsets.UTF_8);
+            String error = result.success() ? null : result.responseBody();
+            persistenceService.recordAttemptAndMaybeDlq(
+                    eventId,
+                    eventType == null ? "unknown" : eventType,
+                    body,
+                    attempt,
+                    result.success(),
+                    error
+            );
+        }
+
+        return result;
     }
 
     // -------------------------------------------------------------------------
