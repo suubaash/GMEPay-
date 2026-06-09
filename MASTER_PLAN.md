@@ -1,7 +1,7 @@
 # GMEPay+ — Master Plan & Launch-Readiness Scorecard
 
 **Target go-live:** 10 Oct 2026 (GME Remit domestic) · overseas partners Oct–Dec 2026
-**Last updated:** 2026-06-09 · **Overall readiness (build-to-launch): ~18%** (16 services + 7 with PostgreSQL/Mongo persistence + 6 REST clients; full build green)
+**Last updated:** 2026-06-09 · **Overall readiness (build-to-launch): ~22%** (16 services + persistence on 7 + revenue-ledger residual endpoint + payment-executor revenue client + docker-compose stack + CI; full build green)
 **Status legend:** ✅ done/green · 🟡 in progress/partial · ⬜ not started · 🔒 blocked on external party
 
 > Living document. Update the status columns and `PROGRESS.md` as each service goes green. Build = AI agents; calendar-bound certification/regulatory/UAT/infra = GME team + external parties.

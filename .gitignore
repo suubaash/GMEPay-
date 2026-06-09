@@ -5,3 +5,6 @@ build/
 *.iml
 *.log
 .DS_Store
+
+# Claude Code personal settings (machine-specific, never commit)
+.claude/settings.local.json
