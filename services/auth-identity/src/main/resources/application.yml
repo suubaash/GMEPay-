@@ -1,6 +1,19 @@
 spring:
   application:
     name: auth-identity
+  # Default datasource: in-process H2 in PostgreSQL-compat mode for dev/test.
+  # Production sets SPRING_DATASOURCE_* env vars to point at the owned PostgreSQL
+  # instance (MSA rule 1: this service owns its DB).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:authid;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: none   # schema is owned by Flyway, not Hibernate
+  flyway:
+    enabled: true
 
 server:
   port: 8085
@@ -13,6 +26,9 @@ gme:
       signing-secret: ${GME_AUTH_JWT_SIGNING_SECRET:changeme-at-least-32-chars-long!!}
       # Access token lifetime: 30 minutes (1800 s).
       access-token-ttl-seconds: ${GME_AUTH_JWT_ACCESS_TOKEN_TTL_SECONDS:1800}
+  config-registry:
+    # Base URL of the config-registry service. Production injects this via env var.
+    base-url: ${GME_CONFIG_REGISTRY_BASE_URL:http://config-registry:8080}
 
 logging:
   level:
