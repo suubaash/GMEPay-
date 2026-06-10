@@ -4,6 +4,7 @@ import com.gme.pay.ledger.domain.ledger.JournalStore;
 import com.gme.pay.ledger.domain.model.EntryType;
 import com.gme.pay.ledger.domain.model.Journal;
 import com.gme.pay.ledger.domain.model.LedgerEntry;
+import com.gme.pay.ledger.outbox.OutboxWriter;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,8 +22,15 @@ import java.util.Optional;
  * row plus one {@link LedgerEntryEntity} row per ledger line. The whole operation
  * runs in a single transaction (via {@link Transactional}).
  *
+ * <p><strong>Transactional Outbox.</strong> Inside the same {@code @Transactional} save,
+ * an {@code outbox} row is enqueued via {@link OutboxWriter#enqueue(String, String, String)}
+ * with eventType {@code "journal.posted"}. The row is committed atomically with the journal
+ * itself; an async {@code OutboxPublisher} drains it and hands the event to
+ * {@code EventPublisher}. This gives at-least-once delivery without 2PC.
+ *
  * <p>Idempotency by {@code journalId}: a second {@code save} of an already-stored
- * journal returns the previously persisted journal unchanged (no duplicates).
+ * journal returns the previously persisted journal unchanged (no duplicates) and
+ * does NOT enqueue a second outbox row.
  *
  * <p>The companion {@link InMemoryJournalStore} is kept as a non-primary fallback bean.
  */
@@ -32,10 +40,14 @@ public class JpaJournalStore implements JournalStore {
 
     private final JournalEntityRepository journals;
     private final LedgerEntryEntityRepository entries;
+    private final OutboxWriter outboxWriter;
 
-    public JpaJournalStore(JournalEntityRepository journals, LedgerEntryEntityRepository entries) {
+    public JpaJournalStore(JournalEntityRepository journals,
+                           LedgerEntryEntityRepository entries,
+                           OutboxWriter outboxWriter) {
         this.journals = Objects.requireNonNull(journals, "journals repo required");
         this.entries = Objects.requireNonNull(entries, "entries repo required");
+        this.outboxWriter = Objects.requireNonNull(outboxWriter, "outboxWriter required");
     }
 
     @Override
@@ -43,7 +55,7 @@ public class JpaJournalStore implements JournalStore {
     public Journal save(Journal journal) {
         Objects.requireNonNull(journal, "journal required");
         if (journals.existsById(journal.journalId())) {
-            // Idempotent: do not overwrite an existing journal.
+            // Idempotent: do not overwrite an existing journal AND do not re-enqueue an outbox row.
             return journal;
         }
 
@@ -62,7 +74,43 @@ public class JpaJournalStore implements JournalStore {
                     e.reference()
             ));
         }
+
+        // Enqueue the domain event in the SAME transaction (Outbox pattern).
+        // Payload is a tiny hand-built JSON snippet — keep it dependency-free and conservative.
+        outboxWriter.enqueue(
+                journal.journalId(),
+                "journal.posted",
+                buildJournalPostedPayload(journal.journalId(), reference, journal.entries().size())
+        );
         return journal;
+    }
+
+    /**
+     * Build a minimal JSON payload for the {@code journal.posted} event. Kept as plain
+     * string concatenation so revenue-ledger does not pull in Jackson just for this hop.
+     * The values are simple identifiers and an integer — JSON-escape only the strings.
+     */
+    private static String buildJournalPostedPayload(String journalId, String reference, int entryCount) {
+        return "{\"journalId\":\"" + escapeJson(journalId)
+                + "\",\"reference\":" + (reference == null ? "null" : "\"" + escapeJson(reference) + "\"")
+                + ",\"entryCount\":" + entryCount + "}";
+    }
+
+    /** Minimal JSON string escape for the handful of identifier characters we actually emit. */
+    private static String escapeJson(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"'  -> out.append("\\\"");
+                case '\\' -> out.append("\\\\");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default   -> out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     @Override

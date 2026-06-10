@@ -23,3 +23,11 @@ adapter:
     sftp-host: ""
     sftp-port: 22
     mai-tag: "29"
+
+# Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

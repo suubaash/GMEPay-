@@ -26,3 +26,11 @@ settlement:
     zeropay:
       # ZeroPay's share of the international merchant fee (monthly invoice cycle)
       international-fee-share-rate: "0.0021"
+
+# Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

@@ -50,6 +50,24 @@ public interface TransactionClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             BigDecimal prefundDeductedUsd,
-            Instant approvedAt
-    ) {}
+            Instant approvedAt,
+            BigDecimal bookedSettlementAmount,
+            String settlementRoundingMode,
+            BigDecimal roundingResidual
+    ) {
+        /**
+         * Backwards-compatible 5-arg constructor used by FAILED / UNCERTAIN / REVERSED branches
+         * that do not need to carry the per-partner rounding lock. Equivalent to the 8-arg form
+         * with the three rounding fields set to {@code null}.
+         */
+        public StatusPatch(
+                PaymentStatus newStatus,
+                String schemeTxnRef,
+                String schemeApprovalCode,
+                BigDecimal prefundDeductedUsd,
+                Instant approvedAt) {
+            this(newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                    null, null, null);
+        }
+    }
 }

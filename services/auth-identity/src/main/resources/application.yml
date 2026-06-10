@@ -33,3 +33,11 @@ gme:
 logging:
   level:
     com.gme.pay.auth: INFO
+
+# Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

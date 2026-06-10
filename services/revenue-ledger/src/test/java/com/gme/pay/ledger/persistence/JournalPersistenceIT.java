@@ -4,6 +4,7 @@ import com.gme.pay.ledger.domain.ledger.LedgerPostingService;
 import com.gme.pay.ledger.domain.model.EntryType;
 import com.gme.pay.ledger.domain.model.Journal;
 import com.gme.pay.ledger.fees.SchemeFeeSplitCalculator;
+import com.gme.pay.ledger.outbox.OutboxWriter;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -36,7 +37,7 @@ import static org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTest
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = NONE)
-@Import({JpaJournalStore.class, InMemoryJournalStore.class, LedgerPostingService.class, SchemeFeeSplitCalculator.class})
+@Import({JpaJournalStore.class, InMemoryJournalStore.class, LedgerPostingService.class, SchemeFeeSplitCalculator.class, OutboxWriter.class})
 class JournalPersistenceIT {
 
     @Autowired
