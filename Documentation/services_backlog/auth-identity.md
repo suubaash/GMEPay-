@@ -991,3 +991,43 @@
 - Document references SEC-09 §9.1, §9.2, §9.3 and OPS-13 §8.3, §8.4 in the appropriate sections
 - Vault path format gmepay/{env}/partner/{uuid}/hmac and gmepay/{env}/sftp/zeropay/private_key is documented
 **Depends on:** 13.9-T18
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G09 — auth-identity: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: principals/api-keys/roles tables.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:auth-identity:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 18.4-G01 — JWT issuance (password + client-credentials)
+*Completion phase:* **R3** · *Est:* 200 min · *Role:* Backend · *Deps:* 17.2-G09
+
+**Context.** Replace BFF's password=demo stub. auth-identity issues RS256 JWTs with roles + partnerId claims; JWKS endpoint.
+
+**Steps.**
+- /oauth/token password + client_credentials grants
+- RS256 keypair, /.well-known/jwks.json
+- Refresh token rotation + revocation table
+
+**Deliverable.** Real token issuance
+
+**Acceptance.**
+- Token validates via JWKS; refresh rotates; revoked refresh rejected
+

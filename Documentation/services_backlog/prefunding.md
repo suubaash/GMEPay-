@@ -1938,3 +1938,28 @@
 - Section 4 explains forceOverride=true requires overrideNote, referenced to 422 error for missing note
 - Section 5 states 24h SLA from SCHEME_SENT timestamp and names the ops.alerts alert topic
 **Depends on:** 6.5-T12, 6.5-T13, 6.5-T14, 6.5-T16, 6.5-T17
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G03 — prefunding: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: double-entry ledger + SELECT FOR UPDATE deduction.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:prefunding:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+

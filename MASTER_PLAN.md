@@ -1,7 +1,7 @@
 # GMEPay+ — Master Plan & Launch-Readiness Scorecard
 
 **Target go-live:** 10 Oct 2026 (GME Remit domestic) · overseas partners Oct–Dec 2026
-**Last updated:** 2026-06-10 · **Overall readiness (WBS-ticket-level audit): 50 DONE (1.6%) · 256 PARTIAL (8.3%) · 2,785 NOT STARTED (90.1%) of 3,091 audited tickets.** Combined Done+Partial = **~10%**. Earlier "% scaffolded" estimates of 30-50% reflected the share of services *touched*, not the share of WBS *acceptance checks met*. See `docs/WBS_STATUS.md` for per-service burndown.
+**Last updated:** 2026-06-10 (WBS v3 re-baseline) · **Overall readiness (sheet-level rollup of the ticket audit): 41 DONE (1.2%) · 412 PARTIAL (12.0%) · 2,979 NOT STARTED (86.8%) of the original 3,432 tickets** (+55 new v3 gap-closure tickets → backlog now 3,487). Combined Done+Partial = **~13%**, but most PARTIALs share one root cause: no Docker in the build env (H2 instead of PostgreSQL, stubs instead of live REST, log instead of Kafka). Earlier "% scaffolded" estimates of 30-50% reflected services *touched*, not acceptance checks met. See `docs/WBS_STATUS.md` (audit) and `docs/COMPLETION_PLAN_V3.md` (re-baselined execution plan).
 **Status legend:** ✅ done/green · 🟡 in progress/partial · ⬜ not started · 🔒 blocked on external party
 
 > Living document. Update the status columns and `PROGRESS.md` as each service goes green. Build = AI agents; calendar-bound certification/regulatory/UAT/infra = GME team + external parties.
@@ -16,17 +16,20 @@
 
 ---
 
-## 2. Phase plan
-| Phase | Objective | Primary owner | Exit gate | Status |
+## 2. Phase plan — **superseded by Completion Plan v3 (2026-06-10 re-baseline)**
+> The audit showed the original phase plan tracked *workstreams*, not *unblocking order*. The WBS has been re-baselined: every work package now carries audit status + a completion phase **R0–R8**, and 3 new workstreams (17 Real-Stack Gap Closure · 18 Missing Components · 20 Phase-2+ Adapters, +55 tickets) were added. **See `docs/COMPLETION_PLAN_V3.md` and the “Completion Plan v3” sheet in `GMEPay+_WBS.xlsx`.**
+
+| R-Phase | Objective | Tickets (D/P/N) | Exit gate | Status |
 |---|---|---|---|---|
-| **0. Foundation & contracts** | Monorepo, shared libs, frozen API/event contracts | AI agents | Contracts frozen, build green | 🟡 ~70% |
-| **1. Per-service build** | All 22 services built, unit-tested, green | AI agents | Every service green | 🟡 ~35% (15 backend modules scaffolded green; UI + persistence remain) |
-| **2. Integration** | API/event wiring, contract tests, E2E money path on local stack | AI agents + GME CI | Money path E2E passes | ⬜ |
-| **3. Infrastructure** | Postgres/Mongo/Redis/Kafka, K8s, CI/CD GitOps, observability | GME DevOps (agents author IaC) | Deploys to staging | ⬜ |
-| **4. Hardening** | Auth/Vault/RBAC, performance/load, resilience, pen test | Agents author; GME validates | Perf + security pass | ⬜ |
-| **5. Compliance & certification** | KFTC/ZeroPay cert, BOK FX1014/1015, tax-invoice, AML | 🔒 External + GME | Scheme-certified + regulatory sign-off | ⬜ 🔒 |
-| **6. UAT & partner onboarding** | Business UAT, GME Remit ready, partner sandbox | GME business + partners | UAT signed | ⬜ |
-| **7. Go-live & hypercare** | Production cutover, smoke, 14-day hypercare | GME + agents | Stable in production | ⬜ |
+| **R0** Decisions & build env | Docker-capable CI; stack ADRs (Kafka/RabbitMQ, Gateway/Nginx, Mongo) | 190 (6/40/144) | compose + Testcontainers green in CI; ADRs signed | 🟡 |
+| **R1** Persistence & real wiring | H2→PostgreSQL ×12, Redis, Kafka+Schema Registry, registries, Mongo, MinIO | 424 (3/81/340) | all stores real; restart-safe | 🟡 |
+| **R2** Money-path E2E | Stub→REST flips; sftp-gateway; scripted E2E incl. rounding residual | 715 (20/131/564) | money-path E2E green in CI | 🟡 |
+| **R3** Edge & security | Nginx WAF, real JWT/RBAC (kills `password=demo`), Vault | 272 (8/24/240) | authz matrix enforced | 🟡 |
+| **R4** UI completion | All admin+portal screens vs live BFF; contract-drift CI gate | 717 (0/80/637) | every WBS screen functional | 🟡 |
+| **R5** Infra & observability | K8s staging, OTel/Prometheus/Grafana/ELK/Jaeger, DR | 268 (0/0/268) | staging deploy + dashboards | ⬜ |
+| **R6** Hardening & perf | Load vs NFR-10, resilience, pen test | 256 (1/14/241) | perf + security pass | ⬜ |
+| **R7** Compliance & cert | KFTC/ZeroPay cert, BOK FX1014/1015, Hometax, AML | 392 (3/41/348) | certified + sign-offs | ⬜ 🔒 |
+| **R8** UAT, go-live, hypercare | UAT, cutover, 14-day hypercare; Phase-2 adapters start | 253 (0/1/252) | stable in production | ⬜ |
 
 ---
 
@@ -108,12 +111,13 @@ Tickets from the service-partitioned backlog. % is rough build completion.
 
 ---
 
-## 8. Immediate next actions (AI agents)
-1. Finish **Phase 0**: freeze `lib-api-contracts` (OpenAPI→DTOs) + `lib-events` schemas.
-2. Build **Tier 0 → Tier 1** services from `services_backlog/*.md`, each green + committed + pushed.
-3. Stand up **`docker-compose`** local stack and begin Phase-2 contract/E2E tests (in an environment with Docker).
-4. Keep this scorecard + `PROGRESS.md` current at each checkpoint.
-5. Wire per-partner settlement rounding into the commit path (config-registry → payment-executor → transaction-mgmt → revenue-ledger) — see Addendum 001.
+## 8. Immediate next actions (AI agents) — v3 wave plan
+1. **Wave 1 (R0):** 17.1-G01..03 — Docker-capable CI + make `docker-compose.yml` actually boot; 18.7-G01 — draft ADR-001..005 (**user decision needed**: Kafka vs RabbitMQ, Spring Cloud Gateway vs Nginx, MongoDB keep/drop, Rocky Linux, Elasticsearch).
+2. **Wave 2 (R1):** 17.2-G01..12 H2→PostgreSQL (one agent per service, parallel) · 17.3 Redis ×3 · 17.4 Kafka + Schema Registry ×5.
+3. **Wave 3 (R2/R3):** 17.5 Stub→REST flips E2E · 17.6 registry persistence · 18.6 money-path E2E harness (incl. ROUND_DOWN partner case) · 18.3 sftp-gateway · 18.4 real auth.
+4. Pull forward any **R7 work not gated on the KFTC env** (file formats, mappings, BOK capture) whenever an agent is free.
+5. Keep this scorecard + `PROGRESS.md` + the Backlog `Status` column current at each checkpoint.
 
 ## 9. Change log
+- **2026-06-10 — WBS v3 re-baseline (Completion Plan).** Post-audit re-baseline: all 124 WPs got audit-status columns + an R0–R8 completion-phase assignment; added WS 17 (Real-Stack Gap Closure), WS 18 (Missing Components incl. `ops-partner-bff` legitimization, `sftp-gateway`, real auth, Nginx WAF, E2E harness, stack ADRs) and WS 20 (Phase-2+ adapters) — **+20 WPs, +55 tickets (3,432→3,487)**. New sheet “Completion Plan v3” in `GMEPay+_WBS.xlsx`; narrative in `docs/COMPLETION_PLAN_V3.md`; per-service `-Gxx` tickets appended to `Documentation/services_backlog/` (2 new bundles: `ops-partner-bff`, `sftp-gateway`). Sheet-level status rollup is now canonical: 41 D / 412 P / 2,979 N of the original 3,432.
 - **2026-06-08 — Addendum 001: Per-partner settlement rounding.** Added `Partner.settlement_rounding_mode` (default HALF_UP); settlement liability booked under the partner's rule with the residual posted to `REVENUE_ROUNDING`. Enabling code built+tested (`lib-money`, `lib-domain`, `revenue-ledger`); WBS WPs 3.2/3.3/4.8/5.5/7.3/10.3/15.3 annotated; **+12 backlog tickets** (3,432→3,444). See `Documentation/ADDENDUM-001-settlement-rounding.md` + `docs/MONEY_CONVENTION.md`. Live commit-path wiring pending (Phase 2).

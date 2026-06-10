@@ -1443,3 +1443,44 @@
 - USD pool fields absent from JSON when null (NON_NULL)
 - Decimal amounts serialize as strings not numbers
 - m_a, m_b, cost_rate_* fields absent from RateQuoteResponse
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G02 — rate-fx: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: rate snapshots + quote TTL tables.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:rate-fx:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.3-G01 — Redis-backed rate-quote TTL store
+*Completion phase:* **R1** · *Est:* 100 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Quote TTL/rate-lock is in-memory; restart loses locks. Move to Redis with TTL semantics.
+
+**Steps.**
+- spring-data-redis + lettuce
+- Key rq:{quoteId} with EXPIRE = quote TTL
+- IT via Testcontainers redis
+
+**Deliverable.** Quotes expire via Redis TTL
+
+**Acceptance.**
+- Lock survives service restart within TTL
+- Expired quote rejected with deterministic error code
+

@@ -2889,3 +2889,41 @@
 - DataTable at 1,024px renders exactly the 3 columns specified in mobileColumns prop.
 - No horizontal scrollbar appears on TransactionHistoryPage at 1,280px viewport width.
 **Depends on:** 12.3-T06, 12.3-T04
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 18.4-G04 — Portal real login + partner scoping
+*Completion phase:* **R3** · *Est:* 120 min · *Role:* Frontend · *Deps:* 18.4-G02
+
+**Context.** Same as admin but partner-scoped: partnerId claim drives all data fetches; no partner switcher.
+
+**Steps.**
+- Auth slice update
+- partnerId from token, not localStorage
+- 403 page on scope violation
+
+**Deliverable.** Real login in portal
+
+**Acceptance.**
+- Cross-partner URL manipulation shows 403 page
+
+### 18.5-G02 — Per-slice contract tests (portal)
+*Completion phase:* **R4** · *Est:* 100 min · *Role:* Frontend · *Deps:* 18.1-G01
+
+**Context.** Same for the portal's 8 slices.
+
+**Steps.**
+- Same fixture pattern
+- Statement CSV header pinned too
+
+**Deliverable.** 8 slices contract-pinned
+
+**Acceptance.**
+- Drift fails portal CI
+

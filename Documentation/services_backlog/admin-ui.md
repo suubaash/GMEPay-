@@ -4379,3 +4379,42 @@
 - Each exported component has at least one JSDoc comment on its primary prop.
 - All stories are named following the Module/ComponentName convention.
 **Depends on:** 12.2-T06, 12.2-T07, 12.2-T08, 12.2-T10, 12.2-T17, 12.2-T22, 12.2-T25, 12.2-T26, 12.2-T29, 12.2-T31
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 18.4-G03 — Admin UI real login + token refresh
+*Completion phase:* **R3** · *Est:* 140 min · *Role:* Frontend · *Deps:* 18.4-G02
+
+**Context.** Auth slice stores stub token. Wire to real login, silent refresh before expiry, 401 interceptor → login redirect.
+
+**Steps.**
+- Update auth slice thunks
+- Refresh timer from exp claim
+- Route guard on role claim
+
+**Deliverable.** Real login in admin UI
+
+**Acceptance.**
+- Login/refresh/expiry flows pass vitest contract tests
+
+### 18.5-G01 — Per-slice contract tests vs frozen BFF contract
+*Completion phase:* **R4** · *Est:* 140 min · *Role:* Frontend · *Deps:* 18.1-G01
+
+**Context.** Field drift caused the dashboard TypeError. Pin every slice's expected wire fields to docs contract (18.1-G01).
+
+**Steps.**
+- Vitest fixture per endpoint from contract doc
+- Assert slice selectors tolerate missing optionals (?? defaults)
+- CI fails on unknown/missing field
+
+**Deliverable.** 11 slices contract-pinned
+
+**Acceptance.**
+- Renaming a BFF field fails admin-ui CI
+

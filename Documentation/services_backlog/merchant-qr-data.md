@@ -370,3 +370,58 @@
 - Test (5): mongoRepo.findById called exactly once across two resolve calls
 - Test (6): after MerchantSyncedEvent(isActive=false), Redis key merchant-resolve:{merchantId}:* absent
 **Depends on:** 9.3-T21, 9.3-T20, 9.3-T08
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G12 — merchant-qr-data: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: relational shadow of merchant mirror (audit trail).
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:merchant-qr-data:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.7-G01 — MongoDB-backed merchant store
+*Completion phase:* **R1** · *Est:* 140 min · *Role:* Backend · *Deps:* 17.1-G03,18.7-G01
+
+**Context.** Lookup store is in-memory. Architecture diagram says MongoDB for the merchant/QR mirror (pending ADR 18.7 confirms keep).
+
+**Steps.**
+- spring-data-mongodb; merchants collection keyed by qr hash
+- Migrate InMemory store behind same port interface
+- IT via Testcontainers mongo
+
+**Deliverable.** Mongo merchant lookup
+
+**Acceptance.**
+- GET /v1/merchants/{qr} served from Mongo; p95 <20ms local
+
+### 17.7-G02 — Merchant sync job (file→Mongo)
+*Completion phase:* **R1** · *Est:* 140 min · *Role:* Backend · *Deps:* 17.7-G01,17.8-G01
+
+**Context.** KFTC distributes merchant master via batch file. Nightly sync parses + upserts; tombstones removed merchants.
+
+**Steps.**
+- Scheduled job reads file from MinIO (17.8)
+- Upsert with change counts logged
+- Dead-merchant tombstoning
+
+**Deliverable.** Nightly merchant sync
+
+**Acceptance.**
+- Re-running same file is idempotent; counts reported
+
