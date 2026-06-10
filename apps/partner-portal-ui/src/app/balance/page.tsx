@@ -6,7 +6,6 @@ import {
   Card,
   CardContent,
   Chip,
-  CircularProgress,
   Divider,
   Grid,
   Stack,
@@ -15,17 +14,18 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 import dynamic from 'next/dynamic';
 import type { AppDispatch, RootState } from '@/store';
-import { fetchBalance } from '@/store/portalSlice';
+import { fetchBalance } from '@/store/balanceSlice';
 import { currentPartnerId } from '@/api/client';
 import MoneyDisplay from '@/components/MoneyDisplay';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import ErrorAlert from '@/components/ErrorAlert';
 
 // Lottie is browser-only — import lazily.
 const Lottie = dynamic(() => import('lottie-react'), { ssr: false });
 
 /**
- * A tiny inline Lottie animation (pulse green) so this page is self-contained
- * without shipping a separate JSON asset. Real animations would live under
- * /public/lottie/*.json.
+ * Inline pulse Lottie (green) — celebration when balance is comfortably
+ * above the threshold. Kept inline so the page is self-contained.
  */
 const HEALTHY_PULSE_LOTTIE = {
   v: '5.7.1',
@@ -81,19 +81,35 @@ function isHealthy(balanceAmount: string, thresholdAmount: string): boolean {
   return b > t;
 }
 
+/**
+ * "Comfortably healthy" — balance > 3x threshold triggers the celebratory
+ * Lottie animation. Above-threshold-but-not-comfortable still passes
+ * `isHealthy` (so no warning fires) but the celebration is muted.
+ */
+function isCelebratory(balanceAmount: string, thresholdAmount: string): boolean {
+  const b = Number(balanceAmount);
+  const t = Number(thresholdAmount);
+  if (!Number.isFinite(b) || !Number.isFinite(t)) return false;
+  return b > t * 3;
+}
+
 export default function BalancePage() {
   const dispatch = useDispatch<AppDispatch>();
   const partnerId = currentPartnerId();
-  const { data, status, error } = useSelector((s: RootState) => s.portal.balance);
+  const { data, status, error } = useSelector((s: RootState) => s.balance);
 
   React.useEffect(() => {
     if (partnerId && status === 'idle') dispatch(fetchBalance(partnerId));
   }, [partnerId, status, dispatch]);
 
+  const retry = React.useCallback(() => {
+    if (partnerId) dispatch(fetchBalance(partnerId));
+  }, [partnerId, dispatch]);
+
   if (!partnerId) {
     return (
       <Alert severity="warning">
-        No partner id configured. Set <code>NEXT_PUBLIC_PARTNER_ID</code>.
+        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
       </Alert>
     );
   }
@@ -107,8 +123,10 @@ export default function BalancePage() {
         </Typography>
       </Box>
 
-      {status === 'loading' && <CircularProgress />}
-      {status === 'failed' && <Alert severity="error">{error}</Alert>}
+      {status === 'loading' && <LoadingSkeleton variant="detail" />}
+      {status === 'failed' && (
+        <ErrorAlert message={error ?? 'Failed to load balance.'} onRetry={retry} />
+      )}
 
       {data && (
         <Card>
@@ -121,7 +139,11 @@ export default function BalancePage() {
                       Current balance
                     </Typography>
                     <Typography variant="h1" sx={{ mt: 0.5 }}>
-                      <MoneyDisplay money={data.balance} parenthesizeNegative />
+                      <MoneyDisplay
+                        money={data.balance}
+                        parenthesizeNegative
+                        showRawTooltip
+                      />
                     </Typography>
                   </Box>
 
@@ -161,13 +183,18 @@ export default function BalancePage() {
               </Grid>
 
               <Grid item xs={12} md={4} sx={{ textAlign: 'center' }}>
-                {isHealthy(data.balance.amount, data.lowBalanceThreshold.amount) ? (
-                  <Box sx={{ width: 200, height: 200, mx: 'auto' }}>
+                {isCelebratory(data.balance.amount, data.lowBalanceThreshold.amount) ? (
+                  <Box sx={{ width: 200, height: 200, mx: 'auto' }} data-testid="balance-celebration">
                     <Lottie animationData={HEALTHY_PULSE_LOTTIE} loop autoplay />
                     <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                      Balance healthy
+                      Balance is comfortably healthy
                     </Typography>
                   </Box>
+                ) : isHealthy(data.balance.amount, data.lowBalanceThreshold.amount) ? (
+                  <Alert severity="info">
+                    Balance is above threshold. Consider topping up when you approach 3× the
+                    threshold for a comfortable margin.
+                  </Alert>
                 ) : (
                   <Alert severity="warning">
                     Balance is at or below your configured low-balance threshold. Top up to avoid

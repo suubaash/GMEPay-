@@ -5,6 +5,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Objects;
 
@@ -42,5 +44,36 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
                 .filter(t -> partnerId == null || partnerId.equals(t.partnerId()))
                 .limit(Math.max(0, limit))
                 .toList();
+    }
+
+    @Override
+    public Page<TransactionSummary> list(Filter filter) {
+        List<TransactionSummary> filtered = STORE.stream()
+                .filter(t -> filter.partnerId() == null || filter.partnerId().equals(t.partnerId()))
+                .filter(t -> filter.state() == null || filter.state().equals(t.state()))
+                .filter(t -> {
+                    if (filter.fromDate() == null) {
+                        return true;
+                    }
+                    LocalDate committed = t.committedAt().atOffset(ZoneOffset.UTC).toLocalDate();
+                    return !committed.isBefore(filter.fromDate());
+                })
+                .filter(t -> {
+                    if (filter.toDate() == null) {
+                        return true;
+                    }
+                    LocalDate committed = t.committedAt().atOffset(ZoneOffset.UTC).toLocalDate();
+                    return !committed.isAfter(filter.toDate());
+                })
+                // schemeId is not modeled in the stub TransactionSummary; ignore it for filtering
+                // but accept it on the wire so the Admin UI form binding is exercised.
+                .toList();
+
+        int page = Math.max(0, filter.page());
+        int size = filter.size() <= 0 ? 20 : filter.size();
+        int fromIndex = Math.min(page * size, filtered.size());
+        int toIndex = Math.min(fromIndex + size, filtered.size());
+        List<TransactionSummary> slice = filtered.subList(fromIndex, toIndex);
+        return new Page<>(slice, page, size, filtered.size());
     }
 }

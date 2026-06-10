@@ -9,33 +9,33 @@ import {
   Typography,
   Stack,
   Button,
-  CircularProgress,
   Alert
 } from '@mui/material';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '@/store';
-import { fetchBalance, fetchTransactions } from '@/store/portalSlice';
+import { fetchOverview } from '@/store/overviewSlice';
 import { currentPartnerId } from '@/api/client';
 import MoneyDisplay from '@/components/MoneyDisplay';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import ErrorAlert from '@/components/ErrorAlert';
 
 export default function OverviewPage() {
   const dispatch = useDispatch<AppDispatch>();
   const partnerId = currentPartnerId();
-  const balance = useSelector((s: RootState) => s.portal.balance);
-  const transactions = useSelector((s: RootState) => s.portal.transactions);
+  const { data, status, error } = useSelector((s: RootState) => s.overview);
 
   React.useEffect(() => {
-    if (!partnerId) return;
-    if (balance.status === 'idle') dispatch(fetchBalance(partnerId));
-    if (transactions.status === 'idle') {
-      dispatch(fetchTransactions({ partnerId, page: 0, size: 10 }));
-    }
-  }, [partnerId, balance.status, transactions.status, dispatch]);
+    if (partnerId && status === 'idle') dispatch(fetchOverview(partnerId));
+  }, [partnerId, status, dispatch]);
+
+  const retry = React.useCallback(() => {
+    if (partnerId) dispatch(fetchOverview(partnerId));
+  }, [partnerId, dispatch]);
 
   if (!partnerId) {
     return (
       <Alert severity="warning">
-        No partner id configured. Set <code>NEXT_PUBLIC_PARTNER_ID</code> in your local env.
+        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
       </Alert>
     );
   }
@@ -49,22 +49,28 @@ export default function OverviewPage() {
         </Typography>
       </Box>
 
+      {status === 'failed' && (
+        <ErrorAlert
+          message={error ?? 'Failed to load overview.'}
+          onRetry={retry}
+        />
+      )}
+
       <Grid container spacing={3}>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
           <Card>
             <CardContent>
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                 Current balance
               </Typography>
-              {balance.status === 'loading' && <CircularProgress size={20} sx={{ mt: 1 }} />}
-              {balance.status === 'failed' && (
-                <Alert severity="error" sx={{ mt: 1 }}>
-                  {balance.error}
-                </Alert>
+              {status === 'loading' && (
+                <Box sx={{ mt: 1 }}>
+                  <LoadingSkeleton variant="stat" />
+                </Box>
               )}
-              {balance.data && (
+              {data && (
                 <Typography variant="h2" sx={{ mt: 1 }}>
-                  <MoneyDisplay money={balance.data.balance} />
+                  <MoneyDisplay money={data.balance} showRawTooltip />
                 </Typography>
               )}
               <Button component={Link} href="/balance" sx={{ mt: 2 }} size="small">
@@ -74,18 +80,40 @@ export default function OverviewPage() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
           <Card>
             <CardContent>
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                Transactions (recent)
+                Low-balance threshold
               </Typography>
-              {transactions.status === 'loading' && (
-                <CircularProgress size={20} sx={{ mt: 1 }} />
+              {status === 'loading' && (
+                <Box sx={{ mt: 1 }}>
+                  <LoadingSkeleton variant="stat" />
+                </Box>
               )}
-              {transactions.data && (
+              {data && (
                 <Typography variant="h2" sx={{ mt: 1 }}>
-                  {transactions.data.total.toLocaleString()}
+                  <MoneyDisplay money={data.lowBalanceThreshold} />
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} md={3}>
+          <Card>
+            <CardContent>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Recent activity (rolling)
+              </Typography>
+              {status === 'loading' && (
+                <Box sx={{ mt: 1 }}>
+                  <LoadingSkeleton variant="stat" />
+                </Box>
+              )}
+              {data && (
+                <Typography variant="h2" sx={{ mt: 1 }}>
+                  {data.recentActivityCount.toLocaleString()}
                 </Typography>
               )}
               <Button component={Link} href="/transactions" sx={{ mt: 2 }} size="small">
@@ -95,21 +123,35 @@ export default function OverviewPage() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
           <Card>
             <CardContent>
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                 Last settlement
               </Typography>
-              <Typography variant="h4" sx={{ mt: 1 }}>
-                {balance.data?.lastSettlementAt
-                  ? new Date(balance.data.lastSettlementAt).toLocaleString()
-                  : '—'}
-              </Typography>
+              {status === 'loading' && (
+                <Box sx={{ mt: 1 }}>
+                  <LoadingSkeleton variant="stat" />
+                </Box>
+              )}
+              {data && (
+                <Typography variant="h4" sx={{ mt: 1 }}>
+                  {data.lastSettlementAt
+                    ? new Date(data.lastSettlementAt).toLocaleString()
+                    : '—'}
+                </Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>
       </Grid>
+
+      {data && (
+        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+          Balance last updated{' '}
+          {new Date(data.balanceLastUpdatedAt).toLocaleString()}.
+        </Typography>
+      )}
     </Stack>
   );
 }

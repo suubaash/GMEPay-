@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   Box,
   Button,
-  CircularProgress,
   Paper,
   Table,
   TableBody,
@@ -13,21 +12,35 @@ import {
   TableHead,
   TableRow,
   Typography,
-  Alert,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { fetchPartners } from '@/store/partnersSlice';
+import ErrorAlert from '@/components/ErrorAlert';
+import EmptyState from '@/components/EmptyState';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
 
-/** Partner list page — feeds from /v1/admin/partners (BFF projection of config-registry). */
+/**
+ * Partner list page — feeds from /v1/admin/partners (BFF projection of config-registry).
+ *
+ * Columns: partnerId, type, settlementCurrency, settlementRoundingMode.
+ * Clicking a row navigates to /partners/{id}. The "New partner" button goes
+ * to /partners/new.
+ */
 export default function PartnersListPage() {
   const dispatch = useAppDispatch();
+  const router = useRouter();
   const { items, loading, error } = useAppSelector((s) => s.partners);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     dispatch(fetchPartners());
   }, [dispatch]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   return (
     <Box>
@@ -45,40 +58,45 @@ export default function PartnersListPage() {
         </Button>
       </Box>
 
-      {error ? (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      ) : null}
+      <ErrorAlert message={error} onRetry={reload} title="Could not load partners" />
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Partner ID</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Settlement currency</TableCell>
-              <TableCell>Rounding mode</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {loading ? (
+      {loading && items.length === 0 ? (
+        <LoadingSkeleton variant="table" rows={6} />
+      ) : !loading && items.length === 0 && !error ? (
+        <Paper variant="outlined">
+          <EmptyState
+            heading="No partners yet"
+            description="Onboard your first partner to start transacting."
+            ctaLabel="New partner"
+            ctaHref="/partners/new"
+          />
+        </Paper>
+      ) : (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={4} align="center">
-                  <CircularProgress size={24} />
-                </TableCell>
+                <TableCell>Partner ID</TableCell>
+                <TableCell>Type</TableCell>
+                <TableCell>Settlement currency</TableCell>
+                <TableCell>Rounding mode</TableCell>
               </TableRow>
-            ) : items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} align="center">
-                  <Typography color="text.secondary">No partners yet.</Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((p) => (
-                <TableRow key={p.partnerId} hover>
+            </TableHead>
+            <TableBody>
+              {items.map((p) => (
+                <TableRow
+                  key={p.partnerId}
+                  hover
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() =>
+                    router.push(`/partners/${encodeURIComponent(p.partnerId)}`)
+                  }
+                >
                   <TableCell>
-                    <Link href={`/partners/${encodeURIComponent(p.partnerId)}`}>
+                    <Link
+                      href={`/partners/${encodeURIComponent(p.partnerId)}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {p.partnerId}
                     </Link>
                   </TableCell>
@@ -86,11 +104,11 @@ export default function PartnersListPage() {
                   <TableCell>{p.settlementCurrency}</TableCell>
                   <TableCell>{p.settlementRoundingMode}</TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
     </Box>
   );
 }

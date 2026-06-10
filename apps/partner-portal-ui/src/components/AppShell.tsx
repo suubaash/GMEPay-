@@ -1,6 +1,7 @@
 'use client';
 import * as React from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import Box from '@mui/material/Box';
@@ -8,7 +9,11 @@ import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import Container from '@mui/material/Container';
 import Stack from '@mui/material/Stack';
+import { useDispatch, useSelector } from 'react-redux';
+import type { AppDispatch, RootState } from '@/store';
+import { logoutAction } from '@/store/authSlice';
 import { currentPartnerId } from '@/api/client';
+import { useSnackbar } from '@/components/SnackbarProvider';
 
 const NAV: Array<{ label: string; href: string }> = [
   { label: 'Overview', href: '/' },
@@ -19,7 +24,17 @@ const NAV: Array<{ label: string; href: string }> = [
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const partnerId = currentPartnerId() || 'unknown-partner';
+  const router = useRouter();
+  const dispatch = useDispatch<AppDispatch>();
+  const snackbar = useSnackbar();
+  const reduxPartnerId = useSelector((s: RootState) => s.auth.partnerId);
+  const partnerId = reduxPartnerId || currentPartnerId() || 'unknown-partner';
+
+  const handleSignOut = () => {
+    dispatch(logoutAction());
+    snackbar.showInfo('Signed out');
+    router.replace('/login');
+  };
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -68,8 +83,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <Button
               size="small"
               variant="outlined"
-              disabled
-              title="Sign-out wired in Phase 2 (OAuth2 partner SSO)"
+              onClick={handleSignOut}
+              data-testid="signout-button"
             >
               Sign out
             </Button>

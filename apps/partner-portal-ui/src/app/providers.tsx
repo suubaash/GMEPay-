@@ -7,6 +7,7 @@ import createCache from '@emotion/cache';
 import { useServerInsertedHTML } from 'next/navigation';
 import { store } from '@/store';
 import { partnerTheme } from '@/theme/theme';
+import { SnackbarProvider } from '@/components/SnackbarProvider';
 
 /**
  * Client-side providers tree.
@@ -86,7 +87,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <EmotionRegistry>
         <ThemeProvider theme={partnerTheme}>
           <CssBaseline />
-          {children}
+          <SnackbarProvider>{children}</SnackbarProvider>
         </ThemeProvider>
       </EmotionRegistry>
     </ReduxProvider>

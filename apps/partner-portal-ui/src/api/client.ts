@@ -4,21 +4,25 @@
  * Auth model:
  *  - Production: partner identity is established at the edge (api-gateway HMAC)
  *    and propagated server-side; the BFF reads the identity from the request session.
- *  - Local dev: we send `X-Partner-Id` from NEXT_PUBLIC_PARTNER_ID so a developer
- *    can switch partners by changing one env var. Production deploys MUST NOT
- *    trust this header.
+ *  - Local dev / Phase 1: we send `Authorization: Bearer <token>` (from localStorage
+ *    via `api/auth`) plus `X-Partner-Id` from the stored partner id (falling back
+ *    to NEXT_PUBLIC_PARTNER_ID so a developer without a token can still browse).
+ *    Production deploys MUST NOT trust the `X-Partner-Id` header.
  */
 import type {
   BalanceDto,
+  OverviewDto,
   PagedResponse,
   PartnerProfileDto,
   TransactionDetailDto,
   TransactionSummaryDto,
   WebhookConfigDto
 } from './types';
+import { getPartnerId, getToken, login as authLogin, logout as authLogout } from './auth';
+import type { LoginRequest, LoginResponse } from './auth';
 
 const BASE = process.env.NEXT_PUBLIC_BFF_BASE_URL || '';
-const PARTNER_ID = process.env.NEXT_PUBLIC_PARTNER_ID || '';
+const ENV_PARTNER_ID = process.env.NEXT_PUBLIC_PARTNER_ID || '';
 
 function url(path: string): string {
   // When BASE is empty (browser dev), rely on next.config.mjs rewrite /api/* -> BFF.
@@ -31,12 +35,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     Accept: 'application/json',
     ...(init?.headers as Record<string, string> | undefined)
   };
-  if (PARTNER_ID) headers['X-Partner-Id'] = PARTNER_ID;
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const partnerId = getPartnerId() || ENV_PARTNER_ID;
+  if (partnerId) headers['X-Partner-Id'] = partnerId;
+
+  if (init?.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const res = await fetch(url(path), {
     ...init,
     headers,
-    // Read-only Phase 1: no credentials/cookies needed yet.
     cache: 'no-store'
   });
 
@@ -54,10 +65,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     err.body = body;
     throw err;
   }
+  if (res.status === 204) return undefined as unknown as T;
   return (await res.json()) as T;
 }
 
 export const portalApi = {
+  getOverview(partnerId: string): Promise<OverviewDto> {
+    return request<OverviewDto>(`/v1/portal/${encodeURIComponent(partnerId)}/overview`);
+  },
+
   getBalance(partnerId: string): Promise<BalanceDto> {
     return request<BalanceDto>(`/v1/portal/${encodeURIComponent(partnerId)}/balance`);
   },
@@ -65,9 +81,14 @@ export const portalApi = {
   listTransactions(
     partnerId: string,
     page = 0,
-    size = 25
+    size = 25,
+    sort = 'createdAt,desc'
   ): Promise<PagedResponse<TransactionSummaryDto>> {
-    const qs = new URLSearchParams({ page: String(page), size: String(size) });
+    const qs = new URLSearchParams({
+      page: String(page),
+      size: String(size),
+      sort
+    });
     return request<PagedResponse<TransactionSummaryDto>>(
       `/v1/portal/${encodeURIComponent(partnerId)}/transactions?${qs.toString()}`
     );
@@ -87,9 +108,27 @@ export const portalApi = {
 
   getProfile(partnerId: string): Promise<PartnerProfileDto> {
     return request<PartnerProfileDto>(`/v1/portal/${encodeURIComponent(partnerId)}/profile`);
+  },
+
+  login(req: LoginRequest): Promise<LoginResponse> {
+    return authLogin(req);
+  },
+
+  /** Phase 1 stub — placeholder for token refresh wiring. */
+  refreshToken(): Promise<LoginResponse> {
+    return Promise.reject(new Error('refreshToken not implemented in Phase 1'));
+  },
+
+  logout(): void {
+    authLogout();
   }
 };
 
+/**
+ * The active partner id used by the UI. Prefers the persisted (logged-in)
+ * value, falls back to the dev env var so a fresh checkout can still browse
+ * without going through the login screen.
+ */
 export function currentPartnerId(): string {
-  return PARTNER_ID;
+  return getPartnerId() || ENV_PARTNER_ID;
 }

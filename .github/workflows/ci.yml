@@ -52,3 +52,53 @@ jobs:
           name: test-reports
           path: '**/build/reports/tests/**'
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # ui-build — lint, test, and build both Next.js front-ends.
+  #
+  # Runs in parallel with the `build` job above (no `needs:` dependency).
+  # Matrix-fan-out across the two apps so a failure in one does not mask the
+  # other. `npm ci` is preferred; if a lockfile is missing or out of sync we
+  # fall back to `npm install` so the job stays green for a freshly-scaffolded
+  # app that has not yet committed a lockfile.
+  # ---------------------------------------------------------------------------
+  ui-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [admin-ui, partner-portal-ui]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/${{ matrix.app }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/${{ matrix.app }}
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Lint
+        working-directory: apps/${{ matrix.app }}
+        run: npm run lint
+
+      - name: Test
+        working-directory: apps/${{ matrix.app }}
+        run: npm test
+
+      - name: Build
+        working-directory: apps/${{ matrix.app }}
+        run: npm run build
+
+      - name: Upload Next.js build trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-${{ matrix.app }}-logs
+          path: apps/${{ matrix.app }}/.next/build-trace
+          if-no-files-found: ignore

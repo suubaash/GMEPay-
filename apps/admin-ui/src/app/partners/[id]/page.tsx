@@ -1,84 +1,82 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert,
   Box,
   Button,
   Card,
   CardContent,
-  CircularProgress,
-  Snackbar,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Stack,
   Typography,
 } from '@mui/material';
+import EditIcon from '@mui/icons-material/Edit';
 import { useParams } from 'next/navigation';
 import RoundingModeSelect from '@/components/RoundingModeSelect';
-import { adminApi } from '@/api/client';
-import type { PartnerDetail, RoundingMode } from '@/api/types';
+import ErrorAlert from '@/components/ErrorAlert';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import { useSnackbar } from '@/components/SnackbarProvider';
+import { useAppDispatch, useAppSelector } from '@/store';
+import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
+import type { RoundingMode } from '@/api/types';
 
 /**
  * Partner detail page.
  *
- * Read-only fields (partnerId, type, settlementCurrency) plus an editable
- * settlementRoundingMode. Saving PUTs /v1/admin/partners/{id}/rounding-mode
- * which is audit-logged in config-registry.
+ * Read-only fields (partnerId, type, settlementCurrency, audit timestamps)
+ * plus an inline "Edit rounding mode" dialog that PUTs
+ * /v1/admin/partners/{id}/rounding-mode — which is audit-logged in
+ * config-registry and rate-locked onto future transactions
+ * (docs/MONEY_CONVENTION.md).
  */
 export default function PartnerDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
+  const dispatch = useAppDispatch();
+  const snackbar = useSnackbar();
+  const { details, detailLoading, saving, error } = useAppSelector((s) => s.partners);
 
-  const [partner, setPartner] = useState<PartnerDetail | null>(null);
-  const [mode, setMode] = useState<RoundingMode>('HALF_UP');
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: 'success' | 'error' }>(
-    { open: false, msg: '', severity: 'success' },
-  );
+  const partner = id ? details[id] : undefined;
+
+  const reload = useCallback(() => {
+    if (id) dispatch(getPartner(id));
+  }, [dispatch, id]);
 
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    adminApi
-      .getPartner(id)
-      .then((p) => {
-        if (cancelled) return;
-        setPartner(p);
-        setMode(p.settlementRoundingMode);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setLoadError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+    reload();
+  }, [reload]);
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [draftMode, setDraftMode] = useState<RoundingMode>('HALF_UP');
+
+  const openDialog = () => {
+    if (!partner) return;
+    setDraftMode(partner.settlementRoundingMode);
+    setDialogOpen(true);
+  };
 
   const onSave = async () => {
-    if (!id) return;
-    setSaving(true);
+    if (!id || !partner) return;
     try {
-      const updated = await adminApi.updatePartnerRoundingMode(id, mode);
-      setPartner(updated);
-      setSnack({ open: true, msg: `Rounding mode set to ${updated.settlementRoundingMode}`, severity: 'success' });
+      const updated = await dispatch(
+        updatePartnerRoundingMode({ id, mode: draftMode }),
+      ).unwrap();
+      snackbar.success(`Rounding mode set to ${updated.settlementRoundingMode}`);
+      setDialogOpen(false);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setSnack({ open: true, msg: `Update failed: ${message}`, severity: 'error' });
-    } finally {
-      setSaving(false);
+      snackbar.error(`Update failed: ${message}`);
     }
   };
 
-  if (loadError) {
-    return <Alert severity="error">{loadError}</Alert>;
+  if (error && !partner) {
+    return <ErrorAlert message={error} onRetry={reload} title="Could not load partner" />;
   }
   if (!partner) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
-        <CircularProgress />
-      </Box>
-    );
+    return <LoadingSkeleton variant="page" />;
   }
 
   return (
@@ -86,7 +84,8 @@ export default function PartnerDetailPage() {
       <Typography variant="h1" gutterBottom>
         {partner.partnerId}
       </Typography>
-      <Card sx={{ maxWidth: 640 }}>
+      <ErrorAlert message={error} onRetry={reload} />
+      <Card sx={{ maxWidth: 720 }}>
         <CardContent>
           <Stack spacing={2}>
             <Box>
@@ -101,37 +100,70 @@ export default function PartnerDetailPage() {
               </Typography>
               <Typography>{partner.settlementCurrency}</Typography>
             </Box>
-            <RoundingModeSelect
-              value={mode}
-              onChange={setMode}
-              helperText="Changing this affects ONLY transactions created after the change."
-            />
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{ flexGrow: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Settlement rounding mode
+                </Typography>
+                <Typography>{partner.settlementRoundingMode}</Typography>
+              </Box>
               <Button
-                variant="contained"
-                onClick={onSave}
-                disabled={saving || mode === partner.settlementRoundingMode}
+                variant="outlined"
+                startIcon={<EditIcon />}
+                onClick={openDialog}
+                disabled={detailLoading}
               >
-                Save rounding mode
+                Edit
               </Button>
             </Box>
+            {partner.createdAt ? (
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Created at
+                </Typography>
+                <Typography>{partner.createdAt}</Typography>
+              </Box>
+            ) : null}
+            {partner.updatedAt ? (
+              <Box>
+                <Typography variant="body2" color="text.secondary">
+                  Updated at
+                </Typography>
+                <Typography>{partner.updatedAt}</Typography>
+              </Box>
+            ) : null}
           </Stack>
         </CardContent>
       </Card>
 
-      <Snackbar
-        open={snack.open}
-        autoHideDuration={5000}
-        onClose={() => setSnack((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      <Dialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        aria-labelledby="edit-rounding-title"
+        maxWidth="xs"
+        fullWidth
       >
-        <Alert
-          severity={snack.severity}
-          onClose={() => setSnack((s) => ({ ...s, open: false }))}
-        >
-          {snack.msg}
-        </Alert>
-      </Snackbar>
+        <DialogTitle id="edit-rounding-title">Edit rounding mode</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 1 }}>
+            <RoundingModeSelect
+              value={draftMode}
+              onChange={setDraftMode}
+              helperText="Changing this affects ONLY transactions created after the change. Audit-logged in config-registry."
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={onSave}
+            variant="contained"
+            disabled={saving || draftMode === partner.settlementRoundingMode}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

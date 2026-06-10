@@ -1,7 +1,7 @@
 # GMEPay+ — Master Plan & Launch-Readiness Scorecard
 
 **Target go-live:** 10 Oct 2026 (GME Remit domestic) · overseas partners Oct–Dec 2026
-**Last updated:** 2026-06-10 · **Overall readiness (build-to-launch): ~42%** (17 backend services + persistence + rounding flow + Outbox + OpenAPI + gateway routes + docker-compose + CI + **Ops/Partner BFF** + **Admin UI** (Next.js + MUI + Redux Toolkit + RHF + Yup + Lottie) + **Partner Self-Service Portal**; full build green)
+**Last updated:** 2026-06-10 · **Overall readiness (build-to-launch): ~50%** (17 backend services + persistence + rounding + Outbox + 13 expanded BFF endpoints + Admin UI + Partner Portal both wired to real BFF with login/auth/loading/error/empty/toast states + UI CI job + docs/UI_DEVELOPMENT.md; full build green; 28 BFF tests + Vitest coverage)
 **Status legend:** ✅ done/green · 🟡 in progress/partial · ⬜ not started · 🔒 blocked on external party
 
 > Living document. Update the status columns and `PROGRESS.md` as each service goes green. Build = AI agents; calendar-bound certification/regulatory/UAT/infra = GME team + external parties.

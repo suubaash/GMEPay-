@@ -3,6 +3,7 @@
 import {
   AppBar,
   Box,
+  Button,
   Drawer,
   List,
   ListItem,
@@ -18,8 +19,13 @@ import QrCode2Icon from '@mui/icons-material/QrCode2';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import LogoutIcon from '@mui/icons-material/Logout';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { clearAuth, getUsername } from '@/api/auth';
+import { useAppDispatch } from '@/store';
+import { logout as logoutAction } from '@/store/authSlice';
 
 const drawerWidth = 240;
 
@@ -41,9 +47,26 @@ const navItems: NavItem[] = [
 /**
  * Top app-bar + permanent left navigation drawer for the Ops/Admin Portal.
  * The current section is highlighted by matching the URL pathname prefix.
+ *
+ * The app bar also shows the signed-in username (read from localStorage so
+ * the value survives a page refresh without an extra round-trip) and a
+ * logout button that clears the token and redirects to /login.
  */
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const dispatch = useAppDispatch();
+  // username is only available client-side; read it after mount to avoid SSR mismatch.
+  const [username, setUsername] = useState<string | null>(null);
+  useEffect(() => {
+    setUsername(getUsername());
+  }, []);
+
+  const handleLogout = () => {
+    clearAuth();
+    dispatch(logoutAction());
+    router.replace('/login');
+  };
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -53,9 +76,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         elevation={0}
       >
         <Toolbar>
-          <Typography variant="h6" noWrap component="div" sx={{ fontWeight: 700 }}>
+          <Typography variant="h6" noWrap component="div" sx={{ fontWeight: 700, flexGrow: 1 }}>
             GMEPay+ Ops
           </Typography>
+          {username ? (
+            <Typography variant="body2" sx={{ mr: 2, opacity: 0.85 }}>
+              {username}
+            </Typography>
+          ) : null}
+          <Button
+            color="inherit"
+            size="small"
+            startIcon={<LogoutIcon />}
+            onClick={handleLogout}
+          >
+            Logout
+          </Button>
         </Toolbar>
       </AppBar>
       <Drawer

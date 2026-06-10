@@ -62,6 +62,21 @@ class AdminDashboardControllerTest {
             public List<PartnerSummary> listPartners() {
                 return partners;
             }
+
+            @Override
+            public PartnerSummary createPartner(PartnerCreateRequest request) {
+                return null;
+            }
+
+            @Override
+            public PartnerSummary updateRoundingMode(String partnerId, String mode) {
+                return null;
+            }
+
+            @Override
+            public List<SchemeSummary> listSchemes() {
+                return List.of();
+            }
         };
 
         TransactionMgmtClient transactions = new TransactionMgmtClient() {
@@ -82,6 +97,11 @@ class AdminDashboardControllerTest {
             public List<TransactionSummary> recent(String partnerId, int limit) {
                 return txns;
             }
+
+            @Override
+            public Page<TransactionSummary> list(Filter filter) {
+                return new Page<>(txns, 0, txns.size(), txns.size());
+            }
         };
 
         // p2 and p3 are at-or-below threshold; the controller should count 2 low-balance partners.
@@ -95,13 +115,38 @@ class AdminDashboardControllerTest {
             default -> null;
         };
 
-        RevenueLedgerClient revenue = date -> new RevenueLedgerClient.RevenueSummary(
-                date == null ? LocalDate.now() : date,
-                new BigDecimal("999.99"),
-                new BigDecimal("300.00"),
-                new BigDecimal("699.99"));
+        RevenueLedgerClient revenue = new RevenueLedgerClient() {
+            @Override
+            public RevenueSummary getSummary(LocalDate date) {
+                return new RevenueSummary(
+                        date == null ? LocalDate.now() : date,
+                        new BigDecimal("999.99"),
+                        new BigDecimal("300.00"),
+                        new BigDecimal("699.99"));
+            }
 
-        SettlementClient settlement = (partnerId, limit) -> List.of();
+            @Override
+            public RevenueSummary summaryRange(LocalDate from, LocalDate to) {
+                return getSummary(to);
+            }
+
+            @Override
+            public RevenueBreakdown breakdown(LocalDate from, LocalDate to) {
+                return new RevenueBreakdown(java.util.Map.of(), java.util.Map.of(), java.util.Map.of());
+            }
+        };
+
+        SettlementClient settlement = new SettlementClient() {
+            @Override
+            public List<SettlementBatchSummary> recent(String partnerId, int limit) {
+                return List.of();
+            }
+
+            @Override
+            public SettlementBatchDetail detail(String batchId) {
+                return null;
+            }
+        };
 
         AdminDashboardController controller =
                 new AdminDashboardController(configRegistry, transactions, prefunding, revenue, settlement);

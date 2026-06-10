@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import ReduxProvider from '@/components/ReduxProvider';
 import ThemeRegistry from '@/components/ThemeRegistry';
-import AppShell from '@/components/AppShell';
+import AppShellChrome from '@/components/AppShellChrome';
+import AuthGate from '@/components/AuthGate';
+import SnackbarProvider from '@/components/SnackbarProvider';
 
 export const metadata: Metadata = {
   title: 'GMEPay+ Ops',
@@ -10,9 +12,11 @@ export const metadata: Metadata = {
 
 /**
  * Root layout for the App Router tree. Order matters:
- *  - ReduxProvider must wrap ThemeRegistry so theme-aware client components
- *    can dispatch actions.
- *  - AppShell provides the persistent navigation chrome.
+ *  - ReduxProvider     : Redux store must be available to every client component.
+ *  - ThemeRegistry     : MUI theme + CssBaseline.
+ *  - SnackbarProvider  : app-wide useSnackbar() hook for toast notifications.
+ *  - AuthGate          : redirects unauthenticated users to /login (skips /login itself).
+ *  - AppShellChrome    : draws the sidebar + top bar EXCEPT on /login.
  */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -20,7 +24,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ReduxProvider>
           <ThemeRegistry>
-            <AppShell>{children}</AppShell>
+            <SnackbarProvider>
+              <AuthGate>
+                <AppShellChrome>{children}</AppShellChrome>
+              </AuthGate>
+            </SnackbarProvider>
           </ThemeRegistry>
         </ReduxProvider>
       </body>

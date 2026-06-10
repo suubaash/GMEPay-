@@ -1,28 +1,40 @@
 'use client';
 
-import { useEffect } from 'react';
-import { Box, Card, CardContent, Grid2 as Grid, Typography, Alert, CircularProgress } from '@mui/material';
-import Lottie from 'lottie-react';
+import { useCallback, useEffect } from 'react';
+import { Box, Card, CardContent, Grid2 as Grid, Typography } from '@mui/material';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { fetchDashboard } from '@/store/dashboardSlice';
 import MoneyDisplay from '@/components/MoneyDisplay';
-import emptyLottie from '@/lottie/empty.json';
+import ErrorAlert from '@/components/ErrorAlert';
+import EmptyState from '@/components/EmptyState';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
 
 /**
  * Dashboard home page.
  *
- * Renders 4 MUI Card components fed by GET /v1/admin/dashboard (via the BFF).
- * While the dashboard is empty (no data yet, e.g. fresh install), a placeholder
- * Lottie animation is shown — see src/lottie/empty.json for the placeholder
- * note; replace with a real file before production.
+ * Renders 4 MUI Card components fed by GET /v1/admin/dashboard (via the BFF):
+ *   - Transactions today          (count)
+ *   - Approved volume today       (Money)
+ *   - Active partners             (count)
+ *   - Rolling failure rate        (percentage)
+ *
+ * UX states:
+ *   - loading & no data -> Skeleton grid
+ *   - error             -> ErrorAlert with retry button
+ *   - data is null      -> EmptyState (Lottie + heading)
+ *   - data present      -> Grid of 4 cards
  */
 export default function DashboardPage() {
   const dispatch = useAppDispatch();
   const { data, loading, error } = useAppSelector((s) => s.dashboard);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     dispatch(fetchDashboard());
   }, [dispatch]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   return (
     <Box>
@@ -30,27 +42,28 @@ export default function DashboardPage() {
         Dashboard
       </Typography>
 
-      {error ? (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          Could not load dashboard metrics: {error}
-        </Alert>
-      ) : null}
+      <ErrorAlert
+        message={error}
+        onRetry={reload}
+        title="Could not load dashboard metrics"
+      />
 
       {loading && !data ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress />
-        </Box>
+        <Grid container spacing={2}>
+          {[0, 1, 2, 3].map((i) => (
+            <Grid key={i} size={{ xs: 12, sm: 6, md: 3 }}>
+              <LoadingSkeleton variant="card" />
+            </Grid>
+          ))}
+        </Grid>
       ) : null}
 
-      {!data && !loading ? (
-        <Card variant="outlined" sx={{ textAlign: 'center', p: 4 }}>
-          <Box sx={{ width: 200, height: 200, mx: 'auto' }}>
-            <Lottie animationData={emptyLottie} loop autoplay />
-          </Box>
-          <Typography variant="h4">No data yet</Typography>
-          <Typography color="text.secondary">
-            Once partners start transacting, KPIs will appear here.
-          </Typography>
+      {!data && !loading && !error ? (
+        <Card variant="outlined">
+          <EmptyState
+            heading="No data yet"
+            description="Once partners start transacting, KPIs will appear here."
+          />
         </Card>
       ) : null}
 
@@ -62,7 +75,9 @@ export default function DashboardPage() {
                 <Typography variant="body2" color="text.secondary">
                   Transactions today
                 </Typography>
-                <Typography variant="h3">{data.txnCountToday.toLocaleString()}</Typography>
+                <Typography variant="h3">
+                  {data.txnCountToday.toLocaleString()}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>

@@ -1,6 +1,6 @@
 'use client';
 import * as React from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   Alert,
@@ -8,7 +8,6 @@ import {
   Button,
   Card,
   CardContent,
-  CircularProgress,
   Divider,
   Grid,
   Stack,
@@ -20,36 +19,52 @@ import {
   TableRow,
   Typography
 } from '@mui/material';
-import { portalApi, currentPartnerId } from '@/api/client';
-import type { TransactionDetailDto } from '@/api/types';
+import { useDispatch, useSelector } from 'react-redux';
+import type { AppDispatch, RootState } from '@/store';
+import {
+  clearDetail,
+  fetchTransactionDetail
+} from '@/store/transactionsSlice';
+import { currentPartnerId } from '@/api/client';
 import MoneyDisplay from '@/components/MoneyDisplay';
 import StatusChip from '@/components/StatusChip';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import ErrorAlert from '@/components/ErrorAlert';
+import { useSnackbar } from '@/components/SnackbarProvider';
 
 export default function TransactionDetailPage() {
   const params = useParams<{ txnId: string }>();
+  const router = useRouter();
+  const dispatch = useDispatch<AppDispatch>();
+  const snackbar = useSnackbar();
   const partnerId = currentPartnerId();
   const txnId = decodeURIComponent(params.txnId);
 
-  const [data, setData] = React.useState<TransactionDetailDto | null>(null);
-  const [status, setStatus] = React.useState<'idle' | 'loading' | 'succeeded' | 'failed'>(
-    'idle'
+  const { data, status, error, failureStatus } = useSelector(
+    (s: RootState) => s.transactions.detail
   );
-  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!partnerId || !txnId) return;
-    setStatus('loading');
-    portalApi
-      .getTransaction(partnerId, txnId)
-      .then((d) => {
-        setData(d);
-        setStatus('succeeded');
-      })
-      .catch((e: Error) => {
-        setError(e.message);
-        setStatus('failed');
-      });
-  }, [partnerId, txnId]);
+    dispatch(fetchTransactionDetail({ partnerId, txnId }));
+    return () => {
+      dispatch(clearDetail());
+    };
+  }, [partnerId, txnId, dispatch]);
+
+  // 404 -> redirect to /transactions with an error toast.
+  React.useEffect(() => {
+    if (status === 'failed' && failureStatus === 404) {
+      snackbar.showError(`Transaction "${txnId}" not found.`);
+      router.replace('/transactions');
+    }
+  }, [status, failureStatus, txnId, router, snackbar]);
+
+  const retry = React.useCallback(() => {
+    if (partnerId && txnId) {
+      dispatch(fetchTransactionDetail({ partnerId, txnId }));
+    }
+  }, [partnerId, txnId, dispatch]);
 
   return (
     <Stack spacing={3}>
@@ -60,8 +75,14 @@ export default function TransactionDetailPage() {
         <Typography variant="h1">Transaction {txnId}</Typography>
       </Box>
 
-      {status === 'loading' && <CircularProgress />}
-      {status === 'failed' && <Alert severity="error">{error}</Alert>}
+      {status === 'loading' && <LoadingSkeleton variant="detail" />}
+      {/*
+        404 is handled by the redirect effect above, so we don't render an
+        error surface for it (the toast does that work).
+      */}
+      {status === 'failed' && failureStatus !== 404 && (
+        <ErrorAlert message={error ?? 'Failed to load transaction.'} onRetry={retry} />
+      )}
 
       {data && (
         <>
@@ -87,7 +108,7 @@ export default function TransactionDetailPage() {
                     Send
                   </Typography>
                   <Typography variant="h4">
-                    <MoneyDisplay money={data.sendAmount} />
+                    <MoneyDisplay money={data.sendAmount} showRawTooltip />
                   </Typography>
                 </Grid>
                 <Grid item xs={12} md={3}>
@@ -95,7 +116,7 @@ export default function TransactionDetailPage() {
                     Payout
                   </Typography>
                   <Typography variant="h4">
-                    <MoneyDisplay money={data.payoutAmount} />
+                    <MoneyDisplay money={data.payoutAmount} showRawTooltip />
                   </Typography>
                 </Grid>
               </Grid>
@@ -114,7 +135,7 @@ export default function TransactionDetailPage() {
                     Booked settlement
                   </Typography>
                   <Typography>
-                    <MoneyDisplay money={data.bookedSettlementAmount} />
+                    <MoneyDisplay money={data.bookedSettlementAmount} showRawTooltip />
                   </Typography>
                 </Grid>
                 <Grid item xs={12} md={3}>
@@ -128,7 +149,11 @@ export default function TransactionDetailPage() {
                     Rounding residual
                   </Typography>
                   <Typography>
-                    <MoneyDisplay money={data.roundingResidual} parenthesizeNegative />
+                    <MoneyDisplay
+                      money={data.roundingResidual}
+                      parenthesizeNegative
+                      showRawTooltip
+                    />
                   </Typography>
                 </Grid>
               </Grid>
@@ -140,26 +165,30 @@ export default function TransactionDetailPage() {
               <Typography variant="h3" sx={{ mb: 2 }}>
                 Event trail
               </Typography>
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>At</TableCell>
-                      <TableCell>Type</TableCell>
-                      <TableCell>Detail</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {data.events.map((e, i) => (
-                      <TableRow key={`${e.at}-${i}`}>
-                        <TableCell>{new Date(e.at).toLocaleString()}</TableCell>
-                        <TableCell>{e.type}</TableCell>
-                        <TableCell>{e.detail ?? ''}</TableCell>
+              {data.events.length === 0 ? (
+                <Alert severity="info">No events recorded for this transaction yet.</Alert>
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>At</TableCell>
+                        <TableCell>Type</TableCell>
+                        <TableCell>Detail</TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                    </TableHead>
+                    <TableBody>
+                      {data.events.map((e, i) => (
+                        <TableRow key={`${e.at}-${i}`}>
+                          <TableCell>{new Date(e.at).toLocaleString()}</TableCell>
+                          <TableCell>{e.type}</TableCell>
+                          <TableCell>{e.detail ?? ''}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
             </CardContent>
           </Card>
         </>

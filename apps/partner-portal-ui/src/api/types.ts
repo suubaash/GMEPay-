@@ -105,3 +105,22 @@ export interface ApiError {
   message: string;
   traceId?: string;
 }
+
+/**
+ * Aggregated overview returned by `GET /v1/portal/{partnerId}/overview`.
+ *
+ * Fans out (server-side, in the BFF) to prefunding (balance), transaction-mgmt
+ * (recent activity count) and settlement-reconciliation (last settlement).
+ */
+export interface OverviewDto {
+  partnerId: string;
+  displayName: string;
+  balance: MoneyDto;
+  lowBalanceThreshold: MoneyDto;
+  /** Count of transactions in a recent rolling window (e.g. last 7 days). */
+  recentActivityCount: number;
+  /** ISO-8601 timestamp of the most recent settlement, if any. */
+  lastSettlementAt?: string | null;
+  /** ISO-8601 timestamp of the last ledger write affecting the balance. */
+  balanceLastUpdatedAt: string;
+}

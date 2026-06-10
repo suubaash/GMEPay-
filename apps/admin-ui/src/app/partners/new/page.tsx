@@ -1,29 +1,28 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Controller, useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import {
-  Alert,
   Box,
   Button,
   Card,
   CardContent,
+  CircularProgress,
   FormControl,
   FormHelperText,
   InputLabel,
   MenuItem,
   Select,
-  Snackbar,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
 import RoundingModeSelect from '@/components/RoundingModeSelect';
+import { useSnackbar } from '@/components/SnackbarProvider';
 import { partnerSchema, type PartnerFormValues } from '@/schemas/partnerSchema';
 import { PARTNER_TYPES, type PartnerType, type RoundingMode } from '@/api/types';
-import { useAppDispatch } from '@/store';
+import { useAppDispatch, useAppSelector } from '@/store';
 import { createPartner } from '@/store/partnersSlice';
 
 /**
@@ -36,6 +35,11 @@ import { createPartner } from '@/store/partnersSlice';
  * and the residual versus the precise amount is posted as REVENUE_ROUNDING gain
  * or loss in revenue-ledger.
  *
+ * On success the global SnackbarProvider fires a green toast and the router
+ * navigates to /partners. On error a red toast carries the BFF message
+ * (e.g. 409 Conflict for duplicate IDs) and the form stays put so the
+ * operator can correct and retry.
+ *
  * Defaults:
  *   type:                 LOCAL
  *   settlementCurrency:   KRW
@@ -44,9 +48,8 @@ import { createPartner } from '@/store/partnersSlice';
 export default function NewPartnerPage() {
   const router = useRouter();
   const dispatch = useAppDispatch();
-  const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: 'success' | 'error' }>(
-    { open: false, msg: '', severity: 'success' },
-  );
+  const snackbar = useSnackbar();
+  const { saving } = useAppSelector((s) => s.partners);
 
   const {
     control,
@@ -73,13 +76,15 @@ export default function NewPartnerPage() {
           settlementRoundingMode: values.settlementRoundingMode as RoundingMode,
         }),
       ).unwrap();
-      setSnack({ open: true, msg: `Partner ${values.partnerId} created`, severity: 'success' });
-      setTimeout(() => router.push('/partners'), 600);
+      snackbar.success(`Partner ${values.partnerId} created`);
+      router.push('/partners');
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setSnack({ open: true, msg: `Create failed: ${message}`, severity: 'error' });
+      snackbar.error(`Create failed: ${message}`);
     }
   };
+
+  const busy = saving || isSubmitting;
 
   return (
     <Box>
@@ -160,7 +165,12 @@ export default function NewPartnerPage() {
 
               <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
                 <Button onClick={() => router.push('/partners')}>Cancel</Button>
-                <Button type="submit" variant="contained" disabled={isSubmitting}>
+                <Button
+                  type="submit"
+                  variant="contained"
+                  disabled={busy}
+                  startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
+                >
                   Create partner
                 </Button>
               </Box>
@@ -168,20 +178,6 @@ export default function NewPartnerPage() {
           </Box>
         </CardContent>
       </Card>
-
-      <Snackbar
-        open={snack.open}
-        autoHideDuration={5000}
-        onClose={() => setSnack((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert
-          severity={snack.severity}
-          onClose={() => setSnack((s) => ({ ...s, open: false }))}
-        >
-          {snack.msg}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 }

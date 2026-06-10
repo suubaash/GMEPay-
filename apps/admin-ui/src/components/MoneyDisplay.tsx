@@ -1,6 +1,6 @@
 'use client';
 
-import { Box, Typography } from '@mui/material';
+import { Box, Tooltip, Typography } from '@mui/material';
 import type { Money } from '@/api/types';
 
 /**
@@ -14,6 +14,12 @@ import type { Money } from '@/api/types';
  * The currency scales table mirrors `lib-money/CurrencyScale`:
  *   KRW / JPY / VND -> 0 decimals
  *   default         -> 2 decimals
+ *
+ * Negative amounts (e.g. rounding loss, refunds) are formatted with a leading
+ * minus sign on the integer portion ("-$5.00") and rendered in the MUI error
+ * color so they stand out in finance tables. A tooltip shows the raw amount
+ * string as received from the BFF — useful for ops debugging when a settlement
+ * residual contains more decimals than the display scale.
  */
 const CURRENCY_SCALES: Readonly<Record<string, number>> = {
   KRW: 0,
@@ -54,26 +60,38 @@ export interface MoneyDisplayProps {
   value: Money;
   /** Show the currency code after the amount. Default true. */
   withCurrency?: boolean;
+  /** Whether to color negative amounts red. Default true. */
+  negativeRed?: boolean;
 }
 
-export default function MoneyDisplay({ value, withCurrency = true }: MoneyDisplayProps) {
+export default function MoneyDisplay({
+  value,
+  withCurrency = true,
+  negativeRed = true,
+}: MoneyDisplayProps) {
   const scale = scaleFor(value.currency);
   const formatted = formatToScale(value.amount, scale);
+  const isNegative = value.amount.startsWith('-');
+  const color = isNegative && negativeRed ? 'error.main' : 'inherit';
+  const tooltipRaw = `${value.amount} ${value.currency}`;
+
   return (
-    <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-      <Typography component="span" sx={{ fontWeight: 600 }}>
-        {formatted}
-      </Typography>
-      {withCurrency ? (
-        <Typography
-          component="span"
-          variant="body2"
-          color="text.secondary"
-          sx={{ ml: 0.5 }}
-        >
-          {value.currency}
+    <Tooltip title={tooltipRaw} arrow enterDelay={400}>
+      <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums', color }}>
+        <Typography component="span" sx={{ fontWeight: 600, color: 'inherit' }}>
+          {formatted}
         </Typography>
-      ) : null}
-    </Box>
+        {withCurrency ? (
+          <Typography
+            component="span"
+            variant="body2"
+            color="text.secondary"
+            sx={{ ml: 0.5 }}
+          >
+            {value.currency}
+          </Typography>
+        ) : null}
+      </Box>
+    </Tooltip>
   );
 }

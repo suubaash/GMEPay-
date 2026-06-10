@@ -5,15 +5,16 @@ import {
   Box,
   Card,
   CardContent,
-  CircularProgress,
   Grid,
   Stack,
   Typography
 } from '@mui/material';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '@/store';
-import { fetchProfile } from '@/store/portalSlice';
+import { fetchProfile } from '@/store/profileSlice';
 import { currentPartnerId } from '@/api/client';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import ErrorAlert from '@/components/ErrorAlert';
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -28,19 +29,28 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/**
+ * Read-only partner profile. Highlights `settlementRoundingMode` since it
+ * determines how the partner's settlement liability is booked under
+ * `lib-money/SettlementRounding.book(...)` (docs/MONEY_CONVENTION.md).
+ */
 export default function ProfilePage() {
   const dispatch = useDispatch<AppDispatch>();
   const partnerId = currentPartnerId();
-  const { data, status, error } = useSelector((s: RootState) => s.portal.profile);
+  const { data, status, error } = useSelector((s: RootState) => s.profile);
 
   React.useEffect(() => {
     if (partnerId && status === 'idle') dispatch(fetchProfile(partnerId));
   }, [partnerId, status, dispatch]);
 
+  const retry = React.useCallback(() => {
+    if (partnerId) dispatch(fetchProfile(partnerId));
+  }, [partnerId, dispatch]);
+
   if (!partnerId) {
     return (
       <Alert severity="warning">
-        No partner id configured. Set <code>NEXT_PUBLIC_PARTNER_ID</code>.
+        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
       </Alert>
     );
   }
@@ -55,8 +65,10 @@ export default function ProfilePage() {
         </Typography>
       </Box>
 
-      {status === 'loading' && <CircularProgress />}
-      {status === 'failed' && <Alert severity="error">{error}</Alert>}
+      {status === 'loading' && <LoadingSkeleton variant="card" rows={5} />}
+      {status === 'failed' && (
+        <ErrorAlert message={error ?? 'Failed to load profile.'} onRetry={retry} />
+      )}
 
       {data && (
         <Card>
@@ -74,19 +86,36 @@ export default function ProfilePage() {
               <Grid item xs={12} md={6}>
                 <Field label="Settlement currency" value={data.settlementCurrency} />
               </Grid>
+
+              {/*
+                Highlighted: settlement rounding mode determines how a partner's
+                liability is booked (HALF_UP, DOWN, etc) per docs/MONEY_CONVENTION.md.
+              */}
               <Grid item xs={12} md={6}>
-                <Field
-                  label="Settlement rounding mode"
-                  value={
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <span>{data.settlementRoundingMode}</span>
-                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                        (see docs/MONEY_CONVENTION.md)
-                      </Typography>
-                    </Stack>
-                  }
-                />
+                <Box
+                  data-testid="rounding-mode-highlight"
+                  sx={{
+                    p: 2,
+                    borderRadius: 1,
+                    border: '1px solid',
+                    borderColor: 'primary.light',
+                    bgcolor: 'rgba(11, 95, 255, 0.04)'
+                  }}
+                >
+                  <Typography variant="caption" sx={{ color: 'primary.dark', fontWeight: 600 }}>
+                    Settlement rounding mode
+                  </Typography>
+                  <Typography variant="h4" sx={{ fontWeight: 700, mt: 0.5 }}>
+                    {data.settlementRoundingMode}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Determines how your settlement liability is booked. Residuals between
+                    the precise amount and the booked amount are recorded in
+                    <code> REVENUE_ROUNDING</code> (see <code>docs/MONEY_CONVENTION.md</code>).
+                  </Typography>
+                </Box>
               </Grid>
+
               <Grid item xs={12} md={6}>
                 <Field
                   label="Onboarded"

@@ -1,9 +1,13 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.client.PrefundingClient;
 import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.web.dto.PartnerOverview;
+import com.gme.pay.bff.web.dto.PartnerProfile;
+import com.gme.pay.bff.web.dto.TransactionDetail;
+import com.gme.pay.bff.web.dto.WebhookConfigView;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -12,18 +16,30 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Partner Self-Service Portal endpoints. Each method orchestrates 1-N calls to
  * backend services and returns a UI-shaped DTO scoped to the calling partner.
  *
- * <p>Endpoints:
+ * <p>Phase-1 endpoints:
  * <ul>
  *   <li>{@code GET /v1/portal/{partnerId}/overview} — balance + recent activity counter + last settlement
  *   <li>{@code GET /v1/portal/{partnerId}/transactions} — paginated recent transactions
  *   <li>{@code GET /v1/portal/{partnerId}/balance} — prefunding balance view
+ * </ul>
+ *
+ * <p>Phase-C2 endpoints:
+ * <ul>
+ *   <li>{@code GET /v1/portal/{partnerId}/transactions/{txnId}} — single-txn detail scoped to the partner
+ *   <li>{@code GET /v1/portal/{partnerId}/webhooks} — webhook configuration rows
+ *   <li>{@code GET /v1/portal/{partnerId}/profile} — partner identity for the Profile page
  * </ul>
  */
 @RestController
@@ -39,14 +55,17 @@ public class PartnerPortalController {
     private final TransactionMgmtClient transactions;
     private final PrefundingClient prefunding;
     private final SettlementClient settlement;
+    private final ConfigRegistryClient configRegistry;
 
     public PartnerPortalController(
             TransactionMgmtClient transactions,
             PrefundingClient prefunding,
-            SettlementClient settlement) {
+            SettlementClient settlement,
+            ConfigRegistryClient configRegistry) {
         this.transactions = transactions;
         this.prefunding = prefunding;
         this.settlement = settlement;
+        this.configRegistry = configRegistry;
     }
 
     @GetMapping("/{partnerId}/overview")
@@ -72,6 +91,20 @@ public class PartnerPortalController {
         return transactions.recent(partnerId, capped);
     }
 
+    @GetMapping("/{partnerId}/transactions/{txnId}")
+    public TransactionDetail transactionDetail(
+            @PathVariable String partnerId,
+            @PathVariable String txnId) {
+        TransactionMgmtClient.TransactionSummary summary = transactions.getTransaction(txnId);
+        // 404 covers both "unknown" and "not owned by this partner" — we do NOT
+        // leak whether the txn exists under a different partner.
+        if (summary == null || !Objects.equals(summary.partnerId(), partnerId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "no transaction " + txnId + " for partner " + partnerId);
+        }
+        return buildDetail(summary);
+    }
+
     @GetMapping("/{partnerId}/balance")
     public PrefundingClient.BalanceView balance(@PathVariable String partnerId) {
         PrefundingClient.BalanceView view = prefunding.getBalance(partnerId);
@@ -80,5 +113,64 @@ public class PartnerPortalController {
                     "no prefunding balance for partner " + partnerId);
         }
         return view;
+    }
+
+    @GetMapping("/{partnerId}/webhooks")
+    public List<WebhookConfigView> webhooks(@PathVariable String partnerId) {
+        // Phase-1 stub: return 1-2 deterministic rows so the Portal UI can bind.
+        // Production: GET notification-webhook/{partnerId}/webhooks.
+        return List.of(
+                new WebhookConfigView(
+                        "https://partner.example.com/" + partnerId + "/webhook/payments",
+                        List.of("payment.approved", "payment.failed"),
+                        "ACTIVE",
+                        Instant.parse("2026-06-09T11:00:00Z")),
+                new WebhookConfigView(
+                        "https://partner.example.com/" + partnerId + "/webhook/settlements",
+                        List.of("settlement.completed"),
+                        "ACTIVE",
+                        Instant.parse("2026-06-08T22:30:00Z")));
+    }
+
+    @GetMapping("/{partnerId}/profile")
+    public PartnerProfile profile(@PathVariable String partnerId) {
+        ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(partnerId);
+        if (partner == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "no partner with id " + partnerId);
+        }
+        // Phase-1: synthesize an onboarding timestamp deterministically. In
+        // production this comes from config-registry's partner record.
+        return new PartnerProfile(
+                partner.partnerId(),
+                partner.type(),
+                partner.settlementCurrency(),
+                partner.settlementRoundingMode(),
+                Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
+    /**
+     * Synthesizes a Phase-1 {@link TransactionDetail} from the read-side summary.
+     * Mirrors {@code AdminDashboardController#buildDetail} so the Portal UI sees
+     * the same shape as the Admin UI.
+     */
+    private TransactionDetail buildDetail(TransactionMgmtClient.TransactionSummary summary) {
+        BigDecimal precise = summary.amount();
+        ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(summary.partnerId());
+        RoundingMode mode = partner == null ? RoundingMode.HALF_UP : partner.settlementRoundingMode();
+        BigDecimal booked = precise.setScale(2, mode);
+        BigDecimal residual = precise.subtract(booked);
+        Instant approvedAt = summary.committedAt() == null
+                ? null
+                : summary.committedAt().minus(2, ChronoUnit.SECONDS);
+        return new TransactionDetail(
+                summary,
+                "SCH-" + summary.txnId(),
+                "AP-" + summary.txnId(),
+                precise,
+                approvedAt,
+                booked,
+                mode,
+                residual);
     }
 }

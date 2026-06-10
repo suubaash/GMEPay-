@@ -80,5 +80,24 @@ describe('MoneyDisplay', () => {
       );
       expect(screen.queryByTestId('money-currency')).toBeNull();
     });
+
+    it('wraps the amount in a tooltip when showRawTooltip is set', () => {
+      render(
+        <MoneyDisplay
+          money={{ amount: '10500.567', currency: 'USD' }}
+          showRawTooltip
+        />
+      );
+      // The tooltip wrapper is always rendered (its title is provided to MUI
+      // Tooltip — the actual popper opens on hover).
+      expect(screen.getByTestId('money-raw-tooltip')).toBeInTheDocument();
+      // Underlying display is still rounded for scale=2.
+      expect(screen.getByTestId('money-amount').textContent).toMatch(/^10,?500\.57$/);
+    });
+
+    it('does NOT wrap in tooltip when showRawTooltip is unset', () => {
+      render(<MoneyDisplay money={{ amount: '10.20', currency: 'USD' }} />);
+      expect(screen.queryByTestId('money-raw-tooltip')).toBeNull();
+    });
   });
 });

@@ -9,10 +9,12 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standal
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.client.PrefundingClient;
 import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -68,16 +70,60 @@ class PartnerPortalControllerTest {
             public List<TransactionSummary> recent(String partnerId, int limit) {
                 return PARTNER.equals(partnerId) ? txns : List.of();
             }
+
+            @Override
+            public Page<TransactionSummary> list(Filter filter) {
+                return new Page<>(txns, 0, txns.size(), txns.size());
+            }
         };
 
-        SettlementClient settlement = (partnerId, limit) -> List.of(
-                new SettlementClient.SettlementBatchSummary(
+        SettlementClient settlement = new SettlementClient() {
+            @Override
+            public List<SettlementBatchSummary> recent(String partnerId, int limit) {
+                return List.of(new SettlementBatchSummary(
                         "BATCH-20260608-001", PARTNER,
                         LocalDate.of(2026, 6, 8), "USD",
                         new BigDecimal("9876.54"), "COMPLETED"));
+            }
+
+            @Override
+            public SettlementBatchDetail detail(String batchId) {
+                return null;
+            }
+        };
+
+        ConfigRegistryClient configRegistry = new ConfigRegistryClient() {
+            private final PartnerSummary partner = new PartnerSummary(
+                    PARTNER, "OVERSEAS", "USD", RoundingMode.HALF_UP);
+
+            @Override
+            public PartnerSummary getPartner(String id) {
+                return PARTNER.equals(id) ? partner : null;
+            }
+
+            @Override
+            public List<PartnerSummary> listPartners() {
+                return List.of(partner);
+            }
+
+            @Override
+            public PartnerSummary createPartner(PartnerCreateRequest request) {
+                return null;
+            }
+
+            @Override
+            public PartnerSummary updateRoundingMode(String partnerId, String mode) {
+                return null;
+            }
+
+            @Override
+            public List<SchemeSummary> listSchemes() {
+                return List.of();
+            }
+        };
 
         PartnerPortalController controller =
-                new PartnerPortalController(transactions, prefunding, settlement);
+                new PartnerPortalController(transactions, prefunding, settlement, configRegistry);
 
         // Configure Jackson with JavaTimeModule + ISO strings for Instant/LocalDate (not arrays of numbers).
         ObjectMapper om = new ObjectMapper()

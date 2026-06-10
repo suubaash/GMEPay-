@@ -1,6 +1,7 @@
 'use client';
 import * as React from 'react';
 import Box from '@mui/material/Box';
+import Tooltip from '@mui/material/Tooltip';
 import type { MoneyDto } from '@/api/types';
 
 /**
@@ -28,6 +29,13 @@ export interface MoneyDisplayProps {
   /** Optional ARIA label override; otherwise composed from amount + currency. */
   ariaLabel?: string;
   className?: string;
+  /**
+   * When true, wraps the rendered amount in a tooltip that reveals the raw
+   * (unrounded, server-supplied) decimal string on hover/focus. Useful for
+   * detail screens where users need to audit the precise value behind a
+   * display-rounded total. Defaults to false.
+   */
+  showRawTooltip?: boolean;
 }
 
 /**
@@ -66,13 +74,14 @@ export default function MoneyDisplay({
   parenthesizeNegative = false,
   showCurrency = true,
   ariaLabel,
-  className
+  className,
+  showRawTooltip = false
 }: MoneyDisplayProps) {
   const text = formatMoney(money, parenthesizeNegative);
   const isNegative = (money.amount ?? '').trim().startsWith('-');
   const label = ariaLabel ?? `${text} ${money.currency}`;
 
-  return (
+  const inner = (
     <Box
       component="span"
       className={className}
@@ -98,4 +107,21 @@ export default function MoneyDisplay({
       )}
     </Box>
   );
+
+  if (showRawTooltip) {
+    const raw = `${money.amount ?? ''} ${money.currency}`.trim();
+    return (
+      <Tooltip title={`Raw: ${raw}`} arrow placement="top">
+        <Box
+          component="span"
+          data-testid="money-raw-tooltip"
+          sx={{ display: 'inline-block', cursor: 'help' }}
+        >
+          {inner}
+        </Box>
+      </Tooltip>
+    );
+  }
+
+  return inner;
 }

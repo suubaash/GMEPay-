@@ -7,6 +7,9 @@ import java.util.List;
 /**
  * Read-only view of settlement-reconciliation. Production calls
  * {@code GET /v1/settlements}; Phase-1 default is an in-memory stub.
+ *
+ * <p>Phase C2 adds a per-batch detail accessor so the Admin UI settlement-batch
+ * drawer can show the matched/unmatched lines.
  */
 public interface SettlementClient {
 
@@ -19,6 +22,12 @@ public interface SettlementClient {
      */
     List<SettlementBatchSummary> recent(String partnerId, int limit);
 
+    /**
+     * Fetches one settlement batch and its lines. Returns {@code null} when the
+     * batch is unknown — the controller maps that to HTTP 404.
+     */
+    SettlementBatchDetail detail(String batchId);
+
     record SettlementBatchSummary(
             String batchId,
             String partnerId,
@@ -26,5 +35,19 @@ public interface SettlementClient {
             String currency,
             BigDecimal amount,
             String status
+    ) {}
+
+    /** One row of a settlement batch — a single scheme/transaction line. */
+    record SettlementLine(
+            String txnRef,
+            BigDecimal amount,
+            String currency,
+            boolean matched
+    ) {}
+
+    /** Full settlement-batch view used by the Admin UI drawer. */
+    record SettlementBatchDetail(
+            SettlementBatchSummary batch,
+            List<SettlementLine> lines
     ) {}
 }

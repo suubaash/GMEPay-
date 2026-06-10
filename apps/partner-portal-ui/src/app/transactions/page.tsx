@@ -1,11 +1,9 @@
 'use client';
 import * as React from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Alert,
   Box,
-  Button,
-  CircularProgress,
   Paper,
   Stack,
   Table,
@@ -15,46 +13,65 @@ import {
   TableHead,
   TablePagination,
   TableRow,
+  TableSortLabel,
   Typography
 } from '@mui/material';
 import { useDispatch, useSelector } from 'react-redux';
 import type { AppDispatch, RootState } from '@/store';
-import { fetchTransactions } from '@/store/portalSlice';
+import { fetchTransactionsPage } from '@/store/transactionsSlice';
 import { currentPartnerId } from '@/api/client';
 import MoneyDisplay from '@/components/MoneyDisplay';
 import StatusChip from '@/components/StatusChip';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import ErrorAlert from '@/components/ErrorAlert';
+import EmptyState from '@/components/EmptyState';
+
+type SortDir = 'asc' | 'desc';
 
 export default function TransactionsPage() {
   const dispatch = useDispatch<AppDispatch>();
+  const router = useRouter();
   const partnerId = currentPartnerId();
-  const { data, status, error } = useSelector((s: RootState) => s.portal.transactions);
+  const { data, status, error } = useSelector((s: RootState) => s.transactions.page);
 
   const [page, setPage] = React.useState(0);
   const [size, setSize] = React.useState(25);
+  // Sort by date desc by default per spec.
+  const [sortDir, setSortDir] = React.useState<SortDir>('desc');
+
+  const sort = `createdAt,${sortDir}`;
 
   React.useEffect(() => {
-    if (partnerId) dispatch(fetchTransactions({ partnerId, page, size }));
-  }, [partnerId, page, size, dispatch]);
+    if (partnerId) dispatch(fetchTransactionsPage({ partnerId, page, size, sort }));
+  }, [partnerId, page, size, sort, dispatch]);
+
+  const retry = React.useCallback(() => {
+    if (partnerId) dispatch(fetchTransactionsPage({ partnerId, page, size, sort }));
+  }, [partnerId, page, size, sort, dispatch]);
 
   if (!partnerId) {
     return (
       <Alert severity="warning">
-        No partner id configured. Set <code>NEXT_PUBLIC_PARTNER_ID</code>.
+        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
       </Alert>
     );
   }
+
+  const isInitialLoad = status === 'loading' && !data;
 
   return (
     <Stack spacing={3}>
       <Box>
         <Typography variant="h1">Transactions</Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          Read-only history. Click a transaction to view its rate-locked details.
+          Read-only history, newest first. Click a row to view rate-locked details.
         </Typography>
       </Box>
 
-      {status === 'loading' && !data && <CircularProgress />}
-      {status === 'failed' && <Alert severity="error">{error}</Alert>}
+      {isInitialLoad && <LoadingSkeleton variant="table" rows={size > 25 ? 10 : size / 2.5} />}
+      {status === 'failed' && (
+        <ErrorAlert message={error ?? 'Failed to load transactions.'} onRetry={retry} />
+      )}
 
       {data && (
         <Paper variant="outlined">
@@ -63,26 +80,42 @@ export default function TransactionsPage() {
               <TableHead>
                 <TableRow>
                   <TableCell>Transaction ID</TableCell>
-                  <TableCell>Created</TableCell>
+                  <TableCell sortDirection={sortDir}>
+                    <TableSortLabel
+                      active
+                      direction={sortDir}
+                      onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                      data-testid="sort-created"
+                    >
+                      Created
+                    </TableSortLabel>
+                  </TableCell>
                   <TableCell>Send</TableCell>
                   <TableCell>Payout</TableCell>
                   <TableCell>Scheme</TableCell>
                   <TableCell>Status</TableCell>
-                  <TableCell />
                 </TableRow>
               </TableHead>
               <TableBody>
                 {data.items.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4 }}>
-                      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                        No transactions yet.
-                      </Typography>
+                    <TableCell colSpan={6} sx={{ p: 0, border: 0 }}>
+                      <EmptyState
+                        title="No transactions yet"
+                        message="Once your first payments are processed, they'll show up here."
+                      />
                     </TableCell>
                   </TableRow>
                 )}
                 {data.items.map((t) => (
-                  <TableRow key={t.txnId} hover>
+                  <TableRow
+                    key={t.txnId}
+                    hover
+                    sx={{ cursor: 'pointer' }}
+                    onClick={() =>
+                      router.push(`/transactions/${encodeURIComponent(t.txnId)}`)
+                    }
+                  >
                     <TableCell sx={{ fontFamily: 'monospace' }}>{t.txnId}</TableCell>
                     <TableCell>{new Date(t.createdAt).toLocaleString()}</TableCell>
                     <TableCell>
@@ -94,15 +127,6 @@ export default function TransactionsPage() {
                     <TableCell>{t.scheme ?? '—'}</TableCell>
                     <TableCell>
                       <StatusChip status={t.status} />
-                    </TableCell>
-                    <TableCell align="right">
-                      <Button
-                        size="small"
-                        component={Link}
-                        href={`/transactions/${encodeURIComponent(t.txnId)}`}
-                      >
-                        View
-                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

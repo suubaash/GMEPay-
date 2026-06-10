@@ -1,11 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
-  Alert,
   Box,
-  Chip,
-  CircularProgress,
   Paper,
   Table,
   TableBody,
@@ -15,78 +12,72 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { adminApi } from '@/api/client';
-import type { QrScheme } from '@/api/types';
+import StatusChip from '@/components/StatusChip';
+import ErrorAlert from '@/components/ErrorAlert';
+import EmptyState from '@/components/EmptyState';
+import LoadingSkeleton from '@/components/LoadingSkeleton';
+import { useAppDispatch, useAppSelector } from '@/store';
+import { listSchemes } from '@/store/schemesSlice';
+import { Chip } from '@mui/material';
 
 /**
- * QR scheme list — placeholder skeleton.
+ * QR scheme list page.
  *
- * Pulls from /v1/admin/schemes when the BFF endpoint is available; until then,
- * the table renders empty without error (the catch swallows network failure
- * so the page is still navigable).
+ * Columns: schemeId, displayName, country, currency, mode, status.
+ * Pulls from /v1/admin/schemes (BFF projection of config-registry's
+ * scheme registry). Status is rendered via the shared StatusChip
+ * (ACTIVE -> success, INACTIVE -> default).
  */
 export default function SchemesPage() {
-  const [items, setItems] = useState<QrScheme[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const dispatch = useAppDispatch();
+  const { items, loading, error } = useAppSelector((s) => s.schemes);
+
+  const reload = useCallback(() => {
+    dispatch(listSchemes());
+  }, [dispatch]);
 
   useEffect(() => {
-    let cancelled = false;
-    adminApi
-      .listSchemes()
-      .then((data) => {
-        if (cancelled) return;
-        setItems(data);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    reload();
+  }, [reload]);
 
   return (
     <Box>
       <Typography variant="h1" gutterBottom>
         QR Schemes
       </Typography>
-      {error ? (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Schemes endpoint not available yet: {error}
-        </Alert>
-      ) : null}
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Scheme ID</TableCell>
-              <TableCell>Display name</TableCell>
-              <TableCell>Active</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {loading ? (
+
+      <ErrorAlert message={error} onRetry={reload} title="Could not load schemes" />
+
+      {loading && items.length === 0 ? (
+        <LoadingSkeleton variant="table" rows={5} />
+      ) : !loading && items.length === 0 && !error ? (
+        <Paper variant="outlined">
+          <EmptyState
+            heading="No QR schemes registered"
+            description="Schemes will appear here once config-registry is populated."
+          />
+        </Paper>
+      ) : (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={3} align="center">
-                  <CircularProgress size={24} />
-                </TableCell>
+                <TableCell>Scheme ID</TableCell>
+                <TableCell>Display name</TableCell>
+                <TableCell>Country</TableCell>
+                <TableCell>Currency</TableCell>
+                <TableCell>Mode</TableCell>
+                <TableCell>Status</TableCell>
               </TableRow>
-            ) : items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} align="center">
-                  <Typography color="text.secondary">No schemes available.</Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((s) => (
+            </TableHead>
+            <TableBody>
+              {items.map((s) => (
                 <TableRow key={s.schemeId} hover>
                   <TableCell>{s.schemeId}</TableCell>
                   <TableCell>{s.displayName}</TableCell>
+                  <TableCell>{s.country ?? '—'}</TableCell>
+                  <TableCell>{s.currency ?? '—'}</TableCell>
+                  <TableCell>{s.mode ?? '—'}</TableCell>
                   <TableCell>
                     <Chip
                       size="small"
@@ -95,11 +86,11 @@ export default function SchemesPage() {
                     />
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
     </Box>
   );
 }

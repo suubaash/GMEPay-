@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { Metadata, Viewport } from 'next';
 import Providers from './providers';
-import AppShell from '@/components/AppShell';
+import AuthShell from '@/components/AuthShell';
 
 export const metadata: Metadata = {
   title: 'GMEPay+ Partner Portal',
@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <Providers>
-          <AppShell>{children}</AppShell>
+          <AuthShell>{children}</AuthShell>
         </Providers>
       </body>
     </html>
