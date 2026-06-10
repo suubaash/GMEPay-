@@ -1,6 +1,9 @@
 spring:
   application:
     name: qr-service
+  # NOTE: datasource / JPA / Flyway settings live in application.properties so the
+  # H2-PostgreSQL-mode test default and SPRING_DATASOURCE_* prod overrides stay in
+  # one place. Do not duplicate them here.
 
 server:
   port: 8084

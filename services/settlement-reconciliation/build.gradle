@@ -16,4 +16,14 @@ dependencies {
     implementation project(':libs:lib-events')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    // 17.2-G07: Docker-backed PostgreSQL 16 ITs (@Tag("docker")). Excluded from the
+    // local `test` task by the root build; CI runs them via `integrationTest`.
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }
+
+// Pin Testcontainers to the BOM version above (Spring Boot's dependency management
+// would otherwise downgrade it to its own default).
+ext['testcontainers.version'] = '1.20.1'

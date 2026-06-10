@@ -16,4 +16,10 @@ dependencies {
     runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    // Docker-backed ITs (@Tag("docker")): real PostgreSQL 16 via Testcontainers.
+    // Excluded from the local `test` task; CI runs them via `integrationTest`.
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

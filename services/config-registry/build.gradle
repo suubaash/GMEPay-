@@ -7,8 +7,14 @@ plugins {
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // Redis-backed config cache (17.3-G03). Optional at runtime: the cache beans are
+    // gated on spring.data.redis.host and fall back to a no-op pass-through without it.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation 'org.flywaydb:flyway-core'
+    // Flyway 10.x ships PostgreSQL support as a separate artifact; required for both
+    // production (PG datasource via SPRING_DATASOURCE_*) and the postgres:16 ITs (17.2-G01).
+    implementation 'org.flywaydb:flyway-database-postgresql'
     implementation project(':libs:lib-domain')
     implementation project(':libs:lib-errors')
 
@@ -16,4 +22,8 @@ dependencies {
     runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Docker-backed ITs (@Tag("docker"), run via :integrationTest on CI only — no Docker here).
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

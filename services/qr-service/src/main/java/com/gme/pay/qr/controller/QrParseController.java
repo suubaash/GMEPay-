@@ -1,5 +1,6 @@
 package com.gme.pay.qr.controller;
 
+import com.gme.pay.qr.domain.cache.QrParseCachePort;
 import com.gme.pay.qr.domain.emvco.ParsedQRPayload;
 import com.gme.pay.qr.domain.emvco.ZeroPayQRParser;
 import com.gme.pay.qr.dto.ParseQrRequest;
@@ -22,9 +23,11 @@ import java.util.Map;
 public class QrParseController {
 
     private final ZeroPayQRParser zeroPayQRParser;
+    private final QrParseCachePort parseCache;
 
-    public QrParseController(ZeroPayQRParser zeroPayQRParser) {
+    public QrParseController(ZeroPayQRParser zeroPayQRParser, QrParseCachePort parseCache) {
         this.zeroPayQRParser = zeroPayQRParser;
+        this.parseCache = parseCache;
     }
 
     /**
@@ -56,9 +59,18 @@ public class QrParseController {
     // Helpers
     // -----------------------------------------------------------------------
 
+    /**
+     * Route to the scheme parser with a read-through QR-parse result cache (17.2-G04).
+     * The cache is consulted only after the scheme check so unknown-scheme behaviour is
+     * unchanged; only successful parses are stored.
+     */
     private ParsedQRPayload routeToParser(String schemeId, String rawPayload) {
         if (ZeroPayQRParser.SCHEME_ID.equalsIgnoreCase(schemeId)) {
-            return zeroPayQRParser.parse(rawPayload);
+            return parseCache.findCached(rawPayload).orElseGet(() -> {
+                ParsedQRPayload parsed = zeroPayQRParser.parse(rawPayload);
+                parseCache.store(parsed);
+                return parsed;
+            });
         }
         throw new com.gme.pay.qr.exception.QRUnknownSchemeException(
                 "No parser registered for schemeId: " + schemeId);

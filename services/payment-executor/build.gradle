@@ -5,12 +5,27 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
 
+    runtimeOnly 'org.postgresql:postgresql'
+    // Flyway 10 ships PostgreSQL support as a separate artifact; required when the
+    // migrations run against real PostgreSQL (docker-tagged ITs / production).
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    // H2 (PostgreSQL mode) backs the no-Docker unit slices only.
+    runtimeOnly 'com.h2database:h2'
+
     // Pulls in spring-test (MockRestServiceServer), JUnit, AssertJ — needed by the
     // REST-adapter tests. No other new runtime deps were introduced for Phase-1 wiring.
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    // Docker-backed ITs (@Tag("docker"), run via :integrationTest in CI only — this
+    // machine has no Docker; locally these classes compile but are skipped by tag).
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

@@ -1,5 +1,8 @@
 package com.gme.pay.settlement.persistence;
 
+import com.gme.pay.settlement.recon.LineMatcher;
+import com.gme.pay.settlement.recon.MatchStatus;
+import com.gme.pay.settlement.recon.ReconLine;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -9,20 +12,19 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase.Replace.NONE;
 
 /**
- * Integration test verifying that settlement_batches and settlement_lines persist correctly
- * through the JPA repositories, against the H2 (PostgreSQL mode) DB configured in
- * application.yml and migrated by Flyway.
+ * Pure unit-slice persistence test on H2 (PostgreSQL mode), migrated by Flyway, verifying
+ * the JPA mappings for settlement_batches, settlement_lines and recon_exceptions compile
+ * and round-trip without a Docker engine.
  *
- * <p>Asserts:
- * <ol>
- *   <li>a batch can be created and saved with its associated lines;</li>
- *   <li>reading back the lines preserves the {@code matched} boolean flag for each row.</li>
- * </ol>
+ * <p>Real-PostgreSQL coverage (NUMERIC fidelity, PG-only syntax) lives in
+ * {@link SettlementReconciliationPostgresIT}, which is tagged {@code docker} and runs in CI
+ * via the {@code integrationTest} task (ticket 17.2-G07).
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = NONE)
@@ -33,6 +35,9 @@ class SettlementPersistenceIT {
 
     @Autowired
     private SettlementLineRepository lineRepository;
+
+    @Autowired
+    private ReconExceptionRepository reconExceptionRepository;
 
     @Test
     void createAndSaveBatchWithLines_roundTrip() {
@@ -101,5 +106,38 @@ class SettlementPersistenceIT {
         assertThat(unmatched).hasSize(1);
         assertThat(unmatched.get(0).getTxnRef()).isEqualTo("TXN-101");
         assertThat(unmatched.get(0).isMatched()).isFalse();
+    }
+
+    @Test
+    void reconExceptionRows_roundTripLineMatcherResults() {
+        LineMatcher matcher = new LineMatcher();
+        List<ReconLine> lines = matcher.match(
+                Map.of("MERCH-A", new BigDecimal("10000"), "MERCH-B", new BigDecimal("25000")),
+                Map.of("MERCH-A", new BigDecimal("10000"), "MERCH-B", new BigDecimal("24000")));
+
+        Instant now = Instant.parse("2026-06-10T05:00:00Z");
+        lines.forEach(line -> reconExceptionRepository.save(
+                ReconExceptionEntity.fromReconLine("BATCH-RECON-H2", line, now)));
+        reconExceptionRepository.flush();
+
+        List<ReconExceptionEntity> reloaded = reconExceptionRepository.findByBatchId("BATCH-RECON-H2");
+        assertThat(reloaded).hasSize(2);
+        assertThat(reloaded).extracting(ReconExceptionEntity::getMatchStatus)
+                .containsExactlyInAnyOrder(MatchStatus.MATCHED, MatchStatus.DISCREPANCY);
+
+        ReconLine discrepancy = reloaded.stream()
+                .filter(e -> e.getMatchStatus() == MatchStatus.DISCREPANCY)
+                .findFirst().orElseThrow()
+                .toReconLine();
+        assertThat(discrepancy.merchantId()).isEqualTo("MERCH-B");
+        assertThat(discrepancy.gmeAmount()).isEqualByComparingTo("25000");
+        assertThat(discrepancy.schemeAmount()).isEqualByComparingTo("24000");
+        assertThat(discrepancy.discrepancyAmount()).isEqualByComparingTo("1000");
+        assertThat(discrepancy.requiresAttention()).isTrue();
+
+        assertThat(reconExceptionRepository
+                .findByBatchIdAndMatchStatus("BATCH-RECON-H2", MatchStatus.DISCREPANCY)).hasSize(1);
+        assertThat(reconExceptionRepository
+                .countByBatchIdAndMatchStatusNot("BATCH-RECON-H2", MatchStatus.MATCHED)).isEqualTo(1);
     }
 }

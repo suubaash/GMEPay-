@@ -1,11 +1,19 @@
-# GMEPay+ — local development stack (Phase 2 -> Phase 3 handoff artifact).
+# GMEPay+ — local development stack (tickets 17.1-G03 static reconciliation, 17.4-G05 schema-registry).
 #
-# Verify locally with:   docker compose up --build
-# Requires Docker (not used to author/test in the build environment).
+# Boot the money path:   docker compose --profile core up --build
+# Boot everything:       docker compose --profile full up --build
+# CI smoke test:         .github/workflows/ci.yml job `compose-smoke` (core profile)
+#
+# Full port map, profile rationale and healthcheck notes: docs/COMPOSE.md
 #
 # Discipline: DB per service per docs/INTER_SERVICE_CONTRACTS.md — each stateful
-# service has its own PostgreSQL instance on a dedicated host port (5433..5439).
+# service has its own PostgreSQL instance on a dedicated host port (5433..5440).
 # Service-to-service traffic uses the Docker DNS name on the gmepay network.
+#
+# Every Spring Boot container listens on 8080 internally (SERVER_PORT env beats
+# any server.port in the module's application.yml/properties — OS env vars sit
+# above config files in Spring's property precedence). Host ports fan out over
+# 8080..8096.
 
 networks:
   gmepay:
@@ -19,10 +27,25 @@ volumes:
   pg-settlement:
   pg-notify:
   pg-authid:
+  pg-scheme:
   mongo-data:
 
+# ─────────── REUSABLE HEALTHCHECK SHAPES (extension fields + anchors) ───────────
+# Only api-gateway ships spring-boot-starter-actuator, so every other Spring
+# service gets a plain TCP probe on its container port. bash is present in
+# eclipse-temurin:21-jre (Ubuntu) and `/dev/tcp` needs no curl/wget/netcat.
+# Do NOT switch a service to an /actuator/health probe without first adding the
+# actuator starter to that module's build.gradle.
+# Budget: 36 x 5s = 3 min (ticket 17.1-G03 acceptance: healthy within 3 min).
+x-tcp-health: &tcp-health
+  test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+  interval: 5s
+  timeout: 3s
+  retries: 36
+  start_period: 15s
+
 services:
-  # ─────────── INFRASTRUCTURE ───────────
+  # ─────────── INFRASTRUCTURE (profiles: core + full) ───────────
 
   postgres-config:
     image: postgres:16-alpine
@@ -31,6 +54,7 @@ services:
     volumes: ["pg-config:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d configreg"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-txn:
     image: postgres:16-alpine
@@ -39,6 +63,7 @@ services:
     volumes: ["pg-txn:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d txndb"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-prefunding:
     image: postgres:16-alpine
@@ -47,6 +72,7 @@ services:
     volumes: ["pg-prefunding:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d prefunding"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-ledger:
     image: postgres:16-alpine
@@ -55,6 +81,7 @@ services:
     volumes: ["pg-ledger:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d ledger"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-settlement:
     image: postgres:16-alpine
@@ -63,6 +90,7 @@ services:
     volumes: ["pg-settlement:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d settlement"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-notify:
     image: postgres:16-alpine
@@ -71,6 +99,7 @@ services:
     volumes: ["pg-notify:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d notify"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   postgres-authid:
     image: postgres:16-alpine
@@ -79,55 +108,110 @@ services:
     volumes: ["pg-authid:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d authid"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-scheme:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: zpadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5440:5432"]
+    volumes: ["pg-scheme:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d zpadapter"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
 
   mongo:
     image: mongo:7
     ports: ["27017:27017"]
     volumes: ["mongo-data:/data/db"]
-    healthcheck: { test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"], interval: 10s, timeout: 5s, retries: 12 }
+    healthcheck: { test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ping: 1})'"], interval: 10s, timeout: 5s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     environment: { ZOOKEEPER_CLIENT_PORT: 2181, ZOOKEEPER_TICK_TIME: 2000 }
+    # zookeeper-shell ships in the cp-zookeeper image (no nc/curl needed). It
+    # hangs while ZK is still starting; the healthcheck timeout converts that
+    # into a retry until the ensemble answers.
+    healthcheck: { test: ["CMD-SHELL", "zookeeper-shell localhost:2181 ls / >/dev/null 2>&1"], interval: 10s, timeout: 10s, retries: 30 }
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    depends_on: [zookeeper]
-    ports: ["9092:9092"]
+    depends_on:
+      zookeeper: { condition: service_healthy }
+    # Listener layout (ticket 17.1-G03 item 4):
+    #   PLAINTEXT  kafka:9092       -> for containers on the gmepay network
+    #   EXTERNAL   localhost:29092  -> for host tooling (only 29092 is published)
+    ports: ["29092:29092"]
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    healthcheck: { test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "kafka:29092"], interval: 10s, timeout: 5s, retries: 18 }
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+    healthcheck: { test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"], interval: 10s, timeout: 10s, retries: 18, start_period: 20s }
     networks: [gmepay]
+    profiles: ["core", "full"]
+
+  # Confluent Schema Registry (ADR-001: Kafka + Schema Registry, compatibility=BACKWARD).
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    depends_on:
+      kafka: { condition: service_healthy }
+    ports: ["8081:8081"]
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka:9092"
+      # BACKWARD is the registry default; pinned explicitly per ADR-001.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xms128m -Xmx512m"
+    healthcheck: { test: ["CMD-SHELL", "curl -fs http://localhost:8081/subjects >/dev/null || bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081'"], interval: 10s, timeout: 5s, retries: 18, start_period: 20s }
+    networks: [gmepay]
+    profiles: ["core", "full"]
 
   # ─────────── APPLICATION SERVICES ───────────
-  # x-app-defaults: env shared by every Spring Boot service.
+  # Conventions:
+  #  - SERVER_PORT=8080 inside every container; host ports fan out 8080..8096.
+  #  - JAVA_TOOL_OPTIONS caps each JVM so the full stack fits a CI runner.
+  #  - SPRING_DATASOURCE_* env names match the ${SPRING_DATASOURCE_*:h2-default}
+  #    placeholders in each module's application config (H2 default is replaced
+  #    by the owned PostgreSQL instance here).
+  #  - depends_on uses condition: service_healthy everywhere for start order.
+  #  - profiles: "core" = money path (+ infra); "full" adds the remaining services.
 
   config-registry:
     build: { context: ., dockerfile: services/config-registry/Dockerfile }
     image: gmepay/config-registry:dev
-    ports: ["8081:8080"]
+    # Host port moved 8081 -> 8096: 8081 is the canonical Schema Registry port (ADR-001).
+    ports: ["8096:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-config:5432/configreg
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-    depends_on: { postgres-config: { condition: service_healthy } }
+    depends_on:
+      postgres-config: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   rate-fx:
     build: { context: ., dockerfile: services/rate-fx/Dockerfile }
@@ -135,9 +219,14 @@ services:
     ports: ["8082:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Forward-compat: rate-fx has no gmepay.config-registry.base-url reader yet.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
-    depends_on: [config-registry]
+    depends_on:
+      config-registry: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   prefunding:
     build: { context: ., dockerfile: services/prefunding/Dockerfile }
@@ -145,12 +234,16 @@ services:
     ports: ["8083:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-prefunding:5432/prefunding
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-    depends_on: { postgres-prefunding: { condition: service_healthy } }
+    depends_on:
+      postgres-prefunding: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   smart-router:
     build: { context: ., dockerfile: services/smart-router/Dockerfile }
@@ -158,9 +251,14 @@ services:
     ports: ["8084:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Forward-compat: smart-router has no gmepay.config-registry.base-url reader yet.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
-    depends_on: [config-registry]
+    depends_on:
+      config-registry: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["full"]
 
   qr-service:
     build: { context: ., dockerfile: services/qr-service/Dockerfile }
@@ -168,9 +266,14 @@ services:
     ports: ["8085:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Forward-compat: qr-service has no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
-    depends_on: [merchant-qr-data]
+    depends_on:
+      merchant-qr-data: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   auth-identity:
     build: { context: ., dockerfile: services/auth-identity/Dockerfile }
@@ -178,15 +281,20 @@ services:
     ports: ["8086:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-authid:5432/authid
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      # auth-identity reads gme.config-registry.base-url (NOT gmepay.*) — see
+      # RestPartnerCredentialClient. Env name fixed accordingly.
+      GME_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
     depends_on:
       postgres-authid: { condition: service_healthy }
-      config-registry: { condition: service_started }
+      config-registry: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["full"]
 
   transaction-mgmt:
     build: { context: ., dockerfile: services/transaction-mgmt/Dockerfile }
@@ -194,15 +302,20 @@ services:
     ports: ["8087:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-txn:5432/txndb
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # Inert until spring-kafka lands on the module classpath (17.4-G0x); the
+      # internal listener address is already correct for that moment.
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres-txn: { condition: service_healthy }
       kafka: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   payment-executor:
     build: { context: ., dockerfile: services/payment-executor/Dockerfile }
@@ -210,6 +323,9 @@ services:
     ports: ["8088:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Env names match the gmepay.<svc>.base-url @Value placeholders in the
+      # Rest*Client adapters (verified against services/payment-executor source).
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
@@ -217,33 +333,62 @@ services:
       GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://scheme-adapter-zeropay:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
-    depends_on: [config-registry, rate-fx, prefunding, qr-service, scheme-adapter-zeropay, transaction-mgmt, revenue-ledger]
+    depends_on:
+      config-registry: { condition: service_healthy }
+      rate-fx: { condition: service_healthy }
+      prefunding: { condition: service_healthy }
+      qr-service: { condition: service_healthy }
+      merchant-qr-data: { condition: service_healthy }
+      scheme-adapter-zeropay: { condition: service_healthy }
+      transaction-mgmt: { condition: service_healthy }
+      revenue-ledger: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   merchant-qr-data:
     build: { context: ., dockerfile: services/merchant-qr-data/Dockerfile }
     image: gmepay/merchant-qr-data:dev
     ports: ["8089:8080"]
     # NOTE: this service ships with autoconfigure.exclude for MongoAutoConfiguration so unit
-    # tests don't need a running Mongo. For production: remove that exclude in
-    # services/merchant-qr-data/src/main/resources/application.properties and the SPRING_DATA_MONGODB_URI
-    # below is honoured.
+    # tests don't need a running Mongo; it boots on the in-memory repository fallback
+    # (@ConditionalOnBean wiring). For production: remove that exclude in
+    # services/merchant-qr-data/src/main/resources/application.properties and the
+    # SPRING_DATA_MONGODB_URI below is honoured.
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/merchant
     depends_on:
       mongo: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   scheme-adapter-zeropay:
     build: { context: ., dockerfile: services/scheme-adapter-zeropay/Dockerfile }
     image: gmepay/scheme-adapter-zeropay:dev
     ports: ["8090:8080"]
+    # The module's application.yml sets management.server.port=8091, but the
+    # actuator starter is not on its classpath, so that key is inert; the TCP
+    # probe on 8080 is the correct liveness signal.
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # 17.2-G09: batch file registry + ZP record staging on owned PostgreSQL
+      # (module defaults to H2 only when these are absent).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/zpadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
+      # Forward-compat: no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
-    depends_on: [merchant-qr-data]
+    depends_on:
+      postgres-scheme: { condition: service_healthy }
+      merchant-qr-data: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   notification-webhook:
     build: { context: ., dockerfile: services/notification-webhook/Dockerfile }
@@ -251,15 +396,19 @@ services:
     ports: ["8091:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notify:5432/notify
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # Inert until spring-kafka lands on the module classpath (17.4-G0x).
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres-notify: { condition: service_healthy }
       kafka: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   settlement-reconciliation:
     build: { context: ., dockerfile: services/settlement-reconciliation/Dockerfile }
@@ -267,12 +416,16 @@ services:
     ports: ["8092:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-settlement:5432/settlement
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-    depends_on: { postgres-settlement: { condition: service_healthy } }
+    depends_on:
+      postgres-settlement: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   revenue-ledger:
     build: { context: ., dockerfile: services/revenue-ledger/Dockerfile }
@@ -280,15 +433,19 @@ services:
     ports: ["8093:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ledger:5432/ledger
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # Inert until spring-kafka lands on the module classpath (17.4-G0x).
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       postgres-ledger: { condition: service_healthy }
       kafka: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["core", "full"]
 
   reporting-compliance:
     build: { context: ., dockerfile: services/reporting-compliance/Dockerfile }
@@ -296,10 +453,40 @@ services:
     ports: ["8094:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Forward-compat: no gmepay.*.base-url readers in this module yet.
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
-    depends_on: [revenue-ledger, transaction-mgmt]
+    depends_on:
+      revenue-ledger: { condition: service_healthy }
+      transaction-mgmt: { condition: service_healthy }
+    healthcheck: *tcp-health
     networks: [gmepay]
+    profiles: ["full"]
+
+  ops-partner-bff:
+    build: { context: ., dockerfile: services/ops-partner-bff/Dockerfile }
+    image: gmepay/ops-partner-bff:dev
+    ports: ["8095:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Match the gmepay.<svc>.base-url properties declared in the module's
+      # application.properties (read by the Rest* adapters once activated).
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+    depends_on:
+      config-registry: { condition: service_healthy }
+      transaction-mgmt: { condition: service_healthy }
+      prefunding: { condition: service_healthy }
+      revenue-ledger: { condition: service_healthy }
+      settlement-reconciliation: { condition: service_healthy }
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["core", "full"]
 
   api-gateway:
     build: { context: ., dockerfile: services/api-gateway/Dockerfile }
@@ -307,11 +494,31 @@ services:
     ports: ["8080:8080"]
     environment:
       SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # The gateway's application.yml enables the redis health indicator; without
+      # this host override the indicator probes localhost and health goes DOWN.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      # Route targets read by GatewayRoutingConfig (gmepay.<svc>.base-url).
       GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
-    depends_on: [payment-executor, auth-identity]
+    depends_on:
+      payment-executor: { condition: service_healthy }
+      auth-identity: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      # Only module with actuator on the classpath -> real /actuator/health probe.
+      # bash /dev/tcp is a last-resort fallback should curl/wget be absent from
+      # the eclipse-temurin JRE image; it degrades to liveness rather than
+      # blocking first boot.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/actuator/health || wget -q -O /dev/null http://127.0.0.1:8080/actuator/health || bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 20s
     networks: [gmepay]
+    profiles: ["full"]
