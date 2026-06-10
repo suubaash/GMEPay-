@@ -1,0 +1,40 @@
+{
+  "name": "@gmepay/admin-ui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "next": "14.2.18",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@mui/material": "6.1.10",
+    "@mui/icons-material": "6.1.10",
+    "@emotion/react": "11.13.5",
+    "@emotion/styled": "11.13.5",
+    "@reduxjs/toolkit": "2.3.0",
+    "react-redux": "9.1.2",
+    "react-hook-form": "7.53.2",
+    "yup": "1.4.0",
+    "@hookform/resolvers": "3.9.1",
+    "lottie-react": "2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/node": "22.9.0",
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.18",
+    "vitest": "2.1.5",
+    "@testing-library/react": "16.0.1",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/user-event": "14.5.2",
+    "jsdom": "25.0.1"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "PLACEHOLDER Lottie animation. This is intentionally a minimal, structurally-valid Lottie JSON with no real animation content. Replace with a real designer-authored .json file before shipping. The empty-state UI tolerates load failures and degrades to a static message.",
+  "v": "5.7.0",
+  "fr": 30,
+  "ip": 0,
+  "op": 60,
+  "w": 200,
+  "h": 200,
+  "nm": "empty-placeholder",
+  "ddd": 0,
+  "assets": [],
+  "layers": []
+}
