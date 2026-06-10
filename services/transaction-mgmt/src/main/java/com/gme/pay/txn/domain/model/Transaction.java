@@ -57,7 +57,10 @@ public class Transaction {
         this.updatedAt = this.createdAt;
     }
 
-    /** Package-private constructor used by the persistence adapter when rehydrating from DB. */
+    /**
+     * Package-private constructor used by the persistence adapter when rehydrating from DB.
+     * Accepts the three rate-lock fields (nullable for in-flight rows).
+     */
     Transaction(
             String txnRef,
             String partnerRef,
@@ -67,7 +70,10 @@ public class Transaction {
             String targetCcy,
             TransactionStatus status,
             Instant createdAt,
-            Instant updatedAt) {
+            Instant updatedAt,
+            BigDecimal bookedSettlementAmount,
+            String settlementRoundingMode,
+            BigDecimal roundingResidual) {
         this.txnRef = txnRef;
         this.partnerRef = partnerRef;
         this.sendAmount = sendAmount;
@@ -77,6 +83,11 @@ public class Transaction {
         this.status = status;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+        this.bookedSettlementAmount = bookedSettlementAmount;
+        this.settlementRoundingMode = settlementRoundingMode == null
+                ? null
+                : RoundingMode.valueOf(settlementRoundingMode);
+        this.roundingResidual = roundingResidual;
     }
 
     /**
@@ -124,6 +135,10 @@ public class Transaction {
      * Records the per-partner rate-lock at commit-time (see MONEY_CONVENTION.md).
      * Subsequent calls overwrite – immutability post-APPROVED is enforced by the
      * state machine, not by the aggregate.
+     *
+     * <p>Prefer {@link #lockSettlementBooking(BigDecimal, String, BigDecimal)} for new code:
+     * it enforces single-shot locking and accepts the rounding mode as a string so the
+     * commit-path caller does not depend on {@link RoundingMode}.
      */
     public void applyRoundingLock(BigDecimal bookedSettlementAmount,
                                   RoundingMode settlementRoundingMode,
@@ -131,6 +146,34 @@ public class Transaction {
         this.bookedSettlementAmount = bookedSettlementAmount;
         this.settlementRoundingMode = settlementRoundingMode;
         this.roundingResidual = roundingResidual;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * One-shot lock of the per-partner settlement-booking fields at commit (MONEY_CONVENTION.md).
+     * All three arguments are required; the rounding mode is supplied as the enum's
+     * {@code name()} (e.g. {@code "DOWN"}, {@code "HALF_UP"}) so callers do not depend on
+     * {@link RoundingMode}.
+     *
+     * <p>Once {@code booked} has been set, subsequent calls fail with
+     * {@link IllegalStateException} – the booked liability is immutable once persisted.
+     *
+     * @throws NullPointerException if any argument is null
+     * @throws IllegalArgumentException if {@code roundingMode} is not a known {@link RoundingMode}
+     * @throws IllegalStateException if {@code bookedSettlementAmount} is already populated
+     */
+    public void lockSettlementBooking(BigDecimal booked, String roundingMode, BigDecimal residual) {
+        Objects.requireNonNull(booked, "booked");
+        Objects.requireNonNull(roundingMode, "roundingMode");
+        Objects.requireNonNull(residual, "residual");
+        if (this.bookedSettlementAmount != null) {
+            throw new IllegalStateException(
+                    "settlement booking already locked for txn " + txnRef
+                            + " (booked=" + this.bookedSettlementAmount + ")");
+        }
+        this.bookedSettlementAmount = booked;
+        this.settlementRoundingMode = RoundingMode.valueOf(roundingMode);
+        this.roundingResidual = residual;
         this.updatedAt = Instant.now();
     }
 

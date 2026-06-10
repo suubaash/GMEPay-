@@ -3,8 +3,11 @@ package com.gme.pay.payment.domain;
 import com.gme.pay.payment.domain.client.PrefundingClient;
 import com.gme.pay.payment.domain.client.QrClient;
 import com.gme.pay.payment.domain.client.RateClient;
+import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
+import com.gme.pay.payment.domain.settlement.SettlementBooking;
+import com.gme.pay.payment.domain.settlement.SettlementBookingService;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,7 +22,9 @@ import java.time.Instant;
  *   <li>Create PENDING transaction record (TransactionClient)
  *   <li>For OVERSEAS partners: deduct prefunding (PrefundingClient) — MUST precede scheme call
  *   <li>Submit to scheme (SchemeClient)
- *   <li>Commit APPROVED status (TransactionClient)
+ *   <li>Book per-partner settlement liability (SettlementBookingService) — see MONEY_CONVENTION.md
+ *   <li>Commit APPROVED status with rate-lock fields (TransactionClient)
+ *   <li>Post rounding residual to revenue-ledger (RevenueLedgerClient) — non-blocking
  * </ol>
  *
  * <p>If prefunding deduction fails, the scheme is NEVER called.
@@ -33,18 +38,43 @@ public class PaymentOrchestrator {
     private final QrClient qrClient;
     private final SchemeClient schemeClient;
     private final TransactionClient transactionClient;
+    private final SettlementBookingService settlementBookingService;
+    private final RevenueLedgerClient revenueLedgerClient;
 
+    /**
+     * Backwards-compatible 5-arg constructor used by existing wiring/tests that do not exercise
+     * the per-partner settlement rounding path. Delegates to the full-arg constructor with the
+     * settlement and revenue-ledger collaborators set to {@code null}, in which case the
+     * rounding-lock steps are skipped.
+     */
     public PaymentOrchestrator(
             RateClient rateClient,
             PrefundingClient prefundingClient,
             QrClient qrClient,
             SchemeClient schemeClient,
             TransactionClient transactionClient) {
+        this(rateClient, prefundingClient, qrClient, schemeClient, transactionClient, null, null);
+    }
+
+    /**
+     * Full-arg constructor wiring in the settlement-rounding collaborators introduced in
+     * Phase 2.5 (per-partner rounding booked at commit, residual posted to revenue-ledger).
+     */
+    public PaymentOrchestrator(
+            RateClient rateClient,
+            PrefundingClient prefundingClient,
+            QrClient qrClient,
+            SchemeClient schemeClient,
+            TransactionClient transactionClient,
+            SettlementBookingService settlementBookingService,
+            RevenueLedgerClient revenueLedgerClient) {
         this.rateClient = rateClient;
         this.prefundingClient = prefundingClient;
         this.qrClient = qrClient;
         this.schemeClient = schemeClient;
         this.transactionClient = transactionClient;
+        this.settlementBookingService = settlementBookingService;
+        this.revenueLedgerClient = revenueLedgerClient;
     }
 
     /**
@@ -117,17 +147,37 @@ public class PaymentOrchestrator {
             throw ex;
         }
 
-        // Step 6: Commit APPROVED
+        // Step 6 (pre-commit): per-partner settlement booking. Skipped when collaborators
+        // are not wired (backwards-compat with 5-arg constructor used by older tests).
+        SettlementBooking booking = (settlementBookingService != null)
+                ? settlementBookingService.book(
+                        cmd.partnerId(), quote.collectionAmount(), quote.collectionCurrency())
+                : null;
+
+        // Step 7: Commit APPROVED with rate-lock fields when booking was performed.
         BigDecimal deductedUsd = deduction != null ? deduction.deductedUsd() : null;
+        BigDecimal bookedAmount = booking != null ? booking.booked() : null;
+        String roundingModeName = booking != null ? booking.mode().name() : null;
+        BigDecimal residual = booking != null ? booking.residual() : null;
         transactionClient.commitStatus(txn.txnRef(),
                 new TransactionClient.StatusPatch(
                         PaymentStatus.APPROVED,
                         schemeResponse.schemeTxnRef(),
                         schemeResponse.schemeApprovalCode(),
                         deductedUsd,
-                        schemeResponse.approvedAt()
+                        schemeResponse.approvedAt(),
+                        bookedAmount,
+                        roundingModeName,
+                        residual
                 )
         );
+
+        // Step 8: Post rounding residual to revenue-ledger AFTER commit. The client is
+        // non-throwing per its contract (failures are logged for offline retry).
+        if (booking != null && revenueLedgerClient != null) {
+            revenueLedgerClient.postRoundingResidual(
+                    txn.txnRef(), booking.residual(), booking.currency());
+        }
 
         return new PaymentResult(
                 txn.paymentId(),

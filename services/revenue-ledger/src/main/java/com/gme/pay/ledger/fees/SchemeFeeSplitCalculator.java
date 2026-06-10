@@ -2,6 +2,7 @@ package com.gme.pay.ledger.fees;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import org.springframework.stereotype.Component;
 
 /**
  * Computes the ZeroPay scheme fee-share split (70/30) for a single transaction.
@@ -33,6 +34,7 @@ import java.math.RoundingMode;
  *
  * @see FeeShareResult
  */
+@Component
 public class SchemeFeeSplitCalculator {
 
     /**
