@@ -18,6 +18,7 @@ import { useParams } from 'next/navigation';
 import RoundingModeSelect from '@/components/RoundingModeSelect';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
+import Breadcrumbs from '@/components/Breadcrumbs';
 import { useSnackbar } from '@/components/SnackbarProvider';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
@@ -79,6 +80,12 @@ export default function PartnerDetailPage() {
 
   return (
     <Box>
+      <Breadcrumbs
+        crumbs={[
+          { label: 'Partners', href: '/partners' },
+          { label: partner.partnerId ?? id ?? '' },
+        ]}
+      />
       <Typography variant="h1" gutterBottom>
         {partner.partnerId}
       </Typography>

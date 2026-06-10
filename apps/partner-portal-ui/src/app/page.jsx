@@ -1,6 +1,7 @@
 'use client';
 import * as React from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import {
   Box,
   Card,
@@ -17,6 +18,10 @@ import { currentPartnerId } from '@/api/client';
 import MoneyDisplay from '@/components/MoneyDisplay';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import ErrorAlert from '@/components/ErrorAlert';
+import welcomeAnimation from '@/lottie/welcome.json';
+
+// Lottie is browser-only — import lazily so it doesn't break SSR.
+const Lottie = dynamic(() => import('lottie-react'), { ssr: false });
 
 /**
  * Overview page — landing screen for a signed-in partner.
@@ -60,11 +65,16 @@ export default function OverviewPage() {
 
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="h1">Overview</Typography>
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          A read-only snapshot of your GMEPay+ account.
-        </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Box sx={{ width: 64, height: 64, flexShrink: 0 }} aria-hidden data-testid="overview-welcome-lottie">
+          <Lottie animationData={welcomeAnimation} loop autoplay />
+        </Box>
+        <Box>
+          <Typography variant="h1">Overview</Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            A read-only snapshot of your GMEPay+ account.
+          </Typography>
+        </Box>
       </Box>
 
       {status === 'failed' && (

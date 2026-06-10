@@ -1,14 +1,19 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.client.ApiKeyClient;
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.client.PrefundingClient;
 import com.gme.pay.bff.client.SettlementClient;
+import com.gme.pay.bff.client.StatementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.web.dto.PartnerOverview;
 import com.gme.pay.bff.web.dto.PartnerProfile;
 import com.gme.pay.bff.web.dto.TransactionDetail;
 import com.gme.pay.bff.web.dto.WebhookConfigView;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,6 +46,12 @@ import java.util.Objects;
  *   <li>{@code GET /v1/portal/{partnerId}/webhooks} — webhook configuration rows
  *   <li>{@code GET /v1/portal/{partnerId}/profile} — partner identity for the Profile page
  * </ul>
+ *
+ * <p>Phase-C4 endpoints:
+ * <ul>
+ *   <li>{@code GET /v1/portal/{partnerId}/api-keys} — API key list (PRIMARY + ROTATING)
+ *   <li>{@code GET /v1/portal/{partnerId}/statement?from&to} — CSV statement download
+ * </ul>
  */
 @RestController
 @RequestMapping("/v1/portal")
@@ -56,16 +67,22 @@ public class PartnerPortalController {
     private final PrefundingClient prefunding;
     private final SettlementClient settlement;
     private final ConfigRegistryClient configRegistry;
+    private final ApiKeyClient apiKeys;
+    private final StatementClient statements;
 
     public PartnerPortalController(
             TransactionMgmtClient transactions,
             PrefundingClient prefunding,
             SettlementClient settlement,
-            ConfigRegistryClient configRegistry) {
+            ConfigRegistryClient configRegistry,
+            ApiKeyClient apiKeys,
+            StatementClient statements) {
         this.transactions = transactions;
         this.prefunding = prefunding;
         this.settlement = settlement;
         this.configRegistry = configRegistry;
+        this.apiKeys = apiKeys;
+        this.statements = statements;
     }
 
     @GetMapping("/{partnerId}/overview")
@@ -147,6 +164,35 @@ public class PartnerPortalController {
                 partner.settlementCurrency(),
                 partner.settlementRoundingMode(),
                 Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
+    @GetMapping("/{partnerId}/api-keys")
+    public List<ApiKeyClient.ApiKeyView> apiKeys(@PathVariable String partnerId) {
+        List<ApiKeyClient.ApiKeyView> keys = apiKeys.listForPartner(partnerId);
+        return keys == null ? List.of() : keys;
+    }
+
+    @GetMapping("/{partnerId}/statement")
+    public ResponseEntity<byte[]> statement(
+            @PathVariable String partnerId,
+            @RequestParam LocalDate from,
+            @RequestParam LocalDate to) {
+        if (from == null || to == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "from and to are required");
+        }
+        if (to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "to must not be before from");
+        }
+        byte[] body = statements.exportCsv(partnerId, from, to);
+        byte[] safeBody = body == null ? new byte[0] : body;
+        String filename = "statement-" + from + "-" + to + ".csv";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + filename + "\"")
+                .body(safeBody);
     }
 
     /**

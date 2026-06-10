@@ -1,12 +1,12 @@
 {
-  "_comment": "PLACEHOLDER Lottie animation used by EmptyState. Structurally valid Lottie JSON with a minimal fade pulse so the empty-state surface is animated rather than blank. Replace with a designer-authored .json before shipping. The component tolerates load failures and degrades to a static icon.",
+  "_comment": "Empty-state Lottie used by components/EmptyState.jsx. Structurally valid Lottie v5.7.1 JSON: a brand-blue rounded square that softly breathes (scale 90% -> 110% -> 90%) with an empty-document slash inside that pulses opacity. Designed to read as 'nothing here yet' rather than 'loading'. 2-second loop at 30fps. Replace with a designer-authored .json when one is available; components must tolerate load failures and degrade to a static icon.",
   "v": "5.7.1",
   "fr": 30,
   "ip": 0,
   "op": 60,
-  "w": 200,
-  "h": 200,
-  "nm": "empty-placeholder",
+  "w": 240,
+  "h": 240,
+  "nm": "empty",
   "ddd": 0,
   "assets": [],
   "layers": [
@@ -14,22 +14,73 @@
       "ddd": 0,
       "ind": 1,
       "ty": 4,
-      "nm": "dot",
+      "nm": "card",
       "sr": 1,
       "ks": {
-        "o": { "a": 1, "k": [{ "t": 0, "s": [40] }, { "t": 30, "s": [80] }, { "t": 60, "s": [40] }] },
+        "o": { "a": 0, "k": 90 },
         "r": { "a": 0, "k": 0 },
-        "p": { "a": 0, "k": [100, 100, 0] },
+        "p": { "a": 0, "k": [120, 120, 0] },
+        "a": { "a": 0, "k": [0, 0, 0] },
+        "s": {
+          "a": 1,
+          "k": [
+            { "t": 0, "s": [90, 90, 100] },
+            { "t": 30, "s": [110, 110, 100] },
+            { "t": 60, "s": [90, 90, 100] }
+          ]
+        }
+      },
+      "ao": 0,
+      "shapes": [
+        {
+          "ty": "rc",
+          "d": 1,
+          "s": { "a": 0, "k": [140, 100] },
+          "p": { "a": 0, "k": [0, 0] },
+          "r": { "a": 0, "k": 14 }
+        },
+        {
+          "ty": "st",
+          "c": { "a": 0, "k": [0.043, 0.373, 1, 1] },
+          "o": { "a": 0, "k": 100 },
+          "w": { "a": 0, "k": 5 },
+          "lc": 2,
+          "lj": 2
+        }
+      ],
+      "ip": 0,
+      "op": 60,
+      "st": 0,
+      "bm": 0
+    },
+    {
+      "ddd": 0,
+      "ind": 2,
+      "ty": 4,
+      "nm": "slash",
+      "sr": 1,
+      "ks": {
+        "o": {
+          "a": 1,
+          "k": [
+            { "t": 0, "s": [40] },
+            { "t": 30, "s": [90] },
+            { "t": 60, "s": [40] }
+          ]
+        },
+        "r": { "a": 0, "k": -25 },
+        "p": { "a": 0, "k": [120, 120, 0] },
         "a": { "a": 0, "k": [0, 0, 0] },
         "s": { "a": 0, "k": [100, 100, 100] }
       },
       "ao": 0,
       "shapes": [
         {
-          "ty": "el",
+          "ty": "rc",
           "d": 1,
-          "s": { "a": 0, "k": [80, 80] },
-          "p": { "a": 0, "k": [0, 0] }
+          "s": { "a": 0, "k": [110, 6] },
+          "p": { "a": 0, "k": [0, 0] },
+          "r": { "a": 0, "k": 3 }
         },
         {
           "ty": "fl",

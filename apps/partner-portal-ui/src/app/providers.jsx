@@ -1,12 +1,12 @@
 'use client';
 import * as React from 'react';
-import { Provider as ReduxProvider } from 'react-redux';
+import { Provider as ReduxProvider, useSelector } from 'react-redux';
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { CacheProvider } from '@emotion/react';
 import createCache from '@emotion/cache';
 import { useServerInsertedHTML } from 'next/navigation';
 import { store } from '@/store';
-import { partnerTheme } from '@/theme/theme';
+import { getPartnerTheme } from '@/theme/theme';
 import { SnackbarProvider } from '@/components/SnackbarProvider';
 
 /**
@@ -81,14 +81,27 @@ function EmotionRegistry({ children }) {
   return <CacheProvider value={cache}>{children}</CacheProvider>;
 }
 
+/**
+ * Inner provider that reads the current theme mode from Redux. Lives inside
+ * `<ReduxProvider>` so `useSelector` is valid here; it switches the MUI
+ * theme without re-mounting the tree.
+ */
+function ThemedShell({ children }) {
+  const mode = useSelector((s) => s.ui?.mode ?? 'light');
+  const theme = React.useMemo(() => getPartnerTheme(mode), [mode]);
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <SnackbarProvider>{children}</SnackbarProvider>
+    </ThemeProvider>
+  );
+}
+
 export default function Providers({ children }) {
   return (
     <ReduxProvider store={store}>
       <EmotionRegistry>
-        <ThemeProvider theme={partnerTheme}>
-          <CssBaseline />
-          <SnackbarProvider>{children}</SnackbarProvider>
-        </ThemeProvider>
+        <ThemedShell>{children}</ThemedShell>
       </EmotionRegistry>
     </ReduxProvider>
   );

@@ -214,4 +214,42 @@ export const adminApi = {
    */
   getRevenueBreakdown: (range) =>
     request(`/v1/admin/revenue/breakdown${qs(range)}`),
+
+  // ---------- Rate quote preview (manual operator quote) ----------
+  /**
+   * POST /v1/admin/rates/preview
+   * body: { fromCcy, toCcy, amount, direction:"INBOUND"|"OUTBOUND", partnerId }
+   * -> RateQuotePreview {
+   *      collectionAmount, collectionCurrency,
+   *      payoutAmount, payoutCurrency,
+   *      collectionUsd, payoutUsdCost,
+   *      collectionMarginUsd, payoutMarginUsd,
+   *      offerRateColl, crossRate,
+   *      shortCircuit:boolean, quotedAt:ISO
+   *    }
+   * All monetary fields are decimal strings; rates are decimal strings; the
+   * shortCircuit flag is `true` when fromCcy === toCcy (no cross-rate path).
+   */
+  previewRate: (req) =>
+    request('/v1/admin/rates/preview', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+
+  // ---------- Audit log ----------
+  /**
+   * GET /v1/admin/audit?page=0&size=20 -> Page<AuditEntry>
+   * Page<T>: { content, page, size, total }
+   * AuditEntry: { id, actor, action, target, at:ISO, detail }
+   */
+  getAuditPage: (page, size) =>
+    request(`/v1/admin/audit${qs({ page, size })}`),
+
+  // ---------- System health ----------
+  /**
+   * GET /v1/admin/system/health -> SystemHealth
+   * { checkedAt:ISO, services:[ServiceHealth] }
+   * ServiceHealth { name, status:"UP"|"DOWN"|"DEGRADED", lastSeenAt, uptimeSec }
+   */
+  getSystemHealth: () => request('/v1/admin/system/health'),
 };

@@ -19,6 +19,7 @@ import MoneyDisplay from '@/components/MoneyDisplay';
 import StatusChip from '@/components/StatusChip';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import ErrorAlert from '@/components/ErrorAlert';
+import Breadcrumbs from '@/components/Breadcrumbs';
 import { useSnackbar } from '@/components/SnackbarProvider';
 
 /**
@@ -89,6 +90,13 @@ export default function TransactionDetailPage() {
   return (
     <Stack spacing={3}>
       <Box>
+        <Breadcrumbs
+          items={[
+            { label: 'Overview', href: '/' },
+            { label: 'Transactions', href: '/transactions' },
+            { label: decodedTxnId || 'Detail' }
+          ]}
+        />
         <Button component={Link} href="/transactions" size="small" sx={{ mb: 1 }}>
           ← Back to transactions
         </Button>

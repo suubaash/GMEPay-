@@ -16,6 +16,7 @@ import MoneyDisplay from '@/components/MoneyDisplay';
 import StatusChip from '@/components/StatusChip';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
+import Breadcrumbs from '@/components/Breadcrumbs';
 
 /**
  * Transaction detail page.
@@ -71,6 +72,12 @@ export default function TransactionDetailPage() {
 
   return (
     <Box>
+      <Breadcrumbs
+        crumbs={[
+          { label: 'Transactions', href: '/transactions' },
+          { label: summary.txnId ?? id ?? '' },
+        ]}
+      />
       <Typography variant="h1" gutterBottom>
         {summary.txnId ?? id}
       </Typography>

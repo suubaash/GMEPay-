@@ -22,6 +22,7 @@ import { getSettlement } from '@/store/settlementSlice';
 import MoneyDisplay from '@/components/MoneyDisplay';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
+import Breadcrumbs from '@/components/Breadcrumbs';
 
 /**
  * Settlement batch detail page.
@@ -60,6 +61,12 @@ export default function SettlementBatchDetailPage() {
 
   return (
     <Box>
+      <Breadcrumbs
+        crumbs={[
+          { label: 'Settlement', href: '/settlement' },
+          { label: batch.batchId ?? batchId ?? '' },
+        ]}
+      />
       <Typography variant="h1" gutterBottom>
         Batch {batch.batchId ?? batchId}
       </Typography>

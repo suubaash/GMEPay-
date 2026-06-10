@@ -18,7 +18,11 @@ const STATUS_COLOR = {
   FAILED: 'error',
   CANCELLED: 'default',
   REVERSED: 'default',
-  SETTLED: 'primary'
+  SETTLED: 'primary',
+  // API key statuses (see store/apiKeysSlice.js):
+  ACTIVE: 'success',
+  ROTATING: 'warning',
+  REVOKED: 'error'
 };
 
 export default function StatusChip({ status, size = 'small' }) {
