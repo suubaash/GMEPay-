@@ -8,7 +8,7 @@ Phase 1 architecture diagram. It talks ONLY to the Ops/Partner BFF
 
 ## Stack
 
-- Next.js 14 (App Router) + React 18 + TypeScript (strict)
+- Next.js 14 (App Router) + React 18 — **plain JavaScript** (no TypeScript)
 - MUI 6 (`@mui/material` + `@mui/icons-material`)
 - Redux Toolkit + React-Redux
 - React Hook Form + Yup (`@hookform/resolvers`)
