@@ -20,7 +20,17 @@ import java.util.Map;
  * store is mutable so the Admin UI partner-form happy path can round-trip a
  * create or rounding-mode update without booting config-registry.
  */
+/**
+ * Default unless {@code gmepay.config-registry.client=rest} (then
+ * {@link com.gme.pay.bff.client.rest.RestConfigRegistryClient} wins). Keeping
+ * the stub on the classpath lets the BFF and its unit slices boot without
+ * config-registry being up.
+ */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        name = "gmepay.config-registry.client",
+        havingValue = "stub",
+        matchIfMissing = true)
 public class StubConfigRegistryClient implements ConfigRegistryClient {
 
     private final Map<String, PartnerSummary> store = new LinkedHashMap<>();
@@ -30,7 +40,7 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         store.put("partner_test_001", new PartnerSummary(
                 "partner_test_001", "OVERSEAS", "USD", RoundingMode.HALF_UP));
         store.put("partner_test_002", new PartnerSummary(
-                "partner_test_002", "DOMESTIC", "KRW", RoundingMode.DOWN));
+                "partner_test_002", "LOCAL", "KRW", RoundingMode.DOWN));
         store.put("partner_test_003", new PartnerSummary(
                 "partner_test_003", "OVERSEAS", "JPY", RoundingMode.HALF_EVEN));
         schemes = List.of(

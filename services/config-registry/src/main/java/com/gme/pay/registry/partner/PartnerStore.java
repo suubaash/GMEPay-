@@ -8,6 +8,7 @@ import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
 
@@ -101,6 +102,15 @@ public class PartnerStore {
                 current.settlementCurrency(),
                 mode);
         return save(updated);
+    }
+
+    /**
+     * Snapshot of every partner currently in the registry. Used by the Admin UI's
+     * partner list. Bypasses the cache: this is a low-frequency operator view and
+     * each row would need its own cache lookup, so we go straight to the DB.
+     */
+    public List<Partner> listAll() {
+        return repository.findAll().stream().map(PartnerEntity::toDomain).toList();
     }
 
     /** Cache key for a partner's current view. */
