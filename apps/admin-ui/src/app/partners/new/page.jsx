@@ -70,7 +70,9 @@ export default function NewPartnerPage() {
       snackbar.success(`Partner ${values.partnerId} created`);
       router.push('/partners');
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      // Redux Toolkit's unwrap() throws a plain serialized object (not an Error),
+      // so don't gate on `instanceof Error` — read .message defensively.
+      const message = e?.message || (typeof e === 'string' ? e : 'unknown error');
       snackbar.error(`Create failed: ${message}`);
     }
   };

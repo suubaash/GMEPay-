@@ -92,7 +92,19 @@ async function request(path, init) {
     } catch {
       /* ignore */
     }
-    throw new ApiError(res.status, url, text || `HTTP ${res.status}`);
+    // Spring's default error JSON is `{timestamp, status, error, path, message?}` —
+    // surface the message when present so the snackbar reads "partner X already
+    // exists" rather than the whole envelope.
+    let message = text || `HTTP ${res.status}`;
+    if (text && text.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed.message || parsed.error || message;
+      } catch {
+        /* leave as raw text */
+      }
+    }
+    throw new ApiError(res.status, url, message);
   }
   if (res.status === 204) {
     return undefined;

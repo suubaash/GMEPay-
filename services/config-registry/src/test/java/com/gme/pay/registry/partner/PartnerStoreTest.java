@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 
 import com.gme.pay.domain.Partner;
 import com.gme.pay.domain.PartnerType;
-import com.gme.pay.errors.ApiException;
 import com.gme.pay.registry.cache.NoOpConfigCache;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
@@ -17,6 +16,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Pure unit test for {@link PartnerStore} against a Mockito stub of the repository.
@@ -70,7 +71,9 @@ class PartnerStoreTest {
     }
 
     @Test
-    void unknownPartnerThrows() {
-        assertThrows(ApiException.class, () -> store.get("NOPE"));
+    void unknownPartnerThrows404() {
+        ResponseStatusException ex =
+                assertThrows(ResponseStatusException.class, () -> store.get("NOPE"));
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
     }
 }

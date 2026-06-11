@@ -1,8 +1,6 @@
 package com.gme.pay.registry.partner;
 
 import com.gme.pay.domain.Partner;
-import com.gme.pay.errors.ApiException;
-import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.registry.cache.ConfigCache;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
@@ -10,7 +8,9 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Registry-side accessor for {@link Partner}. Backed by {@link PartnerRepository}
@@ -60,7 +60,7 @@ public class PartnerStore {
 
     /**
      * Retrieve the partner by id (cache-aside: Redis first, then DB with write-back).
-     * @throws ApiException with {@link ErrorCode#VALIDATION_ERROR} when no row matches.
+     * @throws ResponseStatusException with 404 when no row matches.
      */
     public Partner get(String partnerId) {
         String key = cacheKey(partnerId);
@@ -70,7 +70,7 @@ public class PartnerStore {
         }
         PartnerEntity entity = repository.findById(partnerId).orElse(null);
         if (entity == null) {
-            throw new ApiException(ErrorCode.VALIDATION_ERROR, "unknown partner: " + partnerId);
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "unknown partner: " + partnerId);
         }
         Partner partner = entity.toDomain();
         cache.put(key, partner);
@@ -86,7 +86,7 @@ public class PartnerStore {
     public Partner getEffectiveAt(String partnerId, Instant at) {
         return repository.findEffectiveAt(partnerId, at)
                 .map(PartnerEntity::toDomain)
-                .orElseThrow(() -> new ApiException(ErrorCode.VALIDATION_ERROR,
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "no partner '" + partnerId + "' effective at " + at));
     }
 

@@ -1,9 +1,12 @@
 package com.gme.pay.bff.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -49,6 +52,7 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestConfigRegistryClient(
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
         this(RestClient.builder().baseUrl(baseUrl).build());
@@ -110,9 +114,31 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
             return toSummary(response);
         } catch (org.springframework.web.client.RestClientResponseException e) {
             // Surface upstream 4xx so the Admin UI can show config-registry's validation message
-            // (e.g. duplicate partnerId, bad rounding mode).
-            throw new ResponseStatusException(e.getStatusCode(), e.getResponseBodyAsString());
+            // (e.g. duplicate partnerId, bad rounding mode). Unpack the upstream Spring error
+            // envelope so the UI sees "partner '...' already exists", not the entire JSON.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
         }
+    }
+
+    private static String extractUpstreamMessage(org.springframework.web.client.RestClientResponseException e) {
+        String body = e.getResponseBodyAsString();
+        if (body == null || body.isBlank()) {
+            return e.getStatusText();
+        }
+        try {
+            JsonNode node = new ObjectMapper().readTree(body);
+            JsonNode msg = node.get("message");
+            if (msg != null && !msg.isNull()) {
+                return msg.asText();
+            }
+            JsonNode err = node.get("error");
+            if (err != null && !err.isNull()) {
+                return err.asText();
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return body;
     }
 
     @Override

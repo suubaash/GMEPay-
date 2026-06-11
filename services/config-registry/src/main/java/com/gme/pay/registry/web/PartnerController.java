@@ -5,6 +5,7 @@ import com.gme.pay.domain.PartnerType;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.registry.partner.PartnerStore;
+import com.gme.pay.registry.persistence.PartnerRepository;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 /** Read/update partners from the registry, including the per-partner settlement rounding mode. */
 @RestController
@@ -26,9 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PartnerController {
 
     private final PartnerStore store;
+    private final PartnerRepository repository;
 
-    public PartnerController(PartnerStore store) {
+    public PartnerController(PartnerStore store, PartnerRepository repository) {
         this.store = store;
+        this.repository = repository;
     }
 
     /** Every partner currently in the registry. Powers the Admin UI partner list. */
@@ -63,6 +67,13 @@ public class PartnerController {
         }
         if (req.type() == null || req.type().isBlank()) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "type is required");
+        }
+        // POST is create-only; duplicate IDs return 409 so the caller (Admin UI) can
+        // surface the conflict instead of silently overwriting via PartnerStore.save's
+        // upsert semantics.
+        if (repository.existsById(req.partnerId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "partner '" + req.partnerId() + "' already exists");
         }
         PartnerType type = parsePartnerType(req.type());
         RoundingMode mode = req.settlementRoundingMode() == null || req.settlementRoundingMode().isBlank()
