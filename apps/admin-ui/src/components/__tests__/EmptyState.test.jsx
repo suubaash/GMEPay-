@@ -3,12 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { theme } from '@/theme/theme';
 
-// Mock lottie-react: the real component animates inside a <canvas>-ish element
-// that jsdom doesn't fully implement. We just render a no-op div so the
-// EmptyState DOM is otherwise complete.
-vi.mock('lottie-react', () => ({
-  default: () => <div data-testid="lottie" />,
-}));
+// lottie-react is mocked globally in vitest.setup.js.
 
 import EmptyState from '../EmptyState';
 
@@ -34,12 +29,13 @@ describe('EmptyState', () => {
     expect(screen.queryByRole('button', { name: /add/i })).toBeNull();
   });
 
-  it('renders a CTA button when both label and href are supplied', () => {
+  it('renders a CTA link when both label and href are supplied', () => {
     renderWithTheme(
       <EmptyState heading="Empty" ctaLabel="Create one" ctaHref="/partners/new" />,
     );
-    const btn = screen.getByRole('button', { name: /create one/i });
-    expect(btn).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /create one/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/partners/new');
   });
 
   it('renders a CTA button when label + onCta are supplied', () => {

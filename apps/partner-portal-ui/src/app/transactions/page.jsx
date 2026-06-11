@@ -53,16 +53,7 @@ export default function TransactionsPage() {
     if (partnerId) dispatch(fetchTransactions({ partnerId, limit: 100 }));
   }, [partnerId, dispatch]);
 
-  if (!partnerId) {
-    return (
-      <Alert severity="warning">
-        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
-      </Alert>
-    );
-  }
-
-  const isInitialLoad = status === 'loading' && (!items || items.length === 0);
-
+  // Hook order: all hooks must run before any conditional return.
   // Client-side sort + page over the array returned by the BFF.
   const sorted = React.useMemo(() => {
     const list = Array.isArray(items) ? [...items] : [];
@@ -75,6 +66,15 @@ export default function TransactionsPage() {
     return list;
   }, [items, sortDir]);
 
+  if (!partnerId) {
+    return (
+      <Alert severity="warning">
+        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
+      </Alert>
+    );
+  }
+
+  const isInitialLoad = status === 'loading' && (!items || items.length === 0);
   const pageStart = page * size;
   const pageItems = sorted.slice(pageStart, pageStart + size);
 

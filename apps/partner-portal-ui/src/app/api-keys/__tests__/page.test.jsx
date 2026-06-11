@@ -75,8 +75,28 @@ const TWO_KEYS = [
 ];
 
 describe('ApiKeysPage', () => {
+  // jsdom 25 pre-installs a non-replaceable `navigator.clipboard`, and
+  // user-event 14.5 also tries to shim it in setup(). Install our own
+  // writeText mock ONCE per test via Object.defineProperty on the existing
+  // clipboard object (which IS configurable in jsdom 25). Per-test we just
+  // call .mockReset() / .mockResolvedValueOnce() / .mockRejectedValueOnce().
+  const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+
   beforeEach(() => {
     vi.clearAllMocks();
+    clipboardWriteText.mockReset();
+    clipboardWriteText.mockResolvedValue(undefined);
+    if (!navigator.clipboard) {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {}
+      });
+    }
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      configurable: true,
+      writable: true,
+      value: clipboardWriteText
+    });
   });
 
   it('renders the Phase 2 rotation banner', () => {
@@ -111,21 +131,31 @@ describe('ApiKeysPage', () => {
       status: 'failed',
       error: 'BFF GET /v1/portal/GMEREMIT/api-keys failed: 500'
     });
-    expect(screen.getByRole('alert')).toHaveTextContent(/failed: 500/);
+    // The page renders two role=alert elements: the Phase-2 info banner and
+    // the ErrorAlert. Pick the one carrying the failure message.
+    const errorAlert = screen
+      .getAllByRole('alert')
+      .find((el) => /failed: 500/.test(el.textContent ?? ''));
+    expect(errorAlert).toBeTruthy();
   });
 
   it('copy-prefix click writes the prefix to the clipboard and shows a snackbar', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText }
-    });
+    clipboardWriteText.mockResolvedValueOnce(undefined);
 
     renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
+    // user-event 14 installs its own clipboard shim in setup() that replaces
+    // navigator.clipboard wholesale. Set up the user FIRST, then re-install
+    // our writeText mock so the page's call lands on it.
     const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWriteText }
+    });
     await user.click(screen.getByTestId('copy-prefix-k_01HXYZACTIVE'));
 
-    expect(writeText).toHaveBeenCalledWith('gmepk_live_abcd1234');
+    await waitFor(() => {
+      expect(clipboardWriteText).toHaveBeenCalledWith('gmepk_live_abcd1234');
+    });
     await waitFor(() => {
       expect(screen.getByTestId('snackbar-toast')).toHaveTextContent(
         /Prefix copied to clipboard/i
@@ -134,14 +164,14 @@ describe('ApiKeysPage', () => {
   });
 
   it('copy-prefix click surfaces an error snackbar when clipboard fails', async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText }
-    });
+    clipboardWriteText.mockRejectedValueOnce(new Error('denied'));
 
     renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
     const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWriteText }
+    });
     await user.click(screen.getByTestId('copy-prefix-k_01HXYZROT'));
 
     await waitFor(() => {

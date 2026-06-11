@@ -92,11 +92,19 @@ export async function login(req) {
   });
 
   if (!res.ok) {
+    // Read the response body as text FIRST — once a Response body stream has
+    // been consumed (even by a failing res.json()), subsequent reads throw
+    // `TypeError: Body is unusable`. Parse JSON from the text if possible.
     let body;
     try {
-      body = await res.json();
+      const raw = await res.text();
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
     } catch {
-      body = await res.text();
+      body = undefined;
     }
     const err = new Error(
       res.status === 401 || res.status === 403
