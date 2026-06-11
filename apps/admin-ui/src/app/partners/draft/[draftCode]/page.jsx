@@ -28,6 +28,8 @@ import {
 import IdentityForm from './step-1/IdentityForm';
 import ContactsForm from './step-2/ContactsForm';
 import KybForm from './step-3/KybForm';
+import BankAccountsSection from './step-4/BankAccountsSection';
+import SettlementPanel from './step-4/SettlementPanel';
 
 /**
  * Partner Setup wizard shell (Slice 1, agent 1D.1).
@@ -167,11 +169,11 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   const isFirst = cursor === 1;
   const isLast = cursor === STEPS.length;
   const stepDef = STEPS[cursor - 1];
-  // Steps 1, 2, and 3 each own their own RHF-validated submit button, so the
+  // Steps 1, 2, 3, and 4 each own their own RHF-validated submit button, so the
   // wizard shell hides its generic "Save & next" affordance for those steps.
   // Later steps that use the shell's own Next can set this false once they
   // land with their slice.
-  const stepHasOwnSubmit = cursor === 1 || cursor === 2 || cursor === 3;
+  const stepHasOwnSubmit = cursor === 1 || cursor === 2 || cursor === 3 || cursor === 4;
 
   const onBack = () => {
     dispatch(clearError());
@@ -285,6 +287,30 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   );
 }
 
+/**
+ * Step 4 (Banking & Settlement) body — renders BankAccountsSection and
+ * SettlementPanel stacked. BankAccountsSection has its own "Save & next"
+ * submit; SettlementPanel has a separate "Save settlement config" submit.
+ * The wizard cursor advances after BankAccountsSection's onSaved fires
+ * (operators save both sections independently during setup).
+ */
+function BankingStep({ draft, partnerCode, onSaved }) {
+  return (
+    <Box>
+      <BankAccountsSection
+        draft={draft}
+        partnerCode={partnerCode}
+        onSaved={onSaved}
+      />
+      <Divider sx={{ my: 4 }} />
+      <SettlementPanel
+        draft={draft}
+        partnerCode={partnerCode}
+      />
+    </Box>
+  );
+}
+
 /** Map cursor → step body. Slice 1 fills Step 1; Slice 2 fills Step 2. */
 function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor, dispatch) {
   if (cursor === 1) {
@@ -309,6 +335,15 @@ function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor, dispatch
   if (cursor === 3) {
     return (
       <KybForm
+        draft={draft}
+        partnerCode={partnerCode}
+        onSaved={advanceCursor}
+      />
+    );
+  }
+  if (cursor === 4) {
+    return (
+      <BankingStep
         draft={draft}
         partnerCode={partnerCode}
         onSaved={advanceCursor}

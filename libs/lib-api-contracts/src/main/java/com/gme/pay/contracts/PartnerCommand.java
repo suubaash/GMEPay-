@@ -123,4 +123,64 @@ public record PartnerCommand(
      */
     public record UpdateStep2(List<ContactCommand> contacts) {
     }
+
+    /**
+     * Body for "Save step-4 changes" (Banking &amp; Settlement) on an
+     * already-created draft — Slice 4. Same <b>bulk replace</b> contract as
+     * {@link UpdateStep2}: {@code bankAccounts} carries the FULL desired
+     * bank-account set, and config-registry supersedes every current
+     * {@code partner_bank_account} row and inserts the new set in one
+     * transaction (SCD-6 paired writes per ADR-010). An empty list clears all
+     * bank accounts; {@code null} is rejected with 400.
+     *
+     * <p>Verification status is provider-stamped, not operator-typed: a bulk
+     * replace carries an existing verification verdict forward when the
+     * (currency, ibanOrAccountNumber) pair is unchanged, and resets to
+     * UNVERIFIED otherwise. During ONBOARDING these writes go direct
+     * (audited); the 2-authorized-signatory approval flow for post-activation
+     * bank changes lands with the Slice 8 FSM.
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-4 controller binds this record directly.
+     */
+    public record UpdateStep4(List<BankAccountCommand> bankAccounts) {
+    }
+
+    /**
+     * Body for "Save step-4 settlement settings" on an already-created draft —
+     * Slice 4 (Banking &amp; Settlement), the sibling of {@link UpdateStep4}:
+     * step 4's bank-account rows ride {@link UpdateStep4}, the per-partner
+     * settlement parameters ride this record onto
+     * {@code PATCH /v1/partners/draft/{code}/step-4-settlement}. Full-state
+     * replace of the {@code partner_settlement_config} row (SCD-6 paired write
+     * per ADR-010), the same discipline as {@link KybCommand.UpdateStep3}.
+     *
+     * <ul>
+     *   <li>{@code cycleTPlusN} — settlement cycle in BUSINESS days after the
+     *       value date, {@code 0..5}; {@code null} defaults to {@code 1}
+     *       (T+1).</li>
+     *   <li>{@code cutoffTime} — local-time cutoff in {@code cutoffTimezone};
+     *       transactions after it book to the next value date. {@code null}
+     *       defaults to {@code 16:30}.</li>
+     *   <li>{@code cutoffTimezone} — IANA zone id (&le; 40 chars, e.g.
+     *       {@code Asia/Seoul}); {@code null} defaults to
+     *       {@code Asia/Seoul}.</li>
+     *   <li>{@code settlementMethod} — required; one of {@code SWIFT_MT103},
+     *       {@code KR_FIRM_BANKING}, {@code BAKONG}, {@code NAPAS_247},
+     *       {@code PROMPT_PAY}, {@code FAST_SG}, {@code OTHER} (the V013 CHECK
+     *       roster). String per the {@code legalForm} / {@code riskRating}
+     *       precedent — config-registry validates the roster.</li>
+     * </ul>
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-4 settlement controller binds this record directly.
+     */
+    public record UpdateStep4Settlement(
+            Integer cycleTPlusN,
+            java.time.LocalTime cutoffTime,
+            String cutoffTimezone,
+            String settlementMethod) {
+    }
 }

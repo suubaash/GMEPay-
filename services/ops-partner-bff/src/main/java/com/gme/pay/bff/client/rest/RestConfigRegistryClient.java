@@ -277,6 +277,123 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 4 (4A.1) bank-account endpoints (PARTNER_SETUP_PLAN §Slice 4)
+
+    @Override
+    public List<com.gme.pay.contracts.BankAccountView> patchDraftStep4(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep4 request) {
+        try {
+            List<com.gme.pay.contracts.BankAccountView> response = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-4", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.BankAccountView>>() {});
+            return response == null ? List.of() : response;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400 with the offending
+            // bankAccounts[i] index, unknown draft → 404, non-ONBOARDING → 409)
+            // through to the Admin UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.BankAccountView> listBankAccounts(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.BankAccountView> response = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/bank-accounts", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.BankAccountView>>() {});
+            return response == null ? List.of() : response;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner code; propagate so the Admin UI can
+            // distinguish "no such partner" from "partner with zero accounts"
+            // (the latter is an empty 200 list from upstream).
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listBankAccounts({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.BankAccountView verifyBankAccount(
+            String partnerCode, Long accountId) {
+        try {
+            return restClient.post()
+                    .uri("/v1/partners/{partnerCode}/bank-accounts/{accountId}/verify",
+                            partnerCode, accountId)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.BankAccountView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Includes upstream 502 when the verification rail is unavailable
+            // (e.g. the KFTC certificate-pending placeholder) — verification is
+            // an explicit operator action, so the failure must surface, never
+            // collapse to null.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    // -------- Slice 4 (4B.1) settlement-config endpoints (PARTNER_SETUP_PLAN §Slice 4)
+
+    @Override
+    public com.gme.pay.contracts.SettlementConfigView patchDraftStep4Settlement(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep4Settlement request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-4-settlement", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.SettlementConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400 with the offending field,
+            // unknown draft → 404, non-ONBOARDING → 409) through to the Admin
+            // UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.SettlementConfigView getSettlementConfig(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/settlement-config", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.SettlementConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner OR no settlement config yet; propagate so
+            // the wizard can distinguish "nothing to rehydrate" from a
+            // transport failure.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.SettlementPreview getSettlementPreview(
+            String partnerCode, String txnInstant, String bankCountry) {
+        try {
+            org.springframework.web.util.UriComponentsBuilder uri =
+                    org.springframework.web.util.UriComponentsBuilder
+                            .fromUriString("/v1/partners/{partnerCode}/settlement-preview")
+                            .queryParam("txnInstant", txnInstant);
+            if (bankCountry != null && !bankCountry.isBlank()) {
+                uri.queryParam("bankCountry", bankCountry);
+            }
+            return restClient.get()
+                    .uri(uri.buildAndExpand(partnerCode).toUriString())
+                    .retrieve()
+                    .body(com.gme.pay.contracts.SettlementPreview.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 400 = malformed txnInstant / bankCountry (config-registry owns
+            // the message), 404 = unknown partner or no settlement config —
+            // the preview panel renders the upstream reason verbatim.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
     // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
 
     @Override

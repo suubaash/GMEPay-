@@ -224,6 +224,99 @@ public interface ConfigRegistryClient {
      */
     record DocumentContent(String filename, String contentType, byte[] content) {}
 
+    // -------- Slice 4 (4A.1) bank-account endpoints (PARTNER_SETUP_PLAN §Slice 4)
+    //
+    // Defaults follow the established convention: the write + verify throw so a
+    // missing override is loud, the list degrades to empty. Both real
+    // implementations override all three.
+
+    /**
+     * Bulk-replace the bank-account set on a draft (wizard step-4 "Next").
+     * Routes to {@code PATCH /v1/partners/draft/{partnerCode}/step-4};
+     * config-registry supersedes every current {@code partner_bank_account}
+     * row and inserts the new set in one transaction (SCD-6, ADR-010),
+     * carrying verification verdicts forward where the (currency, account
+     * number) pair is unchanged. Returns the freshly-inserted current set as
+     * canonical {@link com.gme.pay.contracts.BankAccountView}s.
+     */
+    default List<com.gme.pay.contracts.BankAccountView> patchDraftStep4(
+            String partnerCode, PartnerCommand.UpdateStep4 request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep4 is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT bank-account set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/bank-accounts}. A partner with no
+     * accounts yields an empty list; an unknown partner surfaces upstream's
+     * 404 as a {@code ResponseStatusException} from the rest/stub
+     * implementations.
+     */
+    default List<com.gme.pay.contracts.BankAccountView> listBankAccounts(String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * Run account verification for one CURRENT bank-account row (the step-4
+     * "Verify" button). Routes to
+     * {@code POST /v1/partners/{partnerCode}/bank-accounts/{accountId}/verify}
+     * (no body — the server assembles the subject from the stored row and runs
+     * its {@code AccountVerificationProvider} port: KFTC for KR rails in
+     * production, the deterministic stub by default). Returns the FRESH SCD-6
+     * row carrying the verdict (note: a new row id).
+     */
+    default com.gme.pay.contracts.BankAccountView verifyBankAccount(
+            String partnerCode, Long accountId) {
+        throw new UnsupportedOperationException(
+                "verifyBankAccount is not implemented by " + getClass().getName());
+    }
+
+    // -------- Slice 4 (4B.1) settlement-config endpoints (PARTNER_SETUP_PLAN §Slice 4)
+    //
+    // Defaults throw — like createDraft — so existing anonymous test fakes keep
+    // compiling; both real implementations override.
+
+    /**
+     * Save the step-4 settlement panel onto a draft — full-state replace of
+     * the settlement parameters. Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-4-settlement};
+     * config-registry supersedes the current {@code partner_settlement_config}
+     * row and inserts a fresh one in one transaction (SCD-6, ADR-010). Returns
+     * the fresh {@link com.gme.pay.contracts.SettlementConfigView}.
+     */
+    default com.gme.pay.contracts.SettlementConfigView patchDraftStep4Settlement(
+            String partnerCode, PartnerCommand.UpdateStep4Settlement request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep4Settlement is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT settlement config for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/settlement-config}. Upstream 404
+     * (unknown code OR no config yet) surfaces as a
+     * {@code ResponseStatusException} from the rest/stub implementations.
+     */
+    default com.gme.pay.contracts.SettlementConfigView getSettlementConfig(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getSettlementConfig is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Project a transaction instant onto a payout date through the partner's
+     * settlement config and the KR + bank-country business-day calendars (the
+     * wizard's settlement preview panel). Routes to
+     * {@code GET /v1/partners/{partnerCode}/settlement-preview?txnInstant=ISO}
+     * (+ optional {@code bankCountry} alpha-2 override).
+     *
+     * @param txnInstant ISO-8601 instant string, passed through verbatim so
+     *                   config-registry owns the parse + its 400 message.
+     */
+    default com.gme.pay.contracts.SettlementPreview getSettlementPreview(
+            String partnerCode, String txnInstant, String bankCountry) {
+        throw new UnsupportedOperationException(
+                "getSettlementPreview is not implemented by " + getClass().getName());
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias

@@ -269,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2 && n !== 3) {
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4) {
       return Promise.reject(
         new ApiError(
           501,
@@ -488,4 +488,71 @@ export const adminApi = {
    */
   downloadDocumentUrl: (partnerCode, docId) =>
     `${baseUrl()}/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents/${encodeURIComponent(docId)}/content`,
+
+  // ---------- Bank accounts (Slice 4A.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/bank-accounts -> BankAccountView[]
+   * BankAccountView: {
+   *   id, currency, bankName, bicSwift, ibanOrAccountNumber,
+   *   accountHolderName, bankCountry, intermediaryBic,
+   *   swiftChargeBearer: 'OUR'|'BEN'|'SHA',
+   *   purpose: 'PAYOUT'|'FLOAT_TOPUP'|'REFUND',
+   *   isPrimary,
+   *   verificationStatus: 'UNVERIFIED'|'KFTC_VERIFIED'|'BANK_LETTER'|'MICRO_DEPOSIT',
+   *   verificationDate: ISO date string|null
+   * }
+   */
+  getBankAccounts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/bank-accounts`),
+
+  /**
+   * POST /v1/admin/partners/{partnerCode}/bank-accounts/{accountId}/verify
+   * -> BankAccountView (refreshed with updated verificationStatus and verificationDate)
+   */
+  verifyBankAccount: (partnerCode, accountId) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/bank-accounts/${encodeURIComponent(accountId)}/verify`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  // ---------- Settlement config (Slice 4B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/settlement-config
+   * -> SettlementConfigView {
+   *      cycleTPlusN: number,          // 0..5
+   *      cutoffTime: string,           // "HH:mm"
+   *      cutoffTimezone: string,       // e.g. "Asia/Seoul"
+   *      settlementMethod: string      // SWIFT|ACH|FPS|RTGS|SEPA|CHAPS|OTHER
+   *    }
+   */
+  getSettlementConfig: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/settlement-config`,
+    ),
+
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/settlement-preview?txnInstant=ISO
+   * -> SettlementPreviewView {
+   *      payoutDate: string,          // "YYYY-MM-DD"
+   *      explanation: string[]        // e.g. ["Sat: skip", "Sun: skip", "Mon: payout"]
+   *    }
+   */
+  getSettlementPreview: (partnerCode, txnInstant) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/settlement-preview${qs({ txnInstant })}`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-4-settlement
+   * body: { cycleTPlusN, cutoffTime, cutoffTimezone, settlementMethod }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * This differs from the generic patchDraftStep path because the settlement
+   * sub-step is a separate PATCH endpoint (Slice 4B.1 backend, agent 4B.1).
+   */
+  patchDraftStep4Settlement: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-4-settlement`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
 };

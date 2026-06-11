@@ -216,6 +216,362 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         return new ArrayList<>(contactStore.getOrDefault(partnerCode, List.of()));
     }
 
+    // -------- Slice 4 (4A.1) bank-account endpoints (PARTNER_SETUP_PLAN §Slice 4)
+
+    /** Slice 4 bank-account sets — keyed by partner_code, mirrors the bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.BankAccountView>> bankAccountStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_bank_account} BIGSERIAL. */
+    private final AtomicLong bankAccountSeq = new AtomicLong(500_000L);
+
+    /** Mirrors {@code PartnerBankAccountService.BIC} (config-registry). */
+    private static final java.util.regex.Pattern BIC =
+            java.util.regex.Pattern.compile("^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$");
+    /** Mirrors {@code PartnerBankAccountService.IBAN_PREFIX} — "looks like an IBAN". */
+    private static final java.util.regex.Pattern IBAN_PREFIX =
+            java.util.regex.Pattern.compile("^[A-Z]{2}\\d{2}.*$");
+    /** Mirrors {@code PartnerBankAccountService.IBAN_SHAPE}. */
+    private static final java.util.regex.Pattern IBAN_SHAPE =
+            java.util.regex.Pattern.compile("^[A-Z]{2}\\d{2}[A-Z0-9]{1,30}$");
+    /** Mirrors config-registry's V012 swift_charge_bearer CHECK roster. */
+    private static final java.util.Set<String> CHARGE_BEARERS = java.util.Set.of("OUR", "BEN", "SHA");
+    /** Mirrors config-registry's V012 purpose CHECK roster. */
+    private static final java.util.Set<String> BANK_PURPOSES =
+            java.util.Set.of("PAYOUT", "FLOAT_TOPUP", "REFUND");
+
+    /**
+     * In-memory bulk replace mirroring config-registry's
+     * {@code PartnerBankAccountService.replaceDraftBankAccounts}: the incoming
+     * list is the FULL desired set and overwrites whatever was stored before,
+     * carrying verification verdicts forward when the (currency, account
+     * number) pair is unchanged. The same server-side validation (BIC shape,
+     * IBAN mod-97 dispatch, one-primary-per-currency) is applied here so
+     * MockMvc tests exercise the 400 path through the stub.
+     */
+    @Override
+    public synchronized List<com.gme.pay.contracts.BankAccountView> patchDraftStep4(
+            String partnerCode, PartnerCommand.UpdateStep4 request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null || request.bankAccounts() == null) {
+            throw badRequest(
+                    "bankAccounts is required (send an empty list to clear all bank accounts)");
+        }
+        List<com.gme.pay.contracts.BankAccountCommand> accounts = request.bankAccounts();
+        java.util.Set<String> primaryCurrencies = new java.util.HashSet<>();
+        for (int i = 0; i < accounts.size(); i++) {
+            validateBankAccount(accounts.get(i), i);
+            if (Boolean.TRUE.equals(accounts.get(i).primary())
+                    && !primaryCurrencies.add(accounts.get(i).currency())) {
+                throw badRequest("bankAccounts[" + i + "]: more than one primary account"
+                        + " for currency " + accounts.get(i).currency()
+                        + " (at most one primary per currency)");
+            }
+        }
+        // Verification carry-forward index, mirroring upstream.
+        Map<String, com.gme.pay.contracts.BankAccountView> verifiedByKey = new LinkedHashMap<>();
+        for (com.gme.pay.contracts.BankAccountView prior
+                : bankAccountStore.getOrDefault(partnerCode, List.of())) {
+            if (prior.verificationStatus() != null
+                    && !"UNVERIFIED".equals(prior.verificationStatus())) {
+                verifiedByKey.put(prior.currency() + " " + prior.ibanOrAccountNumber(), prior);
+            }
+        }
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        List<com.gme.pay.contracts.BankAccountView> fresh = new ArrayList<>(accounts.size());
+        for (com.gme.pay.contracts.BankAccountCommand cmd : accounts) {
+            com.gme.pay.contracts.BankAccountView carried =
+                    verifiedByKey.get(cmd.currency() + " " + cmd.ibanOrAccountNumber());
+            fresh.add(new com.gme.pay.contracts.BankAccountView(
+                    bankAccountSeq.getAndIncrement(),
+                    cmd.currency(),
+                    cmd.bankName(),
+                    blankToNull(cmd.bicSwift()),
+                    cmd.ibanOrAccountNumber(),
+                    cmd.accountHolderName(),
+                    cmd.bankCountry(),
+                    blankToNull(cmd.intermediaryBic()),
+                    carried == null ? "UNVERIFIED" : carried.verificationStatus(),
+                    cmd.verificationEvidenceDocId() != null
+                            ? cmd.verificationEvidenceDocId()
+                            : carried == null ? null : carried.verificationEvidenceDocId(),
+                    carried == null ? null : carried.verificationDate(),
+                    Boolean.TRUE.equals(cmd.primary()),
+                    blankToNull(cmd.swiftChargeBearer()),
+                    cmd.purpose() == null || cmd.purpose().isBlank() ? "PAYOUT" : cmd.purpose(),
+                    now,
+                    null,
+                    now));
+        }
+        bankAccountStore.put(partnerCode, fresh);
+        return new ArrayList<>(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.BankAccountView> listBankAccounts(
+            String partnerCode) {
+        requireKnownPartner(partnerCode);
+        return new ArrayList<>(bankAccountStore.getOrDefault(partnerCode, List.of()));
+    }
+
+    /**
+     * Deterministic in-memory verification mirroring config-registry's
+     * {@code StubVerificationAdapter}: {@code bankCountry == "KR"} →
+     * KFTC_VERIFIED, anything else → BANK_LETTER. Like upstream's SCD-6 paired
+     * write, the verdict lands on a FRESH row id and replaces the old row in
+     * the current set.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.BankAccountView verifyBankAccount(
+            String partnerCode, Long accountId) {
+        requireKnownPartner(partnerCode);
+        List<com.gme.pay.contracts.BankAccountView> current =
+                new ArrayList<>(bankAccountStore.getOrDefault(partnerCode, List.of()));
+        com.gme.pay.contracts.BankAccountView target = current.stream()
+                .filter(b -> b.id().equals(accountId))
+                .findFirst()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND,
+                        "no current bank account " + accountId
+                                + " for partner '" + partnerCode + "'"));
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.BankAccountView verified = new com.gme.pay.contracts.BankAccountView(
+                bankAccountSeq.getAndIncrement(),
+                target.currency(),
+                target.bankName(),
+                target.bicSwift(),
+                target.ibanOrAccountNumber(),
+                target.accountHolderName(),
+                target.bankCountry(),
+                target.intermediaryBic(),
+                "KR".equalsIgnoreCase(target.bankCountry()) ? "KFTC_VERIFIED" : "BANK_LETTER",
+                target.verificationEvidenceDocId(),
+                java.time.LocalDate.now(java.time.ZoneOffset.UTC),
+                target.primary(),
+                target.swiftChargeBearer(),
+                target.purpose(),
+                now,
+                null,
+                now);
+        current.set(current.indexOf(target), verified);
+        bankAccountStore.put(partnerCode, current);
+        return verified;
+    }
+
+    // -------- Slice 4 (4B.1) settlement-config endpoints (PARTNER_SETUP_PLAN §Slice 4)
+
+    /** Slice 4 settlement configs — keyed by partner_code, mirrors the SCD-6 current row. */
+    private final Map<String, com.gme.pay.contracts.SettlementConfigView> settlementStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_settlement_config} BIGSERIAL. */
+    private final AtomicLong settlementSeq = new AtomicLong(400_000L);
+
+    /** Mirrors config-registry's V013 settlement_method CHECK roster. */
+    private static final java.util.Set<String> SETTLEMENT_METHODS = java.util.Set.of(
+            "SWIFT_MT103", "KR_FIRM_BANKING", "BAKONG",
+            "NAPAS_247", "PROMPT_PAY", "FAST_SG", "OTHER");
+
+    /**
+     * In-memory step-4 settlement upsert mirroring config-registry's
+     * {@code SettlementConfigService.upsertStep4Settlement}: full-state
+     * replace with the same defaults (T+1, 16:30, Asia/Seoul) and the same
+     * validation roster (method, cycle range, IANA zone) so MockMvc tests
+     * exercise the 400 path through the stub.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.SettlementConfigView patchDraftStep4Settlement(
+            String partnerCode, PartnerCommand.UpdateStep4Settlement request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        validateSettlement(request);
+        com.gme.pay.contracts.SettlementConfigView prior = settlementStore.get(partnerCode);
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.SettlementConfigView fresh =
+                new com.gme.pay.contracts.SettlementConfigView(
+                        settlementSeq.getAndIncrement(),
+                        request.cycleTPlusN() == null ? 1 : request.cycleTPlusN(),
+                        request.cutoffTime() == null
+                                ? java.time.LocalTime.of(16, 30) : request.cutoffTime(),
+                        request.cutoffTimezone() == null || request.cutoffTimezone().isBlank()
+                                ? "Asia/Seoul" : request.cutoffTimezone(),
+                        request.settlementMethod(),
+                        prior == null ? now : prior.validFrom(),
+                        null,
+                        now);
+        settlementStore.put(partnerCode, fresh);
+        return fresh;
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.SettlementConfigView getSettlementConfig(
+            String partnerCode) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.SettlementConfigView view = settlementStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no settlement config for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    /**
+     * Simplified in-memory preview: cutoff + T+N walk skipping WEEKENDS only.
+     * The stub has no {@code business_day_calendar} (V014 lives in
+     * config-registry's database), so holiday skips — including the
+     * cross-country union — are exercised by the config-registry slice tests,
+     * not here; the BFF stub keeps the pass-through testable offline.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.SettlementPreview getSettlementPreview(
+            String partnerCode, String txnInstant, String bankCountry) {
+        com.gme.pay.contracts.SettlementConfigView config = getSettlementConfig(partnerCode);
+        Instant instant;
+        try {
+            instant = Instant.parse(txnInstant);
+        } catch (RuntimeException e) {
+            throw badRequest("txnInstant must be an ISO-8601 instant"
+                    + " (e.g. 2026-09-23T08:30:00Z), was: " + txnInstant);
+        }
+        java.time.ZoneId zone = java.time.ZoneId.of(config.cutoffTimezone());
+        java.time.ZonedDateTime local = instant.atZone(zone);
+        java.util.List<String> trail = new ArrayList<>();
+        java.time.LocalDate date = local.toLocalDate();
+        if (local.toLocalTime().isAfter(config.cutoffTime())) {
+            date = date.plusDays(1);
+            trail.add("Transaction is AFTER the " + config.cutoffTime() + " " + zone
+                    + " cutoff - value date moves to " + date + ".");
+        } else {
+            trail.add("Transaction is within the " + config.cutoffTime() + " " + zone
+                    + " cutoff - value date " + date + ".");
+        }
+        date = skipWeekend(date, trail);
+        for (int i = 0; i < config.cycleTPlusN(); i++) {
+            date = skipWeekend(date.plusDays(1), trail);
+        }
+        trail.add("T+" + config.cycleTPlusN() + " business day(s) - payout date " + date
+                + " (stub: weekends only, no holiday calendar).");
+        return new com.gme.pay.contracts.SettlementPreview(date, trail);
+    }
+
+    private static java.time.LocalDate skipWeekend(java.time.LocalDate date,
+                                                   java.util.List<String> trail) {
+        while (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+            trail.add(date + " skipped - weekend (" + date.getDayOfWeek() + ").");
+            date = date.plusDays(1);
+        }
+        return date;
+    }
+
+    /** Mirror of config-registry's {@code SettlementConfigService.validate} (same messages). */
+    private static void validateSettlement(PartnerCommand.UpdateStep4Settlement cmd) {
+        if (cmd.settlementMethod() == null || cmd.settlementMethod().isBlank()
+                || !SETTLEMENT_METHODS.contains(cmd.settlementMethod())) {
+            throw badRequest("settlementMethod must be one of " + SETTLEMENT_METHODS
+                    + ", was: " + cmd.settlementMethod());
+        }
+        if (cmd.cycleTPlusN() != null
+                && (cmd.cycleTPlusN() < 0 || cmd.cycleTPlusN() > 5)) {
+            throw badRequest("cycleTPlusN must be between 0 and 5, was: " + cmd.cycleTPlusN());
+        }
+        if (cmd.cutoffTimezone() != null && !cmd.cutoffTimezone().isBlank()) {
+            if (cmd.cutoffTimezone().length() > 40) {
+                throw badRequest("cutoffTimezone must be at most 40 characters");
+            }
+            try {
+                java.time.ZoneId.of(cmd.cutoffTimezone());
+            } catch (java.time.DateTimeException e) {
+                throw badRequest("cutoffTimezone must be a valid IANA zone id"
+                        + " (e.g. Asia/Seoul), was: " + cmd.cutoffTimezone());
+            }
+        }
+    }
+
+    /**
+     * Mirror of config-registry's per-element bank-account validation
+     * ({@code PartnerBankAccountService.validate} — same message shapes).
+     */
+    private static void validateBankAccount(
+            com.gme.pay.contracts.BankAccountCommand cmd, int index) {
+        String at = "bankAccounts[" + index + "]";
+        if (cmd == null) {
+            throw badRequest(at + " must be an object");
+        }
+        if (cmd.currency() == null || !cmd.currency().matches("[A-Z]{3}")) {
+            throw badRequest(at + ".currency must be an ISO-4217 code"
+                    + " (3 uppercase letters, e.g. KRW), was: " + cmd.currency());
+        }
+        if (cmd.bankName() == null || cmd.bankName().isBlank() || cmd.bankName().length() > 140) {
+            throw badRequest(at + ".bankName is required (max 140 characters)");
+        }
+        if (cmd.bicSwift() != null && !cmd.bicSwift().isBlank()
+                && !BIC.matcher(cmd.bicSwift()).matches()) {
+            throw badRequest(at + ".bicSwift must be a BIC-8 or BIC-11, was: " + cmd.bicSwift());
+        }
+        if (cmd.intermediaryBic() != null && !cmd.intermediaryBic().isBlank()
+                && !BIC.matcher(cmd.intermediaryBic()).matches()) {
+            throw badRequest(at + ".intermediaryBic must be a BIC-8 or BIC-11, was: "
+                    + cmd.intermediaryBic());
+        }
+        String acct = cmd.ibanOrAccountNumber();
+        if (acct == null || acct.isBlank() || acct.length() > 34) {
+            throw badRequest(at + ".ibanOrAccountNumber is required (max 34 characters)");
+        }
+        if (IBAN_PREFIX.matcher(acct).matches()) {
+            if (!IBAN_SHAPE.matcher(acct).matches() || !ibanChecksumOk(acct)) {
+                throw badRequest(at + ".ibanOrAccountNumber failed IBAN validation: " + acct);
+            }
+        } else if (!acct.matches("[A-Za-z0-9-]{1,34}")) {
+            throw badRequest(at + ".ibanOrAccountNumber must contain only letters, digits"
+                    + " and hyphens, was: " + acct);
+        }
+        if (cmd.accountHolderName() == null || cmd.accountHolderName().isBlank()
+                || cmd.accountHolderName().length() > 140) {
+            throw badRequest(at + ".accountHolderName is required (max 140 characters)");
+        }
+        if (cmd.bankCountry() == null || !cmd.bankCountry().matches("[A-Z]{2}")) {
+            throw badRequest(at + ".bankCountry must be an ISO-3166 alpha-2 code"
+                    + " (2 uppercase letters, e.g. KR), was: " + cmd.bankCountry());
+        }
+        if (cmd.verificationEvidenceDocId() != null && cmd.verificationEvidenceDocId() <= 0) {
+            throw badRequest(at + ".verificationEvidenceDocId must be a positive document id");
+        }
+        if (cmd.swiftChargeBearer() != null && !cmd.swiftChargeBearer().isBlank()
+                && !CHARGE_BEARERS.contains(cmd.swiftChargeBearer())) {
+            throw badRequest(at + ".swiftChargeBearer must be one of " + CHARGE_BEARERS
+                    + ", was: " + cmd.swiftChargeBearer());
+        }
+        if (cmd.purpose() != null && !cmd.purpose().isBlank()
+                && !BANK_PURPOSES.contains(cmd.purpose())) {
+            throw badRequest(at + ".purpose must be one of " + BANK_PURPOSES
+                    + ", was: " + cmd.purpose());
+        }
+    }
+
+    /** ISO 13616 mod-97-10, digit-by-digit — mirrors {@code PartnerBankAccountService}. */
+    private static boolean ibanChecksumOk(String iban) {
+        String rearranged = iban.substring(4) + iban.substring(0, 4);
+        int remainder = 0;
+        for (int i = 0; i < rearranged.length(); i++) {
+            char c = rearranged.charAt(i);
+            int value = Character.isDigit(c) ? c - '0' : c - 'A' + 10;
+            remainder = value < 10
+                    ? (remainder * 10 + value) % 97
+                    : (remainder * 100 + value) % 97;
+        }
+        return remainder == 1;
+    }
+
     // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
 
     /**
