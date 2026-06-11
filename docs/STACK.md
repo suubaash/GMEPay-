@@ -5,13 +5,26 @@ CONCRETE technologies, file paths, and framework constructs so a developer build
 
 ## Architecture decisions (ADRs — resolve all prior ambiguities)
 Five stack contradictions between the source images were decided 2026-06-10 (ticket 18.7-G01).
+A second batch of ADRs (006–014) was decided 2026-06-11 for the Partner Setup re-baseline.
 The ADRs below are authoritative; this file reflects them.
 
+Stack ADRs (2026-06-10):
 - **ADR-001** (`docs/adr/ADR-001-message-broker-kafka.md`) — broker is **Apache Kafka + Confluent Schema Registry**. **RabbitMQ is rejected and removed from the stack.**
 - **ADR-002** (`docs/adr/ADR-002-edge-nginx-plus-scg.md`) — **Nginx (TLS/WAF) layered in front of Spring Cloud Gateway**; both, never one instead of the other.
 - **ADR-003** (`docs/adr/ADR-003-mongodb-merchant-mirror.md`) — **MongoDB kept, scoped strictly to `merchant-qr-data`**.
 - **ADR-004** (`docs/adr/ADR-004-rocky-linux-base-images.md`) — our service images build on **Rocky Linux 9**.
 - **ADR-005** (`docs/adr/ADR-005-elasticsearch-role.md`) — **Elasticsearch = ELK log store first**; transaction search is a deferred option.
+
+Partner Setup re-baseline ADRs (2026-06-11):
+- **ADR-006** (`docs/adr/ADR-006-document-vault-minio.md`) — **MinIO with object-lock (compliance, 10y) + versioning** for KYB documents and regulatory artefacts.
+- **ADR-007** (`docs/adr/ADR-007-audit-log-three-tier.md`) — **three-tier audit**: dedicated `audit` Postgres (hash chain, INSERT-only role) + Kafka topics + MinIO cold archive.
+- **ADR-008** (`docs/adr/ADR-008-four-eyes-change-request.md`) — **4-eyes maker-checker via `change_request` table + Spring State Machine** (no workflow engine for partner setup).
+- **ADR-009** (`docs/adr/ADR-009-kyb-provider-port.md`) — vendor-agnostic `KybProvider` port for sanctions screening & KYB; concrete vendor recorded in ADR-014.
+- **ADR-010** (`docs/adr/ADR-010-bitemporal-effective-dating.md`) — **bitemporal** (valid_time × transaction_time) on partner-domain aggregates; SCD Type 6 storage.
+- **ADR-011** (`docs/adr/ADR-011-keycloak-and-auth-identity-split.md`) — **Keycloak for human auth**, **auth-identity for machine auth**; retires `password=demo`.
+- **ADR-012** (`docs/adr/ADR-012-server-side-draft-persistence.md`) — **server-side wizard draft persistence**; draft *is* the row in `status=ONBOARDING`.
+- **ADR-013** (`docs/adr/ADR-013-migration-expand-contract.md`) — **Flyway 10 + Expand/Backfill/Contract** discipline; three-release horizon for breaking schema changes.
+- **ADR-014** (`docs/adr/ADR-014-kyb-vendor-octa-solution.md`) — **Octa Solution** is the concrete KYB vendor implementing the ADR-009 port.
 
 ## Build & repo
 - **Monorepo**, **Gradle multi-module** (root `settings.gradle`, parent `build.gradle`, one module per service + shared libs).
