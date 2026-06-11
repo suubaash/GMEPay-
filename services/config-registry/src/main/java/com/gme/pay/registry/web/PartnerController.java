@@ -1,11 +1,13 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.contracts.ContactView;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerView;
 import com.gme.pay.domain.Partner;
 import com.gme.pay.domain.PartnerType;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.registry.contact.PartnerContactService;
 import com.gme.pay.registry.partner.PartnerDraftService;
 import com.gme.pay.registry.partner.PartnerStore;
 import com.gme.pay.registry.partner.PartnerValidator;
@@ -57,12 +59,15 @@ public class PartnerController {
     private final PartnerStore store;
     private final PartnerRepository repository;
     private final PartnerDraftService draftService;
+    private final PartnerContactService contactService;
 
     public PartnerController(PartnerStore store, PartnerRepository repository,
-                             PartnerDraftService draftService) {
+                             PartnerDraftService draftService,
+                             PartnerContactService contactService) {
         this.store = store;
         this.repository = repository;
         this.draftService = draftService;
+        this.contactService = contactService;
     }
 
     /** Every partner currently in the registry. Powers the Admin UI partner list. */
@@ -351,6 +356,29 @@ public class PartnerController {
     }
 
     /**
+     * Save Step-2 (Contacts) onto an existing draft — Slice 2. Bulk-replace
+     * semantics: the body carries the FULL desired contact set and
+     * {@link PartnerContactService#replaceDraftContacts} supersedes every
+     * current {@code partner_contact} row + inserts the new set in one
+     * transaction (SCD-6 paired writes, ADR-010), publishing one
+     * {@code partner_contact} audit row (ADR-007).
+     *
+     * <p>Returns 200 with the freshly-inserted current set; 404 if no current
+     * row matches {@code partnerCode}; 409 if the partner has left
+     * {@code ONBOARDING}; 400 on validation failure (E.164 phone, email shape,
+     * role roster — message carries the offending {@code contacts[i]} index).
+     */
+    @PatchMapping("/draft/{partnerCode}/step-2")
+    public List<ContactView> patchDraftStep2(@PathVariable String partnerCode,
+                                             @RequestBody PartnerCommand.UpdateStep2 req,
+                                             @RequestHeader(value = "X-Actor", required = false) String actor) {
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return contactService.replaceDraftContacts(partnerCode, req.contacts(), actor);
+    }
+
+    /**
      * Read the current draft for {@code partnerCode}. The wizard's "Resume
      * draft" action calls this to rehydrate the form. Returns 404 if no
      * current row exists for the code.
@@ -358,6 +386,17 @@ public class PartnerController {
     @GetMapping("/draft/{partnerCode}")
     public PartnerView getDraft(@PathVariable String partnerCode) {
         return draftService.getDraft(partnerCode);
+    }
+
+    /**
+     * The CURRENT contact set for {@code id} (the partner business code) —
+     * Slice 2. Powers the wizard's step-2 rehydrate and the partner detail
+     * page. Returns an empty list for a partner with no contacts yet; 404 only
+     * when the partner code itself is unknown.
+     */
+    @GetMapping("/{id}/contacts")
+    public List<ContactView> contacts(@PathVariable String id) {
+        return contactService.currentContacts(id);
     }
 
     /**

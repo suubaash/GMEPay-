@@ -219,6 +219,14 @@ export const adminApi = {
   },
 
   /**
+   * GET /v1/admin/partners/{partnerCode}/contacts
+   * -> PartnerContactView[] (Slice 2, agent 2A.1 backend)
+   * PartnerContactView: { id, role, name, email, phoneE164, isAuthorizedSignatory, notes }
+   */
+  getPartnerContacts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/contacts`),
+
+  /**
    * PATCH /v1/admin/partners/draft/{partnerCode}/step-{n}
    *  -> PartnerView with refreshed bitemporal stamps.
    *
@@ -238,7 +246,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1) {
+    if (n !== 1 && n !== 2) {
       return Promise.reject(
         new ApiError(
           501,
@@ -342,6 +350,19 @@ export const adminApi = {
   getAuditPage: (page, size) =>
     request(`/v1/admin/audit${qs({ page, size })}`),
 
+  /**
+   * GET /v1/admin/audit-trail?aggregateType=&aggregateId=&page=&size=
+   * -> { entries:[{recordedAt,actorId,eventType,beforeJson,afterJson}],
+   *      chainValid:boolean, page:number, size:number, total:number }
+   *
+   * Agent 2C.1 (backend) exposes this endpoint. chainValid is true when
+   * the SHA-256 hash chain over all entries is intact (ADR-007).
+   */
+  getAuditTrail: (aggregateType, aggregateId, page = 0, size = 20) =>
+    request(
+      `/v1/admin/audit-trail${qs({ aggregateType, aggregateId, page, size })}`,
+    ),
+
   // ---------- System health ----------
   /**
    * GET /v1/admin/system/health -> SystemHealth
@@ -349,4 +370,39 @@ export const adminApi = {
    * ServiceHealth { name, status:"UP"|"DOWN"|"DEGRADED", lastSeenAt, uptimeSec }
    */
   getSystemHealth: () => request('/v1/admin/system/health'),
+
+  // ---------- Change-request approvals (Slice 2, agent 2B.1 backend) ----------
+  /**
+   * GET /v1/admin/change-requests?state=PROPOSED
+   * -> ChangeRequestSummary[]
+   * ChangeRequestSummary: { id, aggregate, proposer, proposedAt, payload }
+   *   aggregate: string (e.g. "Partner:GME_KR_001")
+   *   proposer:  operator id / username who raised the request
+   *   proposedAt: ISO-8601 instant
+   *   payload:   object — whatever the PATCH step put into the change_request row
+   */
+  listPendingChangeRequests: () =>
+    request('/v1/admin/change-requests?state=PROPOSED'),
+
+  /**
+   * POST /v1/admin/change-requests/{id}/approve
+   * body: { approvedBy: string }
+   * -> ChangeRequestSummary (state transitions to APPROVED)
+   */
+  approveChangeRequest: (id, approvedBy) =>
+    request(`/v1/admin/change-requests/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ approvedBy }),
+    }),
+
+  /**
+   * POST /v1/admin/change-requests/{id}/reject
+   * body: { rejectedBy: string, reason: string }
+   * -> ChangeRequestSummary (state transitions to REJECTED)
+   */
+  rejectChangeRequest: (id, rejectedBy, reason) =>
+    request(`/v1/admin/change-requests/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectedBy, reason }),
+    }),
 };

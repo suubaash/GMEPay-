@@ -235,4 +235,116 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
             return List.of();
         }
     }
+
+    // -------- Slice 2 (2A.1) contact endpoints (PARTNER_SETUP_PLAN §Slice 2) --
+
+    @Override
+    public List<com.gme.pay.contracts.ContactView> patchDraftStep2(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep2 request) {
+        try {
+            List<com.gme.pay.contracts.ContactView> response = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-2", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.ContactView>>() {});
+            return response == null ? List.of() : response;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400 with the offending
+            // contacts[i] index, unknown draft → 404, non-ONBOARDING → 409)
+            // through to the Admin UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.ContactView> listContacts(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.ContactView> response = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/contacts", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.ContactView>>() {});
+            return response == null ? List.of() : response;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner code; propagate so the Admin UI can
+            // distinguish "no such partner" from "partner with zero contacts"
+            // (the latter is an empty 200 list from upstream).
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listContacts({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    // -------- Slice 2 (2B.1) change-request approval endpoints (ADR-008) ------
+
+    @Override
+    public ChangeRequestPage listChangeRequests(String state, int page, int size) {
+        try {
+            org.springframework.web.util.UriComponentsBuilder uri =
+                    org.springframework.web.util.UriComponentsBuilder
+                            .fromUriString("/v1/change-requests")
+                            .queryParam("page", page)
+                            .queryParam("size", size);
+            if (state != null && !state.isBlank()) {
+                uri.queryParam("state", state);
+            }
+            ChangeRequestPage result = restClient.get()
+                    .uri(uri.toUriString())
+                    .retrieve()
+                    .body(ChangeRequestPage.class);
+            return result != null ? result
+                    : new ChangeRequestPage(List.of(), page, size, 0L);
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listChangeRequests: {}",
+                    network.getMessage());
+            return new ChangeRequestPage(List.of(), page, size, 0L);
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.ChangeRequestView getChangeRequest(Long id) {
+        try {
+            return restClient.get()
+                    .uri("/v1/change-requests/{id}", id)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {})
+                    .body(com.gme.pay.contracts.ChangeRequestView.class);
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getChangeRequest({}): {}",
+                    id, network.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.ChangeRequestView approveChangeRequest(
+            Long id, String approvedBy) {
+        try {
+            return restClient.post()
+                    .uri("/v1/change-requests/{id}/approve", id)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(java.util.Map.of("approvedBy", approvedBy))
+                    .retrieve()
+                    .body(com.gme.pay.contracts.ChangeRequestView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.ChangeRequestView rejectChangeRequest(
+            Long id, String rejectedBy, String reason) {
+        try {
+            return restClient.post()
+                    .uri("/v1/change-requests/{id}/reject", id)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(java.util.Map.of("rejectedBy", rejectedBy, "reason", reason))
+                    .retrieve()
+                    .body(com.gme.pay.contracts.ChangeRequestView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
 }

@@ -3,23 +3,26 @@ package com.gme.pay.contracts;
 import com.gme.pay.domain.PartnerType;
 
 import java.math.RoundingMode;
+import java.util.List;
 
 /**
  * Canonical write surface for a partner. Sealed-style wrapper carrying the
  * specific sub-command the caller wants to apply — keeps every partner-write
  * payload deserializing into a single inbound type for the controller layer.
  *
- * <p>Slice 1 introduces two sub-commands:
+ * <p>Slice 1 introduced two sub-commands; Slice 2 adds the third:
  * <ul>
  *   <li>{@link CreateDraft} — first wizard submission, materialises a row in
  *       {@code partner} with {@code status=ONBOARDING}.</li>
  *   <li>{@link UpdateStep1} — bitemporal mutation of the Identity step on an
  *       existing draft.</li>
+ *   <li>{@link UpdateStep2} — bulk replace of the Contacts step on an existing
+ *       draft (Slice 2 — see {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 2 —
+ *       Contacts").</li>
  * </ul>
  *
- * <p>Later slices add more (e.g. {@code AddContact}, {@code AttachKyb}); each
- * lands as another nested record without churning the wrapper or any existing
- * consumer.
+ * <p>Later slices add more (e.g. {@code AttachKyb}); each lands as another
+ * nested record without churning the wrapper or any existing consumer.
  *
  * <p>The wrapper holds the sub-commands as {@code Object} typed fields so the
  * existing Spring Web JSON-binding path keeps working without introducing a
@@ -28,16 +31,22 @@ import java.math.RoundingMode;
  */
 public record PartnerCommand(
         CreateDraft createDraft,
-        UpdateStep1 updateStep1) {
+        UpdateStep1 updateStep1,
+        UpdateStep2 updateStep2) {
 
     /** Convenience constructor for a create-draft command. */
     public static PartnerCommand create(CreateDraft draft) {
-        return new PartnerCommand(draft, null);
+        return new PartnerCommand(draft, null, null);
     }
 
     /** Convenience constructor for an update-step-1 command. */
     public static PartnerCommand update(UpdateStep1 update) {
-        return new PartnerCommand(null, update);
+        return new PartnerCommand(null, update, null);
+    }
+
+    /** Convenience constructor for an update-step-2 (contacts) command. */
+    public static PartnerCommand updateContacts(UpdateStep2 update) {
+        return new PartnerCommand(null, null, update);
     }
 
     /**
@@ -99,5 +108,19 @@ public record PartnerCommand(
             AddressCommand registeredAddress,
             AddressCommand operatingAddress,
             String lei) {
+    }
+
+    /**
+     * Body for "Save step-2 changes" (Contacts) on an already-created draft —
+     * Slice 2. The wizard's contract is <b>bulk replace</b>: {@code contacts}
+     * carries the FULL desired contact set, and the service supersedes every
+     * current {@code partner_contact} row and inserts the new set in one
+     * transaction (SCD-6 paired writes per ADR-010). An empty list therefore
+     * clears all contacts; {@code null} is rejected with 400.
+     *
+     * <p>The &ge;4-distinct-roles requirement is enforced by the activation
+     * gate (Slice 8), not by this payload — the wizard saves partial progress.
+     */
+    public record UpdateStep2(List<ContactCommand> contacts) {
     }
 }

@@ -45,6 +45,20 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     private final Map<String, PartnerView> draftStore = new LinkedHashMap<>();
     /** Stand-in for {@code partners_id_seq} so the stub-issued surrogate ids look real. */
     private final AtomicLong surrogateSeq = new AtomicLong(900_000L);
+    /** Slice 2 contact sets — keyed by partner_code, mirrors the bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.ContactView>> contactStore = new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_contact} BIGSERIAL. */
+    private final AtomicLong contactSeq = new AtomicLong(800_000L);
+
+    /** Mirrors {@code PartnerContactService.PHONE_E164} (config-registry). */
+    private static final java.util.regex.Pattern PHONE_E164 =
+            java.util.regex.Pattern.compile("^\\+[1-9]\\d{1,14}$");
+    /** Mirrors {@code PartnerContactService.EMAIL} (config-registry). */
+    private static final java.util.regex.Pattern EMAIL =
+            java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    /** Mirrors config-registry's {@code ContactRole} roster (V009 CHECK constraint). */
+    private static final java.util.Set<String> CONTACT_ROLES = java.util.Set.of(
+            "OPS_24X7", "FINANCE", "COMPLIANCE_MLRO", "TECH", "LEGAL", "INCIDENT");
 
     public StubConfigRegistryClient() {
         store.put("partner_test_001", new PartnerSummary(
@@ -138,6 +152,92 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public synchronized List<PartnerView> listDrafts() {
         return new ArrayList<>(draftStore.values());
+    }
+
+    // -------- Slice 2 (2A.1) contact endpoints (PARTNER_SETUP_PLAN §Slice 2) --
+
+    /**
+     * In-memory bulk replace mirroring config-registry's
+     * {@code PartnerContactService.replaceDraftContacts}: the incoming list is
+     * the FULL desired set and overwrites whatever was stored before. The same
+     * server-side validation (role roster, name/email required, E.164 phone) is
+     * applied here so MockMvc tests exercise the 400 path through the stub.
+     */
+    @Override
+    public synchronized List<com.gme.pay.contracts.ContactView> patchDraftStep2(
+            String partnerCode, PartnerCommand.UpdateStep2 request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null || request.contacts() == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "contacts is required (send an empty list to clear all contacts)");
+        }
+        List<com.gme.pay.contracts.ContactCommand> contacts = request.contacts();
+        for (int i = 0; i < contacts.size(); i++) {
+            validateContact(contacts.get(i), i);
+        }
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        List<com.gme.pay.contracts.ContactView> fresh = new ArrayList<>(contacts.size());
+        for (com.gme.pay.contracts.ContactCommand cmd : contacts) {
+            fresh.add(new com.gme.pay.contracts.ContactView(
+                    contactSeq.getAndIncrement(),
+                    cmd.role(),
+                    cmd.name(),
+                    cmd.email(),
+                    cmd.phoneE164() == null || cmd.phoneE164().isBlank() ? null : cmd.phoneE164(),
+                    Boolean.TRUE.equals(cmd.authorizedSignatory()),
+                    cmd.notes() == null || cmd.notes().isBlank() ? null : cmd.notes(),
+                    now,
+                    null,
+                    now));
+        }
+        contactStore.put(partnerCode, fresh);
+        return new ArrayList<>(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.ContactView> listContacts(String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        return new ArrayList<>(contactStore.getOrDefault(partnerCode, List.of()));
+    }
+
+    /** Mirror of config-registry's per-element contact validation (same messages shape). */
+    private static void validateContact(com.gme.pay.contracts.ContactCommand cmd, int index) {
+        String at = "contacts[" + index + "]";
+        if (cmd == null) {
+            throw badRequest(at + " must be an object");
+        }
+        if (cmd.role() == null || cmd.role().isBlank() || !CONTACT_ROLES.contains(cmd.role())) {
+            throw badRequest(at + ".role must be one of " + CONTACT_ROLES + ", was: " + cmd.role());
+        }
+        if (cmd.name() == null || cmd.name().isBlank() || cmd.name().length() > 120) {
+            throw badRequest(at + ".name is required (max 120 characters)");
+        }
+        if (cmd.email() == null || cmd.email().isBlank()
+                || cmd.email().length() > 254 || !EMAIL.matcher(cmd.email()).matches()) {
+            throw badRequest(at + ".email is not a valid email address: " + cmd.email());
+        }
+        if (cmd.phoneE164() != null && !cmd.phoneE164().isBlank()
+                && !PHONE_E164.matcher(cmd.phoneE164()).matches()) {
+            throw badRequest(at + ".phoneE164 must be E.164 format"
+                    + " (+ followed by up to 15 digits), was: " + cmd.phoneE164());
+        }
+        if (cmd.notes() != null && cmd.notes().length() > 500) {
+            throw badRequest(at + ".notes must be at most 500 characters");
+        }
+    }
+
+    private static org.springframework.web.server.ResponseStatusException badRequest(String message) {
+        return new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, message);
     }
 
     private static PartnerView buildView(Long id, PartnerCommand.CreateDraft req) {

@@ -21,10 +21,12 @@ import { useSnackbar } from '@/components/SnackbarProvider';
 import { useAppDispatch, useAppSelector } from '@/store';
 import {
   clearError,
+  fetchContacts,
   fetchDraft,
   resetCurrent,
 } from '@/store/draftsSlice';
 import IdentityForm from './step-1/IdentityForm';
+import ContactsForm from './step-2/ContactsForm';
 
 /**
  * Partner Setup wizard shell (Slice 1, agent 1D.1).
@@ -91,6 +93,37 @@ function IdentityStep({ draft, partnerCode, onSaved }) {
 }
 
 /**
+ * Step 2 (Contacts) body — delegates to {@link ContactsForm} (agent 2A.2).
+ * On mount we lazily fetch the current contact list from the BFF so the
+ * form pre-populates for a returning operator; the contacts are merged onto
+ * the draft view before being handed to the form.
+ */
+function ContactsStep({ draft, partnerCode, onSaved, dispatch }) {
+  const { contacts, contactsLoading } = useAppSelector((s) => s.drafts);
+
+  // Fetch existing contacts when this step first mounts.
+  useEffect(() => {
+    if (partnerCode) dispatch(fetchContacts(partnerCode));
+  }, [partnerCode, dispatch]);
+
+  // Merge persisted contacts onto the draft view so ContactsForm can
+  // initialise its field-array from the BFF's current state.
+  const draftWithContacts = { ...draft, contacts };
+
+  if (contactsLoading) {
+    return <LoadingSkeleton variant="page" />;
+  }
+
+  return (
+    <ContactsForm
+      draft={draftWithContacts}
+      partnerCode={partnerCode}
+      onSaved={onSaved}
+    />
+  );
+}
+
+/**
  * Wizard shell. `activeStep` is the 1-based step the operator is viewing;
  * passed in by the per-step route file (.../step-1/page.jsx) so the URL
  * always agrees with the active stepper position.
@@ -133,12 +166,11 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   const isFirst = cursor === 1;
   const isLast = cursor === STEPS.length;
   const stepDef = STEPS[cursor - 1];
-  // Slice 1 only persists Step 1, and the IdentityForm component owns the
-  // submit + PATCH for it (so RHF validation runs before we round-trip).
-  // The wizard's own "Save & next" button therefore stays hidden on cursor
-  // 1 — the form provides its own submit affordance and advances the
-  // cursor via the {@link advanceCursor} callback below.
-  const step1HasOwnSubmit = cursor === 1;
+  // Steps 1 and 2 each own their own RHF-validated submit button, so the
+  // wizard shell hides its generic "Save & next" affordance for those steps.
+  // Later steps that use the shell's own Next can set this false once they
+  // land with their slice.
+  const stepHasOwnSubmit = cursor === 1 || cursor === 2;
 
   const onBack = () => {
     dispatch(clearError());
@@ -223,7 +255,7 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
 
       <Card>
         <CardContent>
-          {renderStep(cursor, stepDef, current, partnerCode, advanceCursor)}
+          {renderStep(cursor, stepDef, current, partnerCode, advanceCursor, dispatch)}
 
           <Divider sx={{ my: 3 }} />
 
@@ -235,7 +267,7 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
               <Button onClick={onBack} disabled={isFirst || saving}>
                 Back
               </Button>
-              {!step1HasOwnSubmit ? (
+              {!stepHasOwnSubmit ? (
                 <Button
                   variant="contained"
                   onClick={onNext}
@@ -252,14 +284,24 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   );
 }
 
-/** Map cursor → step body. Slice 1 only fills Step 1. */
-function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor) {
+/** Map cursor → step body. Slice 1 fills Step 1; Slice 2 fills Step 2. */
+function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor, dispatch) {
   if (cursor === 1) {
     return (
       <IdentityStep
         draft={draft}
         partnerCode={partnerCode}
         onSaved={advanceCursor}
+      />
+    );
+  }
+  if (cursor === 2) {
+    return (
+      <ContactsStep
+        draft={draft}
+        partnerCode={partnerCode}
+        onSaved={advanceCursor}
+        dispatch={dispatch}
       />
     );
   }

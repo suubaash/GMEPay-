@@ -8,6 +8,7 @@ import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.web.dto.AdminDashboard;
 import com.gme.pay.bff.web.dto.DraftPartnerRequest;
 import com.gme.pay.bff.web.dto.DraftPartnerStep1Request;
+import com.gme.pay.bff.web.dto.DraftPartnerStep2Request;
 import com.gme.pay.bff.web.dto.Page;
 import com.gme.pay.bff.web.dto.PartnerCreateRequest;
 import com.gme.pay.bff.web.dto.RevenueBreakdown;
@@ -230,6 +231,37 @@ public class AdminDashboardController {
     @GetMapping("/partners/drafts")
     public List<PartnerView> listDrafts() {
         return configRegistry.listDrafts();
+    }
+
+    // -------- Slice 2 (2A.1) contact endpoints (PARTNER_SETUP_PLAN §Slice 2) --
+
+    /**
+     * Save Step-2 (Contacts) onto a draft — bulk replace. Mirrors
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-2} on config-registry:
+     * the body carries the FULL desired contact set; upstream supersedes every
+     * current {@code partner_contact} row and inserts the new set in one
+     * transaction (SCD-6, ADR-010) with one {@code partner_contact} audit row
+     * (ADR-007). Returns 200 with the freshly-inserted current set; upstream
+     * 400/404/409 pass through with their messages preserved.
+     */
+    @PatchMapping("/partners/draft/{partnerCode}/step-2")
+    public List<com.gme.pay.contracts.ContactView> patchDraftStep2(
+            @PathVariable String partnerCode,
+            @RequestBody DraftPartnerStep2Request body) {
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.patchDraftStep2(partnerCode, body.toUpdateStep2());
+    }
+
+    /**
+     * The CURRENT contact set for {@code partnerCode}. Mirrors
+     * {@code GET /v1/partners/{partnerCode}/contacts}. A partner with zero
+     * contacts returns an empty list; an unknown code surfaces upstream's 404.
+     */
+    @GetMapping("/partners/{partnerCode}/contacts")
+    public List<com.gme.pay.contracts.ContactView> listContacts(@PathVariable String partnerCode) {
+        return configRegistry.listContacts(partnerCode);
     }
 
     @GetMapping("/transactions/recent")

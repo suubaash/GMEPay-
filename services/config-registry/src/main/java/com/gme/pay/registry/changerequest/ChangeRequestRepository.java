@@ -2,6 +2,8 @@ package com.gme.pay.registry.changerequest;
 
 import com.gme.pay.changerequest.ChangeRequestState;
 import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -28,4 +30,12 @@ public interface ChangeRequestRepository extends JpaRepository<ChangeRequestEnti
      * (FIFO so makers' work is reviewed in submission order).
      */
     List<ChangeRequestEntity> findByStateOrderByProposedAtAsc(ChangeRequestState state);
+
+    /**
+     * Paginated approval queue filtered by state. Used by
+     * {@link ChangeRequestController#list} ({@code GET /v1/change-requests?state=...}).
+     * Ordered oldest-first (FIFO review order) within a state filter;
+     * without a filter all rows are returned newest-first by proposed_at.
+     */
+    Page<ChangeRequestEntity> findByState(ChangeRequestState state, Pageable pageable);
 }

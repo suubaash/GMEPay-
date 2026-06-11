@@ -11,6 +11,8 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
+  Tab,
+  Tabs,
   Typography,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
@@ -19,6 +21,7 @@ import RoundingModeSelect from '@/components/RoundingModeSelect';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import Breadcrumbs from '@/components/Breadcrumbs';
+import AuditTrail from '@/components/AuditTrail';
 import { useSnackbar } from '@/components/SnackbarProvider';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
@@ -50,6 +53,7 @@ export default function PartnerDetailPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draftMode, setDraftMode] = useState('HALF_UP');
+  const [activeTab, setActiveTab] = useState(0);
 
   const openDialog = () => {
     if (!partner) return;
@@ -78,6 +82,11 @@ export default function PartnerDetailPage() {
     return <LoadingSkeleton variant="page" />;
   }
 
+  // The partnerCode used as the aggregateId for the audit trail. The detail
+  // response may carry a `partnerCode` field (PartnerView from Slice 1); fall
+  // back to the URL `id` param which is what the route is keyed on.
+  const partnerCode = partner.partnerCode ?? id ?? '';
+
   return (
     <Box>
       <Breadcrumbs
@@ -90,40 +99,65 @@ export default function PartnerDetailPage() {
         {partner.partnerId}
       </Typography>
       <ErrorAlert message={error} onRetry={reload} />
-      <Card sx={{ maxWidth: 720 }}>
-        <CardContent>
-          <Stack spacing={2}>
-            <Box>
-              <Typography variant="body2" color="text.secondary">
-                Partner type
-              </Typography>
-              <Typography>{partner.type ?? '—'}</Typography>
-            </Box>
-            <Box>
-              <Typography variant="body2" color="text.secondary">
-                Settlement currency
-              </Typography>
-              <Typography>{partner.settlementCurrency ?? '—'}</Typography>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ flexGrow: 1 }}>
-                <Typography variant="body2" color="text.secondary">
-                  Settlement rounding mode
-                </Typography>
-                <Typography>{partner.settlementRoundingMode ?? '—'}</Typography>
-              </Box>
-              <Button
-                variant="outlined"
-                startIcon={<EditIcon />}
-                onClick={openDialog}
-                disabled={detailLoading}
-              >
-                Edit
-              </Button>
-            </Box>
-          </Stack>
-        </CardContent>
-      </Card>
+
+      {/* Tab bar */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_e, v) => setActiveTab(v)}
+          aria-label="Partner detail tabs"
+        >
+          <Tab label="Details" id="partner-tab-0" aria-controls="partner-tabpanel-0" />
+          <Tab label="Audit" id="partner-tab-1" aria-controls="partner-tabpanel-1" />
+        </Tabs>
+      </Box>
+
+      {/* Details tab */}
+      {activeTab === 0 && (
+        <Box role="tabpanel" id="partner-tabpanel-0" aria-labelledby="partner-tab-0">
+          <Card sx={{ maxWidth: 720 }}>
+            <CardContent>
+              <Stack spacing={2}>
+                <Box>
+                  <Typography variant="body2" color="text.secondary">
+                    Partner type
+                  </Typography>
+                  <Typography>{partner.type ?? '—'}</Typography>
+                </Box>
+                <Box>
+                  <Typography variant="body2" color="text.secondary">
+                    Settlement currency
+                  </Typography>
+                  <Typography>{partner.settlementCurrency ?? '—'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Box sx={{ flexGrow: 1 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Settlement rounding mode
+                    </Typography>
+                    <Typography>{partner.settlementRoundingMode ?? '—'}</Typography>
+                  </Box>
+                  <Button
+                    variant="outlined"
+                    startIcon={<EditIcon />}
+                    onClick={openDialog}
+                    disabled={detailLoading}
+                  >
+                    Edit
+                  </Button>
+                </Box>
+              </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+      )}
+
+      {/* Audit tab */}
+      {activeTab === 1 && (
+        <Box role="tabpanel" id="partner-tabpanel-1" aria-labelledby="partner-tab-1">
+          <AuditTrail aggregateType="partner" aggregateId={partnerCode} />
+        </Box>
+      )}
 
       <Dialog
         open={dialogOpen}

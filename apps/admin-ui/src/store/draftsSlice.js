@@ -38,6 +38,9 @@ import { adminApi } from '@/api/client';
 const initialState = {
   current: null,
   currentCode: null,
+  /** Contacts for the currently-open draft, loaded lazily when Step 2 mounts. */
+  contacts: [],
+  contactsLoading: false,
   list: [],
   loading: false,
   listLoading: false,
@@ -49,6 +52,18 @@ export const fetchDraft = createAsyncThunk(
   'drafts/fetch',
   async (partnerCode) => {
     return adminApi.getDraft(partnerCode);
+  },
+);
+
+/**
+ * Fetch the contacts list for the currently-open draft.
+ * Dispatched by ContactsForm on mount (Step 2) so the operator sees any
+ * contacts already persisted from a previous session.
+ */
+export const fetchContacts = createAsyncThunk(
+  'drafts/fetchContacts',
+  async (partnerCode) => {
+    return adminApi.getPartnerContacts(partnerCode);
   },
 );
 
@@ -115,6 +130,8 @@ const draftsSlice = createSlice({
     resetCurrent(state) {
       state.current = null;
       state.currentCode = null;
+      state.contacts = [];
+      state.contactsLoading = false;
       state.error = null;
       state.saving = false;
     },
@@ -137,6 +154,19 @@ const draftsSlice = createSlice({
       .addCase(fetchDraft.rejected, (state, action) => {
         state.loading = false;
         state.error = action.error?.message ?? 'Failed to load draft';
+      })
+      // ---- fetchContacts (Step 2) ----
+      .addCase(fetchContacts.pending, (state) => {
+        state.contactsLoading = true;
+      })
+      .addCase(fetchContacts.fulfilled, (state, action) => {
+        state.contactsLoading = false;
+        state.contacts = Array.isArray(action.payload) ? action.payload : [];
+      })
+      .addCase(fetchContacts.rejected, (state) => {
+        state.contactsLoading = false;
+        // Contacts fetch failure is non-fatal — the form starts with an
+        // empty row so the operator can still enter contacts.
       })
       // ---- fetchDrafts (list) ----
       .addCase(fetchDrafts.pending, (state) => {

@@ -2,7 +2,9 @@ package com.gme.pay.registry.audit;
 
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -12,15 +14,17 @@ import org.springframework.stereotype.Repository;
  * Spring Data repository for {@link AuditLogEntity}. Read-only API:
  * {@link AuditLogService} owns all writes and never mutates an existing row.
  *
- * <p>The two query methods cover the two callers in Slice 1:
+ * <p>Query methods:
  *
  * <ul>
  *   <li>{@link #findLatestByAggregate} — fetched by the writer to obtain the
  *       prior row's {@code row_hash}, which becomes the new row's {@code prev_hash}.
  *       Returns at most one row.</li>
  *   <li>{@link #findChainByAggregate} — fetched by the verifier (in tests and
- *       eventually by a chain-validate endpoint) to walk every row of a given
- *       aggregate in {@code id} order.</li>
+ *       by the chain-validate endpoint) to walk every row of a given aggregate
+ *       in {@code id} order.</li>
+ *   <li>{@link #findPageByAggregate} — paginated read for the audit read
+ *       endpoint ({@code GET /v1/audit}), ordered {@code recorded_at DESC}.</li>
  * </ul>
  */
 @Repository
@@ -64,4 +68,30 @@ public interface AuditLogRepository extends JpaRepository<AuditLogEntity, Long> 
     List<AuditLogEntity> findChainByAggregate(
             @Param("aggregateType") String aggregateType,
             @Param("aggregateId") String aggregateId);
+
+    /**
+     * Paginated read for the audit read endpoint, ordered {@code recorded_at DESC}
+     * (newest first). The count query is a separate {@code countQuery} to avoid a
+     * subselect scan on the JSONB/BLOB columns which are not needed for counting.
+     *
+     * <p>Used by {@code AuditLogController.list}; the chain-validity check is done
+     * separately by {@code AuditLogService.verifyChain} which reads in {@code id
+     * ASC} order — the two queries are intentionally separate so pagination ordering
+     * and chain verification ordering do not interfere.
+     */
+    @Query(value = """
+            select a from AuditLogEntity a
+            where a.aggregateType = :aggregateType
+              and a.aggregateId = :aggregateId
+            order by a.recordedAt desc, a.id desc
+            """,
+           countQuery = """
+            select count(a) from AuditLogEntity a
+            where a.aggregateType = :aggregateType
+              and a.aggregateId = :aggregateId
+            """)
+    Page<AuditLogEntity> findPageByAggregate(
+            @Param("aggregateType") String aggregateType,
+            @Param("aggregateId") String aggregateId,
+            Pageable pageable);
 }

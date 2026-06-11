@@ -101,6 +101,35 @@ public interface ConfigRegistryClient {
         return List.of();
     }
 
+    // -------- Slice 2 (2A.1) contact endpoints (PARTNER_SETUP_PLAN §Slice 2) --
+
+    /**
+     * Bulk-replace the contact set on a draft (wizard step-2 "Next"). Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-2}; config-registry
+     * supersedes every current {@code partner_contact} row and inserts the new
+     * set in one transaction (SCD-6, ADR-010). Returns the freshly-inserted
+     * current set as canonical {@link ContactView}s.
+     *
+     * <p>Default throws — like {@link #createDraft} — so existing anonymous
+     * test fakes keep compiling; both real implementations override.
+     */
+    default List<com.gme.pay.contracts.ContactView> patchDraftStep2(
+            String partnerCode, PartnerCommand.UpdateStep2 request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep2 is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT contact set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/contacts}. A partner with no
+     * contacts yields an empty list; an unknown partner surfaces upstream's
+     * 404 as a {@code ResponseStatusException} from the rest/stub
+     * implementations.
+     */
+    default List<com.gme.pay.contracts.ContactView> listContacts(String partnerCode) {
+        return List.of();
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias
@@ -133,6 +162,68 @@ public interface ConfigRegistryClient {
                     view.settlementRoundingMode());
         }
     }
+
+    // -------- Slice 2 (2B.1) change-request approval endpoints (ADR-008) ------
+    //
+    // Default implementations throw UnsupportedOperationException so the stub
+    // clients that only implement partner CRUD do not need to change. Once the
+    // BFF's RestConfigRegistryClient wires these up the stubs for controller
+    // tests also get the matching methods.
+
+    /**
+     * Paginated list of change requests, optionally filtered by state.
+     * Routes to {@code GET /v1/change-requests?state=...&page=...&size=...} on
+     * config-registry. The page envelope mirrors
+     * {@link com.gme.pay.bff.web.dto.Page}.
+     */
+    default ChangeRequestPage listChangeRequests(String state, int page, int size) {
+        throw new UnsupportedOperationException(
+                "listChangeRequests is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Fetch a single change request by surrogate id.
+     * Routes to {@code GET /v1/change-requests/{id}}.
+     */
+    default com.gme.pay.contracts.ChangeRequestView getChangeRequest(Long id) {
+        throw new UnsupportedOperationException(
+                "getChangeRequest is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Approve a PROPOSED change request and immediately apply it.
+     * Routes to {@code POST /v1/change-requests/{id}/approve}.
+     * Returns the view in state=APPLIED on success; re-throws upstream 4xx
+     * (including 409 for self-approval).
+     */
+    default com.gme.pay.contracts.ChangeRequestView approveChangeRequest(
+            Long id, String approvedBy) {
+        throw new UnsupportedOperationException(
+                "approveChangeRequest is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Reject a change request with a mandatory reason.
+     * Routes to {@code POST /v1/change-requests/{id}/reject}.
+     * Returns the updated view in state=REJECTED.
+     */
+    default com.gme.pay.contracts.ChangeRequestView rejectChangeRequest(
+            Long id, String rejectedBy, String reason) {
+        throw new UnsupportedOperationException(
+                "rejectChangeRequest is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Paginated page of {@link com.gme.pay.contracts.ChangeRequestView} rows.
+     * Mirrors the shape that config-registry's
+     * {@code ChangeRequestController.ChangeRequestPageView} serialises so JSON
+     * deserialisation in the BFF's REST client is straightforward.
+     */
+    record ChangeRequestPage(
+            java.util.List<com.gme.pay.contracts.ChangeRequestView> content,
+            int page,
+            int size,
+            long total) {}
 
     /**
      * @deprecated Slice 1 DTO collapse — build a {@link PartnerCommand.CreateDraft}

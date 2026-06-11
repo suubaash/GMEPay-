@@ -12,8 +12,10 @@ import revenueReducer from './revenueSlice';
 import authReducer from './authSlice';
 import ratesReducer from './ratesSlice';
 import auditReducer from './auditSlice';
+import auditTrailReducer from './auditTrailSlice';
 import systemHealthReducer from './systemHealthSlice';
 import uiReducer from './uiSlice';
+import approvalsReducer from './approvalsSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -29,6 +31,8 @@ import uiReducer from './uiSlice';
  *  - revenue      : period summary + breakdown (revenue-ledger via BFF).
  *  - rates        : manual rate-preview state (rate-fx via BFF, C4).
  *  - audit        : paginated audit log (config-registry via BFF, C4).
+ *  - auditTrail   : per-aggregate audit trail with chainValid (BFF, Slice 2 2C.1).
+ *  - approvals    : 4-eyes PROPOSED change-request queue (Slice 2, agent 2B.2).
  *  - systemHealth : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -44,6 +48,8 @@ export const store = configureStore({
     revenue: revenueReducer,
     rates: ratesReducer,
     audit: auditReducer,
+    auditTrail: auditTrailReducer,
+    approvals: approvalsReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },
