@@ -3146,3 +3146,27 @@
 - No audit entry is created by GET /status or GET /report calls.
 - Two calls to POST /checkins produce two separate audit entries (append-only, no upsert on audit).
 **Depends on:** 16.5-T28
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 18.7-G01 — ADR-001..005: resolve stack contradictions
+*Completion phase:* **R0** · *Est:* 120 min · *Role:* Architect
+
+**Context.** User's two source images conflict: Kafka (architecture diagram) vs RabbitMQ (tile board); Spring Cloud Gateway (built) vs Nginx (tile board); MongoDB keep/drop; Rocky Linux base; Elasticsearch role. NEEDS USER DECISION.
+
+**Steps.**
+- Draft 5 one-page ADRs with recommendation each
+- Present to user; record decision
+- File alignment tickets for any code swap decided
+
+**Deliverable.** 5 signed ADRs in docs/adr/
+
+**Acceptance.**
+- Each ADR has Decision + Consequences; MASTER_PLAN references them
+

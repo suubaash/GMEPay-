@@ -568,3 +568,42 @@
 **Acceptance / logic checks:**
 - account present
 - rounding total in revenue report reconciles to sum of residuals
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G06 — revenue-ledger: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: journal/postings + outbox (V001-V003).
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:revenue-ledger:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.4-G03 — Outbox publisher drains to Kafka (ledger)
+*Completion phase:* **R1** · *Est:* 80 min · *Role:* Backend · *Deps:* 17.4-G01
+
+**Context.** Same as transaction-mgmt but for revenue-ledger's V003 outbox (journal.posted events).
+
+**Steps.**
+- Reuse drain pattern
+- IT with Testcontainers kafka
+
+**Deliverable.** Ledger events on Kafka
+
+**Acceptance.**
+- journal.posted consumable from topic
+

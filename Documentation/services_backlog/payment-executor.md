@@ -1803,3 +1803,44 @@
 - Rollback of deduction transaction also removes alert event row.
 - V203 migration runs cleanly after V202.
 **Depends on:** 8.4-T20, 8.4-T06
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G08 — payment-executor: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: execution attempts + idempotency tables.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:payment-executor:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.5-G01 — Verify executor's 7 REST clients E2E
+*Completion phase:* **R2** · *Est:* 180 min · *Role:* Backend · *Deps:* 17.1-G03,18.6-G01
+
+**Context.** Rest*Client @Primary impls compile but were never exercised against live services. Run executor against the compose stack and verify each hop.
+
+**Steps.**
+- Boot compose core profile
+- Execute scripted payment; capture each REST call (logbook or wiretap)
+- Fix DTO/path drift found
+
+**Deliverable.** 7/7 clients verified live
+
+**Acceptance.**
+- One payment exercises rate-fx, prefunding, config-registry, qr-service, txn-mgmt, scheme-adapter, revenue-ledger over HTTP
+- No stub bean active in compose profile
+

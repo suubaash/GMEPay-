@@ -1,15 +1,37 @@
 // rate-fx service: exposes the rate engine over REST (Rate & FX Engine).
+//
+// Persistence (17.2-G02): rate_snapshots + rate_quotes are Flyway-managed.
+// Unit slices run on H2 in PostgreSQL mode; the real-PostgreSQL contract is
+// verified by @Tag("docker") Testcontainers ITs (postgres:16) which only run
+// via the root `integrationTest` task on CI runners that have Docker.
+//
+// Quote TTL / rate lock (17.3-G01): Redis-backed (key rq:{quoteId}, EXPIRE =
+// quote TTL) when spring.data.redis.host is set; in-memory fallback otherwise.
 plugins {
     id 'org.springframework.boot'
     id 'io.spring.dependency-management'
 }
 
+// Pin Testcontainers to the wave-approved version (Boot 3.3.4 manages an older one).
+ext['testcontainers.version'] = '1.20.1'
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-rate')
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
 
+    runtimeOnly 'org.postgresql:postgresql'
+    // Flyway 10.x ships PostgreSQL support as a separate module (needed by the PG ITs).
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'com.h2database:h2'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
 }

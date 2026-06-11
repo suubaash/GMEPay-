@@ -1,0 +1,24 @@
+// lib-events-kafka: Kafka implementation of lib-events' EventPublisher (ADR-001).
+// Kept separate from lib-events so the core events contract stays Spring/Kafka-free.
+// Services add this module as an `implementation` dependency to publish to Kafka;
+// without it (or without spring.kafka.bootstrap-servers) they fall back to LogEventPublisher.
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api project(':libs:lib-events')
+
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310' // java.time as ISO-8601 strings
+    implementation 'org.slf4j:slf4j-api'
+
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:kafka'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+}

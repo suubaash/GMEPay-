@@ -1,4 +1,4 @@
-<!-- generated -->
+<!-- generated; manually amended 2026-06-10 (WBS v3: ops-partner-bff, sftp-gateway, lib-events-kafka — keep on regeneration) -->
 # GMEPay+ — Microservice Partition & Build Order
 
 Every WBS work-package is assigned to exactly one owning service so a Claude agent can build one repo/microservice at a time, then integrate. Shared contracts live in `shared-libs` and must be built first.
@@ -30,16 +30,24 @@ Every WBS work-package is assigned to exactly one owning service so a Claude age
 | 21 | `security-platform` | platform | 7 | 199 | 146.2 | 3.6, 13.1, 13.3, 13.4, 13.5, 13.6, 13.10 |
 | 22 | `qa-platform` | platform | 10 | 365 | 252.5 | 15.1, 15.2, 15.3, 15.4, 15.5, 15.6, 15.7, 15.8, 15.9, 15.10 |
 | 23 | `program-mgmt` | program | 9 | 259 | 176.0 | 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 16.2, 16.3, 16.5 |
+| 24 | `ops-partner-bff` | backend | — | — | — | 18.1 (legitimized by WBS v3; also 17.5, 18.4) |
+| 25 | `sftp-gateway` | backend | — | — | — | 18.3 (planned — module not yet scaffolded) |
+
+### WBS v3 additions (2026-06-10 re-baseline)
+
+- **`ops-partner-bff`** (`services/ops-partner-bff`) — backend-for-frontend serving `admin-ui` and `partner-portal-ui`: a **19-endpoint** aggregation API speaking REST to 10 upstream services. Built ahead of WBS v2, legitimized by WBS v3 (WS 18.1); backlog bundle: `services_backlog/ops-partner-bff.md`.
+- **`sftp-gateway`** (`services/sftp-gateway`, **planned — WS 18.3**) — new service from the architecture diagram: brokers all KFTC SFTP file exchange so scheme adapters never touch raw SFTP; bridges SFTP ↔ MinIO with PGP + checksum ledger. Backlog bundle: `services_backlog/sftp-gateway.md`.
+- **`libs/lib-events-kafka`** (new shared lib, **ADR-001** — `docs/adr/ADR-001-message-broker-kafka.md`) — Kafka transport behind the broker-agnostic `lib-events` `EventPublisher` interface (`KafkaEventPublisher`, outbox → Kafka drain, consumers; tickets 17.4-G01..G05). Owned with `shared-libs`.
 
 ## Suggested build / integration order
 
 Build top-to-bottom; within a tier, services are independent and can run in parallel agents.
 
-- **Tier 0 — contracts & platform:** `shared-libs`, `platform-infra`
+- **Tier 0 — contracts & platform:** `shared-libs` (incl. `libs/lib-events-kafka`), `platform-infra`
 - **Tier 1 — core config & money:** `config-registry`, `rate-fx`, `prefunding`, `qr-service`, `smart-router`, `auth-identity`
-- **Tier 2 — orchestration:** `payment-executor`, `transaction-mgmt`, `merchant-qr-data`, `scheme-adapter-zeropay`, `notification-webhook`
+- **Tier 2 — orchestration:** `payment-executor`, `transaction-mgmt`, `merchant-qr-data`, `scheme-adapter-zeropay`, `notification-webhook`, `sftp-gateway` (planned, WS 18.3)
 - **Tier 3 — finance:** `settlement-reconciliation`, `revenue-ledger`, `reporting-compliance`
-- **Tier 4 — edge & UI:** `api-gateway`, `ui-design-system`, `admin-ui`, `partner-portal-ui`
+- **Tier 4 — edge & UI:** `api-gateway`, `ops-partner-bff`, `ui-design-system`, `admin-ui`, `partner-portal-ui`
 - **Cross-cutting (ongoing):** `security-platform`, `qa-platform`, `program-mgmt`
 
 ## How an agent uses this

@@ -1141,3 +1141,89 @@
 - Documents 1s Redis TTL and eviction-on-write
 - Does not duplicate full spec math -- references RATE-04 for 5-step formulas
 **Depends on:** 3.4-T23
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G01 — config-registry: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: partner/scheme/rule/treasury tables (V001+).
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:config-registry:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.3-G03 — Redis config cache + invalidation
+*Completion phase:* **R1** · *Est:* 100 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Partner/scheme/rule reads are hot path for executor+router; cache in Redis with explicit invalidation on write.
+
+**Steps.**
+- Cache-aside on partner/scheme/rule GETs
+- DEL on update endpoints
+- Metrics: hit ratio
+
+**Deliverable.** Config cache with invalidation
+
+**Acceptance.**
+- Update visible to readers <1s after write
+- Hit-ratio metric exposed
+
+### 17.6-G01 — Persist Scheme + Direction registries
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.2-G01
+
+**Context.** Scheme/direction data is seed/in-memory. Add entities + Flyway + CRUD with effective-dating.
+
+**Steps.**
+- schemes, scheme_directions tables
+- CRUD endpoints with validation
+- Seed ZeroPay row via migration
+
+**Deliverable.** Persistent scheme registry
+
+**Acceptance.**
+- Restart-safe; effective-dated lookups correct at boundaries
+
+### 17.6-G02 — Persist Routing-Rule registry
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.6-G01
+
+**Context.** smart-router reads rules from config; rules must be DB-backed with versioning + audit of changes.
+
+**Steps.**
+- routing_rules table w/ version, active flags
+- GET /v1/routing-rules consumed by smart-router
+- Rule change audit-logged
+
+**Deliverable.** Persistent rule registry
+
+**Acceptance.**
+- Router picks up rule change without redeploy (cache invalidation via 17.3-G03)
+
+### 17.6-G03 — Persist Treasury rate tables (effective-dated)
+*Completion phase:* **R1** · *Est:* 140 min · *Role:* Backend · *Deps:* 17.6-G01
+
+**Context.** Treasury/FX base tables (WBS 3.4) still pending: effective-dated rate rows feeding rate-fx sourcing.
+
+**Steps.**
+- treasury_rates table (ccy pair, effective_from/to, source)
+- POST import endpoint + validation
+- rate-fx sourcing reads via REST
+
+**Deliverable.** Effective-dated treasury rates
+
+**Acceptance.**
+- rate-fx 5-step engine sources from persisted rows; boundary tests green
+

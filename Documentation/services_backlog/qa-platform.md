@@ -4340,3 +4340,71 @@
 - open-defects.json field descriptions match the DefectRecord schema from 15.10-T07.
 - Emergency override procedure names required approvers (QA lead + tech lead) and states the bypass label name.
 **Depends on:** 15.10-T30
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.5-G03 — Contract tests pinning inter-service DTOs
+*Completion phase:* **R2** · *Est:* 200 min · *Role:* QA · *Deps:* 17.5-G01
+
+**Context.** Field-name drift already bit us (dashboard TypeError). Add consumer-driven contract tests for the 8 inter-service contracts in docs/INTER_SERVICE_CONTRACTS.md.
+
+**Steps.**
+- Spring Cloud Contract or hand-rolled WireMock contract suites per consumer
+- Run in CI integration job
+
+**Deliverable.** Contract suite in CI
+
+**Acceptance.**
+- Renaming a DTO field in a provider fails the consumer's contract test, not production
+
+### 18.6-G01 — Seeded demo dataset + one-command stack
+*Completion phase:* **R2** · *Est:* 160 min · *Role:* QA · *Deps:* 17.1-G03
+
+**Context.** make demo-up (or gradle task): compose up + seed partners/schemes/rates/merchants/prefund balances deterministically.
+
+**Steps.**
+- Seed script via service APIs (not direct DB) to validate contracts
+- Fixed seed IDs for E2E assertions
+- Teardown task
+
+**Deliverable.** Reproducible demo stack
+
+**Acceptance.**
+- Two consecutive runs produce identical seed state
+
+### 18.6-G02 — Scripted money-path E2E
+*Completion phase:* **R2** · *Est:* 240 min · *Role:* QA · *Deps:* 18.6-G01,17.5-G01
+
+**Context.** The exit gate of R2: quote→route→prefund deduct→execute→ZP simulate→commit→settlement booking (partner rounding!)→residual posting→webhook.
+
+**Steps.**
+- JUnit E2E module driving public APIs only
+- Assert prefund balance delta, txn state COMMITTED, ledger residual row, webhook received (wiremock)
+- Include ROUND_DOWN partner case from Addendum-001
+
+**Deliverable.** Money-path E2E green
+
+**Acceptance.**
+- Full path asserts pass incl. REVENUE_ROUNDING residual for a DOWN partner
+- Runs in CI integration job
+
+### 18.6-G03 — Failure-path E2E (compensation)
+*Completion phase:* **R2** · *Est:* 200 min · *Role:* QA · *Deps:* 18.6-G02
+
+**Context.** Negative paths: insufficient prefund, scheme timeout, duplicate idempotency key, cancel same-day.
+
+**Steps.**
+- 4 scripted scenarios
+- Assert no money leaks: ledger invariant sum checks after each
+
+**Deliverable.** 4 failure paths green
+
+**Acceptance.**
+- Ledger debit=credit invariant holds after every failure scenario
+

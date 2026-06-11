@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import com.gme.pay.domain.Partner;
 import com.gme.pay.domain.PartnerType;
 import com.gme.pay.errors.ApiException;
+import com.gme.pay.registry.cache.NoOpConfigCache;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
 import java.math.RoundingMode;
@@ -32,7 +33,9 @@ class PartnerStoreTest {
     @BeforeEach
     void setUp() {
         repository = Mockito.mock(PartnerRepository.class);
-        store = new PartnerStore(repository);
+        // No-op cache: every read is a miss, so the store behaves as a plain DB
+        // pass-through — exactly the production path when Redis is not configured.
+        store = new PartnerStore(repository, new NoOpConfigCache());
 
         // Mimic the runtime seed: GMEREMIT (HALF_UP) and SENDMN (DOWN).
         when(repository.findById("GMEREMIT")).thenReturn(Optional.of(

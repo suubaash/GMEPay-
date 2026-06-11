@@ -327,3 +327,44 @@
 - server.port=8085 in application.yml
 - K8s deployment.yaml has replicas: 2 and memory limit 512Mi
 - Flyway migration location points to db/migration inside the module classpath
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G11 — notification-webhook: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: webhook endpoints/deliveries/DLQ tables.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:notification-webhook:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.4-G04 — Consume payment.approved from Kafka
+*Completion phase:* **R1** · *Est:* 140 min · *Role:* Backend · *Deps:* 17.4-G01
+
+**Context.** Webhook service signs+delivers with backoff/DLQ but has no real consumer. Subscribe to payment.approved; trigger delivery pipeline.
+
+**Steps.**
+- @KafkaListener, manual ack after enqueue
+- DLQ topic on poison messages
+- IT: end-to-end produce→deliver to wiremock endpoint
+
+**Deliverable.** Kafka-driven webhook delivery
+
+**Acceptance.**
+- payment.approved produces a signed POST to subscriber
+- Poison message lands in DLQ, not retry loop
+

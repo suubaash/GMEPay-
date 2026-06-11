@@ -13,4 +13,10 @@ dependencies {
     implementation project(':libs:lib-events')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+    // Docker-backed integration tests (@Tag("docker") — excluded from the local
+    // `test` task, run via `integrationTest` on CI runners that have Docker).
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:mongodb'
 }

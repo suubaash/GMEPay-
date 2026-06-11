@@ -25,7 +25,23 @@ subprojects {
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
 
+    // Unit/slice tests: run everywhere (no Docker). Docker-backed Testcontainers ITs
+    // must be annotated @Tag("docker") — they are excluded here and run only via the
+    // `integrationTest` task (CI ubuntu runners have Docker; the local Windows box does not).
     test {
-        useJUnitPlatform()
+        useJUnitPlatform {
+            excludeTags 'docker'
+        }
+    }
+
+    tasks.register('integrationTest', Test) {
+        description = 'Docker-backed integration tests (JUnit @Tag("docker")) — needs a Docker engine.'
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags 'docker'
+        }
+        shouldRunAfter tasks.named('test')
     }
 }

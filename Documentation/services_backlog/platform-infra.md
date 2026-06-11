@@ -4192,3 +4192,120 @@
 - Section 8 validation confirms all 11 procedures are present and complete
 - Review checklist has been signed off by all 4 required reviewers: Engineering Lead, Ops Lead, Security Lead, Release Manager
 **Depends on:** 16.6-T21, 16.6-T08, 16.6-T10, 16.6-T17, 16.6-T18, 16.6-T19, 16.6-T20
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.1-G01 — Provision Docker-capable build host/runner
+*Completion phase:* **R0** · *Est:* 90 min · *Role:* DevOps
+
+**Context.** Build env so far had no Docker — every Testcontainers acceptance check failed to PARTIAL. A Linux runner (or WSL2/self-hosted) with Docker is the single biggest unlock.
+
+**Steps.**
+- Provision runner with Docker Engine ≥24
+- Register as GitHub Actions self-hosted runner (or use ubuntu-latest)
+- Smoke: docker run hello-world in CI
+
+**Deliverable.** CI runner executing Docker
+
+**Acceptance.**
+- CI job logs show containers starting
+- Documented in docs/UI_DEVELOPMENT.md sibling runbook
+
+### 17.1-G02 — CI job: compose stack up + Testcontainers ITs
+*Completion phase:* **R0** · *Est:* 120 min · *Role:* DevOps · *Deps:* 17.1-G01
+
+**Context.** ci.yml currently builds Gradle + both UIs only. Add a job that boots docker-compose.yml and runs ./gradlew integrationTest with Testcontainers.
+
+**Steps.**
+- Add integration job to .github/workflows/ci.yml gated on the Docker runner
+- Cache Gradle + image layers
+- Publish IT report artifact
+
+**Deliverable.** Green integration CI job
+
+**Acceptance.**
+- Job passes on a PR
+- Failure on a deliberately broken migration
+
+### 17.1-G03 — Make docker-compose.yml actually boot
+*Completion phase:* **R0** · *Est:* 180 min · *Role:* DevOps · *Deps:* 17.1-G01
+
+**Context.** docker-compose.yml (7 postgres, mongo, redis, zookeeper, kafka, services 8080-8095) was authored but never executed; expect port/env/healthcheck fixes.
+
+**Steps.**
+- docker compose up on the runner
+- Fix env vars, healthchecks, depends_on ordering
+- Add profiles: core / full
+
+**Deliverable.** Compose stack boots clean
+
+**Acceptance.**
+- All service healthchecks green within 3 min
+- docs updated with profile usage
+
+### 17.4-G05 — Schema Registry + event schema governance
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* DevOps · *Deps:* 17.4-G01
+
+**Context.** Architecture diagram mandates Schema Registry. Stand up confluent schema-registry in compose; register JSON schemas for the 6 domain events; compatibility=BACKWARD.
+
+**Steps.**
+- Add schema-registry to compose
+- Register schemas in CI step
+- Producer validates against registry when configured
+
+**Deliverable.** Schemas registered + CI-checked
+
+**Acceptance.**
+- Incompatible schema change fails CI
+
+### 17.8-G01 — MinIO object storage in stack + lib-storage
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G03
+
+**Context.** Recon/settlement/statement files need S3-compatible storage per architecture diagram.
+
+**Steps.**
+- minio service in compose + buckets bootstrap
+- Small lib-storage put/get/list wrapper (AWS SDK v2)
+- Creds via env (Vault later)
+
+**Deliverable.** lib-storage against MinIO
+
+**Acceptance.**
+- put/get/list IT green in compose stack
+
+### 18.2-G01 — Nginx reverse proxy fronting stack
+*Completion phase:* **R3** · *Est:* 120 min · *Role:* DevOps · *Deps:* 18.7-G01,17.1-G03
+
+**Context.** Architecture tile board mandates Nginx at the edge (ADR 18.7 confirms shape vs Spring Cloud Gateway).
+
+**Steps.**
+- nginx service in compose; routes /api→api-gateway, /admin→admin-ui, /portal→portal-ui
+- TLS termination with self-signed dev cert
+- Gzip, timeouts, request-id header
+
+**Deliverable.** Single edge entrypoint
+
+**Acceptance.**
+- All UI+API traffic flows through nginx in compose stack
+
+### 18.2-G02 — WAF ruleset + rate limiting at edge
+*Completion phase:* **R3** · *Est:* 160 min · *Role:* DevOps · *Deps:* 18.2-G01
+
+**Context.** Baseline OWASP CRS via ModSecurity (or nginx-native rules if CRS unavailable on Rocky base image).
+
+**Steps.**
+- Enable CRS paranoia 1; tune false positives on the 19 BFF endpoints
+- limit_req zones per API key/IP
+- Block test: sqli probe returns 403
+
+**Deliverable.** WAF active at edge
+
+**Acceptance.**
+- OWASP ZAP baseline scan shows WAF blocks; legit E2E still green
+

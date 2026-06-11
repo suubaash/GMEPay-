@@ -1,0 +1,21 @@
+// ops-partner-bff: Aggregation API for Admin UI and Partner Self-Service Portal.
+//
+// This is the "Ops/Partner BFF" box in the Edge / API Layer of the architecture
+// diagram. It is a CLIENT of backend services (over REST) — it does NOT own data
+// and does NOT connect to any database. Each upstream call is wrapped in a thin
+// adapter under com.gme.pay.bff.client; controllers orchestrate 1-N adapter
+// calls and combine the results into a UI-shaped DTO.
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation project(':libs:lib-errors')
+    implementation project(':libs:lib-money')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}

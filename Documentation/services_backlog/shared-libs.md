@@ -2228,3 +2228,28 @@
 - Each service smoke test ApplicationContext contains exactly one ExceptionHandler bean.
 - MockMvc slice test in services/rate-fx confirms a thrown GmeException(RATE_QUOTE_EXPIRED) returns the canonical envelope with HTTP 422.
 **Depends on:** 8.7-T04, 8.7-T08
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.4-G01 — KafkaEventPublisher implementing lib-events
+*Completion phase:* **R1** · *Est:* 140 min · *Role:* Backend · *Deps:* 17.1-G03
+
+**Context.** lib-events has EventPublisher + LogEventPublisher only. Implement Kafka producer with JSON serialization of DomainEvent (BigDecimal as string per MONEY_CONVENTION).
+
+**Steps.**
+- spring-kafka producer, acks=all, idempotent
+- Topic naming gmepay.<aggregate>.<event>
+- @Primary when spring.kafka.bootstrap-servers set
+
+**Deliverable.** Kafka producer behind EventPublisher
+
+**Acceptance.**
+- Event visible via kafka-console-consumer in compose stack
+- Fallback to LogEventPublisher when no broker configured
+

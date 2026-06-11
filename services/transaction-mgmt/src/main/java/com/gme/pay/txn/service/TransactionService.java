@@ -6,6 +6,7 @@ import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.domain.statemachine.TransactionStateMachine;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.Objects;
@@ -15,6 +16,9 @@ import java.util.Objects;
  *
  * <p>All state mutations go through {@link TransactionStateMachine}; no caller
  * should set {@code status} directly.
+ *
+ * <p>Mutating methods are {@link Transactional} so the aggregate write and the outbox row
+ * appended by the state machine (transactional Outbox pattern) commit atomically.
  */
 @Service
 public class TransactionService {
@@ -33,6 +37,7 @@ public class TransactionService {
      *
      * @throws ApiException with {@link ErrorCode#VALIDATION_ERROR} if amounts are invalid
      */
+    @Transactional
     public Transaction create(String partnerRef,
                               BigDecimal sendAmount,
                               String sendCcy,
@@ -64,6 +69,7 @@ public class TransactionService {
      * Transitions a transaction to {@link TransactionStatus#PENDING_DEBIT}.
      * Typical caller: OVERSEAS commit path.
      */
+    @Transactional
     public Transaction toPendingDebit(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
@@ -74,6 +80,7 @@ public class TransactionService {
      * Transitions a transaction to {@link TransactionStatus#APPROVED}.
      * Typical callers: scheme success response, LOCAL direct-commit, reconciliation.
      */
+    @Transactional
     public Transaction toApproved(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.APPROVED);
@@ -84,6 +91,7 @@ public class TransactionService {
      * Transitions a transaction to {@link TransactionStatus#FAILED}.
      * Typical callers: scheme rejection, TTL expiry, insufficient prefunding.
      */
+    @Transactional
     public Transaction toFailed(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.FAILED);
@@ -94,6 +102,7 @@ public class TransactionService {
      * Transitions a transaction to {@link TransactionStatus#CANCELLED}.
      * Typical caller: same-day cancel before or after debit.
      */
+    @Transactional
     public Transaction toCancelled(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.CANCELLED);

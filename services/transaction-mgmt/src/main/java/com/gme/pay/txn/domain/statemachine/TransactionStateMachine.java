@@ -4,7 +4,9 @@ import com.gme.pay.events.DomainEvent;
 import com.gme.pay.events.EventPublisher;
 import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
+import com.gme.pay.txn.outbox.OutboxAppender;
 import com.gme.pay.txn.outbox.TransactionStatusChangedEvent;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
@@ -28,7 +30,14 @@ public class TransactionStateMachine {
 
     private final EventPublisher eventPublisher;
 
-    public TransactionStateMachine(EventPublisher eventPublisher) {
+    /**
+     * The injected publisher is qualified to the outbox-appending bean
+     * ({@link OutboxAppender#BEAN_NAME}) so status-change events are written to the
+     * {@code outbox} table inside the caller's DB transaction — never sent straight to
+     * Kafka from inside a business transaction (lib-events-kafka registers its publisher
+     * {@code @Primary}, which would otherwise win the by-type injection).
+     */
+    public TransactionStateMachine(@Qualifier(OutboxAppender.BEAN_NAME) EventPublisher eventPublisher) {
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
     }
 

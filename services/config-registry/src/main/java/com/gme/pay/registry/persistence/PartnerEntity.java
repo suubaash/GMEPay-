@@ -20,6 +20,12 @@ import java.time.Instant;
  * partnerId, type, settlementCurrency, settlementRoundingMode.
  * Audit columns ({@code created_at}, {@code updated_at}) are managed by the entity
  * lifecycle callbacks so callers don't need to set them.
+ *
+ * <p>Effective dating (V002): the row carries a half-open validity window
+ * {@code [effective_from, effective_to)} — the lower bound is inclusive, the upper
+ * bound exclusive, and a {@code NULL} upper bound means open-ended. The window is a
+ * persistence-layer concern (the immutable domain record has no validity fields);
+ * rows created from a domain {@link Partner} default to effective-since-epoch.
  */
 @Entity
 @Table(name = "partners")
@@ -39,6 +45,12 @@ public class PartnerEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "settlement_rounding_mode", nullable = false, length = 16)
     private RoundingMode settlementRoundingMode;
+
+    @Column(name = "effective_from", nullable = false)
+    private Instant effectiveFrom;
+
+    @Column(name = "effective_to")
+    private Instant effectiveTo;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -77,6 +89,9 @@ public class PartnerEntity {
         if (createdAt == null) {
             createdAt = Instant.now();
         }
+        if (effectiveFrom == null) {
+            effectiveFrom = Instant.EPOCH; // effective "since forever" unless windowed explicitly
+        }
     }
 
     @jakarta.persistence.PreUpdate
@@ -114,6 +129,22 @@ public class PartnerEntity {
 
     public void setSettlementRoundingMode(RoundingMode settlementRoundingMode) {
         this.settlementRoundingMode = settlementRoundingMode;
+    }
+
+    public Instant getEffectiveFrom() {
+        return effectiveFrom;
+    }
+
+    public void setEffectiveFrom(Instant effectiveFrom) {
+        this.effectiveFrom = effectiveFrom;
+    }
+
+    public Instant getEffectiveTo() {
+        return effectiveTo;
+    }
+
+    public void setEffectiveTo(Instant effectiveTo) {
+        this.effectiveTo = effectiveTo;
     }
 
     public Instant getCreatedAt() {

@@ -7,14 +7,34 @@ plugins {
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // Redis-backed idempotency-key store (17.3-G02). Lettuce client; activates only
+    // when spring.data.redis.host is set — in-memory store is the local fallback.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Kafka transport for the outbox drain (17.4-G02). Auto-config registers a
+    // @Primary KafkaEventPublisher only when spring.kafka.bootstrap-servers is set.
+    implementation project(':libs:lib-events-kafka')
 
     runtimeOnly 'org.postgresql:postgresql'
+    // Flyway 10 ships PostgreSQL support as a separate artifact; required when the
+    // migrations run against real PostgreSQL (docker-tagged ITs / production).
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    // H2 (PostgreSQL mode) backs the no-Docker unit slices only.
     runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // KafkaTemplate/DefaultKafkaProducerFactory + kafka-clients consumer for the
+    // docker-tagged outbox→Kafka IT (version managed by the Boot BOM).
+    testImplementation 'org.springframework.kafka:spring-kafka'
+
+    // Docker-backed ITs (@Tag("docker"), run via :integrationTest in CI only — this
+    // machine has no Docker; locally these classes compile but are skipped by tag).
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:kafka'
 }

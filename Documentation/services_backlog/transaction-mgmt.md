@@ -889,3 +889,60 @@
 - No @param or @return tags are missing on any public method in the idempotency package
 - package-info.java is present and non-empty in the compiled JAR (visible in javadoc index)
 **Depends on:** 5.7-T03, 5.7-T02, 5.7-T05
+
+<!-- wbs-v3-gap-closure -->
+
+---
+
+## WBS v3 gap-closure tickets (re-baseline, 2026-06-10)
+
+These tickets convert this service's PARTIAL audit findings into DONE and add work discovered during the build. Statuses live on the `Backlog` sheet of `GMEPay+_Task_Backlog.xlsx`; phase sequencing on the `Completion Plan v3` sheet of `GMEPay+_WBS.xlsx`.
+
+### 17.2-G05 — transaction-mgmt: swap H2 for real PostgreSQL ITs
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Tests currently run on H2 in PostgreSQL mode. Acceptance requires real PG. Scope: transactions (incl. 3 rounding columns) + outbox.
+
+**Steps.**
+- Add Testcontainers postgres:16 to the service's ITs
+- Run Flyway migrations against it; fix PG-only syntax drift
+- Keep H2 only for pure unit slices
+
+**Deliverable.** Repository/migration ITs green on PostgreSQL 16
+
+**Acceptance.**
+- ./gradlew :services:transaction-mgmt:test green with Testcontainers
+- Migration checksum stable; no H2-mode workarounds left
+
+### 17.3-G02 — Redis idempotency-key store
+*Completion phase:* **R1** · *Est:* 100 min · *Role:* Backend · *Deps:* 17.1-G02
+
+**Context.** Idempotency dedup is in-memory. Move to Redis SETNX with 24h TTL; fall back to DB unique constraint as backstop.
+
+**Steps.**
+- SETNX idem:{key} + TTL
+- Replay returns first response snapshot
+- IT: concurrent duplicate POSTs
+
+**Deliverable.** Redis-backed idempotency
+
+**Acceptance.**
+- Duplicate request returns identical body + 200/409 per contract
+- Keys expire after 24h
+
+### 17.4-G02 — Outbox publisher drains to Kafka
+*Completion phase:* **R1** · *Est:* 120 min · *Role:* Backend · *Deps:* 17.4-G01
+
+**Context.** OutboxPublisher currently drains through LogEventPublisher. Point it at KafkaEventPublisher; guarantee at-least-once with ordered per-aggregate keys.
+
+**Steps.**
+- Key = aggregateId
+- Mark row published only after broker ack
+- IT: kill broker mid-drain, verify redelivery
+
+**Deliverable.** At-least-once outbox→Kafka
+
+**Acceptance.**
+- No lost/duplicate-marked rows across broker restart
+- Lag metric exposed
+

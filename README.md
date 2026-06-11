@@ -23,3 +23,11 @@ Requires JDK 21. (Docker-based integration tests are added later and need Docker
 
 ## Status
 Phase F0 (foundation) complete and green. See `PROGRESS.md` for the build manifest.
+
+## Frontend
+Two Next.js 14 + MUI 6 + Redux Toolkit + RHF/Yup + Lottie front-ends live under
+`apps/` — `admin-ui` for GME Ops/Admin and `partner-portal-ui` for sending
+partners. Both talk only to the Ops/Partner BFF. See
+[`apps/README.md`](apps/README.md) for setup and dev quickstart, and
+[`docs/UI_DEVELOPMENT.md`](docs/UI_DEVELOPMENT.md) for the design-system
+conventions (theme, money/rounding helpers, error/empty/loading patterns).
