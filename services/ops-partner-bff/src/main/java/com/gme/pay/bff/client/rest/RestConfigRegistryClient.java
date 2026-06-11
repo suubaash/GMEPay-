@@ -277,6 +277,55 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
+
+    @Override
+    public com.gme.pay.contracts.KybView patchDraftStep3(
+            String partnerCode, com.gme.pay.contracts.KybCommand.UpdateStep3 request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-3", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.KybView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400 with the offending
+            // uboList[i] index, unknown draft → 404, non-ONBOARDING → 409)
+            // through to the Admin UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.KybView getKyb(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/kyb", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.KybView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner OR no KYB row yet; propagate so the wizard
+            // can distinguish "nothing to rehydrate" from a transport failure.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.KybView runKybScreening(String partnerCode) {
+        try {
+            return restClient.post()
+                    .uri("/v1/partners/{partnerCode}/kyb/screen", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.KybView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Includes upstream 502 when config-registry could not reach
+            // kyb-adapter — a screening run is an explicit operator action, so
+            // the failure must surface, never collapse to null.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
     // -------- Slice 2 (2B.1) change-request approval endpoints (ADR-008) ------
 
     @Override
@@ -345,6 +394,100 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
                     .body(com.gme.pay.contracts.ChangeRequestView.class);
         } catch (org.springframework.web.client.RestClientResponseException e) {
             throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------
+
+    @Override
+    public com.gme.pay.contracts.DocumentView uploadDocument(
+            String partnerCode, String docType, String expiryDate,
+            String filename, String contentType, byte[] content) {
+        // Multipart relay: the Admin UI uploads to the BFF, the BFF re-posts the
+        // same parts to config-registry (browser-direct vault access is
+        // forbidden per ADR-006 — this hop preserves the audit + virus-scan
+        // seam). The file part carries the original filename + MIME type.
+        org.springframework.core.io.ByteArrayResource fileResource =
+                new org.springframework.core.io.ByteArrayResource(content) {
+                    @Override
+                    public String getFilename() {
+                        return filename;
+                    }
+                };
+        org.springframework.http.HttpHeaders fileHeaders = new org.springframework.http.HttpHeaders();
+        fileHeaders.setContentType(safeMediaType(contentType));
+
+        org.springframework.util.MultiValueMap<String, Object> form =
+                new org.springframework.util.LinkedMultiValueMap<>();
+        form.add("file", new org.springframework.http.HttpEntity<>(fileResource, fileHeaders));
+        form.add("docType", docType);
+        if (expiryDate != null && !expiryDate.isBlank()) {
+            form.add("expiryDate", expiryDate);
+        }
+        try {
+            return restClient.post()
+                    .uri("/v1/partners/{partnerCode}/documents", partnerCode)
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(form)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.DocumentView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx/5xx (bad docType → 400, unknown partner →
+            // 404, non-ONBOARDING → 409, vault down → 502) with the upstream
+            // message preserved for the Admin UI.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.DocumentView> listDocuments(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.DocumentView> response = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/documents", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.DocumentView>>() {});
+            return response == null ? List.of() : response;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner; propagate so the UI can distinguish it
+            // from "partner with zero documents" (empty 200 list upstream).
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listDocuments({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public DocumentContent downloadDocument(String partnerCode, Long docId) {
+        try {
+            org.springframework.http.ResponseEntity<byte[]> entity = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/documents/{docId}/content",
+                            partnerCode, docId)
+                    .retrieve()
+                    .toEntity(byte[].class);
+            String filename = entity.getHeaders().getContentDisposition().getFilename();
+            MediaType mediaType = entity.getHeaders().getContentType();
+            return new DocumentContent(
+                    filename,
+                    mediaType == null
+                            ? MediaType.APPLICATION_OCTET_STREAM_VALUE
+                            : mediaType.toString(),
+                    entity.getBody() == null ? new byte[0] : entity.getBody());
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    /** Parse the uploaded MIME type, falling back to octet-stream on junk input. */
+    private static MediaType safeMediaType(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
+        try {
+            return MediaType.parseMediaType(contentType);
+        } catch (RuntimeException e) {
+            return MediaType.APPLICATION_OCTET_STREAM;
         }
     }
 }

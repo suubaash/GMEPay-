@@ -71,9 +71,32 @@ async function request(path, init) {
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
+  return _doFetch(url, { ...init, headers });
+}
+
+/**
+ * Multipart POST — does NOT set Content-Type (the browser must set it with
+ * the correct multipart boundary). Passes the FormData body as-is.
+ *
+ * @param {string} path   Relative path, e.g. "/v1/admin/partners/ABC/documents"
+ * @param {FormData} formData
+ * @returns {Promise<object>}
+ */
+async function multipartRequest(path, formData) {
+  const url = `${baseUrl()}${path}`;
+  const token = readToken();
+  // Only set Authorization; let the browser set Content-Type with boundary.
+  const headers = { Accept: 'application/json' };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return _doFetch(url, { method: 'POST', body: formData, headers });
+}
+
+async function _doFetch(url, init) {
   let res;
   try {
-    res = await fetch(url, { ...init, headers });
+    res = await fetch(url, init);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new ApiError(0, url, msg || 'network error');
@@ -246,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2) {
+    if (n !== 1 && n !== 2 && n !== 3) {
       return Promise.reject(
         new ApiError(
           501,
@@ -263,6 +286,30 @@ export const adminApi = {
       },
     );
   },
+
+  // ---------- KYB (Slice 3, ADR-009 KybProvider port) ----------
+  /**
+   * GET /v1/admin/partners/{code}/kyb -> KybView
+   * KybView: { partnerCode, riskRating, riskRationale, nextReviewDate,
+   *   licenseType, licenseNumber, licenseAuthority, licenseExpiry,
+   *   uboList:[{name,ownershipPct,isPep,country}], cbddqDocId,
+   *   screeningStatus:'CLEAR'|'NEEDS_REVIEW'|'HIT'|null,
+   *   screeningProviderRef:string|null, screenedAt:ISO|null,
+   *   screeningHits:[{name,matchScore,matchType,source}]|null }
+   */
+  getKyb: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb`),
+
+  /**
+   * POST /v1/admin/partners/{code}/kyb/screen -> KybView (refreshed)
+   * Triggers AML/PEP screening via the KybProvider port (ADR-009).
+   * Stubbed until Octa Solution sandbox creds arrive (ADR-014).
+   */
+  runKybScreening: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screen`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
 
   // ---------- Schemes ----------
   /**
@@ -405,4 +452,40 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify({ rejectedBy, reason }),
     }),
+
+  // ---------- Document vault (Slice 3A.2, ADR-006 MinIO) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/documents -> DocumentView[]
+   * DocumentView: {
+   *   id, docType, filename, contentType, version, sha256,
+   *   expiryDate (YYYY-MM-DD|null), verifiedBy (string|null),
+   *   verifiedAt (ISO|null), recordedAt (ISO)
+   * }
+   */
+  getDocuments: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents`),
+
+  /**
+   * POST /v1/admin/partners/{partnerCode}/documents (multipart/form-data)
+   * FormData fields: file (Blob), docType (string), expiryDate? (YYYY-MM-DD)
+   * -> 201 DocumentView
+   *
+   * IMPORTANT: Do NOT set Content-Type manually — the browser must set it
+   * with the multipart boundary so the server can parse the body.
+   */
+  uploadDocument: (partnerCode, formData) =>
+    multipartRequest(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents`,
+      formData,
+    ),
+
+  /**
+   * Returns the URL to GET the raw binary content of a document.
+   * Consumers can use this as an <a href> for direct browser download or
+   * pass it to fetch() themselves.
+   *
+   * GET /v1/admin/partners/{partnerCode}/documents/{docId}/content
+   */
+  downloadDocumentUrl: (partnerCode, docId) =>
+    `${baseUrl()}/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents/${encodeURIComponent(docId)}/content`,
 };

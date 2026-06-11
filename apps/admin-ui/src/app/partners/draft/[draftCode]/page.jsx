@@ -27,6 +27,7 @@ import {
 } from '@/store/draftsSlice';
 import IdentityForm from './step-1/IdentityForm';
 import ContactsForm from './step-2/ContactsForm';
+import KybForm from './step-3/KybForm';
 
 /**
  * Partner Setup wizard shell (Slice 1, agent 1D.1).
@@ -166,11 +167,11 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   const isFirst = cursor === 1;
   const isLast = cursor === STEPS.length;
   const stepDef = STEPS[cursor - 1];
-  // Steps 1 and 2 each own their own RHF-validated submit button, so the
+  // Steps 1, 2, and 3 each own their own RHF-validated submit button, so the
   // wizard shell hides its generic "Save & next" affordance for those steps.
   // Later steps that use the shell's own Next can set this false once they
   // land with their slice.
-  const stepHasOwnSubmit = cursor === 1 || cursor === 2;
+  const stepHasOwnSubmit = cursor === 1 || cursor === 2 || cursor === 3;
 
   const onBack = () => {
     dispatch(clearError());
@@ -302,6 +303,15 @@ function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor, dispatch
         partnerCode={partnerCode}
         onSaved={advanceCursor}
         dispatch={dispatch}
+      />
+    );
+  }
+  if (cursor === 3) {
+    return (
+      <KybForm
+        draft={draft}
+        partnerCode={partnerCode}
+        onSaved={advanceCursor}
       />
     );
   }

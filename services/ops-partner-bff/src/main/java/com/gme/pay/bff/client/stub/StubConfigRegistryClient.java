@@ -59,6 +59,13 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     /** Mirrors config-registry's {@code ContactRole} roster (V009 CHECK constraint). */
     private static final java.util.Set<String> CONTACT_ROLES = java.util.Set.of(
             "OPS_24X7", "FINANCE", "COMPLIANCE_MLRO", "TECH", "LEGAL", "INCIDENT");
+    /** Mirrors config-registry's {@code KybService.RISK_RATINGS} (V011 CHECK constraint). */
+    private static final java.util.Set<String> RISK_RATINGS = java.util.Set.of(
+            "LOW", "MEDIUM", "HIGH");
+    /** Slice 3 KYB views — keyed by partner_code, mirrors the SCD-6 current row. */
+    private final Map<String, com.gme.pay.contracts.KybView> kybStore = new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_kyb} BIGSERIAL. */
+    private final AtomicLong kybSeq = new AtomicLong(700_000L);
 
     public StubConfigRegistryClient() {
         store.put("partner_test_001", new PartnerSummary(
@@ -207,6 +214,295 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                     "no partner '" + partnerCode + "'");
         }
         return new ArrayList<>(contactStore.getOrDefault(partnerCode, List.of()));
+    }
+
+    // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
+
+    /**
+     * In-memory step-3 upsert mirroring config-registry's
+     * {@code KybService.upsertStep3}: full-state replace of the
+     * operator-editable fields, screening verdict carried forward. The same
+     * server-side validation roster (risk rating, UBO pct range, lengths) is
+     * applied here so MockMvc tests exercise the 400 path through the stub.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.KybView patchDraftStep3(
+            String partnerCode, com.gme.pay.contracts.KybCommand.UpdateStep3 request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        validateKyb(request);
+        com.gme.pay.contracts.KybView prior = kybStore.get(partnerCode);
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.KybView fresh = new com.gme.pay.contracts.KybView(
+                kybSeq.getAndIncrement(),
+                blankToNull(request.riskRating()),
+                blankToNull(request.riskRationale()),
+                request.nextReviewDate(),
+                blankToNull(request.licenseType()),
+                blankToNull(request.licenseNumber()),
+                blankToNull(request.licenseAuthority()),
+                request.licenseExpiry(),
+                request.uboList() == null ? null : List.copyOf(request.uboList()),
+                request.cbddqDocId(),
+                // Screening fields are NOT operator-editable: carried forward.
+                prior == null ? null : prior.screeningStatus(),
+                prior == null ? null : prior.screeningProviderRef(),
+                prior == null ? null : prior.screenedAt(),
+                prior == null ? now : prior.validFrom(),
+                null,
+                now);
+        kybStore.put(partnerCode, fresh);
+        return fresh;
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.KybView getKyb(String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        com.gme.pay.contracts.KybView view = kybStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no KYB data for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    /**
+     * Deterministic in-memory screening mirroring {@code StubKybAdapter}
+     * (lib-kyb): any screened name containing {@code SANCTIONED} → HIT,
+     * otherwise containing {@code REVIEW} → NEEDS_REVIEW, else CLEAR. Names
+     * screened = the draft's legal names + every declared UBO name — same
+     * subject assembly as config-registry's {@code KybService.runScreening}.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.KybView runKybScreening(String partnerCode) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        com.gme.pay.contracts.KybView prior = kybStore.get(partnerCode);
+
+        StringBuilder names = new StringBuilder();
+        if (draft.legalNameLocal() != null) {
+            names.append(draft.legalNameLocal()).append('|');
+        }
+        if (draft.legalNameRomanized() != null) {
+            names.append(draft.legalNameRomanized()).append('|');
+        }
+        if (prior != null && prior.uboList() != null) {
+            for (com.gme.pay.contracts.UboView u : prior.uboList()) {
+                if (u != null && u.name() != null) {
+                    names.append(u.name()).append('|');
+                }
+            }
+        }
+        String upper = names.toString().toUpperCase(java.util.Locale.ROOT);
+        String status = upper.contains("SANCTIONED") ? "HIT"
+                : upper.contains("REVIEW") ? "NEEDS_REVIEW" : "CLEAR";
+
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.KybView screened = new com.gme.pay.contracts.KybView(
+                kybSeq.getAndIncrement(),
+                prior == null ? null : prior.riskRating(),
+                prior == null ? null : prior.riskRationale(),
+                prior == null ? null : prior.nextReviewDate(),
+                prior == null ? null : prior.licenseType(),
+                prior == null ? null : prior.licenseNumber(),
+                prior == null ? null : prior.licenseAuthority(),
+                prior == null ? null : prior.licenseExpiry(),
+                prior == null ? null : prior.uboList(),
+                prior == null ? null : prior.cbddqDocId(),
+                status,
+                "stub-bff-" + Integer.toHexString(upper.hashCode()),
+                now,
+                prior == null ? now : prior.validFrom(),
+                null,
+                now);
+        kybStore.put(partnerCode, screened);
+        return screened;
+    }
+
+    // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------
+
+    /** Mirrors config-registry's {@code DocumentType} roster (V010 CHECK constraint). */
+    private static final java.util.Set<String> DOC_TYPES = java.util.Set.of(
+            "LICENSE", "CERT_INCORPORATION", "AOA", "BOARD_RESOLUTION",
+            "UBO_DECLARATION", "FINANCIALS", "CBDDQ", "OTHER");
+
+    /** Slice 3 CURRENT document sets — keyed by partner_code, one row per doc type. */
+    private final Map<String, List<com.gme.pay.contracts.DocumentView>> documentStore =
+            new LinkedHashMap<>();
+    /** Every row version ever minted (superseded ids stay downloadable — version history). */
+    private final Map<Long, com.gme.pay.contracts.DocumentView> documentById = new LinkedHashMap<>();
+    /** Owning partner_code per row id (cross-partner probing 404s, like upstream). */
+    private final Map<Long, String> documentOwner = new LinkedHashMap<>();
+    /** Stored bytes per row id so the download passthrough round-trips. */
+    private final Map<Long, byte[]> documentBytes = new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_document} BIGSERIAL. */
+    private final AtomicLong documentSeq = new AtomicLong(600_000L);
+
+    /**
+     * In-memory upload mirroring config-registry's
+     * {@code PartnerDocumentService.upload}: doc-type roster validation, sha256
+     * over the actual bytes, version bump + supersede per (partner, docType),
+     * vault-shaped URI. Prior versions stay downloadable by id.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.DocumentView uploadDocument(
+            String partnerCode, String docType, String expiryDate,
+            String filename, String contentType, byte[] content) {
+        requireKnownPartner(partnerCode);
+        if (docType == null || docType.isBlank() || !DOC_TYPES.contains(docType)) {
+            throw badRequest("docType must be one of " + DOC_TYPES + ", was: " + docType);
+        }
+        if (filename == null || filename.isBlank()) {
+            throw badRequest("filename is required");
+        }
+        if (content == null || content.length == 0) {
+            throw badRequest("file is required and must not be empty");
+        }
+        java.time.LocalDate expiry = null;
+        if (expiryDate != null && !expiryDate.isBlank()) {
+            try {
+                expiry = java.time.LocalDate.parse(expiryDate);
+            } catch (java.time.format.DateTimeParseException e) {
+                throw badRequest("expiryDate must be an ISO-8601 date (yyyy-MM-dd), was: "
+                        + expiryDate);
+            }
+        }
+
+        List<com.gme.pay.contracts.DocumentView> current =
+                new ArrayList<>(documentStore.getOrDefault(partnerCode, List.of()));
+        com.gme.pay.contracts.DocumentView prior = current.stream()
+                .filter(d -> docType.equals(d.docType()))
+                .findFirst()
+                .orElse(null);
+        int version = prior == null ? 1 : prior.version() + 1;
+        if (prior != null) {
+            current.remove(prior);
+        }
+
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        Long id = documentSeq.getAndIncrement();
+        com.gme.pay.contracts.DocumentView fresh = new com.gme.pay.contracts.DocumentView(
+                id,
+                docType,
+                filename,
+                contentType == null || contentType.isBlank()
+                        ? "application/octet-stream" : contentType,
+                "mem://gmepay-partner-vault/" + partnerCode + "/" + docType
+                        + "/stub-" + id + "/v" + version,
+                version,
+                sha256Hex(content),
+                expiry,
+                null,
+                null,
+                now,
+                null,
+                now);
+        current.add(fresh);
+        documentStore.put(partnerCode, current);
+        documentById.put(id, fresh);
+        documentOwner.put(id, partnerCode);
+        documentBytes.put(id, content.clone());
+        return fresh;
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.DocumentView> listDocuments(String partnerCode) {
+        requireKnownPartner(partnerCode);
+        return new ArrayList<>(documentStore.getOrDefault(partnerCode, List.of()));
+    }
+
+    @Override
+    public synchronized DocumentContent downloadDocument(String partnerCode, Long docId) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.DocumentView meta = documentById.get(docId);
+        if (meta == null || !partnerCode.equals(documentOwner.get(docId))) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no document " + docId + " for partner '" + partnerCode + "'");
+        }
+        return new DocumentContent(meta.filename(), meta.contentType(),
+                documentBytes.get(docId).clone());
+    }
+
+    private void requireKnownPartner(String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+    }
+
+    /** Lowercase hex SHA-256, mirroring lib-vault's digest discipline. */
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM without SHA-256", e);
+        }
+    }
+
+    /** Mirror of config-registry's {@code KybService.validate} (same message shapes). */
+    private static void validateKyb(com.gme.pay.contracts.KybCommand.UpdateStep3 cmd) {
+        if (cmd.riskRating() != null && !cmd.riskRating().isBlank()
+                && !RISK_RATINGS.contains(cmd.riskRating())) {
+            throw badRequest("riskRating must be one of " + RISK_RATINGS
+                    + ", was: " + cmd.riskRating());
+        }
+        if (cmd.riskRationale() != null && cmd.riskRationale().length() > 1000) {
+            throw badRequest("riskRationale must be at most 1000 characters");
+        }
+        if (cmd.licenseType() != null && cmd.licenseType().length() > 50) {
+            throw badRequest("licenseType must be at most 50 characters");
+        }
+        if (cmd.licenseNumber() != null && cmd.licenseNumber().length() > 50) {
+            throw badRequest("licenseNumber must be at most 50 characters");
+        }
+        if (cmd.licenseAuthority() != null && cmd.licenseAuthority().length() > 100) {
+            throw badRequest("licenseAuthority must be at most 100 characters");
+        }
+        if (cmd.uboList() != null) {
+            for (int i = 0; i < cmd.uboList().size(); i++) {
+                com.gme.pay.contracts.UboView u = cmd.uboList().get(i);
+                String at = "uboList[" + i + "]";
+                if (u == null || u.name() == null || u.name().isBlank()) {
+                    throw badRequest(at + ".name is required");
+                }
+                if (u.name().length() > 120) {
+                    throw badRequest(at + ".name must be at most 120 characters");
+                }
+                if (u.ownershipPct() != null
+                        && (u.ownershipPct().compareTo(java.math.BigDecimal.ZERO) < 0
+                            || u.ownershipPct().compareTo(new java.math.BigDecimal("100")) > 0)) {
+                    throw badRequest(at + ".ownershipPct must be between 0 and 100, was: "
+                            + u.ownershipPct().toPlainString());
+                }
+                if (u.country() != null && !u.country().isBlank()
+                        && !u.country().matches("[A-Z]{2}")) {
+                    throw badRequest(at + ".country must be ISO-3166 alpha-2 (e.g. KR), was: "
+                            + u.country());
+                }
+            }
+        }
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 
     /** Mirror of config-registry's per-element contact validation (same messages shape). */

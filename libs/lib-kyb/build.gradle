@@ -1,0 +1,20 @@
+// lib-kyb: vendor-agnostic KYB / sanctions-screening port per ADR-009.
+// KybProvider interface + KybSubject/ScreeningResult value records + the
+// StubKybAdapter (deterministic dev/test default). The concrete vendor adapter
+// (OctaKybAdapter per ADR-014) lives in services/kyb-adapter, NOT here — this
+// lib stays dependency-light so every service can bind to the port.
+
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    implementation 'org.springframework:spring-context'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations'
+    implementation 'org.slf4j:slf4j-api'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

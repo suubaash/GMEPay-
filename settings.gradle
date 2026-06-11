@@ -23,6 +23,9 @@ include 'libs:lib-prefunding'
 include 'libs:lib-api-contracts'
 include 'libs:lib-change-request'
 include 'libs:lib-audit'
+// Partner Setup Slice 3 (KYB) — ADR-006 vault + ADR-009/014 KYB port.
+include 'libs:lib-vault'
+include 'libs:lib-kyb'
 
 // Services (one Spring Boot module per microservice -- expanded in F1)
 include 'services:rate-fx'
@@ -41,3 +44,5 @@ include 'services:revenue-ledger'
 include 'services:reporting-compliance'
 include 'services:api-gateway'
 include 'services:ops-partner-bff'
+// KYB vendor integration service (ADR-009 port / ADR-014 Octa Solution adapter).
+include 'services:kyb-adapter'

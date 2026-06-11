@@ -16,6 +16,8 @@ import auditTrailReducer from './auditTrailSlice';
 import systemHealthReducer from './systemHealthSlice';
 import uiReducer from './uiSlice';
 import approvalsReducer from './approvalsSlice';
+import kybReducer from './kybSlice';
+import documentsReducer from './documentsSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -33,6 +35,7 @@ import approvalsReducer from './approvalsSlice';
  *  - audit        : paginated audit log (config-registry via BFF, C4).
  *  - auditTrail   : per-aggregate audit trail with chainValid (BFF, Slice 2 2C.1).
  *  - approvals    : 4-eyes PROPOSED change-request queue (Slice 2, agent 2B.2).
+ *  - kyb          : KYB data + screening (Slice 3, agent 3B.2).
  *  - systemHealth : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -50,6 +53,8 @@ export const store = configureStore({
     audit: auditReducer,
     auditTrail: auditTrailReducer,
     approvals: approvalsReducer,
+    kyb: kybReducer,
+    documents: documentsReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },

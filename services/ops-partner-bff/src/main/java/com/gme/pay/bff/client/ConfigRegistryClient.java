@@ -130,6 +130,100 @@ public interface ConfigRegistryClient {
         return List.of();
     }
 
+    // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
+    //
+    // Defaults throw — like createDraft — so existing anonymous test fakes keep
+    // compiling; both real implementations override.
+
+    /**
+     * Save wizard step-3 (KYB) onto a draft — full-state replace of the
+     * operator-editable fields. Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-3}; config-registry
+     * supersedes the current {@code partner_kyb} row and inserts a fresh one
+     * in one transaction (SCD-6, ADR-010), carrying the screening verdict
+     * forward server-side. Returns the fresh {@link com.gme.pay.contracts.KybView}.
+     */
+    default com.gme.pay.contracts.KybView patchDraftStep3(
+            String partnerCode, com.gme.pay.contracts.KybCommand.UpdateStep3 request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep3 is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT KYB view for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/kyb}. Upstream 404 (unknown code
+     * OR no KYB row yet) surfaces as a {@code ResponseStatusException} from
+     * the rest/stub implementations.
+     */
+    default com.gme.pay.contracts.KybView getKyb(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getKyb is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Run sanctions screening for a partner (the step-3 "Run screening"
+     * button / the detail page's rescreen button). Routes to
+     * {@code POST /v1/partners/{partnerCode}/kyb/screen} (no body — the
+     * server assembles the screening subject from the stored aggregate,
+     * ADR-009). Returns the updated {@link com.gme.pay.contracts.KybView}
+     * carrying the verdict.
+     */
+    default com.gme.pay.contracts.KybView runKybScreening(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "runKybScreening is not implemented by " + getClass().getName());
+    }
+
+    // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------
+    //
+    // Defaults follow the established convention: list degrades to empty,
+    // upload/download throw so a missing override is loud. Both real
+    // implementations override all three.
+
+    /**
+     * Upload one KYB document onto a partner. Routes to config-registry's
+     * multipart {@code POST /v1/partners/{partnerCode}/documents}; the bytes go
+     * to the ADR-006 vault, the metadata row to {@code partner_document} (V010),
+     * and a {@code partner_document} audit event is chained (ADR-007). Returns
+     * the fresh current {@link com.gme.pay.contracts.DocumentView};
+     * re-uploading a doc type supersedes the prior row and bumps
+     * {@code version} (object-lock: nothing is ever overwritten or deleted).
+     *
+     * @param expiryDate ISO-8601 {@code yyyy-MM-dd} or {@code null}.
+     */
+    default com.gme.pay.contracts.DocumentView uploadDocument(
+            String partnerCode, String docType, String expiryDate,
+            String filename, String contentType, byte[] content) {
+        throw new UnsupportedOperationException(
+                "uploadDocument is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT document set for a partner (at most one row per doc type).
+     * Routes to {@code GET /v1/partners/{partnerCode}/documents}. A partner
+     * with no documents yields an empty list; an unknown partner surfaces
+     * upstream's 404.
+     */
+    default List<com.gme.pay.contracts.DocumentView> listDocuments(String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * Download passthrough for one stored document (current or superseded id —
+     * the document viewer's version history). Routes to
+     * {@code GET /v1/partners/{partnerCode}/documents/{docId}/content}.
+     */
+    default DocumentContent downloadDocument(String partnerCode, Long docId) {
+        throw new UnsupportedOperationException(
+                "downloadDocument is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * One downloaded document as relayed through the BFF: original filename +
+     * MIME type + the bytes. Buffered rather than streamed — KYB documents are
+     * scans/PDFs (tens of MB at worst) and the BFF is a relay, not a CDN.
+     */
+    record DocumentContent(String filename, String contentType, byte[] content) {}
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias

@@ -1,0 +1,20 @@
+// kyb-adapter service: owns the vendor integration for KYB / sanctions screening.
+// ADR-009 (KybProvider port) + ADR-014 (Octa Solution vendor). Exposes internal
+// REST endpoints for screening runs and ongoing-monitoring callbacks; publishes
+// results to Kafka topic gmepay.kyb.screening via lib-events-kafka. Until Octa
+// sandbox credentials land, the StubKybAdapter from lib-kyb is the active bean.
+
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation project(':libs:lib-kyb')
+    implementation project(':libs:lib-errors')
+    implementation project(':libs:lib-events')
+    implementation project(':libs:lib-events-kafka')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}

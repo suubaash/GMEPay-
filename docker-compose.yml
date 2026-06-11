@@ -30,6 +30,7 @@ volumes:
   pg-scheme:
   pg-keycloak:
   mongo-data:
+  minio-data:
 
 # ─────────── REUSABLE HEALTHCHECK SHAPES (extension fields + anchors) ───────────
 # Only api-gateway ships spring-boot-starter-actuator, so every other Spring
@@ -145,6 +146,22 @@ services:
     image: redis:7-alpine
     ports: ["6379:6379"]
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  # Partner document vault (ADR-006): S3-compatible object store with versioning.
+  # Object-lock compliance mode is enabled per-bucket at bootstrap (lib-vault's
+  # VaultBucketInitializer creates gmepay-partner-vault with lock + versioning).
+  # Console on 9001 for local inspection; API on 9000.
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: gmepay
+      MINIO_ROOT_PASSWORD: gmepay-minio
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+    healthcheck: { test: ["CMD", "mc", "ready", "local"], interval: 10s, timeout: 5s, retries: 18, start_period: 10s }
     networks: [gmepay]
     profiles: ["core", "full"]
 
