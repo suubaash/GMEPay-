@@ -3,6 +3,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { useDispatch, useSelector } from 'react-redux';
 import partnersReducer from './partnersSlice';
+import draftsReducer from './draftsSlice';
 import transactionsReducer from './transactionsSlice';
 import dashboardReducer from './dashboardSlice';
 import schemesReducer from './schemesSlice';
@@ -21,6 +22,7 @@ import uiReducer from './uiSlice';
  *  - auth         : login state (JWT, username, role, loading/error).
  *  - dashboard    : 4 KPI cards on the home page.
  *  - partners     : list + detail cache + create/update flags (config-registry via BFF).
+ *  - drafts       : in-flight Partner Setup wizard draft (Slice 1, ADR-012).
  *  - schemes      : QR scheme list.
  *  - transactions : paginated search + detail cache (txn-mgmt via BFF).
  *  - settlement   : recent batches + detail cache (settlement-reconciliation via BFF).
@@ -34,6 +36,7 @@ export const store = configureStore({
   reducer: {
     auth: authReducer,
     partners: partnersReducer,
+    drafts: draftsReducer,
     transactions: transactionsReducer,
     dashboard: dashboardReducer,
     schemes: schemesReducer,

@@ -171,6 +171,91 @@ export const adminApi = {
       body: JSON.stringify({ mode }),
     }),
 
+  // ---------- Partner drafts (Slice 1, ADR-012) ----------
+  /**
+   * GET /v1/admin/partners/drafts -> PartnerView[]
+   * Each PartnerView carries:
+   *   { id, partnerCode, type, settlementCurrency, settlementRoundingMode,
+   *     legalNameLocal, legalNameRomanized, taxId, taxIdType,
+   *     countryOfIncorporation, legalForm, registeredAddress, operatingAddress,
+   *     lei, status, validFrom, validTo, recordedAt }
+   * Slice 1 returns rows in status=ONBOARDING.
+   */
+  listPartnerDrafts: () => request('/v1/admin/partners/drafts'),
+
+  /**
+   * POST /v1/admin/partners/draft
+   * body: DraftPartnerRequest — all fields nullable; the wizard's
+   *   "Start a new partner" step typically only sends { partnerCode }.
+   * -> 201 PartnerView with status=ONBOARDING and bitemporal stamps populated.
+   */
+  createPartnerDraft: (body) =>
+    request('/v1/admin/partners/draft', {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  /** GET /v1/admin/partners/draft/{partnerCode} -> PartnerView (404 when unknown). */
+  getPartnerDraft: (partnerCode) =>
+    request(`/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}`),
+
+  /**
+   * Aliases requested by the wizard scaffold (agent 1D.1).
+   *
+   * These mirror the names used in the slice plan's API surface
+   * (createDraft / getDraft / listDrafts) so the wizard imports read
+   * naturally; the implementations are thin pass-throughs to the
+   * canonical methods above. Keep both — older call sites use the
+   * verbose `Partner*` names.
+   */
+  createDraft(body) {
+    return this.createPartnerDraft(body);
+  },
+  getDraft(partnerCode) {
+    return this.getPartnerDraft(partnerCode);
+  },
+  listDrafts() {
+    return this.listPartnerDrafts();
+  },
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-{n}
+   *  -> PartnerView with refreshed bitemporal stamps.
+   *
+   * Slice 1 only implements Step 1 (Identity) on the backend. To keep the
+   * wizard from triggering noisy 404s when an operator clicks Next on a
+   * stub step, calls with n in 2..8 are rejected client-side with an
+   * {@link ApiError} status=501.
+   *
+   * @param {1|2|3|4|5|6|7|8} step
+   * @param {string} partnerCode
+   * @param {object} body — DraftPartnerStep{N}Request, see ops-partner-bff
+   */
+  patchDraftStep(step, partnerCode, body) {
+    const n = Number(step);
+    if (!Number.isInteger(n) || n < 1 || n > 8) {
+      return Promise.reject(
+        new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
+      );
+    }
+    if (n !== 1) {
+      return Promise.reject(
+        new ApiError(
+          501,
+          `/v1/admin/partners/draft/${partnerCode}/step-${n}`,
+          `Step ${n} is not implemented yet — coming in a later Slice.`,
+        ),
+      );
+    }
+    return request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-${n}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body ?? {}),
+      },
+    );
+  },
+
   // ---------- Schemes ----------
   /**
    * GET /v1/admin/schemes -> SchemeSummary[]

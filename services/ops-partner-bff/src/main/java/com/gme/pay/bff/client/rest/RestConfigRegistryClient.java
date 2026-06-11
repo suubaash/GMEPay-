@@ -1,9 +1,10 @@
 package com.gme.pay.bff.client.rest;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.bff.client.ConfigRegistryClient;
+import com.gme.pay.contracts.PartnerCommand;
+import com.gme.pay.contracts.PartnerView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,10 +19,8 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.RoundingMode;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Production {@link ConfigRegistryClient}. Talks to config-registry over HTTP
@@ -37,6 +36,11 @@ import java.util.Map;
  *   <li>{@code POST   /v1/partners}                  -> {@link #createPartner(PartnerCreateRequest)}</li>
  *   <li>{@code PUT    /v1/partners/{id}/rounding-mode} -> {@link #updateRoundingMode(String, String)}</li>
  * </ul>
+ *
+ * <p>Slice 1 collapsed the wire DTO to the canonical {@link PartnerView}
+ * shape — this client deserializes that directly and adapts to the BFF's
+ * deprecated {@link PartnerSummary} alias via {@link PartnerSummary#fromView}.
+ * Adding a partner field is now a one-line change in {@code lib-api-contracts}.
  *
  * <p>Scheme list ({@link #listSchemes()}) has no config-registry endpoint yet, so
  * we surface an empty list — the Admin schemes view degrades gracefully. When
@@ -66,14 +70,14 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public PartnerSummary getPartner(String partnerId) {
         try {
-            PartnerResponse response = restClient.get()
+            PartnerView view = restClient.get()
                     .uri("/v1/partners/{id}", partnerId)
                     .retrieve()
                     .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
                         // 404 = unknown partner; collapse to null below.
                     })
-                    .body(PartnerResponse.class);
-            return toSummary(response);
+                    .body(PartnerView.class);
+            return PartnerSummary.fromView(view);
         } catch (ResourceAccessException network) {
             log.warn("config-registry unreachable on getPartner({}): {}", partnerId, network.getMessage());
             return null;
@@ -83,14 +87,17 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public List<PartnerSummary> listPartners() {
         try {
-            List<PartnerResponse> response = restClient.get()
+            List<PartnerView> response = restClient.get()
                     .uri("/v1/partners")
                     .retrieve()
-                    .body(new ParameterizedTypeReference<List<PartnerResponse>>() {});
+                    .body(new ParameterizedTypeReference<List<PartnerView>>() {});
             if (response == null) {
                 return List.of();
             }
-            return response.stream().map(RestConfigRegistryClient::toSummary).filter(java.util.Objects::nonNull).toList();
+            return response.stream()
+                    .map(PartnerSummary::fromView)
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
         } catch (ResourceAccessException network) {
             log.warn("config-registry unreachable on listPartners: {}", network.getMessage());
             return List.of();
@@ -99,22 +106,22 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     @Override
     public PartnerSummary createPartner(PartnerCreateRequest request) {
-        Map<String, String> body = new java.util.LinkedHashMap<>();
-        body.put("partnerId", request.partnerId());
-        body.put("type", request.type());
-        body.put("settlementCurrency", request.settlementCurrency());
-        body.put("settlementRoundingMode", request.settlementRoundingMode());
+        // Adapt the BFF's deprecated four-field request to the canonical
+        // PartnerCommand.CreateDraft surface config-registry's POST now accepts.
+        // Identity-step fields ride the canonical payload as null — the legacy
+        // form does not carry them.
+        com.gme.pay.contracts.PartnerCommand.CreateDraft body = request.toCreateDraft();
         try {
-            PartnerResponse response = restClient.post()
+            PartnerView view = restClient.post()
                     .uri("/v1/partners")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()
-                    .body(PartnerResponse.class);
-            return toSummary(response);
+                    .body(PartnerView.class);
+            return PartnerSummary.fromView(view);
         } catch (org.springframework.web.client.RestClientResponseException e) {
             // Surface upstream 4xx so the Admin UI can show config-registry's validation message
-            // (e.g. duplicate partnerId, bad rounding mode). Unpack the upstream Spring error
+            // (e.g. duplicate partnerCode, bad rounding mode). Unpack the upstream Spring error
             // envelope so the UI sees "partner '...' already exists", not the entire JSON.
             throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
         }
@@ -144,16 +151,16 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public PartnerSummary updateRoundingMode(String partnerId, String mode) {
         try {
-            PartnerResponse response = restClient.put()
+            PartnerView view = restClient.put()
                     .uri("/v1/partners/{id}/rounding-mode", partnerId)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of("mode", mode))
+                    .body(java.util.Map.of("mode", mode))
                     .retrieve()
                     .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
                         // 404 = unknown partner; collapse to null below.
                     })
-                    .body(PartnerResponse.class);
-            return toSummary(response);
+                    .body(PartnerView.class);
+            return PartnerSummary.fromView(view);
         } catch (ResourceAccessException network) {
             log.warn("config-registry unreachable on updateRoundingMode({}): {}", partnerId, network.getMessage());
             return null;
@@ -166,27 +173,66 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         return Collections.emptyList();
     }
 
-    private static PartnerSummary toSummary(PartnerResponse r) {
-        if (r == null || r.partnerId() == null) {
-            return null;
+    // -------- Slice 1 (1C.2) draft endpoints (ADR-012) -----------------------
+
+    @Override
+    public PartnerView createDraft(PartnerCommand.CreateDraft request) {
+        try {
+            return restClient.post()
+                    .uri("/v1/partners/draft")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(PartnerView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (duplicate partner_code → 409, validation → 400)
+            // through to the Admin UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
         }
-        RoundingMode mode = r.settlementRoundingMode() == null
-                ? RoundingMode.HALF_UP
-                : RoundingMode.valueOf(r.settlementRoundingMode());
-        return new PartnerSummary(r.partnerId(), r.type(), r.settlementCurrency(), mode);
     }
 
-    /**
-     * Wire shape returned by config-registry. Mirrored locally (MSA rule 5 — do
-     * not import config-registry's internal {@code Partner} record). Hibernate
-     * serialises the {@link RoundingMode} enum as its name, so this stays
-     * String-typed and converts at the boundary above.
-     */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    record PartnerResponse(
-            String partnerId,
-            String type,
-            String settlementCurrency,
-            String settlementRoundingMode
-    ) {}
+    @Override
+    public PartnerView patchDraftStep1(String partnerCode, PartnerCommand.UpdateStep1 request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-1", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(PartnerView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public PartnerView getDraft(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/draft/{partnerCode}", partnerCode)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
+                        // 404 = unknown draft; collapse to null below.
+                    })
+                    .body(PartnerView.class);
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getDraft({}): {}",
+                    partnerCode, network.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public List<PartnerView> listDrafts() {
+        try {
+            List<PartnerView> response = restClient.get()
+                    .uri("/v1/partners/drafts")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<PartnerView>>() {});
+            return response == null ? List.of() : response;
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listDrafts: {}", network.getMessage());
+            return List.of();
+        }
+    }
 }

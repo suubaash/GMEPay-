@@ -1,10 +1,15 @@
 package com.gme.pay.gateway.config;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 
 import java.util.List;
@@ -30,14 +35,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 // Netty) is satisfied. We do not exercise HTTP — only retrieve the RouteLocator bean — but the
 // gateway autoconfig refuses to load without a reactive web environment.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(GatewayRouteTableTest.JwtDecoderStub.class)
 @TestPropertySource(properties = {
         // Disable Redis bits that would try to connect during context start
         "spring.autoconfigure.exclude=" +
                 "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration," +
-                "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration",
+                "org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration," +
+                // Slice 1: prevent the OAuth2 resource-server autoconfig from trying to
+                // fetch the Keycloak JWKS during context refresh. SecurityConfig still
+                // loads and wires the SecurityWebFilterChain using the stub ReactiveJwtDecoder
+                // bean from JwtDecoderStub below.
+                "org.springframework.boot.autoconfigure.security.oauth2.resource.reactive.ReactiveOAuth2ResourceServerAutoConfiguration",
         "management.health.redis.enabled=false"
 })
 class GatewayRouteTableTest {
+
+    /**
+     * Supplies a {@link ReactiveJwtDecoder} so {@link SecurityConfig} can build a
+     * filter chain without reaching out to Keycloak's JWKS endpoint during the route-table
+     * test. We never actually authenticate a request here — the bean only needs to exist.
+     */
+    @TestConfiguration
+    static class JwtDecoderStub {
+        @Bean
+        ReactiveJwtDecoder reactiveJwtDecoder() {
+            return Mockito.mock(ReactiveJwtDecoder.class);
+        }
+    }
+
 
     /**
      * Expected route ids, one per backend service mapping declared in

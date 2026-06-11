@@ -1,4 +1,6 @@
-// auth-identity service: Partner HMAC verification, operator OAuth2/JWT+RBAC, key lifecycle.
+// auth-identity service: machine credentials only (ADR-011) — partner API-key + HMAC
+// verification, machine-identity persistence (principals/api_keys/roles), key lifecycle.
+// Human operator login (OIDC, MFA, sessions) is owned by Keycloak, NOT this service.
 plugins {
     id 'org.springframework.boot'
     id 'io.spring.dependency-management'

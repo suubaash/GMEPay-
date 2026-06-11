@@ -19,13 +19,13 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * Ticket 17.2-G01: real-PostgreSQL integration tests for the partner tables.
- * Boots the full service against a postgres:16 Testcontainer so Flyway V001+
+ * Ticket 17.2-G01 (+ Slice 1 / V004): real-PostgreSQL integration tests for the partner
+ * tables. Boots the full service against a postgres:16 Testcontainer so Flyway V001..V004
  * runs on the production database engine (the H2-PostgreSQL-mode slice in
  * {@link PartnerRepositoryIT} stays for fast local unit runs).
  *
  * <p>Docker-tagged: excluded from the normal {@code test} task and executed by the
- * {@code integrationTest} task on CI ubuntu runners. This machine has no Docker —
+ * {@code integrationTest} task on CI ubuntu runners. The dev workstation has no Docker —
  * never run this locally.
  */
 @Tag("docker")
@@ -58,27 +58,62 @@ class PartnerPostgresMigrationIT {
         Integer applied = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success = true", Integer.class);
         assertThat(applied)
-                .as("V001 (partners) and V002 (effective dating) must both apply on PG16")
+                .as("V001 (partners), V002 (effective dating), V003 (BIGINT surrogate),"
+                        + " V004 (bitemporal SCD-6), V005 (change_request), V006 (audit_log),"
+                        + " V007 (identity fields) and V008 (status) must all apply on PG16")
+                .isEqualTo(8);
+    }
+
+    @Test
+    void v003AddsSurrogateIdAndPartnerCodeColumns() {
+        // Slice 1 schism resolution acceptance check: SELECT id, partner_code FROM partners
+        // returns a populated row for every seeded partner. V004 promoted id to PK so the
+        // legacy partner_id column is no longer the PK; it stays populated (Expand) and
+        // carries the same value as partner_code.
+        Integer seededWithSurrogate = jdbc.queryForObject(
+                "select count(*) from partners where partner_code in ('GMEREMIT', 'SENDMN')"
+                        + " and id is not null and partner_code is not null",
+                Integer.class);
+        assertThat(seededWithSurrogate)
+                .as("V003 backfill must give every existing seed row a BIGINT surrogate + partner_code")
                 .isEqualTo(2);
+
+        String partnerCode = jdbc.queryForObject(
+                "select partner_code from partners where partner_code = 'GMEREMIT'"
+                        + " and superseded_at is null", String.class);
+        assertThat(partnerCode)
+                .as("partner_code must be queryable post-V004 (current row, superseded_at IS NULL)")
+                .isEqualTo("GMEREMIT");
     }
 
     @Test
     void settlementRoundingModeColumnDefaultsToHalfUp() {
         // Insert a raw row WITHOUT the settlement_rounding_mode column: the DB-level
-        // default must kick in (MONEY_CONVENTION.md default policy).
-        jdbc.update("insert into partners (partner_id, type) values ('RAWROW', 'LOCAL')");
+        // default must kick in (MONEY_CONVENTION.md default policy). V004 made `id`
+        // the PK so we have to feed one; pull from the same sequence the app does.
+        jdbc.update("insert into partners (id, partner_code, partner_id, type)"
+                + " values (nextval('partners_id_seq'), 'RAWROW', 'RAWROW', 'LOCAL')");
 
         String mode = jdbc.queryForObject(
-                "select settlement_rounding_mode from partners where partner_id = 'RAWROW'", String.class);
+                "select settlement_rounding_mode from partners where partner_code = 'RAWROW'",
+                String.class);
         assertThat(mode).isEqualTo("HALF_UP");
 
-        // V002 default: effective since the epoch, open-ended (compared server-side
-        // to avoid any client time-zone conversion).
+        // V002 default carried through V004's rename: effective since the epoch,
+        // open-ended (compared server-side to avoid any client time-zone conversion).
         Integer epochDefaulted = jdbc.queryForObject(
-                "select count(*) from partners where partner_id = 'RAWROW'"
-                        + " and effective_from = TIMESTAMP '1970-01-01 00:00:00' and effective_to is null",
+                "select count(*) from partners where partner_code = 'RAWROW'"
+                        + " and valid_from = TIMESTAMP '1970-01-01 00:00:00' and valid_to is null",
                 Integer.class);
         assertThat(epochDefaulted).isEqualTo(1);
+
+        // V004: every row has a non-NULL recorded_at (defaulted to now()) and a NULL
+        // superseded_at (current row).
+        Integer bitemporalCurrent = jdbc.queryForObject(
+                "select count(*) from partners where partner_code = 'RAWROW'"
+                        + " and recorded_at is not null and superseded_at is null",
+                Integer.class);
+        assertThat(bitemporalCurrent).isEqualTo(1);
     }
 
     @Test
@@ -89,35 +124,42 @@ class PartnerPostgresMigrationIT {
         assertThat(store.get("SENDMN").settlementRoundingMode()).isEqualTo(RoundingMode.DOWN);
 
         // Fresh round-trip with a non-default mode: must not fall back to HALF_UP.
-        store.save(new Partner("TBANK", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
+        store.save(Partner.of("TBANK", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
         Partner reloaded = store.get("TBANK");
+        assertThat(reloaded.partnerCode()).isEqualTo("TBANK");
+        assertThat(reloaded.partnerId())
+                .as("a freshly-saved partner must come back with its BIGINT surrogate populated")
+                .isNotNull();
         assertThat(reloaded.type()).isEqualTo(PartnerType.OVERSEAS);
         assertThat(reloaded.settlementCurrency()).isEqualTo("USD");
         assertThat(reloaded.settlementRoundingMode()).isEqualTo(RoundingMode.DOWN);
     }
 
     @Test
-    void effectiveDatingQueriesAreCorrectAtBoundaryInstants() {
+    void bitemporalAsOfQueriesAreCorrectAtBoundaryInstants() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-07-01T00:00:00Z");
 
         PartnerEntity windowed = new PartnerEntity("PGWINDOW", PartnerType.OVERSEAS, "MNT", RoundingMode.HALF_UP);
-        windowed.setEffectiveFrom(from);
-        windowed.setEffectiveTo(to);
+        windowed.setValidFrom(from);
+        windowed.setValidTo(to);
+        windowed.setId(((Number) jdbc.queryForObject(
+                "select nextval('partners_id_seq')", Number.class)).longValue());
         repository.saveAndFlush(windowed);
 
+        Instant nowT = Instant.now();
         // Half-open [from, to): lower bound inclusive, upper bound exclusive.
-        assertThat(repository.findEffectiveAt("PGWINDOW", from))
-                .as("effective AT exactly effective_from (inclusive lower bound)").isPresent();
-        assertThat(repository.findEffectiveAt("PGWINDOW", to.minusSeconds(1)))
-                .as("effective just before effective_to").isPresent();
-        assertThat(repository.findEffectiveAt("PGWINDOW", to))
-                .as("NOT effective at exactly effective_to (exclusive upper bound)").isEmpty();
-        assertThat(repository.findEffectiveAt("PGWINDOW", from.minusSeconds(1)))
-                .as("NOT effective before the window opens").isEmpty();
+        assertThat(repository.findAsOf("PGWINDOW", from, nowT))
+                .as("valid AT exactly valid_from (inclusive lower bound)").isPresent();
+        assertThat(repository.findAsOf("PGWINDOW", to.minusSeconds(1), nowT))
+                .as("valid just before valid_to").isPresent();
+        assertThat(repository.findAsOf("PGWINDOW", to, nowT))
+                .as("NOT valid at exactly valid_to (exclusive upper bound)").isEmpty();
+        assertThat(repository.findAsOf("PGWINDOW", from.minusSeconds(1), nowT))
+                .as("NOT valid before the window opens").isEmpty();
 
-        // Open-ended seed rows are effective from the epoch forever.
-        assertThat(repository.findEffectiveAt("GMEREMIT", Instant.EPOCH)).isPresent();
-        assertThat(repository.findEffectiveAt("GMEREMIT", Instant.parse("2030-01-01T00:00:00Z"))).isPresent();
+        // Open-ended seed rows are valid from the epoch forever.
+        assertThat(repository.findAsOf("GMEREMIT", Instant.EPOCH, nowT)).isPresent();
+        assertThat(repository.findAsOf("GMEREMIT", Instant.parse("2030-01-01T00:00:00Z"), nowT)).isPresent();
     }
 }

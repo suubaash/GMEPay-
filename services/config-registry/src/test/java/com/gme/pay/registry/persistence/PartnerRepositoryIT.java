@@ -19,7 +19,7 @@ import org.springframework.context.annotation.Import;
 /**
  * Slice integration test for {@link PartnerRepository} and the {@link PartnerStore}
  * boundary conversion. Uses the in-memory H2 (PostgreSQL compatibility mode) declared
- * in {@code application.properties}, so Flyway runs V001+ against the same schema
+ * in {@code application.properties}, so Flyway runs V001..V004 against the same schema
  * definition used at runtime — no Docker, no Testcontainers. The same behaviours are
  * re-verified against real PostgreSQL 16 in {@code PartnerPostgresMigrationIT}
  * (docker-tagged, CI-only).
@@ -57,11 +57,17 @@ class PartnerRepositoryIT {
         // The DOWN mode is the one used for SENDMN in production: this verifies the
         // JPA boundary round-trip does not silently fall back to HALF_UP.
         Partner saved = store.save(
-                new Partner("TBANK", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
+                Partner.of("TBANK", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
         assertThat(saved.settlementRoundingMode()).isEqualTo(RoundingMode.DOWN);
+        assertThat(saved.partnerId())
+                .as("V003 surrogate id must be populated by the application-layer sequence pull on insert")
+                .isNotNull();
 
         Partner reloaded = store.get("TBANK");
-        assertThat(reloaded.partnerId()).isEqualTo("TBANK");
+        assertThat(reloaded.partnerCode()).isEqualTo("TBANK");
+        assertThat(reloaded.partnerId())
+                .as("the surrogate must round-trip through the persistence boundary")
+                .isNotNull();
         assertThat(reloaded.type()).isEqualTo(PartnerType.OVERSEAS);
         assertThat(reloaded.settlementCurrency()).isEqualTo("USD");
         assertThat(reloaded.settlementRoundingMode()).isEqualTo(RoundingMode.DOWN);
@@ -69,7 +75,7 @@ class PartnerRepositoryIT {
 
     @Test
     void gmeremitSeededRowExistsAfterStartup() {
-        assertThat(repository.existsById("GMEREMIT"))
+        assertThat(repository.existsByPartnerCode("GMEREMIT"))
                 .as("GMEREMIT must be seeded by PartnerSeeder on startup").isTrue();
 
         Partner gmeremit = store.get("GMEREMIT");
@@ -79,11 +85,15 @@ class PartnerRepositoryIT {
     }
 
     @Test
-    void seededPartnersAreEffectiveSinceEpochAndOpenEnded() {
-        // V002 backfills effective_from to the epoch with a NULL (open-ended) effective_to,
+    void seededPartnersAreValidSinceEpochAndOpenEnded() {
+        // V002 backfilled valid_from to the epoch with a NULL (open-ended) valid_to,
         // so seeded partners must be visible at any instant from the epoch onwards.
-        assertThat(repository.findEffectiveAt("GMEREMIT", Instant.EPOCH)).isPresent();
-        assertThat(repository.findEffectiveAt("GMEREMIT", Instant.parse("2026-06-10T00:00:00Z"))).isPresent();
+        // V004 added the transaction-time axis; for seeded rows that means recorded_at
+        // is whenever the seeder fired, and Instant.now() is always >= that, so the
+        // as-of view at (epoch, now) returns the seeded row.
+        Instant now = Instant.now();
+        assertThat(repository.findAsOf("GMEREMIT", Instant.EPOCH, now)).isPresent();
+        assertThat(repository.findAsOf("GMEREMIT", Instant.parse("2026-06-10T00:00:00Z"), now)).isPresent();
     }
 
     @Test
@@ -92,21 +102,29 @@ class PartnerRepositoryIT {
         Instant to = Instant.parse("2026-07-01T00:00:00Z");
 
         PartnerEntity windowed = new PartnerEntity("WINDOWED", PartnerType.OVERSEAS, "USD", RoundingMode.HALF_UP);
-        windowed.setEffectiveFrom(from);
-        windowed.setEffectiveTo(to);
-        repository.saveAndFlush(windowed);
+        windowed.setValidFrom(from);
+        windowed.setValidTo(to);
+        windowed.setId(9_000_001L); // surrogate must be set: V004 makes id the PK.
+        // Manually-assigned id means Spring Data routes save() through em.merge(),
+        // and @PrePersist fires on Hibernate's managed COPY — the local `windowed`
+        // reference keeps recordedAt == null. Use the returned managed entity.
+        PartnerEntity saved = repository.saveAndFlush(windowed);
 
-        // [from, to): lower bound inclusive ...
-        assertThat(repository.findEffectiveAt("WINDOWED", from))
-                .as("partner IS effective at exactly effective_from").isPresent();
-        assertThat(repository.findEffectiveAt("WINDOWED", to.minusSeconds(1)))
-                .as("partner IS effective just before effective_to").isPresent();
-        // ... upper bound exclusive, nothing outside the window.
-        assertThat(repository.findEffectiveAt("WINDOWED", to))
-                .as("partner is NOT effective at exactly effective_to").isEmpty();
-        assertThat(repository.findEffectiveAt("WINDOWED", from.minusSeconds(1)))
-                .as("partner is NOT effective before effective_from").isEmpty();
-        assertThat(repository.findEffectiveAt("WINDOWED", to.plusSeconds(1)))
-                .as("partner is NOT effective after effective_to").isEmpty();
+        // Transaction-time pin: every assertion uses the same recordedAt, so we are
+        // only exercising the business-time axis here. ADR-010 half-open semantics:
+        // [from, to) — lower bound inclusive, upper bound exclusive.
+        // Pin to the row's own persisted recorded_at (not Instant.now()): the entity
+        // truncates to MICROS at persist so this matches the stored value exactly.
+        Instant nowT = saved.getRecordedAt();
+        assertThat(repository.findAsOf("WINDOWED", from, nowT))
+                .as("partner IS valid at exactly valid_from").isPresent();
+        assertThat(repository.findAsOf("WINDOWED", to.minusSeconds(1), nowT))
+                .as("partner IS valid just before valid_to").isPresent();
+        assertThat(repository.findAsOf("WINDOWED", to, nowT))
+                .as("partner is NOT valid at exactly valid_to (upper bound exclusive)").isEmpty();
+        assertThat(repository.findAsOf("WINDOWED", from.minusSeconds(1), nowT))
+                .as("partner is NOT valid before valid_from").isEmpty();
+        assertThat(repository.findAsOf("WINDOWED", to.plusSeconds(1), nowT))
+                .as("partner is NOT valid after valid_to").isEmpty();
     }
 }

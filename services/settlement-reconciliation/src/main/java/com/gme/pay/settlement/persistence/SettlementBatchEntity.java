@@ -27,6 +27,16 @@ public class SettlementBatchEntity {
     @Column(name = "partner_id", length = 32, nullable = false)
     private String partnerId;
 
+    /**
+     * BIGINT surrogate partner FK introduced by V004 (Slice 1 schism resolution, Expand
+     * phase per ADR-013). Nullable for now: application writes from Slice 2 onwards
+     * will populate it alongside {@link #partnerId}; a future Contract migration drops
+     * the String column and promotes this one. Until then, leaving it null on legacy
+     * writes is intentional — the read path still uses the String column.
+     */
+    @Column(name = "partner_id_new")
+    private Long partnerIdNew;
+
     @Column(name = "business_date", nullable = false)
     private LocalDate businessDate;
 
@@ -76,6 +86,15 @@ public class SettlementBatchEntity {
 
     public void setPartnerId(String partnerId) {
         this.partnerId = partnerId;
+    }
+
+    /** BIGINT surrogate FK (V004). See {@link #partnerIdNew} for Expand-phase semantics. */
+    public Long getPartnerIdNew() {
+        return partnerIdNew;
+    }
+
+    public void setPartnerIdNew(Long partnerIdNew) {
+        this.partnerIdNew = partnerIdNew;
     }
 
     public LocalDate getBusinessDate() {

@@ -14,9 +14,14 @@ import org.springframework.stereotype.Component;
  * persistent backing store it must be idempotent across restarts, hence the
  * empty-table guard rather than upsert-on-boot.
  *
- * <p>This preserves the prior runtime behaviour for callers and tests that
- * expect a freshly-booted service to already know about GMEREMIT (HALF_UP) and
- * SENDMN (DOWN).
+ * <p>The seeded rows go through {@link Partner#of(String, PartnerType, String,
+ * RoundingMode)} which carries the {@code partnerCode} (e.g. {@code "GMEREMIT"})
+ * and leaves the surrogate id {@code null}; V003's {@code partners_id_seq} default
+ * fills the surrogate at INSERT time, and {@link PartnerEntity#toDomain()} reads it
+ * back on the next round-trip.
+ *
+ * <p>This preserves the prior runtime behaviour for callers and tests that expect
+ * a freshly-booted service to already know about GMEREMIT (HALF_UP) and SENDMN (DOWN).
  */
 @Component
 public class PartnerSeeder implements CommandLineRunner {
@@ -34,7 +39,7 @@ public class PartnerSeeder implements CommandLineRunner {
         if (repository.count() > 0) {
             return;
         }
-        store.save(new Partner("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP));
-        store.save(new Partner("SENDMN", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
+        store.save(Partner.of("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP));
+        store.save(Partner.of("SENDMN", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
     }
 }

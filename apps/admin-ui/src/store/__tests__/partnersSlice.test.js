@@ -9,6 +9,8 @@ import reducer, {
   getPartner,
   createPartner,
   updatePartnerRoundingMode,
+  fetchDrafts,
+  createDraft,
 } from '@/store/partnersSlice';
 
 const SNAPSHOT = [
@@ -61,6 +63,61 @@ describe('partnersSlice', () => {
     expect(next.items[1]).toEqual(created);
     expect(next.details['GME_VN_002']).toEqual(created);
     expect(next.saving).toBe(false);
+  });
+
+  it('stores fetchDrafts payload as `drafts` (Slice 1, 1D.4)', () => {
+    const draftsPayload = [
+      {
+        id: 1,
+        partnerCode: 'draft_partner_001',
+        type: 'OVERSEAS',
+        settlementCurrency: 'EUR',
+        settlementRoundingMode: 'DOWN',
+        status: 'ONBOARDING',
+      },
+      {
+        id: 2,
+        partnerCode: 'draft_partner_002',
+        type: 'LOCAL',
+        settlementCurrency: 'KRW',
+        settlementRoundingMode: 'HALF_UP',
+        status: 'ONBOARDING',
+      },
+    ];
+    const next = reducer(undefined, {
+      type: fetchDrafts.fulfilled.type,
+      payload: draftsPayload,
+    });
+    expect(next.drafts).toEqual(draftsPayload);
+    expect(next.draftsLoading).toBe(false);
+    expect(next.draftsError).toBeNull();
+    // active items untouched
+    expect(next.items).toEqual([]);
+  });
+
+  it('prepends newly created drafts to `drafts` on createDraft.fulfilled', () => {
+    const existing = {
+      id: 1,
+      partnerCode: 'draft_partner_001',
+      status: 'ONBOARDING',
+    };
+    const created = {
+      id: 2,
+      partnerCode: 'draft_partner_002',
+      status: 'ONBOARDING',
+    };
+    const start = reducer(undefined, {
+      type: fetchDrafts.fulfilled.type,
+      payload: [existing],
+    });
+    const next = reducer(start, {
+      type: createDraft.fulfilled.type,
+      payload: created,
+    });
+    expect(next.drafts).toHaveLength(2);
+    expect(next.drafts[0]).toEqual(created); // prepended
+    expect(next.drafts[1]).toEqual(existing);
+    expect(next.creatingDraft).toBe(false);
   });
 
   it('updates only the rounding mode in items + cache on updatePartnerRoundingMode', () => {

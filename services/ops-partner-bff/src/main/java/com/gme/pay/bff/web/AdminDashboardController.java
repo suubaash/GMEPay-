@@ -6,14 +6,18 @@ import com.gme.pay.bff.client.RevenueLedgerClient;
 import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.web.dto.AdminDashboard;
+import com.gme.pay.bff.web.dto.DraftPartnerRequest;
+import com.gme.pay.bff.web.dto.DraftPartnerStep1Request;
 import com.gme.pay.bff.web.dto.Page;
 import com.gme.pay.bff.web.dto.PartnerCreateRequest;
 import com.gme.pay.bff.web.dto.RevenueBreakdown;
 import com.gme.pay.bff.web.dto.SettlementBatchDetail;
 import com.gme.pay.bff.web.dto.TransactionDetail;
+import com.gme.pay.contracts.PartnerView;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -160,6 +164,72 @@ public class AdminDashboardController {
     @GetMapping("/schemes")
     public List<ConfigRegistryClient.SchemeSummary> schemes() {
         return configRegistry.listSchemes();
+    }
+
+    // -------- Slice 1 (1C.2) draft endpoints (ADR-012) -----------------------
+    //
+    // The Admin UI wizard's Identity step calls these. The BFF is a pass-through
+    // (no orchestration with other backend services for now); each call delegates
+    // to ConfigRegistryClient which adapts to the upstream
+    // POST/PATCH /v1/partners/draft* endpoints on config-registry. The DTOs
+    // (DraftPartnerRequest / DraftPartnerStep1Request) live in
+    // com.gme.pay.bff.web.dto so the Admin UI binds against BFF-shaped JSON;
+    // the BFF then maps these to lib-api-contracts PartnerCommand records before
+    // calling config-registry.
+
+    /**
+     * Create a partner draft. Mirrors {@code POST /v1/partners/draft} on
+     * config-registry; the row appears in {@code partners} with
+     * {@code status=ONBOARDING} and a paired change_request in
+     * {@code state=DRAFT}. Returns 201 with the canonical {@link PartnerView}
+     * (Slice 1 DTO collapse — see {@code docs/PARTNER_SETUP_PLAN.md}).
+     */
+    @PostMapping("/partners/draft")
+    public ResponseEntity<PartnerView> createDraft(@RequestBody DraftPartnerRequest body) {
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        PartnerView created = configRegistry.createDraft(body.toCreateDraft());
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    /**
+     * Save Step-1 Identity edits onto a draft. Mirrors
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-1}. Returns 200 with
+     * the updated {@link PartnerView} carrying the fresh bitemporal stamps.
+     */
+    @PatchMapping("/partners/draft/{partnerCode}/step-1")
+    public PartnerView patchDraftStep1(@PathVariable String partnerCode,
+                                       @RequestBody DraftPartnerStep1Request body) {
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.patchDraftStep1(partnerCode, body.toUpdateStep1());
+    }
+
+    /**
+     * Read the current draft for {@code partnerCode}. Mirrors
+     * {@code GET /v1/partners/draft/{partnerCode}}. Returns 404 if no draft
+     * exists for the code.
+     */
+    @GetMapping("/partners/draft/{partnerCode}")
+    public PartnerView getDraft(@PathVariable String partnerCode) {
+        PartnerView view = configRegistry.getDraft(partnerCode);
+        if (view == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "no draft for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    /**
+     * List every in-flight draft. Mirrors {@code GET /v1/partners/drafts}.
+     * The Admin UI Partners page shows these in a "Drafts in progress" section
+     * so operators can resume / hand off mid-flow per ADR-012.
+     */
+    @GetMapping("/partners/drafts")
+    public List<PartnerView> listDrafts() {
+        return configRegistry.listDrafts();
     }
 
     @GetMapping("/transactions/recent")

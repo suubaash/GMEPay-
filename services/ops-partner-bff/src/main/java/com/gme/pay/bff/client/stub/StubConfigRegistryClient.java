@@ -1,13 +1,19 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.ConfigRegistryClient;
+import com.gme.pay.contracts.PartnerCommand;
+import com.gme.pay.contracts.PartnerStatus;
+import com.gme.pay.contracts.PartnerView;
+import com.gme.pay.domain.PartnerType;
 import org.springframework.stereotype.Component;
 
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Phase-1 in-memory stub of {@link ConfigRegistryClient}. Lets the BFF boot and be
@@ -35,6 +41,10 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
 
     private final Map<String, PartnerSummary> store = new LinkedHashMap<>();
     private final List<SchemeSummary> schemes;
+    /** Slice 1 draft view — keyed by partner_code, mirrors what config-registry returns. */
+    private final Map<String, PartnerView> draftStore = new LinkedHashMap<>();
+    /** Stand-in for {@code partners_id_seq} so the stub-issued surrogate ids look real. */
+    private final AtomicLong surrogateSeq = new AtomicLong(900_000L);
 
     public StubConfigRegistryClient() {
         store.put("partner_test_001", new PartnerSummary(
@@ -86,6 +96,98 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public List<SchemeSummary> listSchemes() {
         return new ArrayList<>(schemes);
+    }
+
+    // -------- Slice 1 (1C.2) draft endpoints (ADR-012) -----------------------
+
+    @Override
+    public synchronized PartnerView createDraft(PartnerCommand.CreateDraft request) {
+        if (request == null || request.partnerCode() == null || request.partnerCode().isBlank()) {
+            throw new IllegalArgumentException("partnerCode is required");
+        }
+        if (draftStore.containsKey(request.partnerCode())
+                || store.containsKey(request.partnerCode())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "partner '" + request.partnerCode() + "' already exists");
+        }
+        PartnerView view = buildView(surrogateSeq.getAndIncrement(), request);
+        draftStore.put(request.partnerCode(), view);
+        return view;
+    }
+
+    @Override
+    public synchronized PartnerView patchDraftStep1(String partnerCode,
+                                                    PartnerCommand.UpdateStep1 request) {
+        PartnerView prior = draftStore.get(partnerCode);
+        if (prior == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        PartnerView merged = mergeStep1(prior, request);
+        draftStore.put(partnerCode, merged);
+        return merged;
+    }
+
+    @Override
+    public synchronized PartnerView getDraft(String partnerCode) {
+        return draftStore.get(partnerCode);
+    }
+
+    @Override
+    public synchronized List<PartnerView> listDrafts() {
+        return new ArrayList<>(draftStore.values());
+    }
+
+    private static PartnerView buildView(Long id, PartnerCommand.CreateDraft req) {
+        return new PartnerView(
+                id,
+                req.partnerCode(),
+                req.type(),
+                req.settlementCurrency(),
+                req.settlementRoundingMode() == null ? RoundingMode.HALF_UP : req.settlementRoundingMode(),
+                req.legalNameLocal(),
+                req.legalNameRomanized(),
+                req.taxId(),
+                req.taxIdType(),
+                req.countryOfIncorporation(),
+                req.legalForm(),
+                req.registeredAddress() == null ? null : req.registeredAddress().toView(),
+                req.operatingAddress() == null ? null : req.operatingAddress().toView(),
+                req.lei(),
+                PartnerStatus.ONBOARDING,
+                Instant.EPOCH,
+                null,
+                Instant.now());
+    }
+
+    /** Apply non-null Step-1 fields from the request onto the prior view, returning a new PartnerView. */
+    private static PartnerView mergeStep1(PartnerView prior, PartnerCommand.UpdateStep1 req) {
+        PartnerType type = req.type() != null ? req.type() : prior.type();
+        String settlementCurrency = req.settlementCurrency() != null
+                ? req.settlementCurrency() : prior.settlementCurrency();
+        RoundingMode roundingMode = req.settlementRoundingMode() != null
+                ? req.settlementRoundingMode() : prior.settlementRoundingMode();
+        return new PartnerView(
+                prior.id(),
+                prior.partnerCode(),
+                type,
+                settlementCurrency,
+                roundingMode,
+                req.legalNameLocal() != null ? req.legalNameLocal() : prior.legalNameLocal(),
+                req.legalNameRomanized() != null ? req.legalNameRomanized() : prior.legalNameRomanized(),
+                req.taxId() != null ? req.taxId() : prior.taxId(),
+                req.taxIdType() != null ? req.taxIdType() : prior.taxIdType(),
+                req.countryOfIncorporation() != null ? req.countryOfIncorporation() : prior.countryOfIncorporation(),
+                req.legalForm() != null ? req.legalForm() : prior.legalForm(),
+                req.registeredAddress() != null ? req.registeredAddress().toView() : prior.registeredAddress(),
+                req.operatingAddress() != null ? req.operatingAddress().toView() : prior.operatingAddress(),
+                req.lei() != null ? req.lei() : prior.lei(),
+                PartnerStatus.ONBOARDING,
+                prior.validFrom(),
+                prior.validTo(),
+                Instant.now());
     }
 
     private static RoundingMode parseMode(String raw) {

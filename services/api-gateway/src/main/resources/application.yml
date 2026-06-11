@@ -8,6 +8,15 @@ spring:
           enabled: false        # manual route registration only
       default-filters:
         - AddRequestHeader=X-Gateway-Version, v1
+  # Slice 1 (ADR-011): OAuth2 resource server. Human traffic from admin-ui /
+  # partner-portal-ui bears Keycloak-issued JWTs. The issuer URI below is the
+  # default for the docker-compose Keycloak service (realm = gmepay); override
+  # via SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI per environment.
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8090/realms/gmepay
 
 server:
   port: 8080

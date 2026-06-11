@@ -11,16 +11,22 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Stateless JWT issue / verify helper for operator session tokens.
+ * Stateless JWT issue / verify helper for <strong>internal service-to-service
+ * tokens</strong> (e.g. signed callbacks, short-lived internal capability tokens).
  *
- * Algorithm: HS256 (HMAC-SHA256 signed compact JWT).
+ * <p>Per ADR-011 this helper is NOT used to issue human operator session tokens —
+ * operator sessions are owned by Keycloak, which signs its own JWTs using RS256
+ * and rotates JWKS keys. The api-gateway validates Keycloak-issued operator JWTs
+ * via {@code spring-security-oauth2-resource-server}, not via this helper.
+ *
+ * <p>Algorithm: HS256 (HMAC-SHA256 signed compact JWT).
  * Implemented using only JDK classes — no external JWT library required.
  *
- * Format: Base64Url(header) + "." + Base64Url(payload) + "." + Base64Url(signature)
- * where header  = {"alg":"HS256","typ":"JWT"}
- *       payload = {"sub":…,"iat":…,"exp":…,"jti":…, ...extraClaims}
+ * <p>Format: {@code Base64Url(header) + "." + Base64Url(payload) + "." + Base64Url(signature)}
+ * where {@code header  = {"alg":"HS256","typ":"JWT"}}
+ *       {@code payload = {"sub":…,"iat":…,"exp":…,"jti":…, ...extraClaims}}.
  *
- * This class has no Spring dependencies — it can be unit-tested without a context.
+ * <p>This class has no Spring dependencies — it can be unit-tested without a context.
  */
 public final class JwtHelper {
 

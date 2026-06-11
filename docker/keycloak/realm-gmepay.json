@@ -1,0 +1,147 @@
+{
+  "realm": "gmepay",
+  "enabled": true,
+  "displayName": "GMEPay+ (dev)",
+  "displayNameHtml": "<b>GMEPay+</b> dev realm",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "_comment_roles": "ADR-011 §Decision: two realm roles for Slice 1. OPERATOR = back-office user in admin-ui; PARTNER_USER = partner-portal-ui human. PARTNER_ADMIN / PARTNER_VIEWER (mentioned in ADR-011 §Consequences) land in Slice 8 alongside per-partner self-service portal users.",
+  "roles": {
+    "realm": [
+      {
+        "name": "OPERATOR",
+        "description": "Back-office operator (admin-ui). Required for /v1/admin/** routes.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "PARTNER_USER",
+        "description": "Partner-portal-ui human user. Per-partner scoping enforced at the BFF.",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "_comment_clients": "Both clients are confidential OIDC web clients. Secrets here are dev-only placeholders; CI/staging/prod inject real secrets via Vault. The BFF (api-gateway/ops-partner-bff) is the OAuth2 resource server (ADR-011) — clients here are the public-facing UIs that initiate the auth-code flow.",
+  "clients": [
+    {
+      "clientId": "admin-ui",
+      "name": "GMEPay+ admin-ui (back-office)",
+      "description": "Next.js admin-ui — OIDC auth-code flow for operators.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "admin-ui-dev-secret",
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3000",
+      "baseUrl": "http://localhost:3000",
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://admin-ui:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "+"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/*",
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+      ]
+    },
+    {
+      "clientId": "partner-portal-ui",
+      "name": "GMEPay+ partner-portal-ui (self-service)",
+      "description": "Next.js partner-portal-ui — OIDC auth-code flow for partner humans.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "partner-portal-ui-dev-secret",
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:3001",
+      "baseUrl": "http://localhost:3001",
+      "redirectUris": [
+        "http://localhost:3001/*",
+        "http://partner-portal-ui:3001/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3001",
+        "+"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3001/*",
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+      ]
+    }
+  ],
+  "_comment_users": "Seeded users replace the legacy password=demo flow (ADR-011). The credentials below are dev-only — staging/prod realms are imported with empty user lists and real users provisioned via SCIM/LDAP federation.",
+  "users": [
+    {
+      "username": "admin",
+      "email": "admin@gmepay.local",
+      "firstName": "Demo",
+      "lastName": "Operator",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "OPERATOR"
+      ]
+    },
+    {
+      "username": "partner-demo",
+      "email": "partner-demo@gmepay.local",
+      "firstName": "Demo",
+      "lastName": "Partner",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "PARTNER_USER"
+      ]
+    }
+  ]
+}

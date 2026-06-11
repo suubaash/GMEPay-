@@ -39,7 +39,8 @@ import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { clearAuth, getUsername } from '@/api/auth';
+import { clearAuth, getIdToken, getUsername } from '@/api/auth';
+import { logoutUrl as oidcLogoutUrl } from '@/api/oidc';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { logout as logoutAction } from '@/store/authSlice';
 import { toggleMode } from '@/store/uiSlice';
@@ -100,9 +101,19 @@ export default function AppShell({ children }) {
 
   const handleLogout = () => {
     closeMenu();
+    // Capture the OIDC id_token (if any) BEFORE clearing localStorage so we
+    // can hint it to Keycloak's end-session endpoint and clear the SSO
+    // cookie on the IdP — otherwise the operator can be silently re-logged-in
+    // on the next /login click. When there's no id_token (dev-skip path /
+    // legacy session), fall back to the in-app /login route.
+    const idToken = getIdToken();
     clearAuth();
     dispatch(logoutAction());
-    router.replace('/login');
+    if (idToken) {
+      window.location.assign(oidcLogoutUrl(idToken));
+    } else {
+      router.replace('/login');
+    }
   };
 
   const avatarLetter = (username ?? 'A').charAt(0).toUpperCase();
