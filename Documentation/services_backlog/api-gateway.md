@@ -1606,3 +1606,21 @@
 - Test fails if a required response field (e.g. quote_id) is removed from controller output
 - Error envelope responses validate against ErrorResponse schema (error.code, error.message, error.request_id present)
 **Depends on:** 8.10-T10, 8.10-T11, 8.10-T13, 8.10-T16, 8.10-T17, 8.10-T18, 8.10-T19
+
+---
+
+<!-- ws-21-partner-setup-rebaseline -->
+
+## Partner Setup re-baseline tickets (WS 21)
+
+These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **api-gateway** live here; cross-service contributions are listed at the bottom for awareness.
+
+> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
+
+### Cross-service contributions touching this service
+
+Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
+
+- **21.1-P14** (auth-identity, Slice 1) — Keycloak OAuth2 resource-server config on api-gateway and config-registry (retire password=demo)
+- **21.8-P02** (auth-identity, Slice 8) — partner_ip_allowlist table + api-gateway pre-signature 403 enforcement
+

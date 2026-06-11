@@ -1227,3 +1227,541 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - rate-fx 5-step engine sources from persisted rows; boundary tests green
 
+---
+
+<!-- ws-21-partner-setup-rebaseline -->
+
+## Partner Setup re-baseline tickets (WS 21)
+
+These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **config-registry** live here; cross-service contributions are listed at the bottom for awareness.
+
+> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
+
+### Slice 1 tickets owned by this service
+
+### 21.1-P01 — Migration V210: add partner_id BIGSERIAL surrogate + partner_code VARCHAR(20) UNIQUE
+*Slice:* **1** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-013
+
+**Context.** Cross-cutting bug #1 — Partner ID type schism. Partner.partnerId is String today but PrincipalEntity, WebhookEndpointEntity, settlement-reconciliation, PartnerCredentialPort use Long. Expand step (ADR-013): add the new columns, backfill, leave old String partner_id readable. Module: services/config-registry. Flyway path services/config-registry/src/main/resources/db/migration/V210__partner_id_surrogate.sql.
+
+**Steps.** Add `partner_id BIGSERIAL` (new PK candidate, NOT NULL DEFAULT nextval); add `partner_code VARCHAR(20) NOT NULL UNIQUE` and backfill from the existing String `partner_id`; keep the old column under its current name so Release N+2 (21.1-P03) can drop it; index on `partner_code`; CHECK `partner_code ~ '^[A-Z][A-Z0-9_]{2,19}$'`.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V210__partner_id_surrogate.sql`
+
+**Acceptance.**
+- V210 applies cleanly on Testcontainers postgres:16 over the existing V201-V207 baseline
+- After backfill, every existing partner row has a unique partner_id BIGINT and partner_code matching its old String id
+- CHECK constraint rejects partner_code='ab' (too short) and partner_code='123ABC' (must start with letter)
+- UNIQUE(partner_code) raises 23505 on duplicate insert
+
+### 21.1-P02 — Flip PrincipalEntity/WebhookEndpointEntity/settlement-reconciliation joins to partner_id FK
+*Slice:* **1** · *Est:* 90 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-013
+
+**Context.** Expand/Contract step 2 (ADR-013) for the ID schism. Switch consumers from the String partner_id to the new BIGINT partner_id surrogate. Old String column stays read-only this release; consumers must compile against the new FK.
+
+**Steps.** In services/auth-identity/.../PrincipalEntity.java change `partnerId` from String to Long with @JoinColumn(name="partner_id"); same in services/notification-webhook/.../WebhookEndpointEntity.java; same in services/settlement-reconciliation/.../*PartnerRef* repos; update all JPQL `where partnerId = :id` queries; update lib-api-contracts PartnerCredentialPort signatures to Long; @Deprecated the String-keyed overloads with a Javadoc pointer to ADR-013.
+
+**Deliverable.** `services/auth-identity/src/main/java/com/gme/pay/auth/PrincipalEntity.java; services/notification-webhook/src/main/java/com/gme/pay/notify/WebhookEndpointEntity.java; services/settlement-reconciliation/src/main/java/com/gme/pay/recon/PartnerSettlementRepository.java; lib-api-contracts/src/main/java/com/gme/pay/contracts/auth/PartnerCredentialPort.java`
+
+**Acceptance.**
+- All four modules compile against Long partner_id without -Werror failures
+- Existing repository-method tests still pass after the type change
+- Deprecated String-keyed overloads carry a Javadoc reference to ADR-013 Release N+2
+- Foreign-key constraints in V210 reference partners(partner_id) BIGINT, not the old String column
+
+### 21.1-P03 — Migration V230 (Release N+2): drop old String partner_id column, rename partner_code remains
+*Slice:* **1** · *Est:* 30 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-013
+
+**Context.** Contract step (ADR-013) — only runs after Release N+1 has shipped and consumers are off the String column. Drop `partner_id_old_string` (the column V210 renamed it to) and remove the @Deprecated overloads from lib-api-contracts. Lands in a later release window; ticket exists now so the migration is planned.
+
+**Steps.** Create V230__drop_partner_id_string.sql; ALTER TABLE partners DROP COLUMN partner_id_old_string; remove @Deprecated overloads from PartnerCredentialPort; update Javadoc.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V230__drop_partner_id_string.sql`
+
+**Acceptance.**
+- V230 succeeds only if no FK still references the dropped column (gate this in a Flyway callback)
+- PartnerCredentialPort no longer has String-keyed methods on its interface
+- All consuming services compile + test after V230 with no remaining String partner_id references
+
+### 21.1-P04 — Collapse 5 Partner DTOs into PartnerView (read) + PartnerCommand (write)
+*Slice:* **1** · *Est:* 90 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-013
+
+**Context.** Cross-cutting bug #2. Today: Partner (lib-domain), PartnerEntity, PartnerProfile, PartnerSummary, PartnerCreateRequest. Five shapes, five drift surfaces. Introduce canonical PartnerView (Java record in lib-api-contracts) for read and PartnerCommand sealed interface (Create/Update variants) for write. Old shapes become @Deprecated thin adapters that delegate to PartnerView.
+
+**Steps.** Define `lib-api-contracts/src/main/java/com/gme/pay/contracts/partner/PartnerView.java` as a Java record carrying every field on the partner aggregate; define `PartnerCommand` sealed interface with `PartnerCommand.Create` and `PartnerCommand.Update` records; mark the five legacy DTOs @Deprecated with `@Deprecated(forRemoval=true, since="WS-21-Slice-1")` and a Javadoc redirect; update mappers (Partner -> PartnerView, PartnerView -> PartnerEntity) in config-registry; ops-partner-bff RestConfigRegistryClient returns PartnerView only.
+
+**Deliverable.** `lib-api-contracts/src/main/java/com/gme/pay/contracts/partner/PartnerView.java; lib-api-contracts/.../PartnerCommand.java; services/config-registry/.../PartnerMapper.java`
+
+**Acceptance.**
+- PartnerView is a Java record; no setters; BigDecimal fields not double
+- All five legacy DTOs carry @Deprecated(forRemoval=true)
+- ops-partner-bff and admin-ui handlers compile against PartnerView only (no compile-time reference to the deprecated five)
+- Mapper round-trip test: PartnerEntity -> PartnerView -> PartnerCommand.Update -> PartnerEntity preserves every field
+
+### 21.1-P05 — Migration V211: bitemporal partner table (valid_from/to + recorded_at/superseded_at)
+*Slice:* **1** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Per ADR-010 the partner aggregate must support bitemporal queries (SCD Type 6 with current-flag). Adds the temporal columns, the partial-unique index for current rows, and a trigger that on UPDATE inserts a new row and supersedes the old.
+
+**Steps.** Create V211__partner_bitemporal.sql; add columns `valid_from TIMESTAMPTZ NOT NULL DEFAULT now()`, `valid_to TIMESTAMPTZ NULL`, `recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `superseded_at TIMESTAMPTZ NULL`, `is_current BOOLEAN NOT NULL DEFAULT true`; partial unique index `CREATE UNIQUE INDEX uq_partner_current ON partners(partner_code) WHERE is_current=true`; trigger `trg_partner_bitemporal_update` BEFORE UPDATE that copies the OLD row with `superseded_at=now(), is_current=false` and lets the new row become current.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V211__partner_bitemporal.sql`
+
+**Acceptance.**
+- Updating legal_name_local on a partner row produces two rows (current and superseded) — verify via `select count(*) from partners where partner_code=?`
+- findCurrent(partner_code) returns the latest row only (uq_partner_current enforces this)
+- findAsOf(partner_code, validAt, recordedAt) returns the historical view that was current at recordedAt and valid at validAt
+- Concurrent updates from two transactions: second commit rolls back on unique-index violation, never two current rows
+
+### 21.1-P06 — Migration V212: change_request table + Spring State Machine wiring
+*Slice:* **1** · *Est:* 75 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-008
+
+**Context.** Per ADR-008 every partner mutation goes through a change_request approval object with a finite state machine: DRAFT -> PROPOSED -> APPROVED -> APPLIED, REJECTED as terminal. Self-approval is DB-rejected by CHECK constraint (proposer_id != approver_id).
+
+**Steps.** Create V212__change_request.sql; columns id BIGSERIAL PK, aggregate_type VARCHAR(50), aggregate_id BIGINT, payload JSONB, state VARCHAR(20) CHECK IN (DRAFT,PROPOSED,APPROVED,REJECTED,APPLIED), proposer_id VARCHAR(120), approver_id VARCHAR(120) NULL, proposed_at TIMESTAMPTZ, approved_at TIMESTAMPTZ NULL, reason TEXT NULL, CHECK (approver_id IS NULL OR approver_id != proposer_id); index on (state, aggregate_type, aggregate_id); Spring State Machine bean `partnerChangeRequestStateMachine` with the 5-state graph and transition guards.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V212__change_request.sql; services/config-registry/src/main/java/com/gme/pay/config/changerequest/ChangeRequestStateMachineConfig.java; services/config-registry/.../ChangeRequestEntity.java; .../ChangeRequestService.java`
+
+**Acceptance.**
+- Self-approval (approver_id = proposer_id) raises 23514 CHECK violation
+- State transitions follow the FSM strictly — REJECTED cannot move to APPROVED
+- ChangeRequestService.propose creates DRAFT; .submit moves to PROPOSED; .approve to APPROVED; .apply to APPLIED
+- Audit log row written on every state transition
+
+### 21.1-P07 — audit_log infrastructure: dedicated audit DB + INSERT-only role + hash chain + lib-audit
+*Slice:* **1** · *Est:* 120 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-007
+
+**Context.** Per ADR-007 audit_log is a three-tier system: (1) Postgres `audit` DB with an INSERT-only role and a hash chain, (2) Kafka topic `gmepay.audit.partner` for downstream consumers, (3) `lib-audit` Java library that services use to emit rows. Hash chain: each row stores sha256(previous_hash || row_canonical_json).
+
+**Steps.** Add docker-compose service `postgres-audit` (separate from `postgres-config`); Flyway baseline migration V001 creating `audit_log(id, occurred_at, actor_id, actor_type, action, entity_type, entity_id, before_value JSONB, after_value JSONB, prev_hash BYTEA, row_hash BYTEA, request_id)`; PG role `audit_writer` with `INSERT` only (no UPDATE/DELETE); PG rules `prevent_update_audit_log` and `prevent_delete_audit_log`; new module `lib-audit/src/main/java/com/gme/pay/audit/AuditWriter.java` computing the hash chain and emitting to both DB and Kafka in the same Spring @Transactional; topic `gmepay.audit.partner` created via `lib-events-kafka`.
+
+**Deliverable.** `docker/compose/docker-compose.yml; services/config-registry/src/main/resources/db/migration/V001_audit__init.sql; lib-audit/build.gradle; lib-audit/src/main/java/com/gme/pay/audit/AuditWriter.java; lib-audit/src/main/java/com/gme/pay/audit/HashChain.java`
+
+**Acceptance.**
+- UPDATE on audit_log raises exception from rule
+- DELETE on audit_log raises exception from rule
+- Two consecutive rows: row2.prev_hash == row1.row_hash
+- Tampering: direct UPDATE attempt detected by lib-audit verifyChain() — returns first divergent row id
+- Kafka topic `gmepay.audit.partner` carries the same canonical JSON as the DB row
+
+### 21.1-P08 — Partner aggregate identity fields: tax_id with type discriminator, legal_form, structured address, LEI
+*Slice:* **1** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Add the Slice 1 identity fields onto the bitemporal partner table (Migration V213). Per the audit, first-prod blockers in the Identity & legal theme: 6 fields. Tax ID has a type discriminator since KR/KH/VN/SG/generic have different formats and validation.
+
+**Steps.** Create V213__partner_identity_fields.sql; add columns `legal_name_local VARCHAR(200)`, `legal_name_romanized VARCHAR(200)`, `tax_id VARCHAR(40)`, `tax_id_type VARCHAR(15) CHECK IN (KR_BRN,KH_VAT,VN_MST,SG_UEN,GENERIC)`, `country_of_incorporation CHAR(2)` (ISO-3166), `legal_form VARCHAR(20) CHECK IN (CORP,LLC,MTO,EMI,BANK,OTHER)`, `registered_street1`, `registered_street2`, `registered_city`, `registered_state`, `registered_postcode`, `registered_country CHAR(2)`, same six for `operating_*`, `lei CHAR(20) NULL` (ISO 17442); add unique constraint on (tax_id, tax_id_type) where both NOT NULL.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V213__partner_identity_fields.sql`
+
+**Acceptance.**
+- tax_id_type=KR_BRN with malformed BRN (not 10 digits) rejected by app-layer validator in PartnerAdminService
+- country_of_incorporation must be ISO-3166 alpha-2 (e.g. KR not KOR) — CHECK regex `^[A-Z]{2}$`
+- legal_form CHECK rejects unknown values like CORP_LTD
+- LEI when present must match the ISO 17442 format `^[A-Z0-9]{20}$` — validator-layer check
+- UNIQUE(tax_id, tax_id_type) prevents two partners claiming the same KR_BRN
+
+### 21.1-P09 — Validate KR_BRN / KH_VAT / VN_MST / SG_UEN tax ID formats in PartnerAdminService
+*Slice:* **1** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Application-layer tax ID validator per the type discriminator on partner. KR_BRN: 10 digits with checksum. SG_UEN: 9 or 10 chars per IRAS spec. VN_MST: 10 or 13 digits. KH_VAT: 9 digits with prefix. Throws ConfigValidationException with codes per type.
+
+**Steps.** Create `services/config-registry/src/main/java/com/gme/pay/config/validation/TaxIdValidator.java` with `validate(String taxId, String type)`; KR_BRN checksum: weights [1,3,7,1,3,7,1,3,5]; last digit = (10 - sum%10)%10; wire into PartnerAdminService.createPartner before persist; unit tests with vectors for each type.
+
+**Deliverable.** `services/config-registry/src/main/java/com/gme/pay/config/validation/TaxIdValidator.java; services/config-registry/src/test/java/com/gme/pay/config/validation/TaxIdValidatorTest.java`
+
+**Acceptance.**
+- KR_BRN '1234567890' (bad checksum) raises ConfigValidationException code TAX_ID_KR_BRN_CHECKSUM
+- KR_BRN '1208147521' (valid checksum) passes
+- SG_UEN 'T18LL1234A' passes; 'TLL1234A' (too short) rejected
+- VN_MST '0123456789' passes; '012345' rejected with code TAX_ID_VN_MST_LENGTH
+
+### Slice 2 tickets owned by this service
+
+### 21.2-P01 — Migration V215: partner_contact child table (bitemporal)
+*Slice:* **2** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Slice 2 — Contacts. partner_contact is a child of partners, bitemporal per ADR-010. Roles match the audit themes: OPS_24X7, FINANCE, COMPLIANCE_MLRO, TECH, LEGAL, INCIDENT.
+
+**Steps.** V215__partner_contact.sql: id BIGSERIAL PK, partner_id BIGINT FK, role VARCHAR(20) CHECK IN (OPS_24X7,FINANCE,COMPLIANCE_MLRO,TECH,LEGAL,INCIDENT), name VARCHAR(200), email VARCHAR(320), phone_e164 VARCHAR(20), is_authorized_signatory BOOLEAN DEFAULT false, notes TEXT NULL; bitemporal columns (valid_from/to, recorded_at/superseded_at, is_current); partial unique index on (partner_id, role, email) WHERE is_current=true (prevents duplicate active contact); CHECK phone_e164 matches `^\+[1-9]\d{1,14}$`.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V215__partner_contact.sql`
+
+**Acceptance.**
+- E.164 CHECK rejects '01234567' (missing +)
+- Two active contacts with same role+email rejected by partial unique index
+- Bitemporal update on a contact produces two rows (current + superseded)
+- FK to partners(partner_id) cascades on partner soft-delete (we never hard-delete a partner — see Slice 8 FSM)
+
+### Slice 3 tickets owned by this service
+
+### 21.3-P01 — Migration V216: partner_document table (bitemporal, with vault_uri + expiry tracking)
+*Slice:* **3** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-006, ADR-010
+
+**Context.** Slice 3 — KYB. partner_document stores document metadata; bytes live in MinIO (Vault) per ADR-006 with object-lock compliance mode. doc_type enum covers the audit's KYB themes.
+
+**Steps.** V216__partner_document.sql: id BIGSERIAL PK, partner_id BIGINT FK, doc_type VARCHAR(30) CHECK IN (LICENSE,CERT_INCORPORATION,AOA,BOARD_RESOLUTION,UBO_DECLARATION,FINANCIALS,CBDDQ,OTHER), vault_uri VARCHAR(512) NOT NULL, version INT NOT NULL DEFAULT 1, expiry_date DATE NULL, verified_by VARCHAR(120) NULL, verified_at TIMESTAMPTZ NULL; bitemporal columns; index on (partner_id, doc_type, is_current).
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V216__partner_document.sql`
+
+**Acceptance.**
+- doc_type CHECK rejects UNKNOWN_DOC
+- version >= 1 enforced
+- Two LICENSE rows for same partner allowed (versions); only one is_current=true per (partner_id, doc_type) — partial unique index
+- FK to partners enforces partner exists
+
+### 21.3-P02 — Migration V217: partner_kyb table (risk rating, UBO, screening, Wolfsberg CBDDQ FK)
+*Slice:* **3** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-009, ADR-010
+
+**Context.** Slice 3 — KYB record. Stores the operator's risk decision plus the UBO set as JSONB. Wolfsberg CBDDQ document reference is FK to partner_document.
+
+**Steps.** V217__partner_kyb.sql: id, partner_id FK UNIQUE (one current row per partner), risk_rating VARCHAR(10) CHECK IN (LOW,MEDIUM,HIGH), risk_rationale TEXT, next_review_date DATE, license_type VARCHAR(50), license_number VARCHAR(80), license_authority VARCHAR(150), license_expiry DATE, ubo_set JSONB (array of {name,ownership_pct,is_pep,country}), wolfsberg_cbddq_doc_id BIGINT FK partner_document(id) NULL, screening_status VARCHAR(20) CHECK IN (PENDING,CLEAR,HIT,OVERRIDDEN), last_screened_at TIMESTAMPTZ NULL; bitemporal columns; CHECK that sum of ownership_pct in ubo_set <= 100.0 (app-layer assert, comment doc'd).
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V217__partner_kyb.sql`
+
+**Acceptance.**
+- INSERT with risk_rating=UNKNOWN raises CHECK
+- screening_status=HIT requires risk_rationale to be non-null (app validator)
+- Sum of ubo ownership_pct > 100 rejected by KybAdminService.upsert
+- wolfsberg_cbddq_doc_id FK must point at a partner_document with doc_type=CBDDQ
+
+### 21.3-P08 — Publish gmepay.kyb.screening event in same transaction as partner_kyb upsert
+*Slice:* **3** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-007
+
+**Context.** Outbox pattern: KYB result write + Kafka event published atomically. Consumers (reporting-compliance for KoFIU STR feed, admin-ui for UI refresh) listen on this topic.
+
+**Steps.** Extend KybAdminService.recordScreening: within @Transactional, upsert partner_kyb row + INSERT into kyb_outbox(payload JSONB, published BOOLEAN); reuse OutboxPoller (21.1-P22 / 2.5-T22 pattern) to publish to topic `gmepay.kyb.screening`; payload schema: {partnerId, partnerCode, decision, hitCount, screenedAt, vendorRef}.
+
+**Deliverable.** `services/config-registry/src/main/java/com/gme/pay/config/kyb/KybAdminService.java; services/config-registry/src/main/resources/db/migration/V218__kyb_outbox.sql`
+
+**Acceptance.**
+- Rolling back the partner_kyb upsert also rolls back the outbox INSERT
+- OutboxPoller publishes the row to topic gmepay.kyb.screening within 5 seconds
+- Event payload validates against a schema registered in lib-events-kafka
+- Idempotent: same vendorRef twice produces only one DB row + event
+
+### Slice 4 tickets owned by this service
+
+### 21.4-P01 — Migration V219: partner_bank_account (multi-row, bitemporal, with verification tracking)
+*Slice:* **4** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Slice 4 — Banking. Bank accounts are multi-row per partner (one per ccy + purpose). Bitemporal. Verification status separates the operator's claim from KFTC's confirmation.
+
+**Steps.** V219__partner_bank_account.sql: id, partner_id FK, currency CHAR(3), bank_name, bic_swift CHAR(11), iban_or_account_number VARCHAR(34), account_holder_name VARCHAR(200), bank_country CHAR(2), intermediary_bic CHAR(11) NULL, verification_status VARCHAR(20) CHECK IN (UNVERIFIED,KFTC_VERIFIED,BANK_LETTER,MICRO_DEPOSIT), verification_evidence_doc_id BIGINT FK partner_document NULL, verification_date TIMESTAMPTZ NULL, is_primary BOOLEAN DEFAULT false, swift_charge_bearer VARCHAR(3) CHECK IN (OUR,BEN,SHA), purpose VARCHAR(20) CHECK IN (PAYOUT,FLOAT_TOPUP,REFUND); bitemporal columns; partial unique index (partner_id, currency, purpose, is_primary) WHERE is_primary=true AND is_current=true.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V219__partner_bank_account.sql`
+
+**Acceptance.**
+- BIC/SWIFT CHECK enforces 8 or 11 chars (rendered as 11 with X padding)
+- Two primary PAYOUT accounts in same ccy rejected by partial unique index
+- verification_status=KFTC_VERIFIED requires verification_evidence_doc_id (app-layer)
+- purpose enum rejects 'OTHER'
+
+### 21.4-P02 — Migration V220: partner_settlement_config (cycle, cutoff, method per partner)
+*Slice:* **4** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Slice 4 — per-partner cycle, cutoff, settlement method. settlement-reconciliation reads this at txn settle time.
+
+**Steps.** V220__partner_settlement_config.sql: partner_id BIGINT PK FK partners, cycle_t_plus_n INT CHECK BETWEEN 0 AND 7, cutoff_time TIME, cutoff_timezone VARCHAR(40), settlement_method VARCHAR(30) CHECK IN (SWIFT_MT103,KR_FIRM_BANKING,BAKONG,NAPAS_247,PROMPT_PAY,FAST_SG,OTHER); bitemporal columns.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V220__partner_settlement_config.sql`
+
+**Acceptance.**
+- cycle_t_plus_n=8 raises CHECK
+- settlement_method=UNKNOWN raises CHECK
+- cutoff_timezone validated against ZoneId enum app-layer
+- PK on partner_id ensures one settlement config per partner
+
+### 21.4-P03 — Migration V221 + seed: business_day_calendar (KR + ASEAN, 2026-2028)
+*Slice:* **4** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Holiday calendar drives settlement preview ('Mon 11:30 KST pays out Wed 11:30 KST after Chuseok roll'). Seed two years of KR holidays + Tet (VN), Songkran (TH), Chinese New Year (regional), Cambodia (KH) holidays.
+
+**Steps.** V221__business_day_calendar.sql: id, country_code CHAR(2), holiday_date DATE, holiday_name VARCHAR(100), is_full_day BOOLEAN, source VARCHAR(40); index on (country_code, holiday_date); seed file with public holidays for KR/VN/TH/SG/KH/MY for 2026 + 2027 + 2028 (compiled from official labour ministry sources, cited in SQL comments).
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V221__business_day_calendar.sql`
+
+**Acceptance.**
+- KR Chuseok 2026 (Sep 24-26) present
+- VN Tet 2027 (Feb 6-12) present
+- TH Songkran 2026 (Apr 13-15) present
+- Index allows lookup in < 10ms
+
+### Slice 5 tickets owned by this service
+
+### 21.5-P01 — Migration V222: partner_prefunding_config (funding model, thresholds, credit limit)
+*Slice:* **5** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Slice 5 — Prefunding (OVERSEAS only). Extends prefunding service with per-partner config.
+
+**Steps.** V222__partner_prefunding_config.sql: partner_id BIGINT PK FK partners, funding_model VARCHAR(15) CHECK IN (PREFUNDED,POSTPAID,HYBRID), opening_balance_usd NUMERIC(20,4), low_balance_threshold_usd NUMERIC(20,4) DEFAULT 10000, alert_tier_70_pct NUMERIC(20,4), alert_tier_85_pct NUMERIC(20,4), alert_tier_95_pct NUMERIC(20,4), credit_limit_usd NUMERIC(20,4) NULL, auto_suspend_on_breach BOOLEAN DEFAULT true, float_top_up_bank_account_id BIGINT FK partner_bank_account NULL, top_up_reference_pattern VARCHAR(80) DEFAULT 'GMP-{partner_code}-{yyyyMMdd}', collateral_amount_usd NUMERIC(20,4) NULL; bitemporal cols.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V222__partner_prefunding_config.sql`
+
+**Acceptance.**
+- funding_model CHECK rejects UNKNOWN
+- tier_70 < tier_85 < tier_95 (app validator)
+- FK to partner_bank_account requires purpose=FLOAT_TOPUP (app validator)
+- top_up_reference_pattern template can interpolate partner_code + date
+
+### Slice 6 tickets owned by this service
+
+### 21.6-P01 — Migration V223: split settlement_currency into collection_ccy + settle_a_ccy (Expand)
+*Slice:* **6** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-013
+
+**Context.** Slice 6 — Commercial. Per DAT-03 §4.3 / PRD-07 §5.3.2 the single settlement_currency must split into collection_ccy (what we charge the end-customer) and settle_a_ccy (what we pay the partner in). Expand phase per ADR-013.
+
+**Steps.** V223__partner_ccy_split.sql: add `collection_ccy CHAR(3)` and `settle_a_ccy CHAR(3)` columns to partners; backfill `collection_ccy = settle_a_ccy = settlement_currency`; CHECK both match `^[A-Z]{3}$`; leave settlement_currency column intact this release.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V223__partner_ccy_split.sql`
+
+**Acceptance.**
+- Backfill: every partner row has matching collection_ccy and settle_a_ccy after the migration
+- CHECK rejects collection_ccy='krw' (must be uppercase)
+- Existing read-side code paths still function reading settlement_currency
+- V224 (Backfill verify) and V225 (Contract: drop old col) exist as planned future migrations
+
+### 21.6-P02 — Rule CRUD: POST /v1/rules + GET /v1/rules + PUT /v1/rules/{id} (was: validate-only)
+*Slice:* **6** · *Est:* 90 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Today only POST /v1/rules/validate exists. Slice 6 makes rules first-class CRUD. PUT goes through change_request (4-eyes).
+
+**Steps.** Add to ConfigRegistryRestController POST /internal/v1/config/rules (creates DRAFT rule); GET /internal/v1/config/rules?partnerId=X (lists); PUT /internal/v1/config/rules/{id} (proposes change_request, requires approval to apply); reuse the existing m_a + m_b >= 0.02 invariant from RuleAdminService.
+
+**Deliverable.** `services/config-registry/src/main/java/com/gme/pay/config/api/ConfigRegistryRestController.java; services/config-registry/.../RuleAdminService.java`
+
+**Acceptance.**
+- POST creates a Rule in DRAFT with status enforced
+- PUT inserts a change_request with state=PROPOSED, payload=new Rule snapshot
+- PUT body that would break m_a+m_b >= 2% returns 422 before even creating the CR
+- GET lists rules sorted by (scheme_id, direction) for stable UI rendering
+
+### 21.6-P03 — Migration V224: partner_fee_schedule (per partner x scheme x direction with tier table)
+*Slice:* **6** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Per the audit the commercial-terms theme covers fees (fixed + bps + tiered). Tier table is a child of fee schedule.
+
+**Steps.** V224__partner_fee_schedule.sql: id, partner_id FK, scheme_id FK qr_scheme, direction CHECK IN (INBOUND,OUTBOUND,DOMESTIC,HUB), fixed_fee NUMERIC(20,4), bps_fee NUMERIC(8,4), currency CHAR(3); bitemporal; UNIQUE(partner_id, scheme_id, direction, is_current); child table `partner_fee_tier` with min_volume_usd, max_volume_usd, bps_fee_override.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V224__partner_fee_schedule.sql`
+
+**Acceptance.**
+- bps_fee 100.5000 stores and retrieves as NUMERIC(8,4)
+- Tier ranges may not overlap (app validator) for the same fee schedule
+- Direction CHECK rejects UNKNOWN
+- FK to scheme enforces scheme exists
+
+### 21.6-P04 — Migration V225: partner_fx_config (margin_bps, reference source, quote hold)
+*Slice:* **6** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** FX margin is bitemporal. reference_rate_source enum drives which feed rate-fx queries.
+
+**Steps.** V225__partner_fx_config.sql: partner_id PK FK partners, margin_bps NUMERIC(8,4), reference_rate_source VARCHAR(30) CHECK IN (SEOUL_FX_BROKER,PARTNER_PROVIDED,MID_MARKET), quote_hold_seconds INT CHECK BETWEEN 60 AND 1800 DEFAULT 300; bitemporal.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V225__partner_fx_config.sql`
+
+**Acceptance.**
+- quote_hold_seconds=59 raises CHECK
+- reference_rate_source=UNKNOWN raises CHECK
+- Bitemporal update: changing margin_bps creates new current row + superseded old
+- Default 300 honored when column omitted on INSERT
+
+### 21.6-P05 — Migration V226: partner_limits (per-txn, daily, monthly, annual caps + 소액해외송금업 enforcement)
+*Slice:* **6** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Caps per partner. 소액해외송금업 (small foreign-currency transfer license) hard-enforces per_txn ≤ 5000 USD and annual ≤ 50000 USD per end-user (Korea regulation).
+
+**Steps.** V226__partner_limits.sql: partner_id PK FK, per_txn_min_usd NUMERIC, per_txn_max_usd NUMERIC, daily_cap_usd NUMERIC, monthly_cap_usd NUMERIC, annual_cap_usd NUMERIC, end_user_annual_cap_usd NUMERIC NULL; bitemporal; CHECK per_txn_max >= per_txn_min; CHECK daily <= monthly <= annual.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V226__partner_limits.sql`
+
+**Acceptance.**
+- per_txn_max=4000 with per_txn_min=5000 raises CHECK
+- Setting monthly_cap < daily_cap raises CHECK
+- Partners with license_type='SMALL_FX_TRANSFER' must have per_txn_max_usd ≤ 5000 (app validator)
+- annual_cap_usd ≤ 50000 enforced for those partners
+
+### 21.6-P06 — Migration V227: partner_contract (dates, refund/chargeback policy, auto-renewal)
+*Slice:* **6** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Contract dates gate every txn. Per the audit, txns outside contract.effective_to are refused.
+
+**Steps.** V227__partner_contract.sql: id, partner_id FK, effective_from DATE NOT NULL, effective_to DATE NULL, auto_renewal BOOLEAN DEFAULT false, notice_period_days INT DEFAULT 30, refund_chargeback_policy VARCHAR(20) CHECK IN (PARTNER_BEARS,MERCHANT_BEARS,SHARED), termination_reason TEXT NULL; bitemporal; CHECK effective_to IS NULL OR effective_to > effective_from.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V227__partner_contract.sql`
+
+**Acceptance.**
+- effective_to before effective_from raises CHECK
+- refund_chargeback_policy CHECK rejects UNKNOWN
+- Only one current contract per partner (partial unique index on partner_id where is_current=true)
+- Auto-renewal flag stored as boolean
+
+### Slice 7 tickets owned by this service
+
+### 21.7-P01 — Migration V228: partner_scheme (enablement matrix + ZeroPay specifics + D/I derivation)
+*Slice:* **7** · *Est:* 60 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Slice 7 — per-partner scheme enablement. Per the audit Zp0011 partnerType D/I must be derived from per-partner config (not a global flag). Stores merchantId, sub-merchantId, institution code, role, direction, approval method.
+
+**Steps.** V228__partner_scheme.sql: id, partner_id FK, scheme_id FK, direction CHECK IN (INBOUND,OUTBOUND,BOTH), role CHECK IN (ACQUIRER,ISSUER,BOTH), zeropay_merchant_id VARCHAR(50), zeropay_sub_merchant_id VARCHAR(50), kftc_institution_code VARCHAR(20), partner_type_char CHAR(1) CHECK IN ('D','I'), approval_method_cpm VARCHAR(15) CHECK IN (CONFIRMATION,SILENT), approval_method_mpm VARCHAR(15) CHECK IN (CONFIRMATION,SILENT), vault_secret_id VARCHAR(120) NULL; bitemporal; UNIQUE(partner_id, scheme_id, is_current).
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V228__partner_scheme.sql`
+
+**Acceptance.**
+- partner_type_char='X' raises CHECK
+- approval_method_cpm CHECK rejects UNKNOWN
+- UNIQUE prevents two active rows for same (partner,scheme)
+- vault_secret_id is a logical pointer; bytes never in DB
+
+### 21.7-P02 — Migration V229: partner_corridor (src/dst country+ccy enablement matrix)
+*Slice:* **7** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-010
+
+**Context.** Per the audit corridors are 5-blocker theme. KR->KH or KR->VN matrix. go_live_date + is_active gate the gateway routing.
+
+**Steps.** V229__partner_corridor.sql: id, partner_id FK, src_country CHAR(2), src_ccy CHAR(3), dst_country CHAR(2), dst_ccy CHAR(3), go_live_date DATE, is_active BOOLEAN DEFAULT false; bitemporal; UNIQUE(partner_id, src_country, src_ccy, dst_country, dst_ccy, is_current).
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V229__partner_corridor.sql`
+
+**Acceptance.**
+- UNIQUE prevents two active rows for same corridor
+- go_live_date in the past + is_active=true allowed (back-dated activation)
+- is_active default false (operator must explicitly enable)
+- CHECK on country codes ISO-3166 format
+
+### Slice 8 tickets owned by this service
+
+### 21.8-P06 — Full FSM: Draft -> KYB-Pending -> KYB-Approved -> Contract-Signed -> Sandbox -> UAT -> Live -> Suspended -> Terminated
+*Slice:* **8** · *Est:* 120 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* ADR-008
+
+**Context.** Per the plan §Slice 8 the lifecycle FSM has 9 states. Each transition is change_request-gated. Go-Live and Suspend require 4-eyes.
+
+**Steps.** Add `partner_status VARCHAR(20) CHECK IN (DRAFT,KYB_PENDING,KYB_APPROVED,CONTRACT_SIGNED,SANDBOX,UAT,LIVE,SUSPENDED,TERMINATED)` to partners (V234); replace existing 4-state enum; Spring State Machine bean `partnerLifecycleStateMachine` with explicit transition guards (e.g. KYB_APPROVED requires partner_kyb.screening_status=CLEAR); 4-eyes guard on Live and Suspend transitions.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V234__partner_status_fsm.sql; services/config-registry/src/main/java/com/gme/pay/config/partner/PartnerLifecycleStateMachineConfig.java`
+
+**Acceptance.**
+- Transition Draft -> Live in one shot is rejected (must walk the path)
+- Transition to Live without 4-eyes approver returns 403
+- Transition to KYB_APPROVED with screening_status=HIT (not overridden) returns 422
+- Terminated is terminal (no transitions out)
+
+### 21.8-P07 — Activation pre-condition gate: returns 422 with unmet[] until all gates satisfied
+*Slice:* **8** · *Est:* 90 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Single source of truth for 'is this partner ready to go live'. UI consumes the `unmet[]` to highlight pending steps.
+
+**Steps.** Add `ActivationGate.evaluate(Long partnerId): GateResult` to config-registry; checks: legal_name set, partner_kyb.screening_status IN (CLEAR,OVERRIDDEN), ≥1 verified bank account per settle_a_ccy, current contract not in past, prefunding row exists if OVERSEAS, ≥4 role contacts (OPS_24X7+FINANCE+COMPLIANCE_MLRO+TECH), ≥1 active scheme, sanctions clear; expose via GET /v1/admin/partners/{id}/activation-gate.
+
+**Deliverable.** `services/config-registry/src/main/java/com/gme/pay/config/partner/ActivationGate.java`
+
+**Acceptance.**
+- Partial config returns 422 with unmet:[{code:MISSING_BANK_ACCOUNT,detail:settle_a_ccy=USD},...]
+- All gates satisfied returns 200 with ready:true
+- GateResult is the same shape for the activation transition attempt as for the gate endpoint
+- OVERSEAS without prefunding row returns code MISSING_PREFUNDING
+
+### 21.8-P08 — Post-activation immutability: lock partner_code + country_of_incorporation + partner_type + ccys
+*Slice:* **8** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** After first Live transition these fields are immutable. Per ADR-008 attempts return 400 IMMUTABLE_AFTER_ACTIVATION.
+
+**Steps.** Add `ImmutabilityGuard.java @Component` to config-registry intercepting PartnerCommand.Update; if partner.first_live_at IS NOT NULL and the diff includes any of the locked fields, throw ImmutableFieldException; add column `first_live_at TIMESTAMPTZ NULL` (V235) set on the LIVE transition.
+
+**Deliverable.** `services/config-registry/src/main/java/com/gme/pay/config/partner/ImmutabilityGuard.java; services/config-registry/src/main/resources/db/migration/V235__first_live_at.sql`
+
+**Acceptance.**
+- Update on partner_code post-live returns 400 with code IMMUTABLE_AFTER_ACTIVATION
+- Update on legal_name_local post-live succeeds (not in the immutable set)
+- first_live_at is set exactly once (on first LIVE transition; further LIVE re-entries don't update it)
+- Audit log records the rejected attempt
+
+### 21.8-P09 — Suspension reason codes enum + audit linkage
+*Slice:* **8** · *Est:* 30 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Per the plan suspension must carry a structured reason. Enum: LIMIT_BREACH, SANCTIONS_HIT, CREDENTIAL_COMPROMISE, KYB_LAPSED, CONTRACT_EXPIRED, OPERATOR_INITIATED.
+
+**Steps.** Add `suspension_reason VARCHAR(30) CHECK IN (LIMIT_BREACH,SANCTIONS_HIT,CREDENTIAL_COMPROMISE,KYB_LAPSED,CONTRACT_EXPIRED,OPERATOR_INITIATED), suspension_at TIMESTAMPTZ NULL, suspension_by VARCHAR(120) NULL` to partners (V236); FSM Suspend transition requires reason; lift requires operator approval + new reason for the lift.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V236__suspension_reason.sql`
+
+**Acceptance.**
+- Suspend without reason returns 422
+- Lift transition records the reason on the audit_log row
+- Reason enum CHECK rejects UNKNOWN
+- FSM transition guards verify reason matches the trigger
+
+### 21.8-P10 — BOK 외환거래보고 attributes on partner aggregate
+*Slice:* **8** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** BOK FX-trade reporting requires partner-level fields. Per the plan §Slice 8: bok_txn_code, bok_fx_reporting_category, bok_remitter_type. OI-03 (BOK code mapping) listed as open in WBS — this ticket creates the columns + null-tolerant validator; mapping comes from BOK source per OI-03.
+
+**Steps.** V237__partner_bok_fields.sql: bok_txn_code VARCHAR(10) NULL, bok_fx_reporting_category VARCHAR(30) CHECK IN (INDIVIDUAL_AGGREGATE,INSTITUTIONAL) NULL, bok_remitter_type VARCHAR(30) NULL; CHECK that when fx_reporting_category IS NOT NULL the txn_code is also set; reporting-compliance reads these on report generation.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V237__partner_bok_fields.sql`
+
+**Acceptance.**
+- INSERT with category set + txn_code null raises CHECK
+- category=UNKNOWN raises CHECK
+- reporting-compliance reads these without NullPointerException when null
+- BOK report generation routes by fx_reporting_category
+
+### 21.8-P11 — Hometax e-tax-invoice settings on partner aggregate
+*Slice:* **8** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** Hometax requires per-partner issuer cert + VAT treatment. issuer cert lives in lib-vault.
+
+**Steps.** V238__partner_hometax_fields.sql: hometax_issuer_cert_id BIGINT FK partner_document NULL (doc_type=HOMETAX_CERT), vat_treatment VARCHAR(20) CHECK IN (ZERO_RATED_EXPORT,STANDARD,EXEMPT) NULL; reporting-compliance reads these for invoice generation.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V238__partner_hometax_fields.sql`
+
+**Acceptance.**
+- vat_treatment=UNKNOWN raises CHECK
+- FK to partner_document constrained to doc_type=HOMETAX_CERT (app validator)
+- Hometax invoice generation throws HOMETAX_CONFIG_MISSING when null on settlement
+- Operator can set these via step-8 patch
+
+### 21.8-P13 — PIPA cross-border PII transfer notice config
+*Slice:* **8** · *Est:* 45 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** PIPA requires partners to declare which jurisdictions PII may move to, plus a legal-basis code.
+
+**Steps.** V240__partner_pipa_fields.sql: pipa_jurisdiction_allowlist VARCHAR(2)[] NOT NULL DEFAULT '{}', pipa_legal_basis_code VARCHAR(20) CHECK IN (CONSENT,CONTRACT_PERFORMANCE,LEGAL_OBLIGATION,VITAL_INTEREST,PUBLIC_INTEREST,LEGITIMATE_INTEREST) NULL; PII export hook rejects txn destinations not in allowlist.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V240__partner_pipa_fields.sql`
+
+**Acceptance.**
+- Txn to country not in allowlist returns 422 PII_JURISDICTION_NOT_ALLOWED
+- Empty allowlist + LIVE partner returns 422 PIPA_NOT_CONFIGURED on first txn
+- legal_basis_code=UNKNOWN raises CHECK
+- Allowlist update requires 4-eyes approval
+
+### 21.8-P14 — Travel Rule (IVMS101) endpoint config + ≥KRW 1M originator+beneficiary enforcement
+*Slice:* **8** · *Est:* 75 min · *Role:* Backend · *Owner:* config-registry · *ADR refs:* —
+
+**Context.** FATF Travel Rule. Per the plan, ≥1M KRW must include IVMS101 originator + beneficiary blocks.
+
+**Steps.** V241__partner_travel_rule.sql: travel_rule_protocol VARCHAR(30) CHECK IN (TRP,SYGNA,IVMS101_DIRECT,NONE) DEFAULT 'NONE', travel_rule_endpoint VARCHAR(512) NULL, travel_rule_pubkey TEXT NULL; transaction-mgmt enforces presence of ivms101_block on txn amount * usd_krw >= 1M; reporting-compliance forwards block to the configured endpoint.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V241__partner_travel_rule.sql; services/transaction-mgmt/src/main/java/com/gme/pay/txn/TravelRuleEnforcer.java`
+
+**Acceptance.**
+- Txn ≥1M KRW without ivms101_block returns 422 TRAVEL_RULE_MISSING
+- Protocol=NONE allows the txn (warns instead of blocks) for grandfathered partners
+- IVMS101 block schema-validated (originator + beneficiary present)
+- Forwarding to TRP endpoint signed with travel_rule_pubkey
+
+### Cross-service contributions touching this service
+
+Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
+
+- **21.1-P14** (auth-identity, Slice 1) — Keycloak OAuth2 resource-server config on api-gateway and config-registry (retire password=demo)
+- **21.5-P02** (prefunding, Slice 5) — Wire PartnerBalanceEntity into partner-create transaction (BFF orchestration)
+- **21.5-P03** (prefunding, Slice 5) — Prefunding: tier alert publisher (70/85/95% + auto-suspend on breach)
+- **21.6-P07** (transaction-mgmt, Slice 6) — transaction-mgmt: read collection_ccy / settle_a_ccy + enforce partner_limits
+- **21.6-P08** (rate-fx, Slice 6) — rate-fx: read partner_fx_config + apply margin_bps + honor reference source
+- **21.6-P09** (revenue-ledger, Slice 6) — revenue-ledger: evaluate partner_fee_schedule + tier table
+- **21.7-P03** (scheme-adapter-zeropay, Slice 7) — scheme-adapter-zeropay: rewrite SchemeRouter from hardcoded to data-driven
+- **21.7-P04** (merchant-qr-data, Slice 7) — merchant-qr-data: derive Zp0011 partnerType D/I from partner_scheme.partner_type_char
+- **21.8-P02** (auth-identity, Slice 8) — partner_ip_allowlist table + api-gateway pre-signature 403 enforcement
+- **21.8-P12** (reporting-compliance, Slice 8) — KoFIU STR/CTR feed config on partner + reporting-compliance consumer
+- **21.8-P17** (ops-partner-bff, Slice 8) — BFF endpoint PATCH /v1/admin/partners/draft/{id}/step-8 + activation orchestration
+

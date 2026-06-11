@@ -55,3 +55,19 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - Tampered file quarantined + alerted; clean file decrypts
 
+---
+
+<!-- ws-21-partner-setup-rebaseline -->
+
+## Partner Setup re-baseline tickets (WS 21)
+
+These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **sftp-gateway** live here; cross-service contributions are listed at the bottom for awareness.
+
+> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
+
+### Cross-service contributions touching this service
+
+Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
+
+- **21.8-P15** (reporting-compliance, Slice 8) — reporting-compliance: BOK 외환거래보고 XML generator + scheduler
+

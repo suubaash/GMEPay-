@@ -946,3 +946,36 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 - No lost/duplicate-marked rows across broker restart
 - Lag metric exposed
 
+---
+
+<!-- ws-21-partner-setup-rebaseline -->
+
+## Partner Setup re-baseline tickets (WS 21)
+
+These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **transaction-mgmt** live here; cross-service contributions are listed at the bottom for awareness.
+
+> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
+
+### Slice 6 tickets owned by this service
+
+### 21.6-P07 — transaction-mgmt: read collection_ccy / settle_a_ccy + enforce partner_limits
+*Slice:* **6** · *Est:* 120 min · *Role:* Backend · *Owner:* transaction-mgmt · *ADR refs:* —
+
+**Context.** Wire transaction-mgmt to the new ccy split and the new partner_limits table. Per-txn cap check happens pre-quote; daily/monthly/annual via a Redis counter (incremented atomically per txn) checked pre-commit.
+
+**Steps.** Update services/transaction-mgmt/src/main/java/com/gme/pay/txn/PriceTransactionService.java to read PartnerView.collectionCcy + PartnerView.settleACcy for leg routing (was: single ccy); add `LimitsEnforcer.java` that queries partner_limits and Redis counters; throw LIMIT_BREACH(per_txn_max=5000 (소액해외송금업)) on breach with stable error code.
+
+**Deliverable.** `services/transaction-mgmt/src/main/java/com/gme/pay/txn/PriceTransactionService.java; services/transaction-mgmt/src/main/java/com/gme/pay/txn/LimitsEnforcer.java`
+
+**Acceptance.**
+- POST /v1/transactions price-quote with amount=USD 5001 for a SMALL_FX_TRANSFER partner returns 422 LIMIT_BREACH
+- Daily cap counter increments atomically (Lua script) — race-test passes
+- Counter resets at midnight in the partner's timezone (cutoff_timezone)
+- Two-leg txn correctly uses collection_ccy for leg A and settle_a_ccy for leg B
+
+### Cross-service contributions touching this service
+
+Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
+
+- **21.8-P14** (config-registry, Slice 8) — Travel Rule (IVMS101) endpoint config + ≥KRW 1M originator+beneficiary enforcement
+
