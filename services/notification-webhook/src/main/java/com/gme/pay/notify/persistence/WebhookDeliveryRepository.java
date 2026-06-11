@@ -14,4 +14,10 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
 
     /** Returns rows in a given status (e.g. {@code FAILED}, {@code PENDING}). */
     List<WebhookDeliveryEntity> findByStatus(String status);
+
+    /**
+     * Idempotency probe for the Kafka consumer (at-least-once delivery): {@code true}
+     * if a delivery row for this logical webhook id + event type already exists.
+     */
+    boolean existsByWebhookIdAndEventType(String webhookId, String eventType);
 }

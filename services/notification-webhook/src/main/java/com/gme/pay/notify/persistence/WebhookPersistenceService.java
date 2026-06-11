@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Phase-1 persistence collaborator for {@code WebhookSender}.
@@ -42,6 +43,41 @@ public class WebhookPersistenceService {
         this.dlqRepository = Objects.requireNonNull(dlqRepository);
         this.retryPolicy = Objects.requireNonNull(retryPolicy);
         this.clock = Objects.requireNonNull(clock);
+    }
+
+    /**
+     * Enqueues a webhook delivery for the dispatch pipeline (17.4-G04 Kafka consumer
+     * entry point): inserts a {@code PENDING} row in {@code webhook_delivery_log}
+     * with {@code attempt = 0} (no dispatch executed yet).
+     *
+     * <p>Idempotent for Kafka at-least-once redelivery: if a row for the same
+     * {@code webhookId} + {@code eventType} already exists, nothing is inserted and
+     * {@link Optional#empty()} is returned so the consumer can still ack.
+     *
+     * @param webhookId  logical webhook id (the event's aggregate id)
+     * @param eventType  event type (e.g. {@code payment.approved})
+     * @param payload    serialized JSON payload as received from the topic
+     * @return the new {@code PENDING} row, or empty if one already existed
+     */
+    @Transactional
+    public Optional<WebhookDeliveryEntity> enqueuePendingIfAbsent(String webhookId,
+                                                                  String eventType,
+                                                                  String payload) {
+        Objects.requireNonNull(webhookId, "webhookId must not be null");
+        Objects.requireNonNull(eventType, "eventType must not be null");
+        Objects.requireNonNull(payload, "payload must not be null");
+        if (deliveryRepository.existsByWebhookIdAndEventType(webhookId, eventType)) {
+            return Optional.empty();
+        }
+        Instant now = Instant.now(clock);
+        WebhookDeliveryEntity row = new WebhookDeliveryEntity();
+        row.setWebhookId(webhookId);
+        row.setEventType(eventType);
+        row.setPayload(payload);
+        row.setAttempt(0);
+        row.setStatus(STATUS_PENDING);
+        row.setCreatedAt(now);
+        return Optional.of(deliveryRepository.save(row));
     }
 
     /**
