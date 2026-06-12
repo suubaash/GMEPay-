@@ -29,25 +29,31 @@ import { useSnackbar } from '@/components/SnackbarProvider';
 export const CYCLE_OPTIONS = [0, 1, 2, 3, 4, 5];
 
 /**
- * Settlement method options with display labels.
+ * Settlement method options with display labels. The roster MUST match
+ * config-registry V013's CHECK constraint exactly — any value not in this
+ * list will be rejected at the DB layer with a constraint violation.
+ *
+ * Earlier this UI shipped a generic SWIFT/ACH/FPS/RTGS/SEPA/CHAPS/OTHER
+ * roster that diverged from the V013 enum and would 500 on save. Fixed by
+ * mirroring the DB enum and labelling each rail with its real-world name.
  */
 export const SETTLEMENT_METHODS = [
-  'SWIFT',
-  'ACH',
-  'FPS',
-  'RTGS',
-  'SEPA',
-  'CHAPS',
+  'SWIFT_MT103',
+  'KR_FIRM_BANKING',
+  'BAKONG',
+  'NAPAS_247',
+  'PROMPT_PAY',
+  'FAST_SG',
   'OTHER',
 ];
 
 export const SETTLEMENT_METHOD_LABELS = {
-  SWIFT: 'SWIFT (international wire)',
-  ACH: 'ACH (US automated clearing)',
-  FPS: 'FPS (UK faster payments)',
-  RTGS: 'RTGS (real-time gross)',
-  SEPA: 'SEPA (EU credit transfer)',
-  CHAPS: 'CHAPS (UK same-day)',
+  SWIFT_MT103: 'SWIFT MT103 (international wire)',
+  KR_FIRM_BANKING: '펌뱅킹 (Korea firm banking)',
+  BAKONG: 'Bakong (Cambodia)',
+  NAPAS_247: 'NAPAS 247 (Vietnam)',
+  PROMPT_PAY: 'PromptPay (Thailand)',
+  FAST_SG: 'FAST (Singapore)',
   OTHER: 'Other / custom',
 };
 
@@ -84,7 +90,7 @@ const DEFAULT_VALUES = {
   cycleTPlusN: 1,
   cutoffTime: '17:00',
   cutoffTimezone: 'Asia/Seoul',
-  settlementMethod: 'SWIFT',
+  settlementMethod: 'SWIFT_MT103',
 };
 
 /**

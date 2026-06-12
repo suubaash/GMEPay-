@@ -31,6 +31,7 @@ import KybForm from './step-3/KybForm';
 import BankAccountsSection from './step-4/BankAccountsSection';
 import SettlementPanel from './step-4/SettlementPanel';
 import PrefundingForm from './step-5/PrefundingForm';
+import { Step6CommercialForm } from './step-6/page';
 
 /**
  * Partner Setup wizard shell (Slice 1, agent 1D.1).
@@ -174,7 +175,7 @@ export function PartnerDraftWizard({ activeStep = 1 }) {
   // wizard shell hides its generic "Save & next" affordance for those steps.
   // Later steps that use the shell's own Next can set this false once they
   // land with their slice.
-  const stepHasOwnSubmit = cursor === 1 || cursor === 2 || cursor === 3 || cursor === 4 || cursor === 5;
+  const stepHasOwnSubmit = cursor === 1 || cursor === 2 || cursor === 3 || cursor === 4 || cursor === 5 || cursor === 6;
 
   const onBack = () => {
     dispatch(clearError());
@@ -354,6 +355,15 @@ function renderStep(cursor, stepDef, draft, partnerCode, advanceCursor, dispatch
   if (cursor === 5) {
     return (
       <PrefundingForm
+        draft={draft}
+        partnerCode={partnerCode}
+        onSaved={advanceCursor}
+      />
+    );
+  }
+  if (cursor === 6) {
+    return (
+      <Step6CommercialForm
         draft={draft}
         partnerCode={partnerCode}
         onSaved={advanceCursor}

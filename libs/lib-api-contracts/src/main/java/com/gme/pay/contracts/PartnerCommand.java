@@ -185,6 +185,73 @@ public record PartnerCommand(
     }
 
     /**
+     * Body for "Save step-6 pricing rules" on an already-created draft —
+     * Slice 6 (Commercial Terms, see {@code docs/PARTNER_SETUP_PLAN.md}
+     * §"Slice 6"). Same <b>bulk replace</b> contract as {@link UpdateStep2} /
+     * {@link UpdateStep4}: {@code rules} carries the FULL desired rule set,
+     * and config-registry supersedes every current {@code partner_rule} row
+     * (V017) and inserts the new set in one transaction (SCD-6 paired writes
+     * per ADR-010). An empty list clears all rules; {@code null} is rejected
+     * with 400. The read shape is {@link RuleView}.
+     *
+     * <p>At most one rule per ({@code schemeId}, {@code direction}) pair —
+     * duplicates in the payload are a 400 (the V017 partial-unique index is
+     * the storage-level backstop). Each element is validated against the
+     * lib-domain {@code Rule.validate} margin invariant (cross-border
+     * {@code mA + mB >= 2%}, same-currency zero margin) using the partner's
+     * V016 {@code collection_ccy} / {@code settle_a_ccy} split.
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-6 rules controller binds this record directly.
+     */
+    public record UpdateStep6Rules(List<RuleCommand> rules) {
+    }
+
+    /**
+     * Body for "Save step-6 commercial terms" (fees + FX + limits + contract)
+     * on an already-created draft — Slice 6 (see
+     * {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 6 — Commercial Terms"), the
+     * sibling of {@link UpdateStep6Rules}: the rule rows ride that record,
+     * the four commercial sub-resources ride this composite onto
+     * {@code PATCH /v1/partners/draft/{code}/step-6-commercial}. The read
+     * shape is {@link CommercialTermsView}.
+     *
+     * <p>Section semantics — applied ATOMICALLY (one transaction; a
+     * validation failure in any section rolls back all of them):
+     * <ul>
+     *   <li>{@code feeSchedules} — <b>bulk replace</b> of the partner's
+     *       {@code partner_fee_schedule} set (V018), same multi-row contract
+     *       as {@link UpdateStep4}: an empty list clears all fee rows;
+     *       {@code null} leaves the fee set UNTOUCHED.</li>
+     *   <li>{@code fxConfig} — full-state replace of the
+     *       {@code partner_fx_config} row (V019); {@code null} leaves it
+     *       untouched.</li>
+     *   <li>{@code limits} — full-state replace of the
+     *       {@code partner_limits} row (V020); {@code null} leaves it
+     *       untouched. The 소액해외송금업 ({@code SOAEK_HAEOEMONG}) statutory
+     *       caps are enforced server-side.</li>
+     *   <li>{@code contract} — full-state replace of the
+     *       {@code partner_contract} row (V021); {@code null} leaves it
+     *       untouched.</li>
+     * </ul>
+     *
+     * <p>A payload with ALL sections {@code null} is a 400 — there is nothing
+     * to save. Each non-null section produces its own SCD-6 paired write
+     * (ADR-010) and its own audit row (ADR-007).
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-6 commercial controller binds this record directly.
+     */
+    public record UpdateStep6Commercial(
+            List<FeeScheduleCommand> feeSchedules,
+            FxConfigCommand fxConfig,
+            LimitsCommand limits,
+            ContractCommand contract) {
+    }
+
+    /**
      * Body for "Save step-5 changes" (Prefunding) on an already-created draft
      * — Slice 5 (see {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 5 —
      * Prefunding"). Full-state replace of the

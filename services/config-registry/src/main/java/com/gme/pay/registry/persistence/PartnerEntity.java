@@ -100,6 +100,27 @@ public class PartnerEntity {
     @Column(name = "settlement_currency", length = 3)
     private String settlementCurrency;
 
+    // ------------------------------------------------------------------------
+    // Slice 6 currency split (V016 / ADR-013 Expand phase).
+    //
+    // settlement_currency conflates "what the partner collects in" with "what
+    // GME settles to the partner in"; V016 splits it into collection_ccy +
+    // settle_a_ccy. Both are nullable during the Expand phase (drafts may not
+    // have chosen currencies yet); settlement_currency KEEPS being populated
+    // until the Contract release drops it. onPersist() mirrors the legacy
+    // value into either side that is still null, so pre-split write paths
+    // (PartnerStore.save / step-1) produce rows indistinguishable from the
+    // V016 backfill.
+    // ------------------------------------------------------------------------
+
+    /** ISO-4217 currency the partner COLLECTS from its senders in (V016). */
+    @Column(name = "collection_ccy", length = 3, columnDefinition = "CHAR(3)")
+    private String collectionCcy;
+
+    /** ISO-4217 currency GME SETTLES with the partner in (V016). */
+    @Column(name = "settle_a_ccy", length = 3, columnDefinition = "CHAR(3)")
+    private String settleACcy;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "settlement_rounding_mode", nullable = false, length = 16)
     private RoundingMode settlementRoundingMode;
@@ -313,6 +334,17 @@ public class PartnerEntity {
             // And the reverse direction: keep the legacy column populated.
             partnerId = partnerCode;
         }
+        // V016 Expand-phase mirror (Slice 6): until the commercial-terms step
+        // writes a real collection/settle split, both sides default to the
+        // legacy settlement_currency — the same fact the V016 backfill stamped
+        // onto pre-split rows. Defensive: only fills sides that are null, so a
+        // caller that already set a genuine split is never overwritten.
+        if (collectionCcy == null && settlementCurrency != null) {
+            collectionCcy = settlementCurrency;
+        }
+        if (settleACcy == null && settlementCurrency != null) {
+            settleACcy = settlementCurrency;
+        }
     }
 
     @jakarta.persistence.PreUpdate
@@ -363,6 +395,24 @@ public class PartnerEntity {
 
     public void setSettlementCurrency(String settlementCurrency) {
         this.settlementCurrency = settlementCurrency;
+    }
+
+    /** ISO-4217 currency the partner collects from its senders in (V016 split). */
+    public String getCollectionCcy() {
+        return collectionCcy;
+    }
+
+    public void setCollectionCcy(String collectionCcy) {
+        this.collectionCcy = collectionCcy;
+    }
+
+    /** ISO-4217 currency GME settles with the partner in (V016 split). */
+    public String getSettleACcy() {
+        return settleACcy;
+    }
+
+    public void setSettleACcy(String settleACcy) {
+        this.settleACcy = settleACcy;
     }
 
     public RoundingMode getSettlementRoundingMode() {

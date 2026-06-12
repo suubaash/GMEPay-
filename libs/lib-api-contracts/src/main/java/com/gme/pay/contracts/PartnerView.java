@@ -31,6 +31,12 @@ import java.time.Instant;
  *   <li>{@code type} — LOCAL vs OVERSEAS partner classification.</li>
  *   <li>{@code settlementCurrency}, {@code settlementRoundingMode} — settlement
  *       policy (the four-field demo aggregate carried forward).</li>
+ *   <li>Slice 6 currency split (V016, ADR-013 Expand phase):
+ *       {@code collectionCcy} — the currency the partner collects from its
+ *       senders in; {@code settleACcy} — the currency GME settles with the
+ *       partner in. Backfilled from {@code settlementCurrency} for pre-Slice-6
+ *       rows; the legacy {@code settlementCurrency} stays populated for one
+ *       more release (the Contract migration drops it later).</li>
  *   <li>Identity (Slice 1, fields the wizard collects):
  *     <ul>
  *       <li>{@code legalNameLocal} — name in the partner's local script
@@ -70,6 +76,8 @@ public record PartnerView(
         PartnerType type,
         String settlementCurrency,
         RoundingMode settlementRoundingMode,
+        String collectionCcy,
+        String settleACcy,
         String legalNameLocal,
         String legalNameRomanized,
         String taxId,
@@ -91,6 +99,11 @@ public record PartnerView(
      * {@link PartnerStatus#ONBOARDING}. Used by config-registry's controller to
      * adapt the legacy domain {@code Partner} record into the canonical view
      * during the Expand phase, before the wider Identity columns ship.
+     *
+     * <p>The Slice 6 split mirrors the legacy single currency on both sides —
+     * the same defensive mirroring {@code PartnerEntity} applies on persist
+     * (V016 Expand phase): before the commercial-terms step writes a real
+     * split, collection and settlement are the same fact.
      */
     public static PartnerView ofCore(Long id, String partnerCode, PartnerType type,
                                      String settlementCurrency,
@@ -101,6 +114,8 @@ public record PartnerView(
                 type,
                 settlementCurrency,
                 settlementRoundingMode,
+                settlementCurrency,
+                settlementCurrency,
                 null, null, null, null, null, null, null, null, null,
                 PartnerStatus.ONBOARDING,
                 null, null, null);

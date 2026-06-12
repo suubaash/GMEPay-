@@ -46,10 +46,26 @@ class PartnerRepositoryIT {
      * {@link PartnerSeeder} is a {@link org.springframework.boot.CommandLineRunner}, which
      * the {@code @DataJpaTest} slice does not invoke automatically. Run it explicitly so
      * the bootstrap rows mirror what production gets at startup.
+     *
+     * <p>Robustness against the shared in-memory database: every context in this
+     * JVM points at the same {@code jdbc:h2:mem:configreg} (DB_CLOSE_DELAY=-1),
+     * and suites that deliberately opt out of the test transaction (e.g.
+     * {@code Propagation.NOT_SUPPORTED} atomicity tests, which need the service's
+     * own transaction boundary to be the one that rolls back) COMMIT their seed
+     * partners permanently. The seeder's production empty-table guard then skips,
+     * and this class's GMEREMIT/SENDMN assertions would fail purely on suite
+     * ordering. Re-seed the two bootstrap rows explicitly when absent — these
+     * writes ride this class's test transaction and roll back per test.
      */
     @BeforeEach
     void seedIfEmpty() {
         seeder.run();
+        if (!repository.existsByPartnerCode("GMEREMIT")) {
+            store.save(Partner.of("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP));
+        }
+        if (!repository.existsByPartnerCode("SENDMN")) {
+            store.save(Partner.of("SENDMN", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
+        }
     }
 
     @Test

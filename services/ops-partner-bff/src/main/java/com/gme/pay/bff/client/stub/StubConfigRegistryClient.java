@@ -651,6 +651,506 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         return view;
     }
 
+    // -------- Slice 6 (6A.1) pricing-rule endpoints (PARTNER_SETUP_PLAN §Slice 6)
+
+    /** Slice 6 rule sets — keyed by partner_code, mirrors the bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.RuleView>> ruleStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_rule} BIGSERIAL. */
+    private final AtomicLong ruleSeq = new AtomicLong(400_000L);
+
+    /** Mirrors config-registry's V017 direction CHECK roster. */
+    private static final java.util.Set<String> RULE_DIRECTIONS = java.util.Set.of(
+            "INBOUND", "OUTBOUND", "BOTH");
+
+    /**
+     * In-memory step-6 rule bulk replace mirroring config-registry's
+     * {@code RuleService.replaceDraftRules}: full-set replace with the same
+     * validation roster (direction, NUMERIC(7,4) margins, NUMERIC(19,4)
+     * service charge, duplicate (scheme, direction) keys) and the SAME
+     * lib-domain {@code Rule.validate} margin invariant — evaluated against
+     * the draft view's V016 collection/settle split (falling back to the
+     * legacy settlement currency) — so MockMvc tests exercise the 400 paths
+     * through the stub.
+     */
+    @Override
+    public synchronized List<com.gme.pay.contracts.RuleView> patchDraftStep6Rules(
+            String partnerCode, PartnerCommand.UpdateStep6Rules request) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null || request.rules() == null) {
+            throw badRequest("rules is required (send an empty list to clear all rules)");
+        }
+        List<com.gme.pay.contracts.RuleCommand> rules = request.rules();
+        java.util.Set<String> seenKeys = new java.util.HashSet<>();
+        for (int i = 0; i < rules.size(); i++) {
+            validateRule(rules.get(i), i);
+            com.gme.pay.contracts.RuleCommand cmd = rules.get(i);
+            if (!seenKeys.add(cmd.schemeId() + ":" + cmd.direction())) {
+                throw badRequest("rules[" + i + "]: duplicate rule for scheme "
+                        + cmd.schemeId() + " direction " + cmd.direction()
+                        + " (at most one rule per scheme and direction)");
+            }
+        }
+        // The SAME lib-domain invariant config-registry runs (RATE-04 §11).
+        String settleA = draft.settleACcy() != null
+                ? draft.settleACcy() : draft.settlementCurrency();
+        String collection = draft.collectionCcy() != null
+                ? draft.collectionCcy() : draft.settlementCurrency();
+        for (int i = 0; i < rules.size(); i++) {
+            com.gme.pay.contracts.RuleCommand cmd = rules.get(i);
+            try {
+                new com.gme.pay.domain.Rule(partnerCode, cmd.schemeId(),
+                        domainDirection(cmd.direction()), settleA, collection,
+                        cmd.mA(), cmd.mB(), cmd.serviceChargeUsd()).validate();
+            } catch (com.gme.pay.errors.ApiException invariant) {
+                throw badRequest("rules[" + i + "]: " + invariant.getMessage());
+            }
+        }
+
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        List<com.gme.pay.contracts.RuleView> fresh = new ArrayList<>(rules.size());
+        for (com.gme.pay.contracts.RuleCommand cmd : rules) {
+            fresh.add(new com.gme.pay.contracts.RuleView(
+                    ruleSeq.getAndIncrement(),
+                    cmd.schemeId(),
+                    cmd.direction(),
+                    cmd.mA().setScale(4),
+                    cmd.mB().setScale(4),
+                    (cmd.serviceChargeUsd() == null
+                            ? java.math.BigDecimal.ZERO : cmd.serviceChargeUsd()).setScale(4),
+                    now,
+                    null,
+                    now));
+        }
+        ruleStore.put(partnerCode, List.copyOf(fresh));
+        return List.copyOf(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.RuleView> listRules(String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        return ruleStore.getOrDefault(partnerCode, List.of());
+    }
+
+    /** Mirror of config-registry's {@code RuleService.validate} (same messages shape). */
+    private static void validateRule(com.gme.pay.contracts.RuleCommand cmd, int index) {
+        String at = "rules[" + index + "]";
+        if (cmd == null) {
+            throw badRequest(at + " must be an object");
+        }
+        if (cmd.schemeId() == null || cmd.schemeId().isBlank() || cmd.schemeId().length() > 40) {
+            throw badRequest(at + ".schemeId is required (max 40 characters), was: "
+                    + cmd.schemeId());
+        }
+        if (cmd.direction() == null || !RULE_DIRECTIONS.contains(cmd.direction())) {
+            throw badRequest(at + ".direction must be one of " + RULE_DIRECTIONS
+                    + ", was: " + cmd.direction());
+        }
+        validateRuleMargin(at + ".mA", cmd.mA());
+        validateRuleMargin(at + ".mB", cmd.mB());
+        if (cmd.serviceChargeUsd() != null) {
+            if (cmd.serviceChargeUsd().signum() < 0) {
+                throw badRequest(at + ".serviceChargeUsd must not be negative, was: "
+                        + cmd.serviceChargeUsd().toPlainString());
+            }
+            if (cmd.serviceChargeUsd().stripTrailingZeros().scale() > 4) {
+                throw badRequest(at + ".serviceChargeUsd must have at most 4 decimal"
+                        + " places (NUMERIC(19,4)), was: "
+                        + cmd.serviceChargeUsd().toPlainString());
+            }
+        }
+    }
+
+    /** One margin against the NUMERIC(7,4) envelope — mirrors {@code RuleService}. */
+    private static void validateRuleMargin(String field, java.math.BigDecimal value) {
+        if (value == null) {
+            throw badRequest(field + " is required (a decimal fraction, e.g. 0.0150 = 1.50%)");
+        }
+        if (value.signum() < 0) {
+            throw badRequest(field + " must not be negative, was: " + value.toPlainString());
+        }
+        if (value.stripTrailingZeros().scale() > 4) {
+            throw badRequest(field + " must have at most 4 decimal places"
+                    + " (NUMERIC(7,4)), was: " + value.toPlainString());
+        }
+        if (value.precision() - value.scale() > 3) {
+            throw badRequest(field + " exceeds NUMERIC(7,4) (at most 3 integer digits),"
+                    + " was: " + value.toPlainString());
+        }
+    }
+
+    /**
+     * V017 direction string → lib-domain {@code Direction} for the invariant
+     * check; {@code BOTH} maps to {@code null} (safe — {@code Rule.validate}
+     * prices on the currency pair, not the direction).
+     */
+    private static com.gme.pay.domain.Direction domainDirection(String direction) {
+        return switch (direction) {
+            case "INBOUND" -> com.gme.pay.domain.Direction.INBOUND;
+            case "OUTBOUND" -> com.gme.pay.domain.Direction.OUTBOUND;
+            default -> null;
+        };
+    }
+
+    // -------- Slice 6 (6B.1) commercial-terms endpoints (PARTNER_SETUP_PLAN §Slice 6)
+
+    /** Slice 6 fee sets — keyed by partner_code, mirrors the bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.FeeScheduleView>> feeScheduleStore =
+            new LinkedHashMap<>();
+    /** Slice 6 single-row commercial sub-resources — keyed by partner_code. */
+    private final Map<String, com.gme.pay.contracts.FxConfigView> fxConfigStore =
+            new LinkedHashMap<>();
+    private final Map<String, com.gme.pay.contracts.LimitsView> limitsStore =
+            new LinkedHashMap<>();
+    private final Map<String, com.gme.pay.contracts.ContractView> contractStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the V018..V021 BIGSERIALs (shared — ids only need uniqueness). */
+    private final AtomicLong commercialSeq = new AtomicLong(200_000L);
+
+    /** Mirrors config-registry's V019 reference_rate_source CHECK roster. */
+    private static final java.util.Set<String> FX_RATE_SOURCES = java.util.Set.of(
+            "SEOUL_FX_BROKER", "PARTNER_PROVIDED", "MID_MARKET");
+    /** Mirrors config-registry's V021 refund_chargeback_policy CHECK roster. */
+    private static final java.util.Set<String> CHARGEBACK_POLICIES = java.util.Set.of(
+            "PARTNER_BEARS", "MERCHANT_BEARS", "SHARED");
+    /** Mirrors {@code LimitsService}'s 소액해외송금업 statutory ceilings (V020). */
+    private static final java.math.BigDecimal SOAEK_PER_TXN_MAX =
+            new java.math.BigDecimal("5000");
+    private static final java.math.BigDecimal SOAEK_ANNUAL_MAX =
+            new java.math.BigDecimal("50000");
+
+    /**
+     * In-memory step-6 commercial composite mirroring config-registry's
+     * {@code CommercialTermsService.upsertStep6Commercial}: each non-null
+     * section is a full-state (fees: bulk) replace with the same validation
+     * roster — direction/source/policy rosters, NUMERIC(19,4)/(7,4)
+     * envelopes, tier ascent, duplicate fee keys, limits ordering and the
+     * 소액해외송금업 caps — validated up front so a bad later section leaves
+     * earlier sections untouched (the stub equivalent of the one-transaction
+     * rollback). Null sections are untouched; all-null is a 400.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.CommercialTermsView patchDraftStep6Commercial(
+            String partnerCode, PartnerCommand.UpdateStep6Commercial request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        if (request.feeSchedules() == null && request.fxConfig() == null
+                && request.limits() == null && request.contract() == null) {
+            throw badRequest("at least one of feeSchedules, fxConfig, limits, contract"
+                    + " must be present (null sections are left untouched)");
+        }
+        // Validate ALL sections before applying ANY (atomicity mirror).
+        if (request.feeSchedules() != null) {
+            validateFeeSchedules(request.feeSchedules());
+        }
+        if (request.fxConfig() != null) {
+            validateFxConfig(request.fxConfig());
+        }
+        if (request.limits() != null) {
+            validateLimits(request.limits());
+        }
+        if (request.contract() != null) {
+            validateContract(request.contract());
+        }
+
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+
+        List<com.gme.pay.contracts.FeeScheduleView> fees = null;
+        if (request.feeSchedules() != null) {
+            List<com.gme.pay.contracts.FeeScheduleView> fresh =
+                    new ArrayList<>(request.feeSchedules().size());
+            for (com.gme.pay.contracts.FeeScheduleCommand cmd : request.feeSchedules()) {
+                List<com.gme.pay.contracts.FeeTier> tiers =
+                        cmd.tiers() == null || cmd.tiers().isEmpty() ? null
+                                : cmd.tiers().stream()
+                                        .map(t -> new com.gme.pay.contracts.FeeTier(
+                                                scale4(t.fromVolumeUsd()),
+                                                scale4(t.bpsOverride())))
+                                        .toList();
+                fresh.add(new com.gme.pay.contracts.FeeScheduleView(
+                        commercialSeq.getAndIncrement(),
+                        blankToNull(cmd.schemeId()),
+                        blankToNull(cmd.direction()),
+                        scale4(cmd.fixedFeeUsd() == null
+                                ? java.math.BigDecimal.ZERO : cmd.fixedFeeUsd()),
+                        scale4(cmd.bpsFee() == null
+                                ? java.math.BigDecimal.ZERO : cmd.bpsFee()),
+                        tiers,
+                        now,
+                        null,
+                        now));
+            }
+            fees = List.copyOf(fresh);
+            feeScheduleStore.put(partnerCode, fees);
+        }
+
+        com.gme.pay.contracts.FxConfigView fx = null;
+        if (request.fxConfig() != null) {
+            com.gme.pay.contracts.FxConfigView priorFx = fxConfigStore.get(partnerCode);
+            fx = new com.gme.pay.contracts.FxConfigView(
+                    commercialSeq.getAndIncrement(),
+                    scale4(request.fxConfig().marginBps() == null
+                            ? java.math.BigDecimal.ZERO : request.fxConfig().marginBps()),
+                    request.fxConfig().referenceRateSource(),
+                    request.fxConfig().quoteHoldSeconds() == null
+                            ? 300 : request.fxConfig().quoteHoldSeconds(),
+                    priorFx == null ? now : priorFx.validFrom(),
+                    null,
+                    now);
+            fxConfigStore.put(partnerCode, fx);
+        }
+
+        com.gme.pay.contracts.LimitsView limits = null;
+        if (request.limits() != null) {
+            com.gme.pay.contracts.LimitsView priorLimits = limitsStore.get(partnerCode);
+            limits = new com.gme.pay.contracts.LimitsView(
+                    commercialSeq.getAndIncrement(),
+                    scale4(request.limits().perTxnMinUsd()),
+                    scale4(request.limits().perTxnMaxUsd()),
+                    scale4(request.limits().dailyCapUsd()),
+                    scale4(request.limits().monthlyCapUsd()),
+                    scale4(request.limits().annualCapUsd()),
+                    blankToNull(request.limits().licenseType()),
+                    priorLimits == null ? now : priorLimits.validFrom(),
+                    null,
+                    now);
+            limitsStore.put(partnerCode, limits);
+        }
+
+        com.gme.pay.contracts.ContractView contract = null;
+        if (request.contract() != null) {
+            com.gme.pay.contracts.ContractView priorContract = contractStore.get(partnerCode);
+            contract = new com.gme.pay.contracts.ContractView(
+                    commercialSeq.getAndIncrement(),
+                    request.contract().effectiveFrom(),
+                    request.contract().effectiveTo(),
+                    Boolean.TRUE.equals(request.contract().autoRenewal()),
+                    request.contract().noticePeriodDays(),
+                    blankToNull(request.contract().refundChargebackPolicy()),
+                    blankToNull(request.contract().terminationReason()),
+                    priorContract == null ? now : priorContract.validFrom(),
+                    null,
+                    now);
+            contractStore.put(partnerCode, contract);
+        }
+
+        return new com.gme.pay.contracts.CommercialTermsView(fees, fx, limits, contract);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.FeeScheduleView> getFeeSchedules(
+            String partnerCode) {
+        requireKnownPartner(partnerCode);
+        return feeScheduleStore.getOrDefault(partnerCode, List.of());
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.FxConfigView getFxConfig(String partnerCode) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.FxConfigView view = fxConfigStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no fx config for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.LimitsView getLimits(String partnerCode) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.LimitsView view = limitsStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no limits for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.ContractView getContract(String partnerCode) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.ContractView view = contractStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no contract for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    /** Mirror of config-registry's {@code FeeScheduleService} validation (same shapes). */
+    private static void validateFeeSchedules(
+            List<com.gme.pay.contracts.FeeScheduleCommand> fees) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < fees.size(); i++) {
+            com.gme.pay.contracts.FeeScheduleCommand cmd = fees.get(i);
+            String at = "feeSchedules[" + i + "]";
+            if (cmd == null) {
+                throw badRequest(at + " must be an object");
+            }
+            if (cmd.schemeId() != null && !cmd.schemeId().isBlank()
+                    && cmd.schemeId().length() > 40) {
+                throw badRequest(at + ".schemeId must be at most 40 characters");
+            }
+            if (cmd.direction() != null && !cmd.direction().isBlank()
+                    && !RULE_DIRECTIONS.contains(cmd.direction())) {
+                throw badRequest(at + ".direction must be one of " + RULE_DIRECTIONS
+                        + " (or null for all directions), was: " + cmd.direction());
+            }
+            validateMoney(at + ".fixedFeeUsd", cmd.fixedFeeUsd(), false);
+            validateBps4(at + ".bpsFee", cmd.bpsFee());
+            if (cmd.tiers() != null) {
+                java.math.BigDecimal previousFrom = null;
+                for (int t = 0; t < cmd.tiers().size(); t++) {
+                    com.gme.pay.contracts.FeeTier tier = cmd.tiers().get(t);
+                    String tierAt = at + ".tiers[" + t + "]";
+                    if (tier == null || tier.fromVolumeUsd() == null
+                            || tier.bpsOverride() == null) {
+                        throw badRequest(tierAt
+                                + " requires both fromVolumeUsd and bpsOverride");
+                    }
+                    validateMoney(tierAt + ".fromVolumeUsd", tier.fromVolumeUsd(), false);
+                    validateBps4(tierAt + ".bpsOverride", tier.bpsOverride());
+                    if (previousFrom != null
+                            && tier.fromVolumeUsd().compareTo(previousFrom) <= 0) {
+                        throw badRequest(tierAt + ".fromVolumeUsd must be strictly"
+                                + " greater than the previous band's ("
+                                + previousFrom.toPlainString() + "), was: "
+                                + tier.fromVolumeUsd().toPlainString());
+                    }
+                    previousFrom = tier.fromVolumeUsd();
+                }
+            }
+            String key = (blankToNull(cmd.schemeId()) == null ? "*" : cmd.schemeId())
+                    + ":" + (blankToNull(cmd.direction()) == null ? "*" : cmd.direction());
+            if (!seen.add(key)) {
+                throw badRequest(at + ": duplicate (schemeId, direction) pair " + key
+                        + " — at most one fee row per pair");
+            }
+        }
+    }
+
+    /** Mirror of config-registry's {@code FxConfigService.validate} (same messages). */
+    private static void validateFxConfig(com.gme.pay.contracts.FxConfigCommand cmd) {
+        if (cmd.referenceRateSource() == null || cmd.referenceRateSource().isBlank()
+                || !FX_RATE_SOURCES.contains(cmd.referenceRateSource())) {
+            throw badRequest("fxConfig.referenceRateSource must be one of " + FX_RATE_SOURCES
+                    + ", was: " + cmd.referenceRateSource());
+        }
+        validateBps4("fxConfig.marginBps", cmd.marginBps());
+        if (cmd.quoteHoldSeconds() != null
+                && (cmd.quoteHoldSeconds() < 60 || cmd.quoteHoldSeconds() > 1800)) {
+            throw badRequest("fxConfig.quoteHoldSeconds must be between 60 and 1800, was: "
+                    + cmd.quoteHoldSeconds());
+        }
+    }
+
+    /** Mirror of config-registry's {@code LimitsService.validate} incl. 소액해외송금업 caps. */
+    private static void validateLimits(com.gme.pay.contracts.LimitsCommand cmd) {
+        validateMoney("limits.perTxnMinUsd", cmd.perTxnMinUsd(), false);
+        validateMoney("limits.perTxnMaxUsd", cmd.perTxnMaxUsd(), false);
+        validateMoney("limits.dailyCapUsd", cmd.dailyCapUsd(), false);
+        validateMoney("limits.monthlyCapUsd", cmd.monthlyCapUsd(), false);
+        validateMoney("limits.annualCapUsd", cmd.annualCapUsd(), false);
+        requireOrderedCaps("limits.perTxnMinUsd", cmd.perTxnMinUsd(),
+                "limits.perTxnMaxUsd", cmd.perTxnMaxUsd());
+        requireOrderedCaps("limits.dailyCapUsd", cmd.dailyCapUsd(),
+                "limits.monthlyCapUsd", cmd.monthlyCapUsd());
+        requireOrderedCaps("limits.monthlyCapUsd", cmd.monthlyCapUsd(),
+                "limits.annualCapUsd", cmd.annualCapUsd());
+        requireOrderedCaps("limits.dailyCapUsd", cmd.dailyCapUsd(),
+                "limits.annualCapUsd", cmd.annualCapUsd());
+        if (cmd.licenseType() != null && cmd.licenseType().length() > 30) {
+            throw badRequest("limits.licenseType must be at most 30 characters");
+        }
+        if ("SOAEK_HAEOEMONG".equals(cmd.licenseType())) {
+            if (cmd.perTxnMaxUsd() == null
+                    || cmd.perTxnMaxUsd().compareTo(SOAEK_PER_TXN_MAX) > 0) {
+                throw badRequest("limits.perTxnMaxUsd is required for"
+                        + " license_type=SOAEK_HAEOEMONG (소액해외송금업) and must be <= "
+                        + SOAEK_PER_TXN_MAX.toPlainString() + " USD, was: "
+                        + (cmd.perTxnMaxUsd() == null
+                                ? "null" : cmd.perTxnMaxUsd().toPlainString()));
+            }
+            if (cmd.annualCapUsd() == null
+                    || cmd.annualCapUsd().compareTo(SOAEK_ANNUAL_MAX) > 0) {
+                throw badRequest("limits.annualCapUsd is required for"
+                        + " license_type=SOAEK_HAEOEMONG (소액해외송금업) and must be <= "
+                        + SOAEK_ANNUAL_MAX.toPlainString() + " USD, was: "
+                        + (cmd.annualCapUsd() == null
+                                ? "null" : cmd.annualCapUsd().toPlainString()));
+            }
+        }
+    }
+
+    /** Mirror of config-registry's {@code ContractService.validate} (same messages). */
+    private static void validateContract(com.gme.pay.contracts.ContractCommand cmd) {
+        if (cmd.effectiveFrom() == null) {
+            throw badRequest("contract.effectiveFrom is required (ISO-8601 date)");
+        }
+        if (cmd.effectiveTo() != null && cmd.effectiveTo().isBefore(cmd.effectiveFrom())) {
+            throw badRequest("contract.effectiveTo (" + cmd.effectiveTo()
+                    + ") must not be before contract.effectiveFrom ("
+                    + cmd.effectiveFrom() + ")");
+        }
+        if (cmd.noticePeriodDays() != null && cmd.noticePeriodDays() < 0) {
+            throw badRequest("contract.noticePeriodDays must not be negative, was: "
+                    + cmd.noticePeriodDays());
+        }
+        if (cmd.refundChargebackPolicy() != null && !cmd.refundChargebackPolicy().isBlank()
+                && !CHARGEBACK_POLICIES.contains(cmd.refundChargebackPolicy())) {
+            throw badRequest("contract.refundChargebackPolicy must be one of "
+                    + CHARGEBACK_POLICIES + ", was: " + cmd.refundChargebackPolicy());
+        }
+        if (cmd.terminationReason() != null && cmd.terminationReason().length() > 200) {
+            throw badRequest("contract.terminationReason must be at most 200 characters");
+        }
+    }
+
+    /** Nullable bps against the NUMERIC(7,4) envelope (mirrors {@code CommercialValidation}). */
+    private static void validateBps4(String field, java.math.BigDecimal value) {
+        if (value == null) {
+            return;
+        }
+        if (value.signum() < 0) {
+            throw badRequest(field + " must not be negative, was: " + value.toPlainString());
+        }
+        if (value.stripTrailingZeros().scale() > 4) {
+            throw badRequest(field + " must have at most 4 decimal places"
+                    + " (NUMERIC(7,4)), was: " + value.toPlainString());
+        }
+        if (value.precision() - value.scale() > 3) {
+            throw badRequest(field + " exceeds NUMERIC(7,4) (at most 3 integer digits"
+                    + " / 999.9999 bps), was: " + value.toPlainString());
+        }
+    }
+
+    /** {@code low <= high} when both present (mirrors {@code LimitsService}). */
+    private static void requireOrderedCaps(String lowField, java.math.BigDecimal low,
+                                           String highField, java.math.BigDecimal high) {
+        if (low != null && high != null && low.compareTo(high) > 0) {
+            throw badRequest(lowField + " (" + low.toPlainString()
+                    + ") must not exceed " + highField + " (" + high.toPlainString() + ")");
+        }
+    }
+
     /** Mirror of config-registry's {@code PrefundingConfigService.validate} (same messages). */
     private static void validatePrefunding(PartnerCommand.UpdateStep5 cmd) {
         if (cmd.fundingModel() == null || cmd.fundingModel().isBlank()
@@ -1051,6 +1551,11 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 req.type(),
                 req.settlementCurrency(),
                 req.settlementRoundingMode() == null ? RoundingMode.HALF_UP : req.settlementRoundingMode(),
+                // V016 Expand-phase mirror: before the commercial-terms step
+                // writes a real split, collection and settlement are the same
+                // fact — same defensive default as PartnerEntity.onPersist.
+                req.settlementCurrency(),
+                req.settlementCurrency(),
                 req.legalNameLocal(),
                 req.legalNameRomanized(),
                 req.taxId(),
@@ -1073,12 +1578,24 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 ? req.settlementCurrency() : prior.settlementCurrency();
         RoundingMode roundingMode = req.settlementRoundingMode() != null
                 ? req.settlementRoundingMode() : prior.settlementRoundingMode();
+        // V016 split carry-forward (mirrors PartnerStore.save): keep a genuine
+        // split (either side differing from the prior legacy value); otherwise
+        // re-mirror the possibly-updated settlement currency on both sides.
+        boolean priorSplitIsRealConfig =
+                (prior.collectionCcy() != null
+                        && !prior.collectionCcy().equals(prior.settlementCurrency()))
+                || (prior.settleACcy() != null
+                        && !prior.settleACcy().equals(prior.settlementCurrency()));
+        String collectionCcy = priorSplitIsRealConfig ? prior.collectionCcy() : settlementCurrency;
+        String settleACcy = priorSplitIsRealConfig ? prior.settleACcy() : settlementCurrency;
         return new PartnerView(
                 prior.id(),
                 prior.partnerCode(),
                 type,
                 settlementCurrency,
                 roundingMode,
+                collectionCcy,
+                settleACcy,
                 req.legalNameLocal() != null ? req.legalNameLocal() : prior.legalNameLocal(),
                 req.legalNameRomanized() != null ? req.legalNameRomanized() : prior.legalNameRomanized(),
                 req.taxId() != null ? req.taxId() : prior.taxId(),

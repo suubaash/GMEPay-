@@ -348,6 +348,108 @@ public interface ConfigRegistryClient {
                 "getPrefundingConfig is not implemented by " + getClass().getName());
     }
 
+    // -------- Slice 6 (6A.1) pricing-rule endpoints (PARTNER_SETUP_PLAN §Slice 6)
+    //
+    // Defaults follow the established convention: the write throws so a missing
+    // override is loud, the list degrades to empty. Both real implementations
+    // override both.
+
+    /**
+     * Bulk-replace the pricing-rule set on a draft (wizard step-6 "Next").
+     * Routes to {@code PATCH /v1/partners/draft/{partnerCode}/step-6-rules};
+     * config-registry supersedes every current {@code partner_rule} row (V017)
+     * and inserts the new set in one transaction (SCD-6, ADR-010), enforcing
+     * the lib-domain margin invariant (cross-border {@code mA + mB >= 2%},
+     * same-currency zero margin) against the partner's V016 collection/settle
+     * currency split. Returns the freshly-inserted current set as canonical
+     * {@link com.gme.pay.contracts.RuleView}s. Margins and money ride as
+     * decimal STRINGS per {@code docs/MONEY_CONVENTION.md}.
+     */
+    default List<com.gme.pay.contracts.RuleView> patchDraftStep6Rules(
+            String partnerCode, PartnerCommand.UpdateStep6Rules request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep6Rules is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT pricing-rule set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/rules}. A partner with no rules
+     * yields an empty list; an unknown partner surfaces upstream's 404 as a
+     * {@code ResponseStatusException} from the rest/stub implementations.
+     */
+    default List<com.gme.pay.contracts.RuleView> listRules(String partnerCode) {
+        return List.of();
+    }
+
+    // -------- Slice 6 (6B.1) commercial-terms endpoints (PARTNER_SETUP_PLAN §Slice 6)
+    //
+    // Defaults follow the established convention: the write throws so a missing
+    // override is loud; the fee list degrades to empty, the single-row reads
+    // throw like the write (their 404 carries wizard-rehydrate semantics).
+    // Both real implementations override all five.
+
+    /**
+     * Save the step-6 commercial composite (fees + FX + limits + contract)
+     * onto a draft. Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-6-commercial};
+     * config-registry applies each non-null section ATOMICALLY (one
+     * transaction — SCD-6 paired writes per ADR-010, one audit row per
+     * section per ADR-007) and leaves null sections untouched. The
+     * 소액해외송금업 caps ({@code perTxnMax <= 5000},
+     * {@code annualCap <= 50000} for {@code licenseType=SOAEK_HAEOEMONG}) are
+     * enforced server-side. Returns the fresh
+     * {@link com.gme.pay.contracts.CommercialTermsView} (untouched sections
+     * null). Money and bps ride as decimal STRINGS per
+     * {@code docs/MONEY_CONVENTION.md}.
+     */
+    default com.gme.pay.contracts.CommercialTermsView patchDraftStep6Commercial(
+            String partnerCode, PartnerCommand.UpdateStep6Commercial request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep6Commercial is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT fee-schedule set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/fee-schedules}. A partner with no
+     * fee rows yields an empty list; an unknown partner surfaces upstream's
+     * 404 as a {@code ResponseStatusException} from the rest/stub
+     * implementations.
+     */
+    default List<com.gme.pay.contracts.FeeScheduleView> getFeeSchedules(String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * The CURRENT FX config for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/fx-config}. Upstream 404 (unknown
+     * code OR no config yet) surfaces as a {@code ResponseStatusException}
+     * from the rest/stub implementations.
+     */
+    default com.gme.pay.contracts.FxConfigView getFxConfig(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getFxConfig is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT limits for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/limits}. Upstream 404 semantics as
+     * {@link #getFxConfig(String)}.
+     */
+    default com.gme.pay.contracts.LimitsView getLimits(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getLimits is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT contract for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/contract}. Upstream 404 semantics
+     * as {@link #getFxConfig(String)}.
+     */
+    default com.gme.pay.contracts.ContractView getContract(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getContract is not implemented by " + getClass().getName());
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias

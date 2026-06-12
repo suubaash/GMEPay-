@@ -269,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5) {
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6) {
       return Promise.reject(
         new ApiError(
           501,
@@ -432,6 +432,94 @@ export const adminApi = {
   getPrefundingConfig: (partnerCode) =>
     request(
       `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/prefunding-config`,
+    ),
+
+  // ---------- Commercial terms (Slice 6B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/commercial
+   * -> CommercialTermsView {
+   *      feeSchedule: { scheme, direction, fixedFeeUsd, bpsFee,
+   *                     tiers:[{fromVolumeUsd, bpsOverride}] },
+   *      fxConfig:    { marginBps, referenceRateSource, quoteHoldSeconds },
+   *      limits:      { perTxnMinUsd, perTxnMaxUsd, dailyCapUsd,
+   *                     monthlyCapUsd, annualCapUsd, licenseType },
+   *      contract:    { effectiveFrom, effectiveTo, autoRenewal,
+   *                     noticePeriodDays, refundChargebackPolicy,
+   *                     terminationReason }
+   *    }
+   *
+   * Money fields are decimal strings per docs/MONEY_CONVENTION.md.
+   */
+  getCommercialTerms: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/commercial`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-commercial
+   * body: { feeSchedule, fxConfig, limits, contract }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * Slice 6B.1 backend (agent 6B.1) exposes this endpoint. The generic
+   * patchDraftStep route (n=6) calls this same path; this alias provides a
+   * more readable call site for the commercialTermsSlice thunk.
+   */
+  patchDraftStep6Commercial: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-commercial`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  // ---------- Pricing rules (Slice 6A.1 backend) ----------------------------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/rules
+   * -> RuleView[]
+   *
+   * RuleView: {
+   *   id:               number,
+   *   schemeId:         string,
+   *   direction:        'INBOUND' | 'OUTBOUND' | 'BOTH',
+   *   mA:               string (decimal fraction, e.g. "0.0150" = 1.50%),
+   *   mB:               string (decimal fraction),
+   *   serviceChargeUsd: string (decimal),
+   *   validFrom:        ISO instant,
+   *   validTo:          ISO instant | null,
+   *   recordedAt:       ISO instant
+   * }
+   *
+   * A partner with no rules returns an empty array. An unknown partner
+   * surfaces a 404 ApiError.
+   * Slice 6A.1 backend (agent 6A.1) exposes this endpoint.
+   */
+  getRules: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/rules`),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-rules
+   * body: { rules: RuleCommand[] }
+   * -> RuleView[] (fresh current set after bulk replace)
+   *
+   * RuleCommand: { schemeId, direction, mA, mB, serviceChargeUsd }
+   * Margins and money are decimal STRINGS on the wire per
+   * docs/MONEY_CONVENTION.md. Bulk-replace semantics: the FULL desired rule
+   * set must be sent; an empty array clears all rules.
+   * Returns 200 with the fresh set; 400 on validation failure (bad direction /
+   * negative margins / duplicate keys / lib-domain mA+mB>=2% invariant for
+   * cross-border pairs); 404 unknown draft; 409 partner not ONBOARDING.
+   * Slice 6A.1 backend (agent 6A.1) exposes this endpoint.
+   *
+   * NOTE: do NOT remove step 6 from the 501 list in patchDraftStep — the
+   * generic step-6 route is still guarded there. This method calls the
+   * dedicated step-6-rules sub-resource, which is always available when 6A.1
+   * has landed.
+   *
+   * @param {string} partnerCode
+   * @param {Array}  rules  Full desired rule set (bulk replace). Empty array = clear.
+   */
+  patchDraftStep6Rules: (partnerCode, rules) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-rules`,
+      { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
     ),
 
   // ---------- System health ----------

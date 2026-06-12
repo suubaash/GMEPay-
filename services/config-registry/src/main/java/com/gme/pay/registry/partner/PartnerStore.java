@@ -173,6 +173,24 @@ public class PartnerStore {
             fresh.setValidFrom(prior.getValidFrom());
             fresh.setValidTo(prior.getValidTo());
 
+            // Slice 6 currency split (V016 Expand): the domain Partner record
+            // does not carry collection_ccy / settle_a_ccy yet, so a save through
+            // this four-field path must not silently erase a split the
+            // commercial-terms step wrote. Carry the prior split forward when it
+            // holds information beyond the legacy mirror (either side differs
+            // from the prior settlement_currency); when the prior split was just
+            // the mirror, leave both sides null so PartnerEntity.onPersist
+            // re-mirrors the (possibly updated) settlement_currency.
+            boolean priorSplitIsRealConfig =
+                    (prior.getCollectionCcy() != null
+                            && !prior.getCollectionCcy().equals(prior.getSettlementCurrency()))
+                    || (prior.getSettleACcy() != null
+                            && !prior.getSettleACcy().equals(prior.getSettlementCurrency()));
+            if (priorSplitIsRealConfig) {
+                fresh.setCollectionCcy(prior.getCollectionCcy());
+                fresh.setSettleACcy(prior.getSettleACcy());
+            }
+
             // Supersede the prior row: SCD-6 says we never overwrite content, only
             // close out the transaction-time interval. flush() forces this UPDATE
             // out before the new INSERT so the partial unique index partners_current

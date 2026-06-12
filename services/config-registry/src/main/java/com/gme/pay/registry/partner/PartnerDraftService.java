@@ -374,6 +374,8 @@ public class PartnerDraftService {
                 e.getType(),
                 e.getSettlementCurrency(),
                 e.getSettlementRoundingMode(),
+                e.getCollectionCcy(),
+                e.getSettleACcy(),
                 e.getLegalNameLocal(),
                 e.getLegalNameRomanized(),
                 e.getTaxId(),

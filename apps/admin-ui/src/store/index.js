@@ -22,6 +22,8 @@ import bankAccountsReducer from './bankAccountsSlice';
 import settlementConfigReducer from './settlementConfigSlice';
 import prefundingConfigReducer from './prefundingConfigSlice';
 import balanceReducer from './balanceSlice';
+import commercialTermsReducer from './commercialTermsSlice';
+import rulesReducer from './rulesSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -43,6 +45,8 @@ import balanceReducer from './balanceSlice';
  *  - bankAccounts      : bank-account list + per-row verification (Slice 4, agent 4A.2).
  *  - prefundingConfig  : prefunding config read path (Slice 5, agent 5A.2).
  *  - balance           : live balance + alerts per partner (Slice 5, agent 5B.2).
+ *  - commercialTerms   : commercial terms read/write path (Slice 6, agent 6B.2).
+ *  - rules             : pricing rules read/write path (Slice 6, agent 6A.2).
  *  - systemHealth      : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -66,6 +70,8 @@ export const store = configureStore({
     settlementConfig: settlementConfigReducer,
     prefundingConfig: prefundingConfigReducer,
     balance: balanceReducer,
+    commercialTerms: commercialTermsReducer,
+    rules: rulesReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },

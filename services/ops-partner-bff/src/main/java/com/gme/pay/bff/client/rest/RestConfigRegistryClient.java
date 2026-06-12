@@ -429,6 +429,122 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 6 (6A.1) pricing-rule endpoints (PARTNER_SETUP_PLAN §Slice 6)
+
+    @Override
+    public List<com.gme.pay.contracts.RuleView> patchDraftStep6Rules(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep6Rules request) {
+        try {
+            List<com.gme.pay.contracts.RuleView> saved = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-6-rules", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.RuleView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation / margin invariant → 400 with
+            // the offending rules[i] index, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.RuleView> listRules(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.RuleView> rules = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/rules", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<com.gme.pay.contracts.RuleView>>() {});
+            return rules == null ? List.of() : rules;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero rules returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    // -------- Slice 6 (6B.1) commercial-terms endpoints (PARTNER_SETUP_PLAN §Slice 6)
+
+    @Override
+    public com.gme.pay.contracts.CommercialTermsView patchDraftStep6Commercial(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep6Commercial request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-6-commercial", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.CommercialTermsView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation — including the 소액해외송금업
+            // caps — → 400 with the offending field, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.FeeScheduleView> getFeeSchedules(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.FeeScheduleView> fees = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/fee-schedules", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.FeeScheduleView>>() {});
+            return fees == null ? List.of() : fees;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero fee rows returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.FxConfigView getFxConfig(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/fx-config", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.FxConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner OR no fx config yet; propagate so the
+            // wizard can distinguish "nothing to rehydrate" from a transport
+            // failure.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.LimitsView getLimits(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/limits", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.LimitsView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Same 404 semantics as getFxConfig.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.ContractView getContract(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/contract", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.ContractView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Same 404 semantics as getFxConfig.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
     // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
 
     @Override
