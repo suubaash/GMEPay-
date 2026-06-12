@@ -8,3 +8,5 @@ build/
 
 # Claude Code personal settings (machine-specific, never commit)
 .claude/settings.local.json
+# Per-app Claude Preview launch configs (machine-specific)
+apps/*/.claude/launch.json

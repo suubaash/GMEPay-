@@ -269,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6) {
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6 && n !== 7) {
       return Promise.reject(
         new ApiError(
           501,
@@ -520,6 +520,79 @@ export const adminApi = {
     request(
       `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-rules`,
       { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
+    ),
+
+  // ---------- Step-7: Schemes & Corridors (Slice 7) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/step-7/schemes
+   * -> PartnerSchemeView[]
+   * PartnerSchemeView: {
+   *   schemeId, enabled, direction, role,
+   *   zeropayMerchantId, zeropaySubMerchantId, kftcInstitutionCode,
+   *   partnerTypeChar, approvalMethodCpm, approvalMethodMpm
+   * }
+   */
+  listPartnerSchemes: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7/schemes`,
+    ),
+
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/step-7/corridors
+   * -> PartnerCorridorView[]
+   * PartnerCorridorView: { id, srcCountry, srcCcy, dstCountry, dstCcy,
+   *   goLiveDate, active }
+   */
+  listPartnerCorridors: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7/corridors`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-7-schemes
+   * body: { schemes: PartnerSchemeCommand[] }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * PartnerSchemeCommand: {
+   *   schemeId, enabled, direction, role,
+   *   zeropayMerchantId?, zeropaySubMerchantId?, kftcInstitutionCode?,
+   *   partnerTypeChar?, approvalMethodCpm?, approvalMethodMpm?
+   * }
+   */
+  patchDraftStep7Schemes: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7-schemes`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-7-corridors
+   * body: { corridors: PartnerCorridorCommand[] }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * PartnerCorridorCommand: {
+   *   srcCountry, srcCcy, dstCountry, dstCcy, goLiveDate, active
+   * }
+   */
+  patchDraftStep7Corridors: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7-corridors`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * GET /v1/admin/schemes/{schemeId}/operating-hours
+   * -> OperatingHoursView[]
+   * OperatingHoursView: {
+   *   dayOfWeek: 'MON'|'TUE'|'WED'|'THU'|'FRI'|'SAT'|'SUN',
+   *   openTime:  'HH:mm' | null,
+   *   closeTime: 'HH:mm' | null,
+   *   closed:    boolean
+   * }
+   */
+  listSchemeOperatingHours: (schemeId) =>
+    request(
+      `/v1/admin/schemes/${encodeURIComponent(schemeId)}/operating-hours`,
     ),
 
   // ---------- System health ----------

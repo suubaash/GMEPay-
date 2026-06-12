@@ -55,13 +55,23 @@ class PartnerPostgresMigrationIT {
 
     @Test
     void flywayMigrationsApplyCleanlyOnPostgres16() {
-        Integer applied = jdbc.queryForObject(
-                "select count(*) from flyway_schema_history where success = true", Integer.class);
-        assertThat(applied)
-                .as("V001 (partners), V002 (effective dating), V003 (BIGINT surrogate),"
-                        + " V004 (bitemporal SCD-6), V005 (change_request), V006 (audit_log),"
-                        + " V007 (identity fields) and V008 (status) must all apply on PG16")
-                .isEqualTo(8);
+        Integer failed = jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where success = false", Integer.class);
+        assertThat(failed)
+                .as("no Flyway migration may have failed during boot on PG16")
+                .isZero();
+
+        // Version-targeted: assert every required Slice 1..7 migration is present + successful
+        // (count-based assertions rot every slice — see Slice 7 verifier note).
+        Integer requiredApplied = jdbc.queryForObject(
+                "select count(*) from flyway_schema_history"
+                        + " where success = true"
+                        + " and version in ('1','2','3','5','6','7','8','9','10','11','12','13','14',"
+                        + " '15','16','17','18','19','20','21','22','23','24')",
+                Integer.class);
+        assertThat(requiredApplied)
+                .as("V001..V003 + V005..V024 (V004 was dropped in Slice 1) — 23 migrations — must all apply on PG16")
+                .isEqualTo(23);
     }
 
     @Test

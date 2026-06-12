@@ -1617,4 +1617,263 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         }
         return RoundingMode.valueOf(raw);
     }
+
+    // -------- Slice 7 (7A/7B) scheme-enablement + corridor endpoints (PARTNER_SETUP_PLAN §Slice 7)
+
+    /** Slice 7 scheme-enablement sets — keyed by partner_code, mirrors bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.PartnerSchemeView>> schemeEnablementStore =
+            new LinkedHashMap<>();
+    /** Slice 7 corridor sets — keyed by partner_code, mirrors bulk-replace semantics. */
+    private final Map<String, List<com.gme.pay.contracts.PartnerCorridorView>> corridorStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the V022 + V023 BIGSERIALs (not needed for the BFF view — partnerId echoed). */
+
+    /** Mirrors config-registry's V022 schemeId CHECK roster. */
+    private static final java.util.Set<String> SCHEME_IDS = java.util.Set.of(
+            "ZEROPAY", "BAKONG", "NAPAS_247", "PROMPT_PAY", "FAST_SG", "QRIS", "KHQR");
+    /** Mirrors config-registry's V022 direction CHECK roster. */
+    private static final java.util.Set<String> SCHEME_DIRECTIONS = java.util.Set.of(
+            "INBOUND", "OUTBOUND", "BOTH");
+    /** Mirrors config-registry's V022 role CHECK roster. */
+    private static final java.util.Set<String> SCHEME_ROLES = java.util.Set.of(
+            "ACQUIRER", "ISSUER", "BOTH");
+    /** Mirrors config-registry's V022 approval-method CHECK roster. */
+    private static final java.util.Set<String> APPROVAL_METHODS = java.util.Set.of(
+            "CONFIRMATION", "SILENT");
+
+    /**
+     * In-memory step-7 scheme bulk replace mirroring config-registry's
+     * {@code SchemeService.replaceDraftSchemes}: full-set replace with the same
+     * validation roster (schemeId/direction/role rosters, duplicate schemeId key,
+     * enabled-ZEROPAY wiring invariant) so MockMvc tests exercise the 400 paths.
+     */
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerSchemeView> patchDraftStep7Schemes(
+            String partnerCode, PartnerCommand.UpdateStep7Schemes request) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null || request.schemes() == null) {
+            throw badRequest("schemes is required (send an empty list to clear all schemes)");
+        }
+        List<com.gme.pay.contracts.PartnerSchemeCommand> schemes = request.schemes();
+        java.util.Set<String> seenSchemes = new java.util.HashSet<>();
+        for (int i = 0; i < schemes.size(); i++) {
+            validateSchemeCommand(schemes.get(i), i);
+            if (!seenSchemes.add(schemes.get(i).schemeId())) {
+                throw badRequest("schemes[" + i + "]: duplicate schemeId '"
+                        + schemes.get(i).schemeId()
+                        + "' (at most one row per schemeId)");
+            }
+        }
+        List<com.gme.pay.contracts.PartnerSchemeView> fresh = new ArrayList<>(schemes.size());
+        for (com.gme.pay.contracts.PartnerSchemeCommand cmd : schemes) {
+            fresh.add(new com.gme.pay.contracts.PartnerSchemeView(
+                    draft.id(),
+                    cmd.schemeId(),
+                    cmd.direction(),
+                    cmd.role(),
+                    blankToNull(cmd.zeropayMerchantId()),
+                    blankToNull(cmd.zeropaySubMerchantId()),
+                    blankToNull(cmd.kftcInstitutionCode()),
+                    blankToNull(cmd.partnerTypeChar()),
+                    blankToNull(cmd.vaultSecretId()),
+                    blankToNull(cmd.approvalMethodCpm()),
+                    blankToNull(cmd.approvalMethodMpm()),
+                    cmd.enabled() == null || cmd.enabled()));
+        }
+        schemeEnablementStore.put(partnerCode, List.copyOf(fresh));
+        return List.copyOf(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerSchemeView> listSchemeEnablements(
+            String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        return schemeEnablementStore.getOrDefault(partnerCode, List.of());
+    }
+
+    /** Mirror of config-registry's {@code SchemeService.validateSchemeCommand} (same messages). */
+    private static void validateSchemeCommand(
+            com.gme.pay.contracts.PartnerSchemeCommand cmd, int index) {
+        String at = "schemes[" + index + "]";
+        if (cmd == null) {
+            throw badRequest(at + " must be an object");
+        }
+        if (cmd.schemeId() == null || cmd.schemeId().isBlank()
+                || !SCHEME_IDS.contains(cmd.schemeId())) {
+            throw badRequest(at + ".schemeId must be one of " + SCHEME_IDS
+                    + ", was: " + cmd.schemeId());
+        }
+        if (cmd.direction() == null || !SCHEME_DIRECTIONS.contains(cmd.direction())) {
+            throw badRequest(at + ".direction must be one of " + SCHEME_DIRECTIONS
+                    + ", was: " + cmd.direction());
+        }
+        if (cmd.role() == null || !SCHEME_ROLES.contains(cmd.role())) {
+            throw badRequest(at + ".role must be one of " + SCHEME_ROLES
+                    + ", was: " + cmd.role());
+        }
+        if (cmd.zeropayMerchantId() != null && cmd.zeropayMerchantId().length() > 40) {
+            throw badRequest(at + ".zeropayMerchantId must be at most 40 characters");
+        }
+        if (cmd.kftcInstitutionCode() != null && cmd.kftcInstitutionCode().length() > 20) {
+            throw badRequest(at + ".kftcInstitutionCode must be at most 20 characters");
+        }
+        if (cmd.approvalMethodCpm() != null && !cmd.approvalMethodCpm().isBlank()
+                && !APPROVAL_METHODS.contains(cmd.approvalMethodCpm())) {
+            throw badRequest(at + ".approvalMethodCpm must be one of " + APPROVAL_METHODS
+                    + ", was: " + cmd.approvalMethodCpm());
+        }
+        if (cmd.approvalMethodMpm() != null && !cmd.approvalMethodMpm().isBlank()
+                && !APPROVAL_METHODS.contains(cmd.approvalMethodMpm())) {
+            throw badRequest(at + ".approvalMethodMpm must be one of " + APPROVAL_METHODS
+                    + ", was: " + cmd.approvalMethodMpm());
+        }
+        // Enabled ZEROPAY must have zeropayMerchantId + kftcInstitutionCode (service invariant).
+        boolean isEnabled = cmd.enabled() == null || cmd.enabled();
+        if (isEnabled && "ZEROPAY".equals(cmd.schemeId())) {
+            if (cmd.zeropayMerchantId() == null || cmd.zeropayMerchantId().isBlank()) {
+                throw badRequest(at + ": an enabled ZEROPAY scheme row requires"
+                        + " zeropayMerchantId");
+            }
+            if (cmd.kftcInstitutionCode() == null || cmd.kftcInstitutionCode().isBlank()) {
+                throw badRequest(at + ": an enabled ZEROPAY scheme row requires"
+                        + " kftcInstitutionCode");
+            }
+        }
+    }
+
+    /**
+     * In-memory step-7 corridor bulk replace mirroring config-registry's
+     * {@code CorridorService.replaceDraftCorridors}: full-set replace with the
+     * same validation roster (country/currency format, duplicate lane key) so
+     * MockMvc tests exercise the 400 paths.
+     */
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerCorridorView> patchDraftStep7Corridors(
+            String partnerCode, PartnerCommand.UpdateStep7Corridors request) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null || request.corridors() == null) {
+            throw badRequest("corridors is required (send an empty list to clear all corridors)");
+        }
+        List<com.gme.pay.contracts.PartnerCorridorCommand> corridors = request.corridors();
+        java.util.Set<String> seenLanes = new java.util.HashSet<>();
+        for (int i = 0; i < corridors.size(); i++) {
+            validateCorridorCommand(corridors.get(i), i);
+            com.gme.pay.contracts.PartnerCorridorCommand cmd = corridors.get(i);
+            String lane = cmd.srcCountry() + ":" + cmd.srcCcy() + "->"
+                    + cmd.dstCountry() + ":" + cmd.dstCcy();
+            if (!seenLanes.add(lane)) {
+                throw badRequest("corridors[" + i + "]: duplicate lane " + lane
+                        + " (at most one row per corridor)");
+            }
+        }
+        List<com.gme.pay.contracts.PartnerCorridorView> fresh = new ArrayList<>(corridors.size());
+        for (com.gme.pay.contracts.PartnerCorridorCommand cmd : corridors) {
+            fresh.add(new com.gme.pay.contracts.PartnerCorridorView(
+                    draft.id(),
+                    cmd.srcCountry(),
+                    cmd.srcCcy(),
+                    cmd.dstCountry(),
+                    cmd.dstCcy(),
+                    cmd.goLiveDate(),
+                    cmd.isActive() == null || cmd.isActive()));
+        }
+        corridorStore.put(partnerCode, List.copyOf(fresh));
+        return List.copyOf(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerCorridorView> listCorridors(
+            String partnerCode) {
+        if (!draftStore.containsKey(partnerCode) && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        return corridorStore.getOrDefault(partnerCode, List.of());
+    }
+
+    /** Mirror of config-registry's {@code CorridorService.validateCorridorCommand} (same messages). */
+    private static void validateCorridorCommand(
+            com.gme.pay.contracts.PartnerCorridorCommand cmd, int index) {
+        String at = "corridors[" + index + "]";
+        if (cmd == null) {
+            throw badRequest(at + " must be an object");
+        }
+        if (cmd.srcCountry() == null || !cmd.srcCountry().matches("[A-Z]{2}")) {
+            throw badRequest(at + ".srcCountry must be ISO-3166 alpha-2"
+                    + " (2 uppercase letters), was: " + cmd.srcCountry());
+        }
+        if (cmd.srcCcy() == null || !cmd.srcCcy().matches("[A-Z]{3}")) {
+            throw badRequest(at + ".srcCcy must be ISO-4217 (3 uppercase letters), was: "
+                    + cmd.srcCcy());
+        }
+        if (cmd.dstCountry() == null || !cmd.dstCountry().matches("[A-Z]{2}")) {
+            throw badRequest(at + ".dstCountry must be ISO-3166 alpha-2"
+                    + " (2 uppercase letters), was: " + cmd.dstCountry());
+        }
+        if (cmd.dstCcy() == null || !cmd.dstCcy().matches("[A-Z]{3}")) {
+            throw badRequest(at + ".dstCcy must be ISO-4217 (3 uppercase letters), was: "
+                    + cmd.dstCcy());
+        }
+    }
+
+    /**
+     * Returns the seed operating-hours rows for well-known scheme ids; empty list
+     * for unknown ones (no 404 — reference data, unsupported schemeId is not an
+     * error from the BFF's perspective).
+     */
+    @Override
+    public List<com.gme.pay.contracts.SchemeOperatingHoursView> getSchemeOperatingHours(
+            String schemeId) {
+        if (schemeId == null || schemeId.isBlank()) {
+            return List.of();
+        }
+        return switch (schemeId.toUpperCase(java.util.Locale.ROOT)) {
+            // ZeroPay KR: Mon-Fri 09:00-22:00, Sat 09:00-17:00 (Asia/Seoul),
+            // 21:00 settlement cutoff Mon-Fri — approximate reference data.
+            case "ZEROPAY" -> List.of(
+                    hours(schemeId, 0, "09:00", "22:00", "21:00", "Asia/Seoul"),
+                    hours(schemeId, 1, "09:00", "22:00", "21:00", "Asia/Seoul"),
+                    hours(schemeId, 2, "09:00", "22:00", "21:00", "Asia/Seoul"),
+                    hours(schemeId, 3, "09:00", "22:00", "21:00", "Asia/Seoul"),
+                    hours(schemeId, 4, "09:00", "22:00", "21:00", "Asia/Seoul"),
+                    hours(schemeId, 5, "09:00", "17:00", null, "Asia/Seoul"));
+            // PayNow SG: 24x7 (Singapore Standard Time).
+            case "FAST_SG" -> List.of(
+                    hours(schemeId, 0, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 1, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 2, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 3, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 4, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 5, "00:00", "23:59:59", null, "Asia/Singapore"),
+                    hours(schemeId, 6, "00:00", "23:59:59", null, "Asia/Singapore"));
+            default -> List.of();
+        };
+    }
+
+    private static com.gme.pay.contracts.SchemeOperatingHoursView hours(
+            String schemeId, int weekday, String open, String close,
+            String cutoff, String tz) {
+        return new com.gme.pay.contracts.SchemeOperatingHoursView(
+                schemeId,
+                weekday,
+                java.time.LocalTime.parse(open),
+                java.time.LocalTime.parse(close),
+                cutoff == null ? null : java.time.LocalTime.parse(cutoff),
+                tz);
+    }
 }

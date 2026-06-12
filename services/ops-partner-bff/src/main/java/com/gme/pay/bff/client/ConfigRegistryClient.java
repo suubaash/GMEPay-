@@ -545,6 +545,73 @@ public interface ConfigRegistryClient {
             int size,
             long total) {}
 
+    // -------- Slice 7 (7A/7B) scheme-enablement + corridor endpoints (PARTNER_SETUP_PLAN §Slice 7)
+    //
+    // Defaults follow the established convention: the writes throw so a missing
+    // override is loud; the list reads degrade to empty. Both real implementations
+    // override all five.
+
+    /**
+     * Bulk-replace the scheme-enablement set on a draft (wizard step-7 "Next").
+     * Routes to {@code PATCH /v1/partners/draft/{partnerCode}/step-7/schemes};
+     * config-registry supersedes every current {@code partner_scheme} row (V022)
+     * and inserts the new set in one transaction (SCD-6, ADR-010), enforcing the
+     * enabled-ZEROPAY wiring invariant server-side. Returns the freshly-inserted
+     * current set as canonical {@link com.gme.pay.contracts.PartnerSchemeView}s.
+     */
+    default List<com.gme.pay.contracts.PartnerSchemeView> patchDraftStep7Schemes(
+            String partnerCode, PartnerCommand.UpdateStep7Schemes request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep7Schemes is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Bulk-replace the corridor set on a draft (wizard step-7 "Next").
+     * Routes to {@code PATCH /v1/partners/draft/{partnerCode}/step-7/corridors};
+     * config-registry supersedes every current {@code partner_corridor} row (V023)
+     * and inserts the new set in one transaction (SCD-6, ADR-010). Returns the
+     * freshly-inserted current set as canonical
+     * {@link com.gme.pay.contracts.PartnerCorridorView}s.
+     */
+    default List<com.gme.pay.contracts.PartnerCorridorView> patchDraftStep7Corridors(
+            String partnerCode, PartnerCommand.UpdateStep7Corridors request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep7Corridors is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT scheme-enablement set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/schemes}. A partner with no schemes
+     * yields an empty list; an unknown partner surfaces upstream's 404 as a
+     * {@code ResponseStatusException} from the rest/stub implementations.
+     */
+    default List<com.gme.pay.contracts.PartnerSchemeView> listSchemeEnablements(
+            String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * The CURRENT corridor set for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/corridors}. A partner with no
+     * corridors yields an empty list; an unknown partner surfaces upstream's 404
+     * as a {@code ResponseStatusException} from the rest/stub implementations.
+     */
+    default List<com.gme.pay.contracts.PartnerCorridorView> listCorridors(
+            String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * The operating-hours schedule for a scheme. Routes to
+     * {@code GET /v1/schemes/{schemeId}/operating-hours}. An unknown
+     * {@code schemeId} yields an empty list (no 404 — reference data is
+     * migration-seeded, unknown ids are unsupported schemes rather than errors).
+     */
+    default List<com.gme.pay.contracts.SchemeOperatingHoursView> getSchemeOperatingHours(
+            String schemeId) {
+        return List.of();
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — build a {@link PartnerCommand.CreateDraft}
      * directly. Retained so call-sites (Admin UI request mapping) compile during

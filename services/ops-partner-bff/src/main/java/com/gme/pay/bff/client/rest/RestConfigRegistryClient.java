@@ -747,6 +747,112 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 7 (7A/7B) scheme-enablement + corridor endpoints (PARTNER_SETUP_PLAN §Slice 7)
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerSchemeView> patchDraftStep7Schemes(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep7Schemes request) {
+        try {
+            List<com.gme.pay.contracts.PartnerSchemeView> saved = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-7/schemes", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerSchemeView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCorridorView> patchDraftStep7Corridors(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep7Corridors request) {
+        try {
+            List<com.gme.pay.contracts.PartnerCorridorView> saved = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-7/corridors", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCorridorView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerSchemeView> listSchemeEnablements(
+            String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.PartnerSchemeView> schemes = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/schemes", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerSchemeView>>() {});
+            return schemes == null ? List.of() : schemes;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero schemes returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listSchemeEnablements({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCorridorView> listCorridors(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.PartnerCorridorView> corridors = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/corridors", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCorridorView>>() {});
+            return corridors == null ? List.of() : corridors;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero corridors returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listCorridors({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.SchemeOperatingHoursView> getSchemeOperatingHours(
+            String schemeId) {
+        try {
+            List<com.gme.pay.contracts.SchemeOperatingHoursView> hours = restClient.get()
+                    .uri("/v1/schemes/{schemeId}/operating-hours", schemeId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.SchemeOperatingHoursView>>() {});
+            return hours == null ? List.of() : hours;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Unknown schemeId → 404 from config-registry; degrade to empty
+            // list (reference data — unsupported scheme, not an error the UI
+            // must distinguish from "no rows").
+            log.warn("getSchemeOperatingHours({}): upstream {}", schemeId, e.getStatusCode());
+            return List.of();
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getSchemeOperatingHours({}): {}",
+                    schemeId, network.getMessage());
+            return List.of();
+        }
+    }
+
     /** Parse the uploaded MIME type, falling back to octet-stream on junk input. */
     private static MediaType safeMediaType(String contentType) {
         if (contentType == null || contentType.isBlank()) {

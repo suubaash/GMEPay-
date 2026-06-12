@@ -252,6 +252,53 @@ public record PartnerCommand(
     }
 
     /**
+     * Body for "Save step-7 scheme enablements" on an already-created draft —
+     * Slice 7 (Scheme Enablement, see {@code docs/PARTNER_SETUP_PLAN.md}
+     * §"Slice 7"). Same <b>bulk replace</b> contract as {@link UpdateStep2} /
+     * {@link UpdateStep4} / {@link UpdateStep6Rules}: {@code schemes} carries
+     * the FULL desired scheme set, and config-registry supersedes every
+     * current {@code partner_scheme} row (V022) and inserts the new set in
+     * one transaction (SCD-6 paired writes per ADR-010). An empty list clears
+     * all schemes; {@code null} is rejected with 400. The read shape is
+     * {@link PartnerSchemeView}.
+     *
+     * <p>At most one row per {@code schemeId} — duplicates in the payload are
+     * a 400 (the V022 partial-unique index is the storage-level backstop). An
+     * ENABLED {@code ZEROPAY} element must carry {@code zeropayMerchantId} +
+     * {@code kftcInstitutionCode} (service-enforced, NOT a DB CHECK — drafts
+     * may stay incomplete while the row is disabled).
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-7 schemes controller binds this record directly.
+     */
+    public record UpdateStep7Schemes(List<PartnerSchemeCommand> schemes) {
+    }
+
+    /**
+     * Body for "Save step-7 corridors" on an already-created draft — Slice 7
+     * (Schemes &amp; Corridors, see {@code docs/PARTNER_SETUP_PLAN.md}
+     * §"Slice 7"), the sibling of {@link UpdateStep7Schemes}: the scheme
+     * enablements ride that record, the corridor matrix rides this one. Same
+     * <b>bulk replace</b> contract as {@link UpdateStep6Rules}:
+     * {@code corridors} carries the FULL desired corridor set, and
+     * config-registry supersedes every current {@code partner_corridor} row
+     * (V023) and inserts the new set in one transaction (SCD-6 paired writes
+     * per ADR-010). An empty list clears all corridors; {@code null} is
+     * rejected with 400. The read shape is {@link PartnerCorridorView}.
+     *
+     * <p>At most one corridor per ({@code srcCountry}, {@code srcCcy},
+     * {@code dstCountry}, {@code dstCcy}) lane — duplicates in the payload are
+     * a 400 (the V023 partial-unique index is the storage-level backstop).
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-7 corridors controller binds this record directly.
+     */
+    public record UpdateStep7Corridors(List<PartnerCorridorCommand> corridors) {
+    }
+
+    /**
      * Body for "Save step-5 changes" (Prefunding) on an already-created draft
      * — Slice 5 (see {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 5 —
      * Prefunding"). Full-state replace of the
