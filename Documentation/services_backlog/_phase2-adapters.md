@@ -2,6 +2,7 @@
 
 Post-go-live adapters (KHQR, QPay, QRIS, SBP, PromptPay). Placeholders only — expand each into a WS9-shaped ticket set when the partner contract lands.
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

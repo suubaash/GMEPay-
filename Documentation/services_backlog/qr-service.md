@@ -570,6 +570,7 @@
 - No sentences copied verbatim from spec_full.txt
 **Depends on:** 5.4-T03, 5.4-T07
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

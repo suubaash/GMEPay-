@@ -317,6 +317,37 @@ public interface ConfigRegistryClient {
                 "getSettlementPreview is not implemented by " + getClass().getName());
     }
 
+    // -------- Slice 5 (5A.1) prefunding-config endpoints (PARTNER_SETUP_PLAN §Slice 5)
+    //
+    // Defaults throw — like createDraft — so existing anonymous test fakes keep
+    // compiling; both real implementations override.
+
+    /**
+     * Save the step-5 prefunding panel onto a draft — full-state replace of
+     * the prefunding parameters. Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-5}; config-registry
+     * supersedes the current {@code partner_prefunding_config} row and inserts
+     * a fresh one in one transaction (SCD-6, ADR-010). Returns the fresh
+     * {@link com.gme.pay.contracts.PrefundingConfigView}. Money fields ride as
+     * decimal STRINGS per {@code docs/MONEY_CONVENTION.md}.
+     */
+    default com.gme.pay.contracts.PrefundingConfigView patchDraftStep5(
+            String partnerCode, PartnerCommand.UpdateStep5 request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep5 is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT prefunding config for a partner. Routes to
+     * {@code GET /v1/partners/{partnerCode}/prefunding-config}. Upstream 404
+     * (unknown code OR no config yet) surfaces as a
+     * {@code ResponseStatusException} from the rest/stub implementations.
+     */
+    default com.gme.pay.contracts.PrefundingConfigView getPrefundingConfig(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getPrefundingConfig is not implemented by " + getClass().getName());
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias

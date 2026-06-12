@@ -4193,6 +4193,7 @@
 - Review checklist has been signed off by all 4 required reviewers: Engineering Lead, Ops Lead, Security Lead, Release Manager
 **Depends on:** 16.6-T21, 16.6-T08, 16.6-T10, 16.6-T17, 16.6-T18, 16.6-T19, 16.6-T20
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -4308,20 +4309,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 
 **Acceptance.**
 - OWASP ZAP baseline scan shows WAF blocks; legit E2E still green
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **platform-infra** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.8-P03** (auth-identity, Slice 8) — mTLS cert exchange: partner_mtls_cert table + Nginx mTLS verification
 

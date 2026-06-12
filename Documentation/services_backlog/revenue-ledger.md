@@ -569,6 +569,7 @@
 - account present
 - rounding total in revenue report reconciles to sum of residuals
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -606,37 +607,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 
 **Acceptance.**
 - journal.posted consumable from topic
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **revenue-ledger** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 6 tickets owned by this service
-
-### 21.6-P09 — revenue-ledger: evaluate partner_fee_schedule + tier table
-*Slice:* **6** · *Est:* 90 min · *Role:* Backend · *Owner:* revenue-ledger · *ADR refs:* —
-
-**Context.** Revenue ledger reads partner_fee_schedule including tier-table override. On txn settle the ledger entry uses the correct fee.
-
-**Steps.** Update services/revenue-ledger/src/main/java/com/gme/pay/revenue/FeeCalculator.java to query partner_fee_schedule by (partner_id, scheme_id, direction, current); if any tier matches txn volume use that bps_fee_override else default bps_fee; emit `gmepay.revenue.fee_calculated` event.
-
-**Deliverable.** `services/revenue-ledger/src/main/java/com/gme/pay/revenue/FeeCalculator.java`
-
-**Acceptance.**
-- Fee with fixed=2.0 USD + bps=50 (0.5%) on 1000 USD txn = 7.0 USD
-- Tier override: volume 100000 USD with tier (100k-500k @ 25 bps) computes 250 USD bps fee
-- Missing fee schedule returns 422 FEE_SCHEDULE_NOT_FOUND (not a silent zero)
-- Existing revenue-ledger IT still green
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.8-P16** (reporting-compliance, Slice 8) — reporting-compliance: Hometax e-tax-invoice issuance on settled fee
 

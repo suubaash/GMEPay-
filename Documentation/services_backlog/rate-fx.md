@@ -1444,6 +1444,7 @@
 - Decimal amounts serialize as strings not numbers
 - m_a, m_b, cost_rate_* fields absent from RateQuoteResponse
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -1483,31 +1484,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - Lock survives service restart within TTL
 - Expired quote rejected with deterministic error code
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **rate-fx** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 6 tickets owned by this service
-
-### 21.6-P08 — rate-fx: read partner_fx_config + apply margin_bps + honor reference source
-*Slice:* **6** · *Est:* 90 min · *Role:* Backend · *Owner:* rate-fx · *ADR refs:* —
-
-**Context.** Wire rate-fx to pull margin from partner_fx_config instead of the static rule.m_a / m_b. Reference source switch routes to the configured rate feed.
-
-**Steps.** Update services/rate-fx/src/main/java/com/gme/pay/rate/QuoteEngine.java to read partner_fx_config via config-registry REST; apply margin_bps on top of the reference rate; if reference_rate_source=PARTNER_PROVIDED call the partner-supplied rate endpoint (Slice 7+); honor quote_hold_seconds when caching the quote.
-
-**Deliverable.** `services/rate-fx/src/main/java/com/gme/pay/rate/QuoteEngine.java`
-
-**Acceptance.**
-- Partner with margin_bps=150 (1.5%) on a mid-market USD/KRW=1380 gets quote 1399.7
-- quote_hold_seconds=600 keeps the quote retrievable for 10 minutes
-- PARTNER_PROVIDED source missing endpoint falls back to MID_MARKET with WARN log
-- Existing rate-fx 5-step engine boundary tests still green
 

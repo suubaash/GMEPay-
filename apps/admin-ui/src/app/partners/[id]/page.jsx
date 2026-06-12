@@ -22,6 +22,7 @@ import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import AuditTrail from '@/components/AuditTrail';
+import PrefundingTile from '@/components/PrefundingTile';
 import { useSnackbar } from '@/components/SnackbarProvider';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
@@ -33,6 +34,9 @@ import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
  *   { partnerId, type, settlementCurrency, settlementRoundingMode }
  *
  * The Edit dialog PUTs /v1/admin/partners/{id}/rounding-mode with { mode }.
+ *
+ * For OVERSEAS partners a third "Prefunding" tab is shown — it renders the
+ * PrefundingTile (balance gauge + alert list) from Slice 5B.
  */
 export default function PartnerDetailPage() {
   const params = useParams();
@@ -87,6 +91,13 @@ export default function PartnerDetailPage() {
   // back to the URL `id` param which is what the route is keyed on.
   const partnerCode = partner.partnerCode ?? id ?? '';
 
+  // Only OVERSEAS partners have a prefunding balance — show the Prefunding tab
+  // only when the loaded partner data confirms the type.
+  const isOverseas = partner.type === 'OVERSEAS';
+
+  // Tab indices: 0=Details, 1=Audit, 2=Prefunding (OVERSEAS only)
+  const prefundingTabIndex = 2;
+
   return (
     <Box>
       <Breadcrumbs
@@ -109,6 +120,14 @@ export default function PartnerDetailPage() {
         >
           <Tab label="Details" id="partner-tab-0" aria-controls="partner-tabpanel-0" />
           <Tab label="Audit" id="partner-tab-1" aria-controls="partner-tabpanel-1" />
+          {isOverseas && (
+            <Tab
+              label="Prefunding"
+              id="partner-tab-2"
+              aria-controls="partner-tabpanel-2"
+              data-testid="prefunding-tab"
+            />
+          )}
         </Tabs>
       </Box>
 
@@ -156,6 +175,18 @@ export default function PartnerDetailPage() {
       {activeTab === 1 && (
         <Box role="tabpanel" id="partner-tabpanel-1" aria-labelledby="partner-tab-1">
           <AuditTrail aggregateType="partner" aggregateId={partnerCode} />
+        </Box>
+      )}
+
+      {/* Prefunding tab — OVERSEAS partners only */}
+      {isOverseas && activeTab === prefundingTabIndex && (
+        <Box
+          role="tabpanel"
+          id="partner-tabpanel-2"
+          aria-labelledby="partner-tab-2"
+          data-testid="prefunding-tabpanel"
+        >
+          <PrefundingTile partnerCode={partnerCode} />
         </Box>
       )}
 

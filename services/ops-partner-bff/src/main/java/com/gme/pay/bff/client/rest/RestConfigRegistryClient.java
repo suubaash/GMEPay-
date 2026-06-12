@@ -394,6 +394,41 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 5 (5A.1) prefunding-config endpoints (PARTNER_SETUP_PLAN §Slice 5)
+
+    @Override
+    public com.gme.pay.contracts.PrefundingConfigView patchDraftStep5(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep5 request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-5", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PrefundingConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400 with the offending field,
+            // unknown draft → 404, non-ONBOARDING → 409) through to the Admin
+            // UI with the upstream message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.PrefundingConfigView getPrefundingConfig(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/prefunding-config", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PrefundingConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner OR no prefunding config yet; propagate so
+            // the wizard can distinguish "nothing to rehydrate" from a
+            // transport failure.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
     // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
 
     @Override

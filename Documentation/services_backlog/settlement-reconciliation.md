@@ -1464,6 +1464,7 @@
 - No method or class has a TODO referencing reconciliation logic that is actually implemented (clean TODO list)
 **Depends on:** 9.8-T09, 9.8-T10, 9.8-T13, 9.8-T16
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -1502,37 +1503,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 
 **Acceptance.**
 - Recon run consumes+produces files purely via object storage
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **settlement-reconciliation** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 4 tickets owned by this service
-
-### 21.4-P06 — settlement-reconciliation: read per-partner cycle/cutoff/method config + calendar
-*Slice:* **4** · *Est:* 90 min · *Role:* Backend · *Owner:* settlement-reconciliation · *ADR refs:* —
-
-**Context.** Wire settlement-reconciliation to read partner_settlement_config and business_day_calendar instead of hardcoded T+1 KST cutoff. Affects the daily settlement batch.
-
-**Steps.** Update services/settlement-reconciliation/src/main/java/com/gme/pay/recon/SettlementScheduler.java to fetch per-partner config via config-registry REST; replace the hardcoded `LocalTime.of(16,30)` with `partnerConfig.cutoffTime`; use BusinessDayCalendar.rollForward() for holiday handling; emit a per-partner `gmepay.settlement.scheduled` event with the computed pay-out date.
-
-**Deliverable.** `services/settlement-reconciliation/src/main/java/com/gme/pay/recon/SettlementScheduler.java; services/settlement-reconciliation/.../BusinessDayCalendar.java`
-
-**Acceptance.**
-- Two partners with different cutoffs settle on the dates their config specifies
-- Holiday roll integration test: Sep 22 (Tue) KST cutoff with T+1 + Chuseok rolls to Sep 28 (Mon)
-- Missing partner_settlement_config row makes the batch skip that partner with a WARN log + alert
-- Existing settlement IT still green
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.1-P02** (config-registry, Slice 1) — Flip PrincipalEntity/WebhookEndpointEntity/settlement-reconciliation joins to partner_id FK
 

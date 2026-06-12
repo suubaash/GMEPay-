@@ -122,6 +122,10 @@ ALTER TABLE partners ADD CONSTRAINT pk_partners PRIMARY KEY (id);
 --    under UNIQUE), so historical rows do not collide with each other or with
 --    the current row; current rows still collide on the partner_code value,
 --    giving the desired "one current row per code" guarantee.
+-- PostgreSQL requires the STORED keyword on GENERATED ALWAYS AS columns;
+-- H2 (≥2.2 in PostgreSQL mode) accepts the same form. Without STORED, PG
+-- raises `syntax error at end of input` and Flyway aborts the migration —
+-- caught when the slice was first booted against a real PG instance.
 ALTER TABLE partners ADD COLUMN current_partner_code VARCHAR(20)
-    GENERATED ALWAYS AS (CASE WHEN superseded_at IS NULL THEN partner_code END);
+    GENERATED ALWAYS AS (CASE WHEN superseded_at IS NULL THEN partner_code END) STORED;
 CREATE UNIQUE INDEX partners_current ON partners(current_partner_code);

@@ -3147,6 +3147,7 @@
 - Two calls to POST /checkins produce two separate audit entries (append-only, no upsert on audit).
 **Depends on:** 16.5-T28
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

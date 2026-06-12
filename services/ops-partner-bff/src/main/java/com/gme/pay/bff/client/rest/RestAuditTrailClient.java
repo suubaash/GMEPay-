@@ -6,6 +6,7 @@ import com.gme.pay.contracts.PageView;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -39,6 +40,7 @@ public class RestAuditTrailClient implements AuditTrailClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestAuditTrailClient(
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
         this(RestClient.builder().baseUrl(baseUrl).build());

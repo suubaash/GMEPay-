@@ -51,11 +51,13 @@ CREATE TABLE audit_log (
     -- (PROPOSED / APPROVED / APPLIED / REJECTED / SUSPENDED / etc).
     event_type      VARCHAR(64)  NOT NULL,
 
-    -- Before/after row snapshots as JSON bytes. JSONB on PostgreSQL for queryability;
-    -- under H2-in-PostgreSQL-mode this is stored as JSON (H2 lacks a native JSONB
-    -- column type but accepts the same DDL when you spell it lower-case).
-    before_jsonb    JSONB,
-    after_jsonb     JSONB,
+    -- Before/after row snapshots as raw JSON bytes. BYTEA on both PostgreSQL and
+    -- H2 (PostgreSQL mode) so AuditLogEntity's @Lob byte[] mapping binds cleanly
+    -- without a vendor-specific JsonType handler. The hash chain canonicalises
+    -- over the raw bytes — we never query into the JSON. (Slice 8 hardening may
+    -- revisit if regulator queries demand JSONB.)
+    before_jsonb    BYTEA,
+    after_jsonb     BYTEA,
 
     -- 32-byte SHA-256 outputs. prev_hash references the prior row of the SAME
     -- (aggregate_type, aggregate_id) — the chain is per-aggregate, not per-table.

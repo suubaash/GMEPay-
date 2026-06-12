@@ -2890,6 +2890,7 @@
 - No horizontal scrollbar appears on TransactionHistoryPage at 1,280px viewport width.
 **Depends on:** 12.3-T06, 12.3-T04
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

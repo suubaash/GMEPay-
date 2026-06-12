@@ -6,7 +6,6 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
 
@@ -71,16 +70,17 @@ public class AuditLogEntity {
     private String eventType;
 
     /**
-     * Raw JSON bytes of the BEFORE snapshot. Mapped via {@code @Lob} so H2 stores
-     * it as a BLOB rather than truncating to VARBINARY default length; PostgreSQL
-     * accepts the same mapping and stores it in {@code JSONB} per the V006 DDL.
+     * Raw JSON bytes of the BEFORE snapshot. Mapped as {@code BYTEA} on PostgreSQL
+     * and {@code VARBINARY} on H2. {@code @Lob} is intentionally avoided: on
+     * PostgreSQL it would route byte[] through Large Objects (OID/BIGINT pointers)
+     * which then collides with the BYTEA column type in V006. Hibernate 6 + recent
+     * H2 versions accept unbounded byte[] without truncation, so plain byte[] is
+     * sufficient on both engines.
      */
-    @Lob
-    @Column(name = "before_jsonb", updatable = false)
+    @Column(name = "before_jsonb", updatable = false, columnDefinition = "bytea")
     private byte[] beforeJsonb;
 
-    @Lob
-    @Column(name = "after_jsonb", updatable = false)
+    @Column(name = "after_jsonb", updatable = false, columnDefinition = "bytea")
     private byte[] afterJsonb;
 
     @Column(name = "prev_hash", nullable = false, length = 32, updatable = false)

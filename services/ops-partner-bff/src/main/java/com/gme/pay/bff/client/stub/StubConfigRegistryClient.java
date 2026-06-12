@@ -572,6 +572,158 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         return remainder == 1;
     }
 
+    // -------- Slice 5 (5A.1) prefunding-config endpoints (PARTNER_SETUP_PLAN §Slice 5)
+
+    /** Slice 5 prefunding configs — keyed by partner_code, mirrors the SCD-6 current row. */
+    private final Map<String, com.gme.pay.contracts.PrefundingConfigView> prefundingStore =
+            new LinkedHashMap<>();
+    /** Stand-in for the {@code partner_prefunding_config} BIGSERIAL. */
+    private final AtomicLong prefundingSeq = new AtomicLong(300_000L);
+
+    /** Mirrors config-registry's V015 funding_model CHECK roster. */
+    private static final java.util.Set<String> FUNDING_MODELS = java.util.Set.of(
+            "PREFUNDED", "POSTPAID", "HYBRID");
+    /** Mirrors {@code PrefundingConfigService.DEFAULT_TOP_UP_REFERENCE_PATTERN}. */
+    private static final String DEFAULT_TOP_UP_REFERENCE_PATTERN =
+            "GMP-{partner_code}-{yyyyMMdd}";
+
+    /**
+     * In-memory step-5 prefunding upsert mirroring config-registry's
+     * {@code PrefundingConfigService.upsertStep5}: full-state replace with the
+     * same defaults (threshold 10000, tiers armed, auto-suspend on, the
+     * GMP-{partner_code}-{yyyyMMdd} pattern) and the same validation roster
+     * (funding model, positive scale-4 money, {partner_code} placeholder,
+     * FLOAT_TOPUP purpose checked against the stub's own bank-account set) so
+     * MockMvc tests exercise the 400 path through the stub.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.PrefundingConfigView patchDraftStep5(
+            String partnerCode, PartnerCommand.UpdateStep5 request) {
+        if (!draftStore.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        validatePrefunding(request);
+        validateTopUpAccount(partnerCode, request.floatTopUpBankAccountId());
+
+        com.gme.pay.contracts.PrefundingConfigView prior = prefundingStore.get(partnerCode);
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.PrefundingConfigView fresh =
+                new com.gme.pay.contracts.PrefundingConfigView(
+                        prefundingSeq.getAndIncrement(),
+                        request.fundingModel(),
+                        scale4(request.openingBalanceUsd()),
+                        scale4(request.lowBalanceThresholdUsd() == null
+                                ? new java.math.BigDecimal("10000")
+                                : request.lowBalanceThresholdUsd()),
+                        request.alertTier70() == null || request.alertTier70(),
+                        request.alertTier85() == null || request.alertTier85(),
+                        request.alertTier95() == null || request.alertTier95(),
+                        scale4(request.creditLimitUsd()),
+                        request.autoSuspendOnBreach() == null || request.autoSuspendOnBreach(),
+                        request.floatTopUpBankAccountId(),
+                        request.topUpReferencePattern() == null
+                                || request.topUpReferencePattern().isBlank()
+                                ? DEFAULT_TOP_UP_REFERENCE_PATTERN
+                                : request.topUpReferencePattern(),
+                        scale4(request.collateralAmountUsd()),
+                        prior == null ? now : prior.validFrom(),
+                        null,
+                        now);
+        prefundingStore.put(partnerCode, fresh);
+        return fresh;
+    }
+
+    @Override
+    public synchronized com.gme.pay.contracts.PrefundingConfigView getPrefundingConfig(
+            String partnerCode) {
+        requireKnownPartner(partnerCode);
+        com.gme.pay.contracts.PrefundingConfigView view = prefundingStore.get(partnerCode);
+        if (view == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no prefunding config for partner '" + partnerCode + "'");
+        }
+        return view;
+    }
+
+    /** Mirror of config-registry's {@code PrefundingConfigService.validate} (same messages). */
+    private static void validatePrefunding(PartnerCommand.UpdateStep5 cmd) {
+        if (cmd.fundingModel() == null || cmd.fundingModel().isBlank()
+                || !FUNDING_MODELS.contains(cmd.fundingModel())) {
+            throw badRequest("fundingModel must be one of " + FUNDING_MODELS
+                    + ", was: " + cmd.fundingModel());
+        }
+        validateMoney("openingBalanceUsd", cmd.openingBalanceUsd(), false);
+        validateMoney("lowBalanceThresholdUsd", cmd.lowBalanceThresholdUsd(), true);
+        validateMoney("creditLimitUsd", cmd.creditLimitUsd(), false);
+        validateMoney("collateralAmountUsd", cmd.collateralAmountUsd(), false);
+        if (cmd.topUpReferencePattern() != null && !cmd.topUpReferencePattern().isBlank()) {
+            if (cmd.topUpReferencePattern().length() > 60) {
+                throw badRequest("topUpReferencePattern must be at most 60 characters");
+            }
+            if (!cmd.topUpReferencePattern().contains("{partner_code}")) {
+                throw badRequest("topUpReferencePattern must contain the {partner_code}"
+                        + " placeholder (top-up wires auto-reconcile on it), was: "
+                        + cmd.topUpReferencePattern());
+            }
+        }
+        if (cmd.floatTopUpBankAccountId() != null && cmd.floatTopUpBankAccountId() <= 0) {
+            throw badRequest("floatTopUpBankAccountId must be a positive bank-account id");
+        }
+    }
+
+    /** Mirror of config-registry's {@code PrefundingConfigService.validateMoney}. */
+    private static void validateMoney(String field, java.math.BigDecimal value,
+                                      boolean strictlyPositive) {
+        if (value == null) {
+            return;
+        }
+        if (strictlyPositive && value.signum() <= 0) {
+            throw badRequest(field + " must be greater than 0, was: " + value.toPlainString());
+        }
+        if (!strictlyPositive && value.signum() < 0) {
+            throw badRequest(field + " must not be negative, was: " + value.toPlainString());
+        }
+        if (value.stripTrailingZeros().scale() > 4) {
+            throw badRequest(field + " must have at most 4 decimal places"
+                    + " (NUMERIC(19,4)), was: " + value.toPlainString());
+        }
+    }
+
+    /**
+     * Mirror of config-registry's
+     * {@code PrefundingConfigService.validateTopUpAccount}: the referenced row
+     * must be in the partner's CURRENT bank-account set with
+     * purpose=FLOAT_TOPUP.
+     */
+    private void validateTopUpAccount(String partnerCode, Long accountId) {
+        if (accountId == null) {
+            return;
+        }
+        com.gme.pay.contracts.BankAccountView account =
+                bankAccountStore.getOrDefault(partnerCode, List.of()).stream()
+                        .filter(b -> accountId.equals(b.id()))
+                        .findFirst()
+                        .orElseThrow(() -> badRequest("floatTopUpBankAccountId " + accountId
+                                + " is not a current bank account of partner '"
+                                + partnerCode + "'"));
+        if (!"FLOAT_TOPUP".equals(account.purpose())) {
+            throw badRequest("floatTopUpBankAccountId " + accountId
+                    + " must reference a bank account with purpose=FLOAT_TOPUP,"
+                    + " but its purpose is " + account.purpose());
+        }
+    }
+
+    /** Scale-4 normalisation mirroring {@code PrefundingConfigService.normalizeMoney}. */
+    private static java.math.BigDecimal scale4(java.math.BigDecimal value) {
+        return value == null ? null : value.setScale(4);
+    }
+
     // -------- Slice 3 (3B.1) KYB endpoints (PARTNER_SETUP_PLAN §Slice 3) ------
 
     /**

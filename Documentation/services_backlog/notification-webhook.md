@@ -328,6 +328,7 @@
 - K8s deployment.yaml has replicas: 2 and memory limit 512Mi
 - Flyway migration location points to db/migration inside the module classpath
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -367,39 +368,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - payment.approved produces a signed POST to subscriber
 - Poison message lands in DLQ, not retry loop
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **notification-webhook** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 5 tickets owned by this service
-
-### 21.5-P04 — notification-webhook: route gmepay.prefunding.alert by recipient list
-*Slice:* **5** · *Est:* 60 min · *Role:* Backend · *Owner:* notification-webhook · *ADR refs:* —
-
-**Context.** Consume the prefunding alert topic; resolve recipient list from partner_contact rows where role=FINANCE; send email + webhook (if subscribed) per recipient.
-
-**Steps.** Add @KafkaListener(topics="gmepay.prefunding.alert") to services/notification-webhook AlertConsumer; for each alert resolve partner_contact rows; for each recipient with email, send via Email port (SES adapter behind it); also POST to partner_webhook subscribers filtered to event_types containing PREFUNDING_ALERT; per-recipient backoff+DLQ.
-
-**Deliverable.** `services/notification-webhook/src/main/java/com/gme/pay/notify/PrefundingAlertConsumer.java`
-
-**Acceptance.**
-- Alert with 2 FINANCE contacts sends 2 emails
-- Webhook subscriber receives a signed POST with HMAC header
-- Poison message lands in DLQ topic gmepay.prefunding.alert.dlq
-- Failed delivery retried with exponential backoff up to 5 attempts
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.1-P02** (config-registry, Slice 1) — Flip PrincipalEntity/WebhookEndpointEntity/settlement-reconciliation joins to partner_id FK
-- **21.5-P03** (prefunding, Slice 5) — Prefunding: tier alert publisher (70/85/95% + auto-suspend on breach)
-- **21.8-P17** (ops-partner-bff, Slice 8) — BFF endpoint PATCH /v1/admin/partners/draft/{id}/step-8 + activation orchestration
 

@@ -269,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2 && n !== 3 && n !== 4) {
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5) {
       return Promise.reject(
         new ApiError(
           501,
@@ -408,6 +408,30 @@ export const adminApi = {
   getAuditTrail: (aggregateType, aggregateId, page = 0, size = 20) =>
     request(
       `/v1/admin/audit-trail${qs({ aggregateType, aggregateId, page, size })}`,
+    ),
+
+  // ---------- Prefunding config (Slice 5A.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/prefunding-config
+   * -> PrefundingConfigView {
+   *      fundingModel:            'PREFUNDED'|'POSTPAID'|'HYBRID',
+   *      openingBalanceUsd:       string (decimal),
+   *      lowBalanceThresholdUsd:  string (decimal),
+   *      alertTier70:             boolean,
+   *      alertTier85:             boolean,
+   *      alertTier95:             boolean,
+   *      creditLimitUsd:          string (decimal),
+   *      autoSuspendOnBreach:     boolean,
+   *      floatTopUpBankAccountId: string | null,
+   *      topUpReferencePattern:   string,
+   *      collateralAmountUsd:     string (decimal),
+   *    }
+   *
+   * Money fields are decimal strings per docs/MONEY_CONVENTION.md.
+   */
+  getPrefundingConfig: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/prefunding-config`,
     ),
 
   // ---------- System health ----------
@@ -555,4 +579,30 @@ export const adminApi = {
       `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-4-settlement`,
       { method: 'PATCH', body: JSON.stringify(body ?? {}) },
     ),
+
+  // ---------- Prefunding balance (Slice 5B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/balance -> BalanceView
+   * BalanceView: {
+   *   currency:        string  (ISO-4217),
+   *   balance:         string  (BigDecimal decimal string),
+   *   threshold:       string  (BigDecimal decimal string),
+   *   pctOfThreshold:  number  (0-100, current balance as % of threshold)
+   * }
+   */
+  getPartnerBalance: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/balance`),
+
+  /**
+   * GET /v1/admin/partners/{partnerCode}/balance-alerts -> BalanceAlertView[]
+   * BalanceAlertView: {
+   *   tier:         'WARNING'|'CRITICAL',
+   *   balanceUsd:   string  (BigDecimal decimal string),
+   *   thresholdUsd: string  (BigDecimal decimal string),
+   *   raisedAt:     ISO-8601 instant string,
+   *   acknowledged: boolean
+   * }
+   */
+  getBalanceAlerts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/balance-alerts`),
 };

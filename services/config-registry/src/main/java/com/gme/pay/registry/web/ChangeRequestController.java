@@ -118,6 +118,47 @@ public class ChangeRequestController {
     }
 
     /**
+     * Create a change request and submit it for checker review (maker path,
+     * DRAFT → PROPOSED in one call — {@link ChangeRequestService#propose}).
+     * Returns 201 with the view in state=PROPOSED.
+     *
+     * <p>Slice 5 wires the prefunding service's breach auto-suspend through
+     * this endpoint: on a balance BREACH it POSTs
+     * {@code {aggregateType: "partner", aggregateId: <partnerCode>,
+     * proposedBy: "system", payloadJsonb: "{\"status\":\"SUSPENDED\"}"}} —
+     * the suspension still waits for a second pair of eyes (ADR-008; the
+     * {@code (system, system)} CHECK carve-out covers bot-approved flows).
+     *
+     * @param body must carry non-blank {@code aggregateType},
+     *             {@code aggregateId} and {@code proposedBy};
+     *             {@code payloadJsonb} / {@code appliesToFieldSet} optional
+     * @throws ResponseStatusException 400 when a required field is missing
+     */
+    @PostMapping
+    public ResponseEntity<ChangeRequestView> create(@RequestBody CreateRequest body) {
+        if (body == null || isBlank(body.aggregateType())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "aggregateType is required");
+        }
+        if (isBlank(body.aggregateId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "aggregateId is required");
+        }
+        if (isBlank(body.proposedBy())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "proposedBy is required");
+        }
+        ChangeRequest proposed = service.propose(
+                body.aggregateType(), body.aggregateId(), body.proposedBy(),
+                body.payloadJsonb(), body.appliesToFieldSet());
+        return ResponseEntity.status(HttpStatus.CREATED).body(toView(proposed));
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    /**
      * Approve a PROPOSED change request, then immediately apply it to the
      * underlying aggregate. Returns the view in state=APPLIED on success.
      *
@@ -224,6 +265,14 @@ public class ChangeRequestController {
     }
 
     // -------- request / response bodies -------------------------------------
+
+    /** Body for {@link #create}. */
+    public record CreateRequest(
+            String aggregateType,
+            String aggregateId,
+            String proposedBy,
+            String payloadJsonb,
+            String[] appliesToFieldSet) {}
 
     /** Body for {@link #approve}. */
     public record ApproveRequest(String approvedBy) {}

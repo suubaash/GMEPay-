@@ -2800,6 +2800,7 @@
 - Production SFTP credentials received from 한결원 (or confirmed to be forthcoming) as a result of passing certification.
 **Depends on:** 9.10-T35
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -2823,37 +2824,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - ./gradlew :services:scheme-adapter-zeropay:test green with Testcontainers
 - Migration checksum stable; no H2-mode workarounds left
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **scheme-adapter-zeropay** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 7 tickets owned by this service
-
-### 21.7-P03 — scheme-adapter-zeropay: rewrite SchemeRouter from hardcoded to data-driven
-*Slice:* **7** · *Est:* 120 min · *Role:* Backend · *Owner:* scheme-adapter-zeropay · *ADR refs:* —
-
-**Context.** Today SchemeRouter has `if (country == KR) route to ZeroPay`. Slice 7 makes it data-driven: routes by partner_scheme + partner_corridor joins. Adding a new corridor requires no code change.
-
-**Steps.** Replace `services/scheme-adapter-zeropay/src/main/java/com/gme/pay/zeropay/SchemeRouter.java` hardcoded logic with `RuleSetEngine.resolve(partnerId, srcCountry, srcCcy, dstCountry, dstCcy): SchemeRoute` reading from config-registry; cache routes in Redis with TTL=300s; emit `gmepay.scheme.routed` audit event with the resolved route.
-
-**Deliverable.** `services/scheme-adapter-zeropay/src/main/java/com/gme/pay/zeropay/SchemeRouter.java; services/scheme-adapter-zeropay/.../RuleSetEngine.java`
-
-**Acceptance.**
-- Second KR partner with different sub-merchant config routes correctly without code change
-- Inactive corridor (is_active=false) returns CORRIDOR_INACTIVE 422
-- Cache hit on repeat lookup (Redis MONITOR shows single DB call)
-- Adding a brand-new corridor via SQL INSERT makes the route work next call
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.4-P04** (shared-libs, Slice 4) — AccountVerificationProvider port + KftcVerificationAdapter + StubVerificationAdapter
 

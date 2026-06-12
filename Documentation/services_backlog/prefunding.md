@@ -1939,6 +1939,7 @@
 - Section 5 states 24h SLA from SCHEME_SENT timestamp and names the ops.alerts alert topic
 **Depends on:** 6.5-T12, 6.5-T13, 6.5-T14, 6.5-T16, 6.5-T17
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -1962,46 +1963,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - ./gradlew :services:prefunding:test green with Testcontainers
 - Migration checksum stable; no H2-mode workarounds left
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **prefunding** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 5 tickets owned by this service
-
-### 21.5-P02 — Wire PartnerBalanceEntity into partner-create transaction (BFF orchestration)
-*Slice:* **5** · *Est:* 75 min · *Role:* Backend · *Owner:* prefunding · *ADR refs:* —
-
-**Context.** On partner activation, if funding_model in (PREFUNDED, HYBRID) the prefunding service must create the PartnerBalanceEntity row in the same logical transaction as activation. Done via saga (BFF orchestrates: activate -> create balance -> commit or compensate).
-
-**Steps.** Extend ops-partner-bff's PartnerActivationOrchestrator (Slice 8) to invoke prefunding's POST /v1/balances/{partnerId} after config-registry activation; saga ID stored on change_request; compensating action on failure: rollback activation; on success emit `gmepay.partner.activated` event.
-
-**Deliverable.** `services/ops-partner-bff/src/main/java/com/gme/pay/bff/partner/PartnerActivationOrchestrator.java; services/prefunding/src/main/java/com/gme/pay/prefunding/BalanceController.java`
-
-**Acceptance.**
-- Activating an OVERSEAS partner with PREFUNDED model creates exactly one PartnerBalanceEntity row
-- If prefunding service is down, activation fails atomically (config-registry status rolls back)
-- POSTPAID partners do not create a balance row
-- Saga emits success event only after both steps committed
-
-### 21.5-P03 — Prefunding: tier alert publisher (70/85/95% + auto-suspend on breach)
-*Slice:* **5** · *Est:* 90 min · *Role:* Backend · *Owner:* prefunding · *ADR refs:* —
-
-**Context.** When a partner's balance crosses a tier threshold, prefunding emits a Kafka event consumed by notification-webhook. When balance < 0 (or breach + auto_suspend_on_breach=true), prefunding publishes a system-proposed change_request to suspend the partner.
-
-**Steps.** Add `BalanceTierMonitor.java` @Component to services/prefunding; on every balance delta evaluate against partner_prefunding_config tiers; publish to topic `gmepay.prefunding.alert` with payload `{partnerId, tier, currentBalanceUsd, thresholdUsd}`; on breach publish a change_request via config-registry's /v1/admin/partners/change-requests with proposer='system' and payload `{status: SUSPENDED, reason: LOW_BALANCE_BREACH}`.
-
-**Deliverable.** `services/prefunding/src/main/java/com/gme/pay/prefunding/BalanceTierMonitor.java; services/prefunding/src/main/java/com/gme/pay/prefunding/PrefundingEventPublisher.java`
-
-**Acceptance.**
-- Balance crossing 70% emits tier_70 event exactly once until reset
-- Balance < 0 with auto_suspend_on_breach=true creates a PROPOSED change_request
-- Operator manually approves to apply the suspend
-- Balance < 0 with auto_suspend_on_breach=false emits the alert only, no change_request
 

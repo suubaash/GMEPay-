@@ -2229,6 +2229,7 @@
 - MockMvc slice test in services/rate-fx confirms a thrown GmeException(RATE_QUOTE_EXPIRED) returns the canonical envelope with HTTP 422.
 **Depends on:** 8.7-T04, 8.7-T08
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---
@@ -2252,70 +2253,4 @@ These tickets convert this service's PARTIAL audit findings into DONE and add wo
 **Acceptance.**
 - Event visible via kafka-console-consumer in compose stack
 - Fallback to LogEventPublisher when no broker configured
-
----
-
-<!-- ws-21-partner-setup-rebaseline -->
-
-## Partner Setup re-baseline tickets (WS 21)
-
-These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **shared-libs** live here; cross-service contributions are listed at the bottom for awareness.
-
-> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
-
-### Slice 3 tickets owned by this service
-
-### 21.3-P03 — lib-kyb: define KybProvider port + DTOs (KybRequest, KybResult, ScreeningHit)
-*Slice:* **3** · *Est:* 60 min · *Role:* Backend · *Owner:* shared-libs · *ADR refs:* ADR-009
-
-**Context.** Per ADR-009 vendor-agnostic KybProvider port lives in a new lib. Allows StubKybAdapter (Slice 3 internal dev) and OctaKybAdapter (Slice 3+ when sandbox lands) to plug behind the same interface.
-
-**Steps.** Create new module `lib-kyb` with `KybProvider.java` interface: `KybResult screen(KybRequest req)`; KybRequest record with partnerView + ubo list + screening_purpose enum (ONBOARDING|PERIODIC|EVENT_DRIVEN); KybResult record with decision enum (CLEAR|HIT|MANUAL_REVIEW), List<ScreeningHit> hits, vendor_reference, screened_at; ScreeningHit record with subject_name, match_score (0-100), list_source enum (OFAC|UN|EU|MAS|JFIU|PEP|ADVERSE_MEDIA); add @Retry / @CircuitBreaker abstraction marker.
-
-**Deliverable.** `lib-kyb/build.gradle; lib-kyb/src/main/java/com/gme/pay/kyb/KybProvider.java; lib-kyb/src/main/java/com/gme/pay/kyb/KybRequest.java; lib-kyb/src/main/java/com/gme/pay/kyb/KybResult.java; lib-kyb/src/main/java/com/gme/pay/kyb/ScreeningHit.java`
-
-**Acceptance.**
-- lib-kyb compiles standalone with no Spring dependencies
-- All DTOs are Java records
-- KybResult.decision enum has exactly three values: CLEAR, HIT, MANUAL_REVIEW
-- ScreeningHit.match_score is int 0-100; Javadoc states the range
-
-### 21.3-P04 — lib-vault: MinIO SDK wrapper with object-lock + virus-scan hook + Vault-key encryption
-*Slice:* **3** · *Est:* 120 min · *Role:* Backend · *Owner:* shared-libs · *ADR refs:* ADR-006
-
-**Context.** Per ADR-006 documents go to MinIO bucket `gmepay-partner-vault` in object-lock compliance mode. lib-vault wraps the MinIO SDK with: virus-scan hook (ClamAV adapter, defaultable to NoopScanner for dev), Vault-key envelope encryption (SSE-S3 with KMS keys held in HashiCorp Vault), audit-log emission on every put/get.
-
-**Steps.** Create `lib-vault` module; VaultClient interface with put(VaultKey, byte[], Metadata)/get(VaultKey)/list(prefix); MinioVaultAdapter implementation using the MinIO Java SDK; bucket creation idempotent (createBucket with object-lock if absent); VirusScanner port + ClamAvScanner + NoopScanner; KmsEnvelopeEncryptor wrapping AES-256-GCM with the data-key fetched from Vault KV; emit `gmepay.audit.vault` Kafka event on every operation.
-
-**Deliverable.** `lib-vault/build.gradle; lib-vault/src/main/java/com/gme/pay/vault/VaultClient.java; lib-vault/.../MinioVaultAdapter.java; lib-vault/.../VirusScanner.java; lib-vault/.../KmsEnvelopeEncryptor.java`
-
-**Acceptance.**
-- Bucket `gmepay-partner-vault` created with object-lock compliance mode on first run
-- Uploaded objects carry SSE-S3 metadata and a `x-amz-meta-virus-scan: clean` header
-- Attempt to overwrite an object-lock-protected version raises an error and emits audit event
-- Audit event `gmepay.audit.vault` carries actor, object_key, action
-
-### Slice 4 tickets owned by this service
-
-### 21.4-P04 — AccountVerificationProvider port + KftcVerificationAdapter + StubVerificationAdapter
-*Slice:* **4** · *Est:* 90 min · *Role:* Backend · *Owner:* shared-libs · *ADR refs:* —
-
-**Context.** 계좌실명조회 — KFTC real-name account verification. Port abstraction in `lib-kyb` (vendor-adjacent), real adapter calls KFTC, stub for dev.
-
-**Steps.** Add `AccountVerificationProvider.java` to lib-kyb (or a new lib-banking if cleaner) with `verify(BankAccount): VerificationResult`; KftcVerificationAdapter in scheme-adapter-zeropay (it already has KFTC connectivity) at /v1/account-verification/kftc; StubVerificationAdapter returns OK unless holder_name contains 'STUB_FAIL'.
-
-**Deliverable.** `lib-banking/src/main/java/com/gme/pay/banking/AccountVerificationProvider.java; services/scheme-adapter-zeropay/src/main/java/com/gme/pay/zeropay/verification/KftcVerificationAdapter.java`
-
-**Acceptance.**
-- Stub returns VerifiedResult(true) for holder='GME Corp'
-- Stub returns VerifiedResult(false, reason='STUB_FAIL_MARKER') for holder='STUB_FAIL Co'
-- KFTC adapter calls KFTC sandbox with the right XML envelope (WireMock test)
-- Adapter swap is config-property driven (gme.banking.verifier)
-
-### Cross-service contributions touching this service
-
-Tickets owned elsewhere but with code or schema touchpoints in this service. Listed here so this bundle remains the single read for a service developer.
-
-- **21.1-P04** (config-registry, Slice 1) — Collapse 5 Partner DTOs into PartnerView (read) + PartnerCommand (write)
-- **21.1-P07** (config-registry, Slice 1) — audit_log infrastructure: dedicated audit DB + INSERT-only role + hash chain + lib-audit
 

@@ -183,4 +183,65 @@ public record PartnerCommand(
             String cutoffTimezone,
             String settlementMethod) {
     }
+
+    /**
+     * Body for "Save step-5 changes" (Prefunding) on an already-created draft
+     * — Slice 5 (see {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 5 —
+     * Prefunding"). Full-state replace of the
+     * {@code partner_prefunding_config} row (SCD-6 paired write per ADR-010),
+     * the same discipline as {@link UpdateStep4Settlement}. The read shape is
+     * {@link PrefundingConfigView}.
+     *
+     * <ul>
+     *   <li>{@code fundingModel} — required; {@code PREFUNDED} |
+     *       {@code POSTPAID} | {@code HYBRID} (the V015 CHECK roster). String
+     *       per the {@code settlementMethod} precedent — config-registry
+     *       validates the roster.</li>
+     *   <li>Money fields ({@code openingBalanceUsd},
+     *       {@code lowBalanceThresholdUsd}, {@code creditLimitUsd},
+     *       {@code collateralAmountUsd}) — {@link java.math.BigDecimal} in
+     *       major USD units, decimal STRINGS on the wire per
+     *       {@code docs/MONEY_CONVENTION.md}; at most 4 decimal places
+     *       (NUMERIC(19,4)). {@code lowBalanceThresholdUsd} must be &gt; 0;
+     *       {@code null} defaults to {@code 10000}. The others must be &ge; 0
+     *       when present; {@code null} = not configured.</li>
+     *   <li>{@code alertTier70} / {@code alertTier85} / {@code alertTier95} —
+     *       which alert tiers are armed; {@code null} defaults to
+     *       {@code true}.</li>
+     *   <li>{@code autoSuspendOnBreach} — {@code null} defaults to
+     *       {@code true}.</li>
+     *   <li>{@code floatTopUpBankAccountId} — must reference a CURRENT
+     *       {@code partner_bank_account} row of THIS partner with
+     *       {@code purpose=FLOAT_TOPUP} (validated server-side), or
+     *       {@code null}.</li>
+     *   <li>{@code topUpReferencePattern} — &le; 60 chars and must contain
+     *       the {@code {partner_code}} placeholder; {@code null}/blank
+     *       defaults to {@code GMP-{partner_code}-{yyyyMMdd}}.</li>
+     * </ul>
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-5 controller binds this record directly.
+     */
+    public record UpdateStep5(
+            String fundingModel,
+            @com.fasterxml.jackson.annotation.JsonFormat(
+                    shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+            java.math.BigDecimal openingBalanceUsd,
+            @com.fasterxml.jackson.annotation.JsonFormat(
+                    shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+            java.math.BigDecimal lowBalanceThresholdUsd,
+            Boolean alertTier70,
+            Boolean alertTier85,
+            Boolean alertTier95,
+            @com.fasterxml.jackson.annotation.JsonFormat(
+                    shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+            java.math.BigDecimal creditLimitUsd,
+            Boolean autoSuspendOnBreach,
+            Long floatTopUpBankAccountId,
+            String topUpReferencePattern,
+            @com.fasterxml.jackson.annotation.JsonFormat(
+                    shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+            java.math.BigDecimal collateralAmountUsd) {
+    }
 }
