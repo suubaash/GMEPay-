@@ -93,6 +93,11 @@ public class ContractService {
         fresh.setTerminationReason(
                 cmd.terminationReason() == null || cmd.terminationReason().isBlank()
                         ? null : cmd.terminationReason());
+        // Slice 8 / V025: countersign instant feeding the activation gate.
+        // MICROS truncation so the stored TIMESTAMP equals the in-memory value
+        // on both engines (same discipline as recorded_at).
+        fresh.setSignedAt(cmd.signedAt() == null
+                ? null : cmd.signedAt().truncatedTo(ChronoUnit.MICROS));
 
         ContractEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor,

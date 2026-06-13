@@ -91,7 +91,7 @@ public class JpaWebhookConfigStore implements WebhookConfigStore {
     }
 
     /** {@code null}/empty list (= "all events") is stored as SQL {@code NULL}. */
-    static String toCsv(List<String> eventTypes) {
+    public static String toCsv(List<String> eventTypes) {
         if (eventTypes == null || eventTypes.isEmpty()) {
             return null;
         }
@@ -112,7 +112,7 @@ public class JpaWebhookConfigStore implements WebhookConfigStore {
     }
 
     /** SQL {@code NULL} (= "all events") maps back to a {@code null} list. */
-    static List<String> fromCsv(String csv) {
+    public static List<String> fromCsv(String csv) {
         if (csv == null || csv.isBlank()) {
             return null;
         }

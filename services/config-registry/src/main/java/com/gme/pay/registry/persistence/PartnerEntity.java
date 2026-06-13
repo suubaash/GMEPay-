@@ -268,6 +268,45 @@ public class PartnerEntity {
     @Column(name = "status", nullable = false, length = 20)
     private PartnerStatus status = PartnerStatus.ONBOARDING;
 
+    // ------------------------------------------------------------------------
+    // Slice 8 lifecycle columns (V025 / ADR-011 Expand phase).
+    //
+    // All nullable: stamped by the 4-eyes lifecycle transitions and NULL on
+    // every row that has not reached the corresponding state. go_live_at is
+    // also the post-activation immutability lock marker (non-NULL = the
+    // identity-critical columns are frozen — see PartnerImmutabilityGuard).
+    // PartnerStore.save carries these forward onto each fresh SCD-6 row so a
+    // settlement-attribute write can never silently "un-activate" a partner.
+    // ------------------------------------------------------------------------
+
+    /** Instant of the FIRST {@code UAT → LIVE} transition; never reset thereafter. */
+    @Column(name = "go_live_at")
+    private Instant goLiveAt;
+
+    /** Operator (the 4-eyes checker) who completed the first activation. */
+    @Column(name = "activated_by", length = 100)
+    private String activatedBy;
+
+    /** {@code SuspensionReason} name while SUSPENDED (V025 CHECK roster); else NULL. */
+    @Column(name = "suspension_reason", length = 40)
+    private String suspensionReason;
+
+    /** Operator free text accompanying a suspension; cleared on reactivation. */
+    @Column(name = "suspension_notes", length = 500)
+    private String suspensionNotes;
+
+    /** When the current suspension was applied; cleared on reactivation. */
+    @Column(name = "suspended_at")
+    private Instant suspendedAt;
+
+    /** When the partner was terminated (terminal state — never cleared). */
+    @Column(name = "terminated_at")
+    private Instant terminatedAt;
+
+    /** Operator free text for the termination decision. */
+    @Column(name = "termination_reason", length = 500)
+    private String terminationReason;
+
     public PartnerEntity() {
         // JPA
     }
@@ -643,5 +682,67 @@ public class PartnerEntity {
 
     public void setStatus(PartnerStatus status) {
         this.status = status;
+    }
+
+    // ------------------------------------------------------------------------
+    // Slice 8 lifecycle accessors (V025). Plain getter/setter pairs; the FSM
+    // rules live in PartnerStatusTransitionTable + PartnerLifecycleService.
+    // ------------------------------------------------------------------------
+
+    /** First-go-live instant; non-NULL also means "immutability lock engaged". */
+    public Instant getGoLiveAt() {
+        return goLiveAt;
+    }
+
+    public void setGoLiveAt(Instant goLiveAt) {
+        this.goLiveAt = goLiveAt;
+    }
+
+    public String getActivatedBy() {
+        return activatedBy;
+    }
+
+    public void setActivatedBy(String activatedBy) {
+        this.activatedBy = activatedBy;
+    }
+
+    public String getSuspensionReason() {
+        return suspensionReason;
+    }
+
+    public void setSuspensionReason(String suspensionReason) {
+        this.suspensionReason = suspensionReason;
+    }
+
+    public String getSuspensionNotes() {
+        return suspensionNotes;
+    }
+
+    public void setSuspensionNotes(String suspensionNotes) {
+        this.suspensionNotes = suspensionNotes;
+    }
+
+    public Instant getSuspendedAt() {
+        return suspendedAt;
+    }
+
+    public void setSuspendedAt(Instant suspendedAt) {
+        this.suspendedAt = suspendedAt;
+    }
+
+    public Instant getTerminatedAt() {
+        return terminatedAt;
+    }
+
+    public void setTerminatedAt(Instant terminatedAt) {
+        this.terminatedAt = terminatedAt;
+    }
+
+    public String getTerminationReason() {
+        return terminationReason;
+    }
+
+    public void setTerminationReason(String terminationReason) {
+        this.terminationReason = terminationReason;
     }
 }

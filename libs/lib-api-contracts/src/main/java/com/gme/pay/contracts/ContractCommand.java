@@ -1,5 +1,6 @@
 package com.gme.pay.contracts;
 
+import java.time.Instant;
 import java.time.LocalDate;
 
 /**
@@ -24,6 +25,9 @@ import java.time.LocalDate;
  *   <li>{@code terminationReason} — optional, &le; 200 chars; normally set by
  *       the Slice 8 lifecycle flow, accepted here so a terminated-and-renewed
  *       partner's history can be backfilled during onboarding.</li>
+ *   <li>{@code signedAt} — optional (Slice 8 / V025); the instant the paper
+ *       contract was countersigned. The activation gate requires it non-null
+ *       before {@code UAT → LIVE} (CONTRACT_NOT_SIGNED otherwise).</li>
  * </ul>
  */
 public record ContractCommand(
@@ -32,5 +36,21 @@ public record ContractCommand(
         Boolean autoRenewal,
         Integer noticePeriodDays,
         String refundChargebackPolicy,
-        String terminationReason) {
+        String terminationReason,
+        Instant signedAt) {
+
+    /**
+     * Back-compat convenience for pre-Slice-8 callers that do not carry the
+     * V025 {@code signed_at} column. Keeps every existing positional
+     * construction site compiling; {@code signedAt} lands {@code null}.
+     */
+    public ContractCommand(LocalDate effectiveFrom,
+                           LocalDate effectiveTo,
+                           Boolean autoRenewal,
+                           Integer noticePeriodDays,
+                           String refundChargebackPolicy,
+                           String terminationReason) {
+        this(effectiveFrom, effectiveTo, autoRenewal, noticePeriodDays,
+                refundChargebackPolicy, terminationReason, null);
+    }
 }

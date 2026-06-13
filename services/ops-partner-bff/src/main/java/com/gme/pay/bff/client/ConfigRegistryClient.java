@@ -645,6 +645,206 @@ public interface ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 8 Lane A lifecycle endpoints ---------------------------------
+    //
+    // Defaults throw so a missing stub override is loud. Both real implementations
+    // override all five.
+
+    /**
+     * Propose / approve {@code UAT → LIVE}. Routes to
+     * {@code POST /v1/admin/partners/{partnerCode}/lifecycle/activate}.
+     * Returns a {@code ResponseEntity} whose body is either
+     * {@link com.gme.pay.contracts.ChangeRequestView} (202 Accepted — maker
+     * call) or {@link com.gme.pay.contracts.PartnerView} /
+     * {@link com.gme.pay.contracts.PartnerActivationView} (200 OK — checker
+     * call, possibly carrying the ONE-TIME credential bundle).
+     */
+    default org.springframework.http.ResponseEntity<?> lifecycleActivate(
+            String partnerCode, String actor) {
+        throw new UnsupportedOperationException(
+                "lifecycleActivate is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Propose / approve {@code LIVE → SUSPENDED}. Routes to
+     * {@code POST /v1/admin/partners/{partnerCode}/lifecycle/suspend}.
+     * {@code reason} must be a SuspensionReason name; {@code notes} optional ≤500.
+     */
+    default org.springframework.http.ResponseEntity<?> lifecycleSuspend(
+            String partnerCode, String reason, String notes, String actor) {
+        throw new UnsupportedOperationException(
+                "lifecycleSuspend is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Propose / approve {@code SUSPENDED → LIVE}. Routes to
+     * {@code POST /v1/admin/partners/{partnerCode}/lifecycle/reactivate}.
+     */
+    default org.springframework.http.ResponseEntity<?> lifecycleReactivate(
+            String partnerCode, String actor) {
+        throw new UnsupportedOperationException(
+                "lifecycleReactivate is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Propose / approve {@code LIVE|SUSPENDED → TERMINATED}. Routes to
+     * {@code POST /v1/admin/partners/{partnerCode}/lifecycle/terminate}.
+     * {@code reason} required free text ≤500 chars.
+     */
+    default org.springframework.http.ResponseEntity<?> lifecycleTerminate(
+            String partnerCode, String reason, String actor) {
+        throw new UnsupportedOperationException(
+                "lifecycleTerminate is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Non-mutating activation-gate evaluation. Routes to
+     * {@code GET /v1/admin/partners/{partnerCode}/lifecycle/preconditions}.
+     * Always returns the gate view — a failing gate is a normal answer.
+     */
+    default com.gme.pay.contracts.ActivationGateView lifecyclePreconditions(
+            String partnerCode) {
+        throw new UnsupportedOperationException(
+                "lifecyclePreconditions is not implemented by " + getClass().getName());
+    }
+
+    // -------- Slice 8 Lane B credential / ip-allowlist / mtls endpoints ----------
+    //
+    // Defaults throw so a missing stub override is loud. Both real implementations
+    // override all six.
+
+    /**
+     * Bulk-replace the IP allowlist on a draft (wizard step-8). Routes to
+     * {@code PATCH /v1/admin/partners/draft/{partnerCode}/step-8/ip-allowlist}.
+     * Returns the freshly-stored current set as
+     * {@link com.gme.pay.contracts.PartnerIpAllowlistView}s.
+     */
+    default java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> patchDraftStep8IpAllowlist(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8Credentials request,
+            String actor) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep8IpAllowlist is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT IP allowlist for a partner (both environments). Routes to
+     * {@code GET /v1/admin/partners/{partnerCode}/ip-allowlist}. Empty list when
+     * no entries have been saved yet; 404 for an unknown partner code.
+     */
+    default java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> getIpAllowlist(
+            String partnerCode) {
+        return java.util.List.of();
+    }
+
+    /**
+     * Upload the mTLS client certificate for one environment (wizard step-8).
+     * Routes to
+     * {@code PATCH /v1/admin/partners/draft/{partnerCode}/step-8/mtls-cert}.
+     * Returns the fresh ACTIVE {@link com.gme.pay.contracts.PartnerMtlsCertView}.
+     */
+    default com.gme.pay.contracts.PartnerMtlsCertView patchDraftStep8MtlsCert(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UploadMtlsCert request,
+            String actor) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep8MtlsCert is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT mTLS cert bindings for a partner (both environments, no PEM
+     * bodies). Routes to {@code GET /v1/admin/partners/{partnerCode}/mtls-cert}.
+     * Empty list when no certs have been uploaded yet; 404 for unknown partner.
+     */
+    default java.util.List<com.gme.pay.contracts.PartnerMtlsCertView> getMtlsCerts(
+            String partnerCode) {
+        return java.util.List.of();
+    }
+
+    /**
+     * Manual credential rotation. Routes to
+     * {@code POST /v1/admin/partners/{partnerCode}/credentials/rotate}.
+     * Returns the ONE-TIME {@link com.gme.pay.contracts.IssuedCredentialBundle}
+     * (SEC-09 §4 — never log, never persist the plaintext).
+     */
+    default com.gme.pay.contracts.IssuedCredentialBundle rotateCredentials(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.RotateCredentials request,
+            String actor) {
+        throw new UnsupportedOperationException(
+                "rotateCredentials is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The partner's full credential ledger — display residue only, never
+     * plaintext. Routes to
+     * {@code GET /v1/admin/partners/{partnerCode}/credentials}. Empty list when
+     * no credentials have been issued yet; 404 for unknown partner.
+     */
+    default java.util.List<com.gme.pay.contracts.PartnerCredentialView> listCredentials(
+            String partnerCode) {
+        return java.util.List.of();
+    }
+
+    // -------- Slice 8 Lane C regulatory endpoints --------------------------------
+    //
+    // Defaults throw so a missing stub override is loud. Both real implementations
+    // override both.
+
+    /**
+     * Save the step-8 regulatory panel onto a draft — full-state replace
+     * (SCD-6, ADR-010). Routes to
+     * {@code PATCH /v1/admin/partners/draft/{partnerCode}/step-8/regulatory}.
+     * Returns the fresh {@link com.gme.pay.contracts.PartnerRegulatoryConfigView}.
+     */
+    default com.gme.pay.contracts.PartnerRegulatoryConfigView patchDraftStep8Regulatory(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8Regulatory request,
+            String actor) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep8Regulatory is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT regulatory config for a partner. Routes to
+     * {@code GET /v1/admin/partners/{partnerCode}/regulatory}. 404 for unknown
+     * partner or when no step-8 regulatory save has happened yet.
+     */
+    default com.gme.pay.contracts.PartnerRegulatoryConfigView getRegulatory(
+            String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getRegulatory is not implemented by " + getClass().getName());
+    }
+
+    // -------- Slice 8 Lane D webhook-subscription endpoints ----------------------
+    //
+    // Defaults throw so a missing stub override is loud. Both real implementations
+    // override both.
+
+    /**
+     * Save the step-8 webhook subscription draft — in-place upsert of the
+     * (partner, environment) row (V030). Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-8/webhook-subscription}.
+     * Returns the fresh {@link com.gme.pay.contracts.WebhookSubscriptionView}.
+     */
+    default com.gme.pay.contracts.WebhookSubscriptionView patchDraftStep8WebhookSubscription(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8WebhookSubscription request,
+            String actor) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep8WebhookSubscription is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The partner's webhook subscriptions across environments. Routes to
+     * {@code GET /v1/partners/{partnerCode}/webhook-subscriptions}. Empty list
+     * when no step-8 save has happened yet; 404 for unknown partner.
+     */
+    default java.util.List<com.gme.pay.contracts.WebhookSubscriptionView> getWebhookSubscriptions(
+            String partnerCode) {
+        return java.util.List.of();
+    }
+
     /**
      * Scheme-list row for the Admin UI. Schemes are payment-network configurations
      * (e.g. ZeroPay-KR) owned by config-registry.

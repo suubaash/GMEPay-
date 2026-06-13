@@ -7,6 +7,14 @@ package com.gme.pay.errors;
 public enum ErrorCode {
 
     VALIDATION_ERROR(400, false),
+    /**
+     * Slice 8 post-activation immutability: once a partner has gone LIVE for the
+     * first time ({@code partners.go_live_at} stamped), the identity-critical
+     * columns (partner_code, country_of_incorporation, partner_type,
+     * collection_ccy, settle_a_ccy) are locked. Any PATCH/PUT attempting to
+     * mutate them is rejected with this code.
+     */
+    IMMUTABLE_AFTER_ACTIVATION(400, false),
     RATE_QUOTE_EXPIRED(409, false),
     MIN_MARGIN_VIOLATION(422, false),
     POOL_IDENTITY_VIOLATION(500, false),

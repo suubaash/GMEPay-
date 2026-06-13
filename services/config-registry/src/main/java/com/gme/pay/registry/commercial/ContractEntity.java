@@ -59,6 +59,17 @@ public class ContractEntity {
     @Column(name = "termination_reason", length = 200)
     private String terminationReason;
 
+    /**
+     * When the paper contract was countersigned (Slice 8 / V025). NULL until
+     * the wizard's step-6 save stamps it; the activation gate requires it
+     * non-NULL before {@code UAT → LIVE} (CONTRACT_NOT_SIGNED otherwise).
+     * Deliberately NOT surfaced on {@link ContractView} yet — widening that
+     * record's positional shape would ripple into the BFF stub, which Lane A
+     * does not own (see Slice 8 lane split).
+     */
+    @Column(name = "signed_at")
+    private Instant signedAt;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -162,6 +173,15 @@ public class ContractEntity {
 
     public void setTerminationReason(String terminationReason) {
         this.terminationReason = terminationReason;
+    }
+
+    /** Contract countersign instant (V025); NULL = not yet signed. */
+    public Instant getSignedAt() {
+        return signedAt;
+    }
+
+    public void setSignedAt(Instant signedAt) {
+        this.signedAt = signedAt;
     }
 
     public Instant getValidFrom() {

@@ -87,6 +87,20 @@ public class ApiKeyEntity {
      */
     public static ApiKeyEntity issue(PrincipalEntity principal, String apiKey,
                                      String plaintextSecret, Instant now) {
+        return issue(principal, apiKey, plaintextSecret, now, null);
+    }
+
+    /**
+     * Issues a new ACTIVE api-key credential with an explicit expiry (Slice 8
+     * Lane B: issued material expires after 12 months; config-registry's
+     * rotation scheduler proposes replacement at 11). Same hashing contract
+     * as {@link #issue(PrincipalEntity, String, String, Instant)} — the
+     * plaintext is hashed here and discarded.
+     *
+     * @param expiresAt when the credential hard-expires; {@code null} = never.
+     */
+    public static ApiKeyEntity issue(PrincipalEntity principal, String apiKey,
+                                     String plaintextSecret, Instant now, Instant expiresAt) {
         ApiKeyEntity e = new ApiKeyEntity();
         e.principal = principal;
         e.apiKey = apiKey;
@@ -96,6 +110,7 @@ public class ApiKeyEntity {
         e.secretHash = SecretHasher.hashHex(plaintextSecret, e.secretSalt, e.hashIterations);
         e.status = Status.ACTIVE;
         e.createdAt = now;
+        e.expiresAt = expiresAt;
         return e;
     }
 

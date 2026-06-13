@@ -202,6 +202,8 @@ public class PartnerCorridorService {
         e.setGoLiveDate(cmd.goLiveDate());
         // Mirrors the V023 column DEFAULT TRUE when the wire omits the toggle.
         e.setIsActive(cmd.isActive() == null ? Boolean.TRUE : cmd.isActive());
+        // Mirrors the V029.1 column DEFAULT FALSE when the wire omits the STR flag.
+        e.setStrEnabled(cmd.strEnabled() == null ? Boolean.FALSE : cmd.strEnabled());
         e.setRecordedAt(now);
         // Business time starts at capture — the wizard does not back-date corridors.
         e.setValidFrom(now);

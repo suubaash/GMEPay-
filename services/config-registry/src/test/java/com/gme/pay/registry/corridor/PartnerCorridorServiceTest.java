@@ -177,6 +177,32 @@ class PartnerCorridorServiceTest {
     }
 
     @Test
+    void strEnabled_defaultsFalse_andRoundTripsTrue_v029_1() {
+        seedPartner("CORR_STR");
+
+        // Slice 8 Lane C (V029.1): the wire may omit the per-lane KoFIU STR
+        // flag — it defaults to the column DEFAULT FALSE — and an explicit
+        // true round-trips through entity, view and audit snapshot.
+        List<PartnerCorridorView> saved = service.replaceDraftCorridors("CORR_STR",
+                List.of(
+                        lane("KR", "KRW", "MN", "MNT"),
+                        new PartnerCorridorCommand("KR", "KRW", "VN", "VND",
+                                null, true, true)),
+                "maker_kim");
+
+        assertThat(saved.get(0).strEnabled()).isFalse();
+        assertThat(saved.get(1).strEnabled()).isTrue();
+        assertThat(service.currentCorridors("CORR_STR"))
+                .extracting(PartnerCorridorView::strEnabled)
+                .containsExactly(false, true);
+
+        AuditEvent event = publisher.published().get(publisher.published().size() - 1);
+        assertThat(new String(event.afterJsonb(), StandardCharsets.UTF_8))
+                .contains("\"strEnabled\":false")
+                .contains("\"strEnabled\":true");
+    }
+
+    @Test
     void validation_rejectsBadPayloadsWith400_withoutWritingRows() {
         Long partnerId = seedPartner("CORR_INVALID");
 

@@ -76,6 +76,13 @@ public class PartnerCorridorEntity {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    /**
+     * Per-corridor KoFIU STR-feed switch (V029.1, Slice 8 Lane C); never NULL
+     * (defaults to false — STR is enabled lane-by-lane).
+     */
+    @Column(name = "str_enabled", nullable = false)
+    private Boolean strEnabled;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -111,6 +118,10 @@ public class PartnerCorridorEntity {
             // Mirrors the V023 column DEFAULT TRUE for entities built without one.
             isActive = Boolean.TRUE;
         }
+        if (strEnabled == null) {
+            // Mirrors the V029.1 column DEFAULT FALSE for entities built without one.
+            strEnabled = Boolean.FALSE;
+        }
     }
 
     /** Adapt this row to the canonical {@link PartnerCorridorView} wire DTO. */
@@ -122,7 +133,8 @@ public class PartnerCorridorEntity {
                 dstCountry,
                 dstCcy,
                 goLiveDate,
-                isActive);
+                isActive,
+                strEnabled);
     }
 
     public Long getId() {
@@ -183,6 +195,14 @@ public class PartnerCorridorEntity {
 
     public void setIsActive(Boolean isActive) {
         this.isActive = isActive;
+    }
+
+    public Boolean getStrEnabled() {
+        return strEnabled;
+    }
+
+    public void setStrEnabled(Boolean strEnabled) {
+        this.strEnabled = strEnabled;
     }
 
     public Instant getValidFrom() {

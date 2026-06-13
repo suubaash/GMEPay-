@@ -299,6 +299,47 @@ public record PartnerCommand(
     }
 
     /**
+     * Body for "Save step-8 regulatory attributes" on an already-created
+     * draft — Slice 8 Lane C (Regulatory attributes: BOK 외환거래보고 +
+     * Hometax e-tax-invoice + KoFIU CTR/STR + PIPA cross-border + Travel
+     * Rule). Full-state replace of the {@code partner_regulatory_config} row
+     * (V029, SCD-6 paired write per ADR-010) — the same single-row discipline
+     * as {@link UpdateStep5}; {@code null} {@code regulatory} is rejected
+     * with 400. The read shape is {@link PartnerRegulatoryConfigView}.
+     *
+     * <p>The existence of a current {@code partner_regulatory_config} row is
+     * a hard activation-gate pre-condition for {@code LIVE} (Lane A's
+     * {@code ActivationGateService} checks it through
+     * {@code PartnerRegulatoryConfigRepository.existsCurrentByPartnerId}).
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-8 regulatory controller binds this record directly.
+     */
+    public record UpdateStep8Regulatory(PartnerRegulatoryConfigCommand regulatory) {
+    }
+
+    /**
+     * Body for "Save step-8 webhook subscription" on an already-created draft
+     * — Slice 8 Lane D (Webhook endpoint wire-up, see
+     * {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 8"). Rides onto
+     * {@code PATCH /v1/partners/draft/{code}/step-8/webhook-subscription} and
+     * persists the DRAFT webhook URL + event-type selection per environment
+     * ({@code SANDBOX} | {@code LIVE}) in {@code partner_webhook_subscription}
+     * (V030) — BEFORE activation, so the activation transaction can read the
+     * draft and provision the endpoint + signing secret accordingly
+     * ({@code WebhookProvisioningService}). {@code null} {@code subscription}
+     * is rejected with 400. The read shape is {@link WebhookSubscriptionView};
+     * the one-time provisioning result is {@link IssuedWebhookSubscription}.
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-8 webhook controller binds this record directly.
+     */
+    public record UpdateStep8WebhookSubscription(WebhookSubscriptionCommand subscription) {
+    }
+
+    /**
      * Body for "Save step-5 changes" (Prefunding) on an already-created draft
      * — Slice 5 (see {@code docs/PARTNER_SETUP_PLAN.md} §"Slice 5 —
      * Prefunding"). Full-state replace of the
@@ -357,5 +398,72 @@ public record PartnerCommand(
             @com.fasterxml.jackson.annotation.JsonFormat(
                     shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
             java.math.BigDecimal collateralAmountUsd) {
+    }
+
+    /**
+     * Body for "Save step-8 IP allowlist" on an already-created draft —
+     * Slice 8 Lane B (Credentials, see {@code docs/PARTNER_SETUP_PLAN.md}
+     * §"Slice 8"). Same <b>bulk replace</b> contract as {@link UpdateStep2} /
+     * {@link UpdateStep6Rules}: {@code ipAllowlist} carries the FULL desired
+     * CIDR set across BOTH environments, and config-registry replaces every
+     * {@code partner_ip_allowlist} row (V026) of the partner in one
+     * transaction. An empty list clears the allowlist; {@code null} is
+     * rejected with 400. The read shape is {@link PartnerIpAllowlistView}.
+     *
+     * <p>Hard ceiling: 10 entries per ({@code partner}, {@code environment})
+     * — exceeding it is a 409 {@code CIDR_LIMIT_EXCEEDED}. Duplicate
+     * ({@code environment}, {@code cidr}) pairs in the payload are a 400.
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-8 ip-allowlist controller binds this record directly.
+     */
+    public record UpdateStep8Credentials(List<PartnerIpAllowlistCommand> ipAllowlist) {
+    }
+
+    /**
+     * Body for "Upload step-8 mTLS client certificate" on an already-created
+     * draft — Slice 8 Lane B. config-registry parses the PEM
+     * ({@code java.security.cert.X509Certificate}), validates the validity
+     * window ({@code notBefore <= now < notAfter} — expired and not-yet-valid
+     * leafs are a 400), computes the SHA-256 fingerprint over the DER
+     * encoding and stores the binding bitemporally (V027): the prior CURRENT
+     * row for the ({@code partner}, {@code environment}) is superseded and
+     * the new row inserted in one transaction (SCD-6 paired writes per
+     * ADR-010). The read shape is {@link PartnerMtlsCertView}.
+     *
+     * <ul>
+     *   <li>{@code environment} — required; {@code SANDBOX} |
+     *       {@code PRODUCTION} (the V027 CHECK roster).</li>
+     *   <li>{@code certPem} — required; one PEM-encoded X.509 leaf
+     *       certificate ({@code -----BEGIN CERTIFICATE-----} block).</li>
+     * </ul>
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the step-8 mtls-cert controller binds this record directly.
+     */
+    public record UploadMtlsCert(String environment, String certPem) {
+    }
+
+    /**
+     * Body for "Rotate credentials" on an activated partner — Slice 8 Lane B,
+     * {@code POST /v1/admin/partners/{code}/credentials/rotate}. Marks every
+     * ACTIVE {@code partner_credential} row (V028) of the partner in the
+     * given environment ROTATED, issues a fresh API key + HMAC secret +
+     * webhook secret through auth-identity (which stores only salted hashes)
+     * and returns the new plaintext exactly once as
+     * {@link IssuedCredentialBundle} — it is unrecoverable afterwards.
+     *
+     * <ul>
+     *   <li>{@code environment} — required; {@code SANDBOX} |
+     *       {@code PRODUCTION}: which tier's credentials to rotate.</li>
+     * </ul>
+     *
+     * <p>Per the wrapper's contract this lands as another nested record
+     * without churning the wrapper's component list or any existing consumer;
+     * the credentials controller binds this record directly.
+     */
+    public record RotateCredentials(String environment) {
     }
 }

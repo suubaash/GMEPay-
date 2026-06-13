@@ -27,6 +27,10 @@ import java.time.LocalDate;
  *   <li>{@code isActive} — corridor toggle; transactions on an inactive
  *       corridor are rejected at the gateway (Slice 7 exit gate).
  *       {@code null} defaults to {@code true} (the V023 column default).</li>
+ *   <li>{@code strEnabled} — per-corridor KoFIU Suspicious Transaction
+ *       Reporting switch (V029.1, Slice 8 Lane C); {@code null} defaults to
+ *       {@code false} (the column default — STR feeds are enabled
+ *       lane-by-lane as counterparty FIU integrations go live).</li>
  * </ul>
  */
 public record PartnerCorridorCommand(
@@ -35,5 +39,16 @@ public record PartnerCorridorCommand(
         String dstCountry,
         String dstCcy,
         LocalDate goLiveDate,
-        Boolean isActive) {
+        Boolean isActive,
+        Boolean strEnabled) {
+
+    /**
+     * Pre-Slice-8 arity ({@code strEnabled} omitted → {@code null}, server
+     * defaults it to {@code false}) — keeps Slice 7 callers source-compatible.
+     */
+    public PartnerCorridorCommand(String srcCountry, String srcCcy,
+                                  String dstCountry, String dstCcy,
+                                  LocalDate goLiveDate, Boolean isActive) {
+        this(srcCountry, srcCcy, dstCountry, dstCcy, goLiveDate, isActive, null);
+    }
 }

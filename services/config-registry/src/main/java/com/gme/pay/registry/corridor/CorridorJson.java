@@ -16,7 +16,8 @@ import java.util.List;
  *
  * <p>Shape: a JSON array, rows in id order (the order the repository returns),
  * each object carrying the fixed key sequence {@code id, srcCountry, srcCcy,
- * dstCountry, dstCcy, goLiveDate, isActive}. {@code goLiveDate} renders as an
+ * dstCountry, dstCcy, goLiveDate, isActive, strEnabled}. {@code goLiveDate}
+ * renders as an
  * ISO-8601 {@code yyyy-MM-dd} JSON string ({@link java.time.LocalDate#toString}
  * is exactly that) or the JSON null literal; {@code isActive} as a JSON
  * boolean literal. Bitemporal stamps are intentionally excluded — they
@@ -49,6 +50,9 @@ final class CorridorJson {
             sb.append(',');
             sb.append("\"isActive\":").append(
                     c.getIsActive() == null ? "null" : c.getIsActive().toString());
+            sb.append(',');
+            sb.append("\"strEnabled\":").append(
+                    c.getStrEnabled() == null ? "null" : c.getStrEnabled().toString());
             sb.append('}');
         }
         sb.append(']');

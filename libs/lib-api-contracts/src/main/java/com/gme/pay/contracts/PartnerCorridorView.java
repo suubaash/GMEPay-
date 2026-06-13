@@ -23,6 +23,9 @@ import java.time.LocalDate;
  *       scheduled.</li>
  *   <li>{@code isActive} — corridor toggle; never {@code null} on reads (the
  *       V023 column is NOT NULL with DEFAULT TRUE).</li>
+ *   <li>{@code strEnabled} — per-corridor KoFIU Suspicious Transaction
+ *       Reporting switch (V029.1, Slice 8 Lane C); never {@code null} on
+ *       reads (the column is NOT NULL with DEFAULT FALSE).</li>
  * </ul>
  *
  * <p>{@code @JsonInclude(ALWAYS)} so {@code null} fields stay on the wire —
@@ -36,5 +39,18 @@ public record PartnerCorridorView(
         String dstCountry,
         String dstCcy,
         LocalDate goLiveDate,
-        Boolean isActive) {
+        Boolean isActive,
+        Boolean strEnabled) {
+
+    /**
+     * Pre-Slice-8 arity ({@code strEnabled} → {@code false}, mirroring the
+     * V029.1 column default) — keeps Slice 7 callers (including the BFF stub)
+     * source-compatible.
+     */
+    public PartnerCorridorView(Long partnerId, String srcCountry, String srcCcy,
+                               String dstCountry, String dstCcy,
+                               LocalDate goLiveDate, Boolean isActive) {
+        this(partnerId, srcCountry, srcCcy, dstCountry, dstCcy,
+                goLiveDate, isActive, Boolean.FALSE);
+    }
 }
