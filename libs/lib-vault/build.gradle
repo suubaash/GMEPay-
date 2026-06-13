@@ -1,0 +1,29 @@
+// lib-vault: partner document vault primitive per ADR-006.
+// Wraps the MinIO S3 client with: bucket conventions
+// (gmepay-partner-vault/<partner_code>/<doc_type>/<doc_id>/v<n>), object-lock
+// compliance-mode writes, versioning, and a virus-scan hook point. Services
+// depend on this lib; they never talk to MinIO directly.
+
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    api 'io.minio:minio:8.5.12'
+    implementation 'org.springframework:spring-context'
+    // @AutoConfiguration / @ConditionalOn* / @ConfigurationProperties for the
+    // gmepay.vault.endpoint-gated wiring (MinIO when set, in-memory fallback otherwise).
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    implementation 'org.slf4j:slf4j-api'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.assertj:assertj-core:3.25.3'
+    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation 'org.testcontainers:minio'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // The docker-tagged MinIO IT logs through Testcontainers' slf4j usage.
+    testRuntimeOnly 'org.slf4j:slf4j-simple'
+}

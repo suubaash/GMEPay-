@@ -18,18 +18,47 @@ import java.util.Base64;
 /**
  * Phase-1 stub auth controller for the Admin UI / Partner Portal login flow.
  *
- * <p><b>REPLACE WITH auth-identity integration in Phase 4 hardening.</b> The real
- * implementation will delegate to {@code auth-identity}'s OAuth2/JWT issuer,
- * apply RBAC, and rotate refresh tokens. Today the BFF just returns a
- * deterministic mock JWT-shaped string so the UI can store-and-forward a token
- * across pages.
+ * <h2>Slice 1 status: DEPRECATED — scheduled for removal</h2>
  *
- * <p>Endpoints:
+ * <p>Per ADR-011 ("Keycloak for humans, auth-identity for machines"), human
+ * authentication moves to Keycloak (realm {@code gmepay}) accessed directly by
+ * the SPAs via the OIDC Authorization Code + PKCE flow. The api-gateway
+ * (companion change in {@code services/api-gateway/.../SecurityConfig.java})
+ * is now an OAuth2 resource server that validates the Keycloak-issued JWT and
+ * maps the realm role {@code OPERATOR} to Spring authority {@code ROLE_OPERATOR}.
+ *
+ * <p><b>Why this class still exists today:</b> the admin-ui swap to Keycloak
+ * OIDC ships in Slice 1's UI ticket (1D.3). Until that lands the SPA still
+ * POSTs {@code {username, password}} to {@code /v1/auth/login} and stores the
+ * returned token. To avoid a broken-build window we keep the endpoint live and
+ * returning the same mock JWT shape it always did — the new resource-server
+ * config in api-gateway does not yet front this BFF for admin traffic, so the
+ * legacy flow continues to work for that brief overlap.
+ *
+ * <p><b>Migration path / removal plan:</b>
+ * <ol>
+ *   <li>1D.3 swaps admin-ui to {@code @react-keycloak/web} (or equivalent),
+ *       redirecting to Keycloak for login and attaching the resulting JWT as
+ *       {@code Authorization: Bearer ...} on outbound calls.</li>
+ *   <li>The same ticket removes the admin-ui code that calls
+ *       {@code POST /v1/auth/login} and {@code POST /v1/auth/refresh}.</li>
+ *   <li>Slice 1's exit gate verifies "no {@code password=demo} left" in the UI;
+ *       once that ships, this controller plus {@link com.gme.pay.bff.web.dto.LoginRequest},
+ *       {@link com.gme.pay.bff.web.dto.LoginResponse}, {@link com.gme.pay.bff.web.dto.RefreshRequest},
+ *       and the associated test {@code AuthControllerTest} are deleted in a
+ *       follow-up commit referenced as 1C.4-cleanup.</li>
+ * </ol>
+ *
+ * <p>Endpoints (kept identical for the transition window):
  * <ul>
  *   <li>{@code POST /v1/auth/login}   — body {@code {username, password}} → mock JWT or 401
  *   <li>{@code POST /v1/auth/refresh} — body {@code {token}}              → regenerated mock JWT
  * </ul>
+ *
+ * @deprecated Replaced by direct Keycloak OIDC login from the SPAs (ADR-011).
+ *     Remove after Slice 1's admin-ui auth swap (ticket 1D.3) lands.
  */
+@Deprecated(since = "Slice 1", forRemoval = true)
 @RestController
 @RequestMapping("/v1/auth")
 public class AuthController {

@@ -1,0 +1,19 @@
+// lib-api-contracts: canonical Partner DTO surface (PartnerView, PartnerCommand, AddressView,
+// PartnerStatus) plus future cross-service DTOs. Pure-data, no Spring dep on main classpath
+// so any service can depend on it without pulling in framework noise.
+//
+// Owns: docs/PARTNER_SETUP_PLAN.md §Slice 1 cross-cutting bug fix #2 (5-DTO collapse).
+
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api project(':libs:lib-domain')
+    api project(':libs:lib-money')
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.2'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

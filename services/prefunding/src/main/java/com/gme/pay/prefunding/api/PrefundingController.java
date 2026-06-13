@@ -2,7 +2,6 @@ package com.gme.pay.prefunding.api;
 
 import com.gme.pay.prefunding.service.PrefundingService;
 import java.math.BigDecimal;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -10,8 +9,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Public REST surface for the prefunding service.
- * Per INTER_SERVICE_CONTRACTS.md, this service exposes balance/deduct/credit at /v1/prefunding/*.
+ * Public REST surface for the prefunding service's balance mutations.
+ * Per INTER_SERVICE_CONTRACTS.md, this service exposes deduct/credit at /v1/prefunding/*.
+ *
+ * <p>Slice 5 moved {@code GET /{partnerCode}/balance} to
+ * {@link BalanceProvisioningController}, which returns the canonical
+ * {@link com.gme.pay.contracts.BalanceView} (currency / balance / threshold /
+ * pctOfThreshold; money as decimal strings per docs/MONEY_CONVENTION.md). The
+ * deduct/credit response shape here is unchanged — payment-executor binds
+ * {@code {partnerId, balance}}.
  */
 @RestController
 @RequestMapping("/v1/prefunding")
@@ -21,11 +27,6 @@ public class PrefundingController {
 
     public PrefundingController(PrefundingService service) {
         this.service = service;
-    }
-
-    @GetMapping("/{partnerId}/balance")
-    public BalanceResponse getBalance(@PathVariable String partnerId) {
-        return new BalanceResponse(partnerId, service.getBalance(partnerId));
     }
 
     @PostMapping("/{partnerId}/deduct")

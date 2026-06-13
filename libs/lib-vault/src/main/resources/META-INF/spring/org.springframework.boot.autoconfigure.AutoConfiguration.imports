@@ -1,0 +1,2 @@
+com.gme.pay.vault.MinioVaultAutoConfiguration
+com.gme.pay.vault.InMemoryVaultAutoConfiguration

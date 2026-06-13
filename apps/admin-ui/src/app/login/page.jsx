@@ -11,36 +11,43 @@ import {
   Card,
   CardContent,
   CircularProgress,
+  Divider,
   Snackbar,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
+import LockIcon from '@mui/icons-material/Lock';
 import { loginSchema } from '@/schemas/loginSchema';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { loginThunk } from '@/store/authSlice';
+import { isDevLoginAllowed, startLogin } from '@/api/oidc';
 
 /**
  * Operator login page.
  *
- * Form fields: username + password (RHF + Yup validation).
- * On submit, dispatches loginThunk which:
- *   1. POSTs to /v1/auth/login on the BFF.
- *   2. Stores the returned JWT under "gmepay.adminToken" in localStorage.
- *   3. Caches the form username under "gmepay.adminUser" for the AppShell.
- *      (The BFF response is { token, expiresAt, role } — it does NOT echo
- *       the username back.)
+ * As of Slice 1 (PARTNER_SETUP_PLAN.md) the legacy `password=demo` form is
+ * retired in favour of Keycloak SSO via OIDC authorization-code + PKCE
+ * (ADR-011). The primary affordance on this page is now a single
+ * "Sign in with Keycloak" button that redirects the browser to the realm
+ * configured by `NEXT_PUBLIC_KEYCLOAK_URL` (default
+ * `http://localhost:8090/realms/gmepay`).
  *
- * On success, redirects to `/`. On error, a MUI Snackbar surfaces the message.
- *
- * Dev credentials: username=admin, password=demo.
+ * Dev escape hatch: when `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` is set at build
+ * time the legacy username/password form is rendered underneath the SSO
+ * button so vitest + local-no-Keycloak iteration still work. The form
+ * dispatches the original {@link loginThunk} against the BFF
+ * `/v1/auth/login` endpoint (which the BFF will eventually retire once the
+ * gateway is the only resource server).
  */
 export default function LoginPage() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { loading, error } = useAppSelector((s) => s.auth);
   const [snackOpen, setSnackOpen] = useState(false);
+  const [ssoPending, setSsoPending] = useState(false);
+  const devAllowed = isDevLoginAllowed();
 
   const {
     register,
@@ -50,6 +57,18 @@ export default function LoginPage() {
     resolver: yupResolver(loginSchema),
     defaultValues: { username: '', password: '' },
   });
+
+  const handleSso = async () => {
+    setSsoPending(true);
+    try {
+      await startLogin('/');
+      // startLogin navigates the browser away; if it returns we hit an
+      // error path (no window etc.) — flip pending back so the button
+      // recovers.
+    } finally {
+      setSsoPending(false);
+    }
+  };
 
   const onSubmit = async (values) => {
     const result = await dispatch(loginThunk(values));
@@ -79,57 +98,89 @@ export default function LoginPage() {
                 GMEPay+ Ops
               </Typography>
               <Typography color="text.secondary" sx={{ mt: 1 }}>
-                Sign in with your operator credentials.
+                Sign in to manage partners, schemes, and settlement.
               </Typography>
             </Box>
 
-            <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate>
-              <Stack spacing={2}>
-                <TextField
-                  label="Username"
-                  fullWidth
-                  required
-                  autoFocus
-                  autoComplete="username"
-                  {...register('username')}
-                  error={!!errors.username}
-                  helperText={errors.username?.message}
-                  inputProps={{ 'aria-label': 'Username' }}
-                />
-                <TextField
-                  label="Password"
-                  type="password"
-                  fullWidth
-                  required
-                  autoComplete="current-password"
-                  {...register('password')}
-                  error={!!errors.password}
-                  helperText={errors.password?.message}
-                  inputProps={{ 'aria-label': 'Password' }}
-                />
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={
+                ssoPending ? (
+                  <CircularProgress size={18} color="inherit" />
+                ) : (
+                  <LockIcon />
+                )
+              }
+              onClick={handleSso}
+              disabled={ssoPending}
+              fullWidth
+              aria-label="Sign in with Keycloak"
+            >
+              Sign in with Keycloak
+            </Button>
+            <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
+              Single sign-on via the GMEPay+ identity provider.
+            </Typography>
 
-                <Button
-                  type="submit"
-                  variant="contained"
-                  size="large"
-                  startIcon={
-                    loading || isSubmitting ? (
-                      <CircularProgress size={18} color="inherit" />
-                    ) : (
-                      <LoginIcon />
-                    )
-                  }
-                  disabled={loading || isSubmitting}
-                  fullWidth
-                >
-                  Sign in
-                </Button>
+            {devAllowed && (
+              <>
+                <Divider>
+                  <Typography variant="caption" color="text.secondary">
+                    Dev: skip login
+                  </Typography>
+                </Divider>
 
-                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
-                  Dev credentials: admin / demo
-                </Typography>
-              </Stack>
-            </Box>
+                <Alert severity="warning" variant="outlined" sx={{ py: 0.5 }}>
+                  This form is only available when
+                  <code style={{ marginLeft: 4, marginRight: 4 }}>
+                    NEXT_PUBLIC_ALLOW_DEV_LOGIN=true
+                  </code>
+                  and is intended for local iteration only.
+                </Alert>
+
+                <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate>
+                  <Stack spacing={2}>
+                    <TextField
+                      label="Username"
+                      fullWidth
+                      autoComplete="username"
+                      {...register('username')}
+                      error={!!errors.username}
+                      helperText={errors.username?.message}
+                      inputProps={{ 'aria-label': 'Username' }}
+                    />
+                    <TextField
+                      label="Password"
+                      type="password"
+                      fullWidth
+                      autoComplete="current-password"
+                      {...register('password')}
+                      error={!!errors.password}
+                      helperText={errors.password?.message}
+                      inputProps={{ 'aria-label': 'Password' }}
+                    />
+
+                    <Button
+                      type="submit"
+                      variant="outlined"
+                      size="large"
+                      startIcon={
+                        loading || isSubmitting ? (
+                          <CircularProgress size={18} color="inherit" />
+                        ) : (
+                          <LoginIcon />
+                        )
+                      }
+                      disabled={loading || isSubmitting}
+                      fullWidth
+                    >
+                      Dev sign in (BFF)
+                    </Button>
+                  </Stack>
+                </Box>
+              </>
+            )}
           </Stack>
         </CardContent>
       </Card>

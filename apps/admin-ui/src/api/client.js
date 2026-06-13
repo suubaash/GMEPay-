@@ -71,9 +71,32 @@ async function request(path, init) {
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
+  return _doFetch(url, { ...init, headers });
+}
+
+/**
+ * Multipart POST — does NOT set Content-Type (the browser must set it with
+ * the correct multipart boundary). Passes the FormData body as-is.
+ *
+ * @param {string} path   Relative path, e.g. "/v1/admin/partners/ABC/documents"
+ * @param {FormData} formData
+ * @returns {Promise<object>}
+ */
+async function multipartRequest(path, formData) {
+  const url = `${baseUrl()}${path}`;
+  const token = readToken();
+  // Only set Authorization; let the browser set Content-Type with boundary.
+  const headers = { Accept: 'application/json' };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return _doFetch(url, { method: 'POST', body: formData, headers });
+}
+
+async function _doFetch(url, init) {
   let res;
   try {
-    res = await fetch(url, { ...init, headers });
+    res = await fetch(url, init);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new ApiError(0, url, msg || 'network error');
@@ -92,7 +115,19 @@ async function request(path, init) {
     } catch {
       /* ignore */
     }
-    throw new ApiError(res.status, url, text || `HTTP ${res.status}`);
+    // Spring's default error JSON is `{timestamp, status, error, path, message?}` —
+    // surface the message when present so the snackbar reads "partner X already
+    // exists" rather than the whole envelope.
+    let message = text || `HTTP ${res.status}`;
+    if (text && text.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed.message || parsed.error || message;
+      } catch {
+        /* leave as raw text */
+      }
+    }
+    throw new ApiError(res.status, url, message);
   }
   if (res.status === 204) {
     return undefined;
@@ -158,6 +193,123 @@ export const adminApi = {
       method: 'PUT',
       body: JSON.stringify({ mode }),
     }),
+
+  // ---------- Partner drafts (Slice 1, ADR-012) ----------
+  /**
+   * GET /v1/admin/partners/drafts -> PartnerView[]
+   * Each PartnerView carries:
+   *   { id, partnerCode, type, settlementCurrency, settlementRoundingMode,
+   *     legalNameLocal, legalNameRomanized, taxId, taxIdType,
+   *     countryOfIncorporation, legalForm, registeredAddress, operatingAddress,
+   *     lei, status, validFrom, validTo, recordedAt }
+   * Slice 1 returns rows in status=ONBOARDING.
+   */
+  listPartnerDrafts: () => request('/v1/admin/partners/drafts'),
+
+  /**
+   * POST /v1/admin/partners/draft
+   * body: DraftPartnerRequest — all fields nullable; the wizard's
+   *   "Start a new partner" step typically only sends { partnerCode }.
+   * -> 201 PartnerView with status=ONBOARDING and bitemporal stamps populated.
+   */
+  createPartnerDraft: (body) =>
+    request('/v1/admin/partners/draft', {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+
+  /** GET /v1/admin/partners/draft/{partnerCode} -> PartnerView (404 when unknown). */
+  getPartnerDraft: (partnerCode) =>
+    request(`/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}`),
+
+  /**
+   * Aliases requested by the wizard scaffold (agent 1D.1).
+   *
+   * These mirror the names used in the slice plan's API surface
+   * (createDraft / getDraft / listDrafts) so the wizard imports read
+   * naturally; the implementations are thin pass-throughs to the
+   * canonical methods above. Keep both — older call sites use the
+   * verbose `Partner*` names.
+   */
+  createDraft(body) {
+    return this.createPartnerDraft(body);
+  },
+  getDraft(partnerCode) {
+    return this.getPartnerDraft(partnerCode);
+  },
+  listDrafts() {
+    return this.listPartnerDrafts();
+  },
+
+  /**
+   * GET /v1/admin/partners/{partnerCode}/contacts
+   * -> PartnerContactView[] (Slice 2, agent 2A.1 backend)
+   * PartnerContactView: { id, role, name, email, phoneE164, isAuthorizedSignatory, notes }
+   */
+  getPartnerContacts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/contacts`),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-{n}
+   *  -> PartnerView with refreshed bitemporal stamps.
+   *
+   * Slice 1 only implements Step 1 (Identity) on the backend. To keep the
+   * wizard from triggering noisy 404s when an operator clicks Next on a
+   * stub step, calls with n in 2..8 are rejected client-side with an
+   * {@link ApiError} status=501.
+   *
+   * @param {1|2|3|4|5|6|7|8} step
+   * @param {string} partnerCode
+   * @param {object} body — DraftPartnerStep{N}Request, see ops-partner-bff
+   */
+  patchDraftStep(step, partnerCode, body) {
+    const n = Number(step);
+    if (!Number.isInteger(n) || n < 1 || n > 8) {
+      return Promise.reject(
+        new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
+      );
+    }
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6) {
+      return Promise.reject(
+        new ApiError(
+          501,
+          `/v1/admin/partners/draft/${partnerCode}/step-${n}`,
+          `Step ${n} is not implemented yet — coming in a later Slice.`,
+        ),
+      );
+    }
+    return request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-${n}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body ?? {}),
+      },
+    );
+  },
+
+  // ---------- KYB (Slice 3, ADR-009 KybProvider port) ----------
+  /**
+   * GET /v1/admin/partners/{code}/kyb -> KybView
+   * KybView: { partnerCode, riskRating, riskRationale, nextReviewDate,
+   *   licenseType, licenseNumber, licenseAuthority, licenseExpiry,
+   *   uboList:[{name,ownershipPct,isPep,country}], cbddqDocId,
+   *   screeningStatus:'CLEAR'|'NEEDS_REVIEW'|'HIT'|null,
+   *   screeningProviderRef:string|null, screenedAt:ISO|null,
+   *   screeningHits:[{name,matchScore,matchType,source}]|null }
+   */
+  getKyb: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb`),
+
+  /**
+   * POST /v1/admin/partners/{code}/kyb/screen -> KybView (refreshed)
+   * Triggers AML/PEP screening via the KybProvider port (ADR-009).
+   * Stubbed until Octa Solution sandbox creds arrive (ADR-014).
+   */
+  runKybScreening: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screen`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
 
   // ---------- Schemes ----------
   /**
@@ -245,6 +397,131 @@ export const adminApi = {
   getAuditPage: (page, size) =>
     request(`/v1/admin/audit${qs({ page, size })}`),
 
+  /**
+   * GET /v1/admin/audit-trail?aggregateType=&aggregateId=&page=&size=
+   * -> { entries:[{recordedAt,actorId,eventType,beforeJson,afterJson}],
+   *      chainValid:boolean, page:number, size:number, total:number }
+   *
+   * Agent 2C.1 (backend) exposes this endpoint. chainValid is true when
+   * the SHA-256 hash chain over all entries is intact (ADR-007).
+   */
+  getAuditTrail: (aggregateType, aggregateId, page = 0, size = 20) =>
+    request(
+      `/v1/admin/audit-trail${qs({ aggregateType, aggregateId, page, size })}`,
+    ),
+
+  // ---------- Prefunding config (Slice 5A.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/prefunding-config
+   * -> PrefundingConfigView {
+   *      fundingModel:            'PREFUNDED'|'POSTPAID'|'HYBRID',
+   *      openingBalanceUsd:       string (decimal),
+   *      lowBalanceThresholdUsd:  string (decimal),
+   *      alertTier70:             boolean,
+   *      alertTier85:             boolean,
+   *      alertTier95:             boolean,
+   *      creditLimitUsd:          string (decimal),
+   *      autoSuspendOnBreach:     boolean,
+   *      floatTopUpBankAccountId: string | null,
+   *      topUpReferencePattern:   string,
+   *      collateralAmountUsd:     string (decimal),
+   *    }
+   *
+   * Money fields are decimal strings per docs/MONEY_CONVENTION.md.
+   */
+  getPrefundingConfig: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/prefunding-config`,
+    ),
+
+  // ---------- Commercial terms (Slice 6B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/commercial
+   * -> CommercialTermsView {
+   *      feeSchedule: { scheme, direction, fixedFeeUsd, bpsFee,
+   *                     tiers:[{fromVolumeUsd, bpsOverride}] },
+   *      fxConfig:    { marginBps, referenceRateSource, quoteHoldSeconds },
+   *      limits:      { perTxnMinUsd, perTxnMaxUsd, dailyCapUsd,
+   *                     monthlyCapUsd, annualCapUsd, licenseType },
+   *      contract:    { effectiveFrom, effectiveTo, autoRenewal,
+   *                     noticePeriodDays, refundChargebackPolicy,
+   *                     terminationReason }
+   *    }
+   *
+   * Money fields are decimal strings per docs/MONEY_CONVENTION.md.
+   */
+  getCommercialTerms: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/commercial`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-commercial
+   * body: { feeSchedule, fxConfig, limits, contract }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * Slice 6B.1 backend (agent 6B.1) exposes this endpoint. The generic
+   * patchDraftStep route (n=6) calls this same path; this alias provides a
+   * more readable call site for the commercialTermsSlice thunk.
+   */
+  patchDraftStep6Commercial: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-commercial`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  // ---------- Pricing rules (Slice 6A.1 backend) ----------------------------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/rules
+   * -> RuleView[]
+   *
+   * RuleView: {
+   *   id:               number,
+   *   schemeId:         string,
+   *   direction:        'INBOUND' | 'OUTBOUND' | 'BOTH',
+   *   mA:               string (decimal fraction, e.g. "0.0150" = 1.50%),
+   *   mB:               string (decimal fraction),
+   *   serviceChargeUsd: string (decimal),
+   *   validFrom:        ISO instant,
+   *   validTo:          ISO instant | null,
+   *   recordedAt:       ISO instant
+   * }
+   *
+   * A partner with no rules returns an empty array. An unknown partner
+   * surfaces a 404 ApiError.
+   * Slice 6A.1 backend (agent 6A.1) exposes this endpoint.
+   */
+  getRules: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/rules`),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-rules
+   * body: { rules: RuleCommand[] }
+   * -> RuleView[] (fresh current set after bulk replace)
+   *
+   * RuleCommand: { schemeId, direction, mA, mB, serviceChargeUsd }
+   * Margins and money are decimal STRINGS on the wire per
+   * docs/MONEY_CONVENTION.md. Bulk-replace semantics: the FULL desired rule
+   * set must be sent; an empty array clears all rules.
+   * Returns 200 with the fresh set; 400 on validation failure (bad direction /
+   * negative margins / duplicate keys / lib-domain mA+mB>=2% invariant for
+   * cross-border pairs); 404 unknown draft; 409 partner not ONBOARDING.
+   * Slice 6A.1 backend (agent 6A.1) exposes this endpoint.
+   *
+   * NOTE: do NOT remove step 6 from the 501 list in patchDraftStep — the
+   * generic step-6 route is still guarded there. This method calls the
+   * dedicated step-6-rules sub-resource, which is always available when 6A.1
+   * has landed.
+   *
+   * @param {string} partnerCode
+   * @param {Array}  rules  Full desired rule set (bulk replace). Empty array = clear.
+   */
+  patchDraftStep6Rules: (partnerCode, rules) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-rules`,
+      { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
+    ),
+
   // ---------- System health ----------
   /**
    * GET /v1/admin/system/health -> SystemHealth
@@ -252,4 +529,168 @@ export const adminApi = {
    * ServiceHealth { name, status:"UP"|"DOWN"|"DEGRADED", lastSeenAt, uptimeSec }
    */
   getSystemHealth: () => request('/v1/admin/system/health'),
+
+  // ---------- Change-request approvals (Slice 2, agent 2B.1 backend) ----------
+  /**
+   * GET /v1/admin/change-requests?state=PROPOSED
+   * -> ChangeRequestSummary[]
+   * ChangeRequestSummary: { id, aggregate, proposer, proposedAt, payload }
+   *   aggregate: string (e.g. "Partner:GME_KR_001")
+   *   proposer:  operator id / username who raised the request
+   *   proposedAt: ISO-8601 instant
+   *   payload:   object — whatever the PATCH step put into the change_request row
+   */
+  listPendingChangeRequests: () =>
+    request('/v1/admin/change-requests?state=PROPOSED'),
+
+  /**
+   * POST /v1/admin/change-requests/{id}/approve
+   * body: { approvedBy: string }
+   * -> ChangeRequestSummary (state transitions to APPROVED)
+   */
+  approveChangeRequest: (id, approvedBy) =>
+    request(`/v1/admin/change-requests/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ approvedBy }),
+    }),
+
+  /**
+   * POST /v1/admin/change-requests/{id}/reject
+   * body: { rejectedBy: string, reason: string }
+   * -> ChangeRequestSummary (state transitions to REJECTED)
+   */
+  rejectChangeRequest: (id, rejectedBy, reason) =>
+    request(`/v1/admin/change-requests/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectedBy, reason }),
+    }),
+
+  // ---------- Document vault (Slice 3A.2, ADR-006 MinIO) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/documents -> DocumentView[]
+   * DocumentView: {
+   *   id, docType, filename, contentType, version, sha256,
+   *   expiryDate (YYYY-MM-DD|null), verifiedBy (string|null),
+   *   verifiedAt (ISO|null), recordedAt (ISO)
+   * }
+   */
+  getDocuments: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents`),
+
+  /**
+   * POST /v1/admin/partners/{partnerCode}/documents (multipart/form-data)
+   * FormData fields: file (Blob), docType (string), expiryDate? (YYYY-MM-DD)
+   * -> 201 DocumentView
+   *
+   * IMPORTANT: Do NOT set Content-Type manually — the browser must set it
+   * with the multipart boundary so the server can parse the body.
+   */
+  uploadDocument: (partnerCode, formData) =>
+    multipartRequest(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents`,
+      formData,
+    ),
+
+  /**
+   * Returns the URL to GET the raw binary content of a document.
+   * Consumers can use this as an <a href> for direct browser download or
+   * pass it to fetch() themselves.
+   *
+   * GET /v1/admin/partners/{partnerCode}/documents/{docId}/content
+   */
+  downloadDocumentUrl: (partnerCode, docId) =>
+    `${baseUrl()}/v1/admin/partners/${encodeURIComponent(partnerCode)}/documents/${encodeURIComponent(docId)}/content`,
+
+  // ---------- Bank accounts (Slice 4A.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/bank-accounts -> BankAccountView[]
+   * BankAccountView: {
+   *   id, currency, bankName, bicSwift, ibanOrAccountNumber,
+   *   accountHolderName, bankCountry, intermediaryBic,
+   *   swiftChargeBearer: 'OUR'|'BEN'|'SHA',
+   *   purpose: 'PAYOUT'|'FLOAT_TOPUP'|'REFUND',
+   *   isPrimary,
+   *   verificationStatus: 'UNVERIFIED'|'KFTC_VERIFIED'|'BANK_LETTER'|'MICRO_DEPOSIT',
+   *   verificationDate: ISO date string|null
+   * }
+   */
+  getBankAccounts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/bank-accounts`),
+
+  /**
+   * POST /v1/admin/partners/{partnerCode}/bank-accounts/{accountId}/verify
+   * -> BankAccountView (refreshed with updated verificationStatus and verificationDate)
+   */
+  verifyBankAccount: (partnerCode, accountId) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/bank-accounts/${encodeURIComponent(accountId)}/verify`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  // ---------- Settlement config (Slice 4B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/settlement-config
+   * -> SettlementConfigView {
+   *      cycleTPlusN: number,          // 0..5
+   *      cutoffTime: string,           // "HH:mm"
+   *      cutoffTimezone: string,       // e.g. "Asia/Seoul"
+   *      settlementMethod: string      // SWIFT|ACH|FPS|RTGS|SEPA|CHAPS|OTHER
+   *    }
+   */
+  getSettlementConfig: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/settlement-config`,
+    ),
+
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/settlement-preview?txnInstant=ISO
+   * -> SettlementPreviewView {
+   *      payoutDate: string,          // "YYYY-MM-DD"
+   *      explanation: string[]        // e.g. ["Sat: skip", "Sun: skip", "Mon: payout"]
+   *    }
+   */
+  getSettlementPreview: (partnerCode, txnInstant) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/settlement-preview${qs({ txnInstant })}`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-4-settlement
+   * body: { cycleTPlusN, cutoffTime, cutoffTimezone, settlementMethod }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * This differs from the generic patchDraftStep path because the settlement
+   * sub-step is a separate PATCH endpoint (Slice 4B.1 backend, agent 4B.1).
+   */
+  patchDraftStep4Settlement: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-4-settlement`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  // ---------- Prefunding balance (Slice 5B.1 backend) ----------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/balance -> BalanceView
+   * BalanceView: {
+   *   currency:        string  (ISO-4217),
+   *   balance:         string  (BigDecimal decimal string),
+   *   threshold:       string  (BigDecimal decimal string),
+   *   pctOfThreshold:  number  (0-100, current balance as % of threshold)
+   * }
+   */
+  getPartnerBalance: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/balance`),
+
+  /**
+   * GET /v1/admin/partners/{partnerCode}/balance-alerts -> BalanceAlertView[]
+   * BalanceAlertView: {
+   *   tier:         'WARNING'|'CRITICAL',
+   *   balanceUsd:   string  (BigDecimal decimal string),
+   *   thresholdUsd: string  (BigDecimal decimal string),
+   *   raisedAt:     ISO-8601 instant string,
+   *   acknowledged: boolean
+   * }
+   */
+  getBalanceAlerts: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/balance-alerts`),
 };

@@ -24,6 +24,12 @@ dependencies {
     // Reactive Redis — rate-limit counters + idempotency cache
     implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
 
+    // Slice 1 (ADR-011): api-gateway is an OAuth2 resource server. Human traffic from
+    // admin-ui / partner-portal-ui bears Keycloak-issued JWTs (realm = gmepay); this
+    // starter pulls in spring-security + the JOSE / Nimbus stack to validate them.
+    // Machine traffic continues to authenticate via HMAC headers (see HmacSignatureFilter).
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+
     // Shared libs (contract only — no cross-service DB access)
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')

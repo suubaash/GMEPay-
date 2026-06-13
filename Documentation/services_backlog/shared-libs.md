@@ -2229,6 +2229,7 @@
 - MockMvc slice test in services/rate-fx confirms a thrown GmeException(RATE_QUOTE_EXPIRED) returns the canonical envelope with HTTP 422.
 **Depends on:** 8.7-T04, 8.7-T08
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

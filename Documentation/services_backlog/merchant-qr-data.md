@@ -371,6 +371,7 @@
 - Test (6): after MerchantSyncedEvent(isActive=false), Redis key merchant-resolve:{merchantId}:* absent
 **Depends on:** 9.3-T21, 9.3-T20, 9.3-T08
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

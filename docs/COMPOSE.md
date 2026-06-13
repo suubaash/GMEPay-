@@ -13,7 +13,7 @@ flag — a bare `docker compose up` starts nothing.
 
 | Profile | Contents |
 |---|---|
-| `core` | All infrastructure (8× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff |
+| `core` | All infrastructure (9× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry, Keycloak) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff |
 | `full` | Everything in `core` plus: api-gateway, auth-identity, smart-router, reporting-compliance |
 
 Infrastructure and money-path services are tagged with *both* profiles
@@ -57,7 +57,9 @@ precedence). Host ports fan out as follows:
 | 8094 | reporting-compliance | full | |
 | 8095 | ops-partner-bff | core+full | |
 | 8096 | **config-registry** | core+full | **moved from 8081** to free the SR port |
+| 8097 | **keycloak** | core+full | human IdP (ADR-011); see below |
 | 5433–5440 | postgres-{config,txn,prefunding,ledger,settlement,notify,authid,scheme} | core+full | one PostgreSQL per stateful service |
+| 5446 | postgres-keycloak | core+full | Keycloak's own datastore (separate from authid) |
 | 6379 | redis | core+full | used by api-gateway (replay protection + health) |
 | 27017 | mongo | core+full | |
 | 29092 | kafka (EXTERNAL listener) | core+full | host access; see below |
@@ -144,3 +146,55 @@ flips to required (17.1-G03 acceptance).
 Local note: this repo's build machine has no Docker — do **not** try to run
 `docker compose` or `gradlew integrationTest` locally; unit tests stay on H2
 (PostgreSQL mode).
+
+## Keycloak (ADR-011)
+
+`quay.io/keycloak/keycloak:25.0` runs the **human** identity provider for
+admin-ui and partner-portal-ui. Machine credentials (API keys, HMAC, mTLS)
+stay with `auth-identity` — the two IdPs never share state. See ADR-011 for
+the rationale.
+
+| Property | Value |
+|---|---|
+| Image | `quay.io/keycloak/keycloak:25.0` (Quarkus distribution; do **not** revert to the EOL `jboss/keycloak` image) |
+| Host port | **8097** (admin console: `http://localhost:8097`) |
+| Internal port | 8080 |
+| Start command | `start-dev --import-realm` (dev mode — no HTTPS required) |
+| Datastore | `postgres-keycloak` (Postgres 16, host port **5446**, db/user/password = `keycloak`) |
+| Master-realm admin | `admin / admin` (env vars `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`) |
+| Realm seed | `docker/keycloak/realm-gmepay.json` mounted read-only at `/opt/keycloak/data/import` |
+| Healthcheck | TCP probe on 8080 (the `/health` endpoint lives on the management port, which is off in dev mode) |
+
+### Seeded realm `gmepay`
+
+The realm JSON imports on first boot (subsequent boots are idempotent — Keycloak
+skips re-import when the realm already exists). It seeds:
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Client | `admin-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3000/*`, dev secret `admin-ui-dev-secret` |
+| Client | `partner-portal-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3001/*`, dev secret `partner-portal-ui-dev-secret` |
+| Realm role | `OPERATOR` | back-office user; gates `/v1/admin/**` at the BFF |
+| Realm role | `PARTNER_USER` | partner-portal-ui human; per-partner scoping enforced at the BFF |
+| User | `admin / demo` | OPERATOR — replaces the legacy `password=demo` flow in admin-ui |
+| User | `partner-demo / demo` | PARTNER_USER — partner-portal-ui smoke-test login |
+
+The richer `PARTNER_ADMIN` / `PARTNER_VIEWER` split mentioned in ADR-011
+§Consequences lands in **Slice 8** alongside per-partner self-service users.
+Staging and prod use a different realm export with **empty user lists**; real
+users are provisioned via SCIM/LDAP federation.
+
+### Port-band note
+
+The 8080..8096 application band was already full when Keycloak was added, and
+8090 (the Slice 1 brief's first choice) is owned by `scheme-adapter-zeropay`.
+Keycloak therefore sits at host port **8097**, one step beyond the original
+application band. The admin console URL and OIDC discovery URL follow:
+
+```
+admin console:   http://localhost:8097/
+OIDC discovery:  http://localhost:8097/realms/gmepay/.well-known/openid-configuration
+```
+
+Inside the compose network the gateway/BFF reach Keycloak at
+`http://keycloak:8080` (the internal port is unchanged at 8080).

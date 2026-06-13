@@ -17,6 +17,28 @@ dependencies {
     implementation 'org.flywaydb:flyway-database-postgresql'
     implementation project(':libs:lib-domain')
     implementation project(':libs:lib-errors')
+    // Slice 1: canonical PartnerView (read) + PartnerCommand (write) DTOs in
+    // lib-api-contracts for the partner endpoints — see docs/PARTNER_SETUP_PLAN.md
+    // §"Cross-cutting bug fixes".
+    implementation project(':libs:lib-api-contracts')
+    // Slice 1B.2: 4-eyes maker-checker primitive per ADR-008 (ChangeRequest record,
+    // ChangeRequestState enum, Spring State Machine config). The change_request
+    // table itself is owned by this service (V005); the FSM and DTOs are shared.
+    implementation project(':libs:lib-change-request')
+    // Slice 1B.3: tamper-evident audit log primitive per ADR-007. The audit_log
+    // table is owned by this service (V006); AuditEvent / AuditPublisher / HashChain
+    // are shared via lib-audit. Added here so the audit package compiles — the
+    // audit code itself was wired by the 1B.3 agent.
+    implementation project(':libs:lib-audit')
+    // Slice 3: KYB port types (KybSubject / ScreeningResult, ADR-009) used by the
+    // KybScreeningClient seam to kyb-adapter, plus the deterministic StubKybAdapter
+    // that backs StubKybClient for local dev / unit slices (ADR-014).
+    implementation project(':libs:lib-kyb')
+    // Slice 3 (3A.1): ADR-006 document vault port. Production wiring activates on
+    // gmepay.vault.endpoint (MinIO); without it the in-memory client keeps dev/test
+    // boots infrastructure-free. The partner_document table (V010) is owned here;
+    // the bytes are owned by the vault.
+    implementation project(':libs:lib-vault')
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'

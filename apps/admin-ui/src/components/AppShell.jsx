@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import GroupsIcon from '@mui/icons-material/Groups';
+import HowToVoteIcon from '@mui/icons-material/HowToVote';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
@@ -39,7 +40,8 @@ import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { clearAuth, getUsername } from '@/api/auth';
+import { clearAuth, getIdToken, getUsername } from '@/api/auth';
+import { logoutUrl as oidcLogoutUrl } from '@/api/oidc';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { logout as logoutAction } from '@/store/authSlice';
 import { toggleMode } from '@/store/uiSlice';
@@ -49,6 +51,7 @@ const drawerWidth = 240;
 const navItems = [
   { label: 'Dashboard', href: '/', icon: <DashboardIcon /> },
   { label: 'Partners', href: '/partners', icon: <GroupsIcon /> },
+  { label: 'Approvals', href: '/approvals', icon: <HowToVoteIcon /> },
   { label: 'Schemes', href: '/schemes', icon: <QrCode2Icon /> },
   { label: 'Transactions', href: '/transactions', icon: <ReceiptLongIcon /> },
   { label: 'Settlement', href: '/settlement', icon: <AccountBalanceIcon /> },
@@ -100,9 +103,19 @@ export default function AppShell({ children }) {
 
   const handleLogout = () => {
     closeMenu();
+    // Capture the OIDC id_token (if any) BEFORE clearing localStorage so we
+    // can hint it to Keycloak's end-session endpoint and clear the SSO
+    // cookie on the IdP — otherwise the operator can be silently re-logged-in
+    // on the next /login click. When there's no id_token (dev-skip path /
+    // legacy session), fall back to the in-app /login route.
+    const idToken = getIdToken();
     clearAuth();
     dispatch(logoutAction());
-    router.replace('/login');
+    if (idToken) {
+      window.location.assign(oidcLogoutUrl(idToken));
+    } else {
+      router.replace('/login');
+    }
   };
 
   const avatarLetter = (username ?? 'A').charAt(0).toUpperCase();

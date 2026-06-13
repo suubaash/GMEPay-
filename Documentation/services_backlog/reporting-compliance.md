@@ -923,3 +923,61 @@
 - KYC responsibility statement explicitly names the 8 forbidden data categories: name, national ID, passport, bank account, phone, address, biometric, date of birth
 - Nightly baseline job cron schedule (02:00 KST) is documented with the SQL aggregation logic described in plain English
 **Depends on:** 13.8-T11, 13.8-T09
+
+---
+
+<!-- ws-21-partner-setup-rebaseline -->
+
+## Partner Setup re-baseline tickets (WS 21)
+
+These tickets close Partner Setup audit gaps under the 8-slice vertical plan in `docs/PARTNER_SETUP_PLAN.md` (approved 2026-06-11). Each ticket id `21.{slice}-Pxx` maps to a wizard slice; ADR references point at `docs/adr/`. Tickets owned by **reporting-compliance** live here; cross-service contributions are listed at the bottom for awareness.
+
+> Note: legacy WP 10.3 entries on the WBS spreadsheet remain in place but are flagged *superseded by WS 21 — see docs/PARTNER_SETUP_PLAN.md*.
+
+### Slice 8 tickets owned by this service
+
+### 21.8-P12 — KoFIU STR/CTR feed config on partner + reporting-compliance consumer
+*Slice:* **8** · *Est:* 75 min · *Role:* Backend · *Owner:* reporting-compliance · *ADR refs:* —
+
+**Context.** KoFIU reporting: CTR threshold + per-corridor STR enable flag. Reporting-compliance subscribes to gmepay.kyb.screening and gmepay.txn.completed to build reports.
+
+**Steps.** V239__partner_kofiu_fields.sql: kofiu_entity_id VARCHAR(40) NULL, ctr_threshold_krw NUMERIC(20,4) DEFAULT 10000000, str_enabled_corridors JSONB DEFAULT '[]'; update services/reporting-compliance/src/main/java/com/gme/pay/reporting/KoFiuFeedBuilder.java to consume txn events + apply per-partner threshold + emit XML report.
+
+**Deliverable.** `services/config-registry/src/main/resources/db/migration/V239__partner_kofiu_fields.sql; services/reporting-compliance/src/main/java/com/gme/pay/reporting/KoFiuFeedBuilder.java`
+
+**Acceptance.**
+- CTR triggered when daily aggregate per end-user crosses 10M KRW threshold
+- STR triggered when partner-corridor in str_enabled_corridors list and txn flagged
+- Report XML validates against KoFIU schema
+- ctr_threshold_krw can be overridden per partner (some partners regulated stricter)
+
+### 21.8-P15 — reporting-compliance: BOK 외환거래보고 XML generator + scheduler
+*Slice:* **8** · *Est:* 120 min · *Role:* Backend · *Owner:* reporting-compliance · *ADR refs:* —
+
+**Context.** Generate BOK FX-trade report XML monthly, classify by partner.bok_txn_code.
+
+**Steps.** Add `services/reporting-compliance/src/main/java/com/gme/pay/reporting/BokFxReportBuilder.java`; @Scheduled monthly batch reads completed txns + partner.bok_* fields; emits XML matching BOK template (XSD-validated); files to SFTP gateway for upload.
+
+**Deliverable.** `services/reporting-compliance/src/main/java/com/gme/pay/reporting/BokFxReportBuilder.java`
+
+**Acceptance.**
+- Monthly batch produces one XML per fx_reporting_category
+- XML validates against BOK XSD
+- Files land in sftp-gateway outbox
+- Txns from partners with no bok_txn_code raise WARN + Slack alert before report finalises
+
+### 21.8-P16 — reporting-compliance: Hometax e-tax-invoice issuance on settled fee
+*Slice:* **8** · *Est:* 90 min · *Role:* Backend · *Owner:* reporting-compliance · *ADR refs:* —
+
+**Context.** When a fee settles, issue a Hometax e-tax-invoice on behalf of the partner. Uses hometax_issuer_cert_id loaded from lib-vault.
+
+**Steps.** Add HometaxInvoiceIssuer.java consuming gmepay.settlement.completed events; fetch issuer cert from lib-vault; build invoice XML; POST to Hometax API; record invoice id in invoices table.
+
+**Deliverable.** `services/reporting-compliance/src/main/java/com/gme/pay/reporting/HometaxInvoiceIssuer.java`
+
+**Acceptance.**
+- Settled fee triggers an issued invoice within 5 minutes
+- Invoice number from Hometax stored on revenue_ledger entry
+- Hometax 5xx retried 3x with backoff
+- Failed issuance produces a manual-action alert
+

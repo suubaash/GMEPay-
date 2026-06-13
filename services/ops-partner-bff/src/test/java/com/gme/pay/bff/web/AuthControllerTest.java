@@ -22,8 +22,12 @@ import org.springframework.test.web.servlet.MockMvc;
  * refresh returns a new token shape.
  *
  * <p>These tests do NOT pretend to validate real auth — the controller's own
- * Javadoc flags it as a Phase-4 replacement.
+ * Javadoc flags it as Slice 1 deprecated (admin-ui swaps to Keycloak OIDC in
+ * ticket 1D.3; this test + the controller are deleted in the 1C.4-cleanup follow-up).
+ * The {@code "removal"} suppression keeps the build clean for the brief overlap
+ * window while the old login path still serves UI traffic.
  */
+@SuppressWarnings("removal")
 class AuthControllerTest {
 
     private MockMvc mvc;

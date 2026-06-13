@@ -2,6 +2,7 @@
 
 Backend-for-frontend serving admin-ui and partner-portal-ui (19 endpoints, built ahead of WBS v2 — legitimized by WBS v3). Module `services/ops-partner-bff`. Speaks REST to 10 upstream services; stubs remain only under the `demo` profile.
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

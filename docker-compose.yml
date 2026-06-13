@@ -28,7 +28,9 @@ volumes:
   pg-notify:
   pg-authid:
   pg-scheme:
+  pg-keycloak:
   mongo-data:
+  minio-data:
 
 # ─────────── REUSABLE HEALTHCHECK SHAPES (extension fields + anchors) ───────────
 # Only api-gateway ships spring-boot-starter-actuator, so every other Spring
@@ -119,6 +121,19 @@ services:
     networks: [gmepay]
     profiles: ["core", "full"]
 
+  # Keycloak's own datastore (ADR-011: human IdP, PostgreSQL-backed). Kept on a
+  # separate volume + host port (5446) from postgres-authid (5439) so the two
+  # IdPs cannot accidentally share state — auth-identity continues to own
+  # machine credentials (ApiKey/HMAC/mTLS) and never touches the Keycloak DB.
+  postgres-keycloak:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: keycloak, POSTGRES_USER: keycloak, POSTGRES_PASSWORD: keycloak }
+    ports: ["5446:5432"]
+    volumes: ["pg-keycloak:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
   mongo:
     image: mongo:7
     ports: ["27017:27017"]
@@ -131,6 +146,22 @@ services:
     image: redis:7-alpine
     ports: ["6379:6379"]
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  # Partner document vault (ADR-006): S3-compatible object store with versioning.
+  # Object-lock compliance mode is enabled per-bucket at bootstrap (lib-vault's
+  # VaultBucketInitializer creates gmepay-partner-vault with lock + versioning).
+  # Console on 9001 for local inspection; API on 9000.
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: gmepay
+      MINIO_ROOT_PASSWORD: gmepay-minio
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+    healthcheck: { test: ["CMD", "mc", "ready", "local"], interval: 10s, timeout: 5s, retries: 18, start_period: 10s }
     networks: [gmepay]
     profiles: ["core", "full"]
 
@@ -182,6 +213,59 @@ services:
       SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xms128m -Xmx512m"
     healthcheck: { test: ["CMD-SHELL", "curl -fs http://localhost:8081/subjects >/dev/null || bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081'"], interval: 10s, timeout: 5s, retries: 18, start_period: 20s }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  # Keycloak — human IdP for admin-ui + partner-portal-ui (ADR-011).
+  #
+  # Image: quay.io/keycloak/keycloak:25.0 (the modern Quarkus distribution; the
+  # legacy jboss/keycloak image is EOL and pinned to Keycloak 16.x — do NOT
+  # switch back to it).
+  #
+  # `start-dev --import-realm` runs Keycloak in dev mode (no HTTPS required) and
+  # imports any realm JSON found under /opt/keycloak/data/import on first boot.
+  # docker/keycloak/realm-gmepay.json seeds:
+  #   - realm 'gmepay'
+  #   - clients 'admin-ui' + 'partner-portal-ui' (confidential OIDC, PKCE on)
+  #   - users 'admin/demo' (OPERATOR) + 'partner-demo/demo' (PARTNER_USER)
+  # Staging/prod use a different realm export with empty user lists; SCIM/LDAP
+  # federation provisions real users (ADR-011 §Consequences).
+  #
+  # Host port 8097 (not 8090): the 8080..8096 application-port band is full,
+  # and 8090 is already taken by scheme-adapter-zeropay. The Slice 1 brief
+  # called for 8090 — this is the documented deviation. Internal port is
+  # Keycloak's default 8080.
+  #
+  # Healthcheck note: Keycloak 25 exposes /health on the *management* port
+  # (9000) by default and that endpoint is off in dev mode. A TCP probe on the
+  # main listener (8080) is the correct liveness signal until we move to the
+  # production distribution with a real management listener.
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: ["start-dev", "--import-realm"]
+    ports: ["8097:8080"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      JAVA_OPTS_APPEND: "-Xms256m -Xmx768m"
+    volumes:
+      - ./docker/keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres-keycloak: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
     networks: [gmepay]
     profiles: ["core", "full"]
 

@@ -2,6 +2,7 @@
 
 NEW service (architecture diagram): brokers all KFTC SFTP file exchange so scheme adapters never touch raw SFTP. Module `services/sftp-gateway` (settings.gradle change is coordinator-only). Bridges SFTP <-> MinIO with PGP + checksum ledger.
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

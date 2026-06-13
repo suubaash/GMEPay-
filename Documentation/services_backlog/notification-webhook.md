@@ -328,6 +328,7 @@
 - K8s deployment.yaml has replicas: 2 and memory limit 512Mi
 - Flyway migration location points to db/migration inside the module classpath
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

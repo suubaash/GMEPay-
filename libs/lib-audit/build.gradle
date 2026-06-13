@@ -1,0 +1,21 @@
+// lib-audit: tamper-evident audit log primitive per ADR-007.
+// AuditEvent record + KafkaAuditPublisher + HashChain helper. Services adopt by depending
+// on this lib + wiring publishAuditEvent into their write paths. Three-tier deployment
+// (dedicated audit DB + MinIO cold sink) lands in Slice 8 hardening.
+
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api project(':libs:lib-events')
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    implementation 'org.slf4j:slf4j-api'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

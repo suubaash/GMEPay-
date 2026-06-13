@@ -11,6 +11,11 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-prefunding')
     implementation project(':libs:lib-errors')
+    // Slice 5 (5B.1): canonical BalanceView/BalanceAlertView wire DTOs + the
+    // transactional-Outbox event contracts (DomainEvent/EventPublisher) for
+    // tier alerts on topic gmepay.prefunding.alert (ADR-001).
+    implementation project(':libs:lib-api-contracts')
+    implementation project(':libs:lib-events')
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'

@@ -16,6 +16,9 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-money')
+    // Slice 1: canonical PartnerView / PartnerCommand DTOs that this BFF binds against
+    // when talking to config-registry — see docs/PARTNER_SETUP_PLAN.md §"Cross-cutting bug fixes".
+    implementation project(':libs:lib-api-contracts')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

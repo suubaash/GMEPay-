@@ -1444,6 +1444,7 @@
 - Decimal amounts serialize as strings not numbers
 - m_a, m_b, cost_rate_* fields absent from RateQuoteResponse
 
+
 <!-- wbs-v3-gap-closure -->
 
 ---

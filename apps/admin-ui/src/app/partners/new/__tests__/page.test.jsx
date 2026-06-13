@@ -4,32 +4,33 @@ import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import partnersReducer from '@/store/partnersSlice';
+import draftsReducer from '@/store/draftsSlice';
 import authReducer from '@/store/authSlice';
 import { theme } from '@/theme/theme';
 
-// Mock next/navigation BEFORE importing the page so it picks up our stubs.
+// next/navigation must be mocked BEFORE importing the page.
 const push = vi.fn();
+const replace = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push, replace: vi.fn(), back: vi.fn() }),
+  useRouter: () => ({ push, replace, back: vi.fn() }),
 }));
 
-// Mock the BFF client — only createPartner is needed for this page.
-const createPartner = vi.fn();
+// The deprecated form posted directly to createPartner; the wizard-entry page
+// only needs createPartnerDraft + getPartnerDraft (the draftsSlice thunks).
+const createPartnerDraft = vi.fn();
 vi.mock('@/api/client', () => ({
   adminApi: {
-    createPartner: (req) => createPartner(req),
+    createPartnerDraft: (body) => createPartnerDraft(body),
+    createDraft: (body) => createPartnerDraft(body),
   },
 }));
 
-// Mock the snackbar provider so the form's success/error toasts no-op.
-const snackSuccess = vi.fn();
 const snackError = vi.fn();
 vi.mock('@/components/SnackbarProvider', () => ({
   __esModule: true,
   default: ({ children }) => <>{children}</>,
   useSnackbar: () => ({
-    success: snackSuccess,
+    success: vi.fn(),
     error: snackError,
     info: vi.fn(),
     warning: vi.fn(),
@@ -40,7 +41,7 @@ import NewPartnerPage from '../page';
 
 function renderPage() {
   const store = configureStore({
-    reducer: { partners: partnersReducer, auth: authReducer },
+    reducer: { drafts: draftsReducer, auth: authReducer },
   });
   return render(
     <Provider store={store}>
@@ -51,58 +52,59 @@ function renderPage() {
   );
 }
 
-describe('NewPartnerPage', () => {
+describe('NewPartnerPage (wizard entry)', () => {
   beforeEach(() => {
     push.mockReset();
-    createPartner.mockReset();
-    snackSuccess.mockReset();
+    replace.mockReset();
+    createPartnerDraft.mockReset();
     snackError.mockReset();
   });
 
-  it('shows required-field errors when submitting an invalid form', async () => {
-    const user = userEvent.setup();
+  it('asks for a partner code and disables Start until format is valid', async () => {
     renderPage();
-    await user.click(screen.getByRole('button', { name: /create partner/i }));
-    expect(await screen.findByText(/Partner ID is required/i)).toBeInTheDocument();
-    expect(createPartner).not.toHaveBeenCalled();
+    const start = screen.getByRole('button', { name: /start wizard/i });
+    expect(start).toBeDisabled();
+
+    const user = userEvent.setup();
+    const input = screen.getByLabelText(/partner code/i);
+    await user.type(input, 'AB'); // too short
+    expect(start).toBeDisabled();
+    await user.type(input, 'C'); // now 3 chars
+    expect(start).toBeEnabled();
   });
 
-  it('shows a regex error for a lowercase partner ID', async () => {
-    const user = userEvent.setup();
+  it('creates a draft and redirects to step-1 on Start', async () => {
+    createPartnerDraft.mockResolvedValueOnce({ partnerCode: 'GME_VN_001', status: 'ONBOARDING' });
     renderPage();
-    await user.type(screen.getByLabelText('Partner ID'), 'lower_case');
-    await user.click(screen.getByRole('button', { name: /create partner/i }));
-    expect(
-      await screen.findByText(/uppercase letters, digits, hyphen or underscore/i),
-    ).toBeInTheDocument();
-    expect(createPartner).not.toHaveBeenCalled();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/partner code/i), 'gme_vn_001'); // lowercased input
+    await user.click(screen.getByRole('button', { name: /start wizard/i }));
+
+    await waitFor(() => expect(createPartnerDraft).toHaveBeenCalledWith({ partnerCode: 'GME_VN_001' }));
+    await waitFor(() =>
+      expect(replace).toHaveBeenCalledWith('/partners/draft/GME_VN_001/step-1'),
+    );
   });
 
-  it('calls createPartner when a valid form is submitted', async () => {
-    createPartner.mockResolvedValueOnce({
-      partnerId: 'GME_KR_001',
-      type: 'LOCAL',
-      settlementCurrency: 'KRW',
-      settlementRoundingMode: 'HALF_UP',
-    });
-    const user = userEvent.setup();
+  it('surfaces the upstream error message via snackbar when create fails', async () => {
+    createPartnerDraft.mockRejectedValueOnce({ message: "partner 'GME_VN_001' already exists" });
     renderPage();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/partner code/i), 'GME_VN_001');
+    await user.click(screen.getByRole('button', { name: /start wizard/i }));
 
-    await user.type(screen.getByLabelText('Partner ID'), 'GME_KR_001');
-    await user.click(screen.getByRole('button', { name: /create partner/i }));
+    await waitFor(() =>
+      expect(snackError).toHaveBeenCalledWith(
+        expect.stringContaining("partner 'GME_VN_001' already exists"),
+      ),
+    );
+    expect(replace).not.toHaveBeenCalled();
+  });
 
-    await waitFor(() => {
-      expect(createPartner).toHaveBeenCalledTimes(1);
-    });
-    expect(createPartner).toHaveBeenCalledWith({
-      partnerId: 'GME_KR_001',
-      type: 'LOCAL',
-      settlementCurrency: 'KRW',
-      settlementRoundingMode: 'HALF_UP',
-    });
-    await waitFor(() => {
-      expect(snackSuccess).toHaveBeenCalled();
-      expect(push).toHaveBeenCalledWith('/partners');
-    });
+  it('Cancel returns to /partners', async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(push).toHaveBeenCalledWith('/partners');
   });
 });

@@ -1,0 +1,20 @@
+// lib-change-request: 4-eyes maker-checker primitive per ADR-008.
+// ChangeRequest record + ChangeRequestState enum + Spring State Machine config.
+// Services adopt by including this lib + adding the change_request table to their schema.
+//
+// Owns: docs/PARTNER_SETUP_PLAN.md §Slice 1 1B.2.
+
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api 'org.springframework.statemachine:spring-statemachine-core:4.0.0'
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    implementation 'org.springframework:spring-context'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.springframework.statemachine:spring-statemachine-test:4.0.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

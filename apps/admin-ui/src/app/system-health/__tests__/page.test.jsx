@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { Provider } from 'react-redux';
@@ -47,10 +47,6 @@ function renderPage() {
 describe('SystemHealthPage', () => {
   beforeEach(() => {
     getSystemHealth.mockReset();
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it('renders one status chip per service with the correct label per status', async () => {
