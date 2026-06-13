@@ -13,8 +13,8 @@ package com.gme.pay.contracts;
  *
  * <p>Forward-flow:
  * <pre>
- *   ONBOARDING → KYB_PENDING → KYB_APPROVED → CONTRACT_SIGNED
- *              → SANDBOX → UAT → LIVE
+ *   DRAFT → ONBOARDING → KYB_PENDING → KYB_APPROVED → CONTRACT_SIGNED
+ *         → SANDBOX → UAT → LIVE
  * </pre>
  *
  * <p>Terminal-ish states reachable from {@link #LIVE}:
@@ -22,8 +22,20 @@ package com.gme.pay.contracts;
  *   <li>{@link #SUSPENDED} — recoverable; an operator can re-propose LIVE.</li>
  *   <li>{@link #TERMINATED} — non-recoverable; the partner is closed.</li>
  * </ul>
+ *
+ * <p>The single source of truth for which edges are legal (and which require
+ * 4-eyes approval) is {@link PartnerStatusTransitionTable} — keep the two in
+ * lock-step with the V025 {@code ck_partners_status} CHECK roster.
  */
 public enum PartnerStatus {
+    /**
+     * Operator has opened a brand-new draft shell (Slice 8 widened the FSM head).
+     * No wizard step has been saved yet. Slice 1's draft endpoints historically
+     * minted rows straight into {@link #ONBOARDING}; DRAFT exists so the full
+     * lifecycle documented in ADR-011 has its true head state and the
+     * {@code DRAFT → ONBOARDING} edge can be driven explicitly.
+     */
+    DRAFT,
     /** Operator has opened a draft (Slice 1). No data yet committed. */
     ONBOARDING,
     /** KYB documents collected; awaiting compliance review (Slice 3). */

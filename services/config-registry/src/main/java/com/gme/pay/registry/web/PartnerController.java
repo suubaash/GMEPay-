@@ -174,6 +174,12 @@ public class PartnerController {
         PartnerEntity current = repository.findCurrentByPartnerCode(code)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "unknown partner: " + code));
+        // Slice 8 post-activation immutability (ADR-011): once go_live_at is
+        // stamped, country_of_incorporation is frozen. Throws
+        // ApiException(IMMUTABLE_AFTER_ACTIVATION) → 400 via the
+        // RegistryApiExceptionHandler envelope.
+        com.gme.pay.registry.lifecycle.PartnerImmutabilityGuard
+                .checkIdentityWrite(current, req.countryOfIncorporation());
         applyIdentityFromUpdate(current, req);
         // saveAndFlush — same JPA path the store uses; this is a direct UPDATE on the
         // current row, which is acceptable Expand-phase behaviour for the Identity

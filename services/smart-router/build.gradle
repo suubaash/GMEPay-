@@ -8,6 +8,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation project(':libs:lib-errors')
+    // Slice 7 data-driven routing: PartnerSchemeResolver port + the
+    // config-registry wire DTOs (PartnerView / PartnerSchemeView).
+    implementation project(':libs:lib-domain')
+    implementation project(':libs:lib-api-contracts')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

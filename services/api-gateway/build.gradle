@@ -34,6 +34,12 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Slice 8 (I1): partner IP-allowlist pre-signature filter needs the
+    // PartnerIpAllowlistView contract, the CIDR matcher, and the tamper-evident
+    // audit publisher for rejection logging.
+    implementation project(':libs:lib-api-contracts')
+    implementation project(':libs:lib-domain')
+    implementation project(':libs:lib-audit')
 
     // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

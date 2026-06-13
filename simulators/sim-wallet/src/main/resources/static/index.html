@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GMEPay+ Wallet Simulator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f2f5;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    .phone {
+      width: 390px;
+      background: #fff;
+      border-radius: 24px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #1a73e8, #0d47a1);
+      color: #fff;
+      padding: 20px 20px 16px;
+    }
+    .header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    .header p  { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+
+    /* Partner toggle */
+    .partner-toggle {
+      display: flex;
+      background: rgba(255,255,255,0.15);
+      border-radius: 10px;
+      margin-top: 14px;
+      padding: 3px;
+    }
+    .partner-toggle button {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: rgba(255,255,255,0.75);
+      padding: 8px 0;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .partner-toggle button.active {
+      background: #fff;
+      color: #1a73e8;
+    }
+
+    .partner-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-top: 6px;
+    }
+    .badge-gmeremit { background: #e8f5e9; color: #2e7d32; }
+    .badge-sendmn   { background: #fff3e0; color: #e65100; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #e8eaed;
+    }
+    .tabs button {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 14px 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tabs button.active {
+      color: #1a73e8;
+      border-bottom-color: #1a73e8;
+    }
+
+    /* Content */
+    .tab-content { padding: 20px; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      margin-bottom: 12px;
+    }
+    input:focus, select:focus { border-color: #1a73e8; }
+    textarea { resize: vertical; min-height: 70px; font-family: monospace; font-size: 12px; }
+
+    .btn {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      margin-bottom: 10px;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn-primary { background: #1a73e8; color: #fff; }
+    .btn-secondary { background: #f1f3f4; color: #333; }
+    .btn-pay { background: #34a853; color: #fff; }
+
+    /* Cards */
+    .card {
+      background: #f8f9fa;
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      border: 1px solid #e8eaed;
+    }
+    .card-title { font-size: 12px; font-weight: 700; color: #444; margin-bottom: 8px; }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 0;
+      font-size: 13px;
+    }
+    .info-row .label  { color: #666; }
+    .info-row .value  { font-weight: 600; color: #222; }
+    .info-row .value.highlight { color: #1a73e8; }
+    .info-row .value.mnt  { color: #e65100; }
+    .info-row .value.fee  { color: #f44336; font-size: 12px; }
+    .info-row .value.green { color: #34a853; }
+
+    .divider {
+      border: none;
+      border-top: 1px dashed #e0e0e0;
+      margin: 8px 0;
+    }
+
+    .cpm-token-box {
+      background: #1a1a2e;
+      color: #00ff88;
+      border-radius: 10px;
+      padding: 14px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      margin-bottom: 12px;
+    }
+
+    .mode-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .mode-static  { background: #e3f2fd; color: #1565c0; }
+    .mode-dynamic { background: #fce4ec; color: #c62828; }
+    .mode-cpm     { background: #f3e5f5; color: #6a1b9a; }
+    .mode-mpm     { background: #e8f5e9; color: #1b5e20; }
+
+    .error-box {
+      background: #fce8e6;
+      color: #c62828;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    .success-icon { font-size: 22px; margin-bottom: 4px; }
+
+    #loading {
+      text-align: center;
+      color: #888;
+      font-size: 13px;
+      padding: 16px;
+    }
+  </style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- Header + partner toggle -->
+  <div class="header">
+    <h1>GMEPay+ Wallet</h1>
+    <p id="partnerDesc">Domestic KRW wallet — no FX applied</p>
+    <div class="partner-toggle">
+      <button id="btnGMERemit" class="active" onclick="setPartner('GMEREMIT')">GMERemit</button>
+      <button id="btnSendMN"               onclick="setPartner('SENDMN')">SendMN</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button id="tabMpm" class="active" onclick="switchTab('mpm')">Scan Merchant QR (MPM)</button>
+    <button id="tabCpm"               onclick="switchTab('cpm')">My QR Code (CPM)</button>
+  </div>
+
+  <!-- MPM Tab -->
+  <div class="tab-content">
+    <div id="paneMpm" class="tab-pane active">
+
+      <div class="section-label">Demo QR payloads</div>
+      <select id="mpmPreset" onchange="loadPreset()">
+        <option value="">-- choose a demo payload --</option>
+        <option value="STATIC:CU Convenience:KRW">Static QR — CU Convenience (KRW, no amount)</option>
+        <option value="DYNAMIC:GS25:15000:KRW">Dynamic QR — GS25 (KRW 15,000 fixed)</option>
+        <option value="DYNAMIC:Lotte Mart:58900:KRW">Dynamic QR — Lotte Mart (KRW 58,900)</option>
+      </select>
+
+      <div class="section-label">Or paste QR payload</div>
+      <textarea id="mpmPayload" placeholder="Paste raw QR payload here..."></textarea>
+
+      <button class="btn btn-secondary" onclick="doScan()">Scan QR</button>
+
+      <!-- Preview card -->
+      <div id="mpmPreview" style="display:none" class="card">
+        <div class="card-title">Merchant Preview</div>
+        <div class="info-row">
+          <span class="label">Merchant</span>
+          <span class="value" id="prevMerchant"></span>
+        </div>
+        <div class="info-row">
+          <span class="label">QR Mode</span>
+          <span id="prevModeBadge"></span>
+        </div>
+        <div class="info-row" id="prevAmountRow">
+          <span class="label">Amount</span>
+          <span class="value highlight" id="prevAmount"></span>
+        </div>
+        <div class="info-row">
+          <span class="label">Currency</span>
+          <span class="value" id="prevCurrency"></span>
+        </div>
+      </div>
+
+      <!-- Amount input (shown only for static QR) -->
+      <div id="mpmAmountSection" style="display:none">
+        <div class="section-label">Enter amount (KRW)</div>
+        <input type="number" id="mpmAmount" placeholder="e.g. 12000" min="1" />
+      </div>
+
+      <button class="btn btn-pay" id="mpmPayBtn" style="display:none" onclick="doMpmPay()">
+        Confirm &amp; Pay
+      </button>
+
+      <div id="mpmReceipt" style="display:none"></div>
+      <div id="mpmError"   style="display:none" class="error-box"></div>
+    </div>
+
+    <!-- CPM Tab -->
+    <div id="paneCpm" class="tab-pane">
+
+      <div class="section-label">Customer ID</div>
+      <input type="text" id="cpmCustomerId" placeholder="e.g. CUST-001" value="CUST-001" />
+
+      <div class="section-label">Amount (optional)</div>
+      <input type="number" id="cpmAmount" placeholder="Leave blank for open amount" min="1" />
+
+      <button class="btn btn-primary" onclick="doGenerateCpm()">Generate My QR</button>
+
+      <div id="cpmResult" style="display:none">
+        <div class="card">
+          <div class="card-title">
+            CPM Token &nbsp;<span class="mode-badge mode-cpm">CPM</span>
+          </div>
+          <p style="font-size:12px;color:#666;margin-bottom:8px;">
+            Present this token / QR at the merchant terminal. The terminal scans you.
+          </p>
+          <div class="cpm-token-box" id="cpmTokenBox"></div>
+          <!-- Simple text QR representation -->
+          <div id="cpmQrArea"></div>
+        </div>
+      </div>
+      <div id="cpmError" style="display:none" class="error-box"></div>
+    </div>
+  </div><!-- /tab-content -->
+
+</div><!-- /phone -->
+
+<script>
+/* ------------------------------------------------------------------ */
+/*  State                                                               */
+/* ------------------------------------------------------------------ */
+let currentPartner = 'GMEREMIT';
+let lastPreview    = null;   // MpmPreview from /mpm/scan
+let lastQrPayload  = null;
+
+const API = '';   // same origin
+
+/* ------------------------------------------------------------------ */
+/*  Partner toggle                                                      */
+/* ------------------------------------------------------------------ */
+function setPartner(p) {
+  currentPartner = p;
+  document.getElementById('btnGMERemit').classList.toggle('active', p === 'GMEREMIT');
+  document.getElementById('btnSendMN').classList.toggle('active', p === 'SENDMN');
+  const desc = document.getElementById('partnerDesc');
+  if (p === 'SENDMN') {
+    desc.textContent = 'Overseas MNT wallet — 2% FX margin applied';
+  } else {
+    desc.textContent = 'Domestic KRW wallet — no FX applied';
+  }
+  // Reset views
+  clearMpmState();
+  clearCpmState();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tabs                                                                */
+/* ------------------------------------------------------------------ */
+function switchTab(t) {
+  document.getElementById('paneMpm').classList.toggle('active', t === 'mpm');
+  document.getElementById('paneCpm').classList.toggle('active', t === 'cpm');
+  document.getElementById('tabMpm').classList.toggle('active', t === 'mpm');
+  document.getElementById('tabCpm').classList.toggle('active', t === 'cpm');
+}
+
+/* ------------------------------------------------------------------ */
+/*  MPM — preset loader                                                 */
+/* ------------------------------------------------------------------ */
+function loadPreset() {
+  const v = document.getElementById('mpmPreset').value;
+  document.getElementById('mpmPayload').value = v;
+  clearMpmState();
+}
+
+function clearMpmState() {
+  hide('mpmPreview');
+  hide('mpmAmountSection');
+  hide('mpmPayBtn');
+  hide('mpmReceipt');
+  hide('mpmError');
+  lastPreview = null;
+  lastQrPayload = null;
+}
+
+/* ------------------------------------------------------------------ */
+/*  MPM — Scan                                                          */
+/* ------------------------------------------------------------------ */
+async function doScan() {
+  clearMpmState();
+  const payload = document.getElementById('mpmPayload').value.trim();
+  if (!payload) { showMpmError('Please enter or select a QR payload.'); return; }
+  lastQrPayload = payload;
+
+  try {
+    const res = await apiPost('/v1/wallet/mpm/scan', {
+      partner: currentPartner,
+      qrPayload: payload
+    });
+
+    if (res.error) { showMpmError(res.detail || res.error); return; }
+
+    lastPreview = res;
+    document.getElementById('prevMerchant').textContent = res.merchantName || '—';
+    document.getElementById('prevCurrency').textContent = res.currency || 'KRW';
+
+    const modeBadge = document.getElementById('prevModeBadge');
+    modeBadge.innerHTML = `<span class="mode-badge mode-${res.mode}">${res.mode.toUpperCase()}</span>
+      &nbsp;<span class="mode-badge mode-mpm">MPM</span>`;
+
+    if (res.mode === 'dynamic' && res.amount) {
+      document.getElementById('prevAmount').textContent = `${fmtKrw(res.amount)} ${res.currency}`;
+      show('prevAmountRow');
+      hide('mpmAmountSection');
+    } else {
+      hide('prevAmountRow');
+      show('mpmAmountSection');
+    }
+
+    show('mpmPreview');
+    show('mpmPayBtn');
+  } catch(e) {
+    showMpmError('Network error: ' + e.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  MPM — Pay                                                           */
+/* ------------------------------------------------------------------ */
+async function doMpmPay() {
+  hide('mpmReceipt');
+  hide('mpmError');
+
+  let amount;
+  if (lastPreview && lastPreview.mode === 'dynamic' && lastPreview.amount) {
+    amount = lastPreview.amount;
+  } else {
+    amount = document.getElementById('mpmAmount').value.trim();
+    if (!amount) { showMpmError('Please enter the amount to pay.'); return; }
+  }
+
+  try {
+    const res = await apiPost('/v1/wallet/pay', {
+      partner: currentPartner,
+      mode: 'mpm',
+      qrPayload: lastQrPayload,
+      payAmountKrw: amount
+    });
+
+    if (res.error) { showMpmError(res.detail || res.error); return; }
+
+    const box = document.getElementById('mpmReceipt');
+    box.innerHTML = renderReceipt(res, lastPreview ? lastPreview.merchantName : '');
+    show('mpmReceipt');
+  } catch(e) {
+    showMpmError('Network error: ' + e.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  CPM — Generate                                                      */
+/* ------------------------------------------------------------------ */
+async function doCpmPay() {}   // alias placeholder
+
+async function doGenerateCpm() {
+  hide('cpmResult');
+  hide('cpmError');
+
+  const customerId = document.getElementById('cpmCustomerId').value.trim();
+  if (!customerId) { showCpmError('Customer ID is required.'); return; }
+
+  const amountStr = document.getElementById('cpmAmount').value.trim();
+  const body = { partner: currentPartner, customerId };
+  if (amountStr) { body.amount = amountStr; body.currency = currentPartner === 'SENDMN' ? 'MNT' : 'KRW'; }
+
+  try {
+    const res = await apiPost('/v1/wallet/cpm/generate', body);
+    if (res.error) { showCpmError(res.detail || res.error); return; }
+
+    const token = res.cpmToken;
+    document.getElementById('cpmTokenBox').textContent = token;
+
+    // Simple ASCII "QR" placeholder — no external dependency
+    const qrArea = document.getElementById('cpmQrArea');
+    qrArea.innerHTML = `
+      <div style="text-align:center;padding:10px 0;">
+        <div style="display:inline-block;border:3px solid #222;padding:12px;border-radius:6px;background:#fff;">
+          ${generateTinyQrSvg(token)}
+        </div>
+        <p style="font-size:11px;color:#888;margin-top:6px;">Scan at merchant terminal</p>
+      </div>`;
+    show('cpmResult');
+  } catch(e) {
+    showCpmError('Network error: ' + e.message);
+  }
+}
+
+function clearCpmState() {
+  hide('cpmResult');
+  hide('cpmError');
+}
+
+/* ------------------------------------------------------------------ */
+/*  Receipt renderer                                                    */
+/* ------------------------------------------------------------------ */
+function renderReceipt(r, merchantName) {
+  const ts = r.committedAt ? new Date(r.committedAt).toLocaleString('ko-KR') : '';
+  let fxRows = '';
+
+  if (r.fxApplied) {
+    fxRows = `
+      <hr class="divider"/>
+      <div class="info-row">
+        <span class="label">FX Rate (KRW/MNT)</span>
+        <span class="value highlight">${r.fxRate}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">MNT charge (incl. 2% margin)</span>
+        <span class="value mnt">${fmtNum(r.chargeAmount)} MNT</span>
+      </div>`;
+  }
+
+  return `
+    <div class="card">
+      <div class="success-icon">&#10003;</div>
+      <div class="card-title">Payment Receipt
+        &nbsp;<span class="mode-badge mode-${r.mode}">${r.mode.toUpperCase()}</span>
+        &nbsp;<span class="mode-badge ${r.partner==='SENDMN'?'mode-dynamic':'mode-static'}">${r.partner}</span>
+      </div>
+      ${merchantName ? `<div class="info-row"><span class="label">Merchant</span><span class="value">${merchantName}</span></div>` : ''}
+      <div class="info-row">
+        <span class="label">Pay amount</span>
+        <span class="value">${fmtKrw(r.payAmountKrw)} KRW</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Service fee</span>
+        <span class="value fee">+ ${fmtKrw(r.serviceFeeKrw)} KRW</span>
+      </div>
+      ${fxRows}
+      <hr class="divider"/>
+      <div class="info-row">
+        <span class="label">Charge currency</span>
+        <span class="value">${r.chargeCurrency}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Total charged</span>
+        <span class="value green">${fmtNum(r.chargeAmount)} ${r.chargeCurrency}</span>
+      </div>
+      <hr class="divider"/>
+      <div class="info-row">
+        <span class="label">Txn ref</span>
+        <span class="value" style="font-size:11px;font-family:monospace">${r.schemeTxnRef}</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Committed at (KST)</span>
+        <span class="value" style="font-size:11px">${ts}</span>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tiny SVG QR placeholder (hash-based pattern, no lib needed)        */
+/* ------------------------------------------------------------------ */
+function generateTinyQrSvg(text) {
+  // Creates a deterministic 9×9 grid from a hash of the token — purely cosmetic.
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+    hash |= 0;
+  }
+  const size = 9; const cell = 12;
+  let rects = '';
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // Always fill finder patterns (corners)
+      const isFinder = (x < 3 && y < 3) || (x >= size-3 && y < 3) || (x < 3 && y >= size-3);
+      const on = isFinder || ((hash >>> (y * size + x)) & 1);
+      if (on) {
+        rects += `<rect x="${x*cell}" y="${y*cell}" width="${cell}" height="${cell}" fill="#222"/>`;
+      }
+    }
+  }
+  const svgSize = size * cell;
+  return `<svg width="${svgSize}" height="${svgSize}" xmlns="http://www.w3.org/2000/svg">${rects}</svg>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                             */
+/* ------------------------------------------------------------------ */
+async function apiPost(path, body) {
+  const res = await fetch(API + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return res.json();
+}
+
+function fmtKrw(v) { return Number(v).toLocaleString('ko-KR'); }
+function fmtNum(v) { return Number(v).toLocaleString(); }
+
+function show(id) { document.getElementById(id).style.display = ''; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+function showMpmError(msg) {
+  const el = document.getElementById('mpmError');
+  el.textContent = msg;
+  el.style.display = '';
+}
+function showCpmError(msg) {
+  const el = document.getElementById('cpmError');
+  el.textContent = msg;
+  el.style.display = '';
+}
+</script>
+</body>
+</html>

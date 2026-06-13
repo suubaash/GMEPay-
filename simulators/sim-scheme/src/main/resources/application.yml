@@ -1,0 +1,19 @@
+server:
+  port: 9102
+
+spring:
+  application:
+    name: sim-scheme
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+gmepay:
+  sim:
+    scheme:
+      profile: KHQR   # KHQR | ZEROPAY
+
+logging:
+  level:
+    com.gme.sim: DEBUG

@@ -11,4 +11,11 @@ public interface WebhookEndpointRepository extends JpaRepository<WebhookEndpoint
 
     /** Returns all currently active endpoint registrations for the given partner. */
     List<WebhookEndpointEntity> findByPartnerIdAndActiveTrue(Long partnerId);
+
+    /**
+     * Active registrations for one partner in one credential environment
+     * (V004) — the idempotency lookup of the Slice 8 registration endpoint.
+     */
+    List<WebhookEndpointEntity> findByPartnerIdAndEnvironmentAndActiveTrue(
+            Long partnerId, String environment);
 }

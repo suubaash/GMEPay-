@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIM-XE Live Rates</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee; padding: 2rem; }
+  h1   { color: #4fc; margin-bottom: 0.5rem; }
+  p    { color: #aaa; margin: 0 0 1rem; font-size: 0.85rem; }
+  table { border-collapse: collapse; min-width: 320px; }
+  th, td { border: 1px solid #333; padding: 0.4rem 1rem; text-align: right; }
+  th { background: #222; color: #4fc; text-align: center; }
+  td:first-child { text-align: left; }
+  #ts  { color: #888; font-size: 0.8rem; margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+<h1>SIM-XE &mdash; Live FX Rates (USD base)</h1>
+<p>Auto-refreshes every 5 s. Rates move ±0.3 % every 60 s (random walk).</p>
+<table id="tbl">
+  <thead><tr><th>Pair</th><th>Mid-Rate</th><th>AsOf (KST)</th></tr></thead>
+  <tbody></tbody>
+</table>
+<p id="ts"></p>
+<script>
+async function refresh() {
+  try {
+    const r = await fetch('/v1/rates?base=USD');
+    const d = await r.json();
+    const tbody = document.querySelector('#tbl tbody');
+    tbody.innerHTML = Object.entries(d.quotes)
+      .map(([ccy, rate]) =>
+        `<tr><td>USD/${ccy}</td><td>${rate}</td><td>${d.asOf}</td></tr>`)
+      .join('');
+    document.getElementById('ts').textContent = 'Last fetch: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('ts').textContent = 'Error: ' + e;
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

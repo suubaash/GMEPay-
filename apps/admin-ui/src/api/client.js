@@ -269,7 +269,7 @@ export const adminApi = {
         new ApiError(0, '', `patchDraftStep: invalid step ${step} (expected 1..8)`),
       );
     }
-    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6) {
+    if (n !== 1 && n !== 2 && n !== 3 && n !== 4 && n !== 5 && n !== 6 && n !== 7) {
       return Promise.reject(
         new ApiError(
           501,
@@ -522,6 +522,167 @@ export const adminApi = {
       { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
     ),
 
+  // ---------- Step-7: Schemes & Corridors (Slice 7) ----------
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/step-7/schemes
+   * -> PartnerSchemeView[]
+   * PartnerSchemeView: {
+   *   schemeId, enabled, direction, role,
+   *   zeropayMerchantId, zeropaySubMerchantId, kftcInstitutionCode,
+   *   partnerTypeChar, approvalMethodCpm, approvalMethodMpm
+   * }
+   */
+  listPartnerSchemes: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7/schemes`,
+    ),
+
+  /**
+   * GET /v1/admin/partners/draft/{partnerCode}/step-7/corridors
+   * -> PartnerCorridorView[]
+   * PartnerCorridorView: { id, srcCountry, srcCcy, dstCountry, dstCcy,
+   *   goLiveDate, active }
+   */
+  listPartnerCorridors: (partnerCode) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7/corridors`,
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-7-schemes
+   * body: { schemes: PartnerSchemeCommand[] }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * PartnerSchemeCommand: {
+   *   schemeId, enabled, direction, role,
+   *   zeropayMerchantId?, zeropaySubMerchantId?, kftcInstitutionCode?,
+   *   partnerTypeChar?, approvalMethodCpm?, approvalMethodMpm?
+   * }
+   */
+  patchDraftStep7Schemes: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7-schemes`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-7-corridors
+   * body: { corridors: PartnerCorridorCommand[] }
+   * -> PartnerView with refreshed bitemporal stamps.
+   *
+   * PartnerCorridorCommand: {
+   *   srcCountry, srcCcy, dstCountry, dstCcy, goLiveDate, active
+   * }
+   */
+  patchDraftStep7Corridors: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-7-corridors`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * GET /v1/admin/schemes/{schemeId}/operating-hours
+   * -> OperatingHoursView[]
+   * OperatingHoursView: {
+   *   dayOfWeek: 'MON'|'TUE'|'WED'|'THU'|'FRI'|'SAT'|'SUN',
+   *   openTime:  'HH:mm' | null,
+   *   closeTime: 'HH:mm' | null,
+   *   closed:    boolean
+   * }
+   */
+  listSchemeOperatingHours: (schemeId) =>
+    request(
+      `/v1/admin/schemes/${encodeURIComponent(schemeId)}/operating-hours`,
+    ),
+
+  // ---------- Step-8: Regulatory & Credentials (Slice 8) ----------
+  /**
+   * GET /v1/admin/partners/{code}/lifecycle/preconditions
+   * -> PreconditionView[]
+   * PreconditionView: { key: string, description: string, met: boolean }
+   */
+  getActivationPreconditions: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/lifecycle/preconditions`,
+    ),
+
+  /**
+   * POST /v1/admin/partners/{code}/lifecycle/activate  (first-operator click)
+   * -> 202 { status: 'PROPOSED', proposedAt: ISO }
+   */
+  proposePartnerActivation: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/lifecycle/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  /**
+   * POST /v1/admin/partners/{code}/lifecycle/activate  (second-operator confirm)
+   * -> 201 IssuedCredentialBundle {
+   *      keyId, keyPrefix, keyLast4,
+   *      plaintextApiKey, plaintextHmac, plaintextWebhookSecret
+   *    }
+   * NOTE: plaintextApiKey / plaintextHmac / plaintextWebhookSecret are
+   * returned EXACTLY ONCE and must never be stored anywhere except the
+   * operator's secret manager. The Redux store holds them only long enough
+   * for the OneTimeCredentialModal to display; dismissBundle() wipes them.
+   */
+  executePartnerActivation: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/lifecycle/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-8/ip-allowlist
+   * body: { env: 'sandbox'|'production', cidrs: string[] }
+   * -> PartnerView
+   */
+  patchDraftStep8IpAllowlist: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-8/ip-allowlist`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-8/mtls-cert
+   * body: { pemCertificate: string }
+   * -> MtlsCertParsedView { subjectDn, issuerDn, notBefore, notAfter, fingerprint }
+   */
+  patchDraftStep8MtlsCert: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-8/mtls-cert`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-8/regulatory
+   * body: {
+   *   bok:        { txnCode, fxReportingCategory, remitterType },
+   *   hometax:    { hometaxIssuerCertId, vatTreatment },
+   *   kofiu:      { kofiuEntityId, ctrThresholdKrw },        // BigDecimal strings
+   *   pipa:       { pipaJurisdictionAllowlist: string[] },
+   *   travelRule: { protocol, endpointUrl, thresholdKrw }    // BigDecimal string
+   * }
+   * -> PartnerView
+   */
+  patchDraftStep8Regulatory: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-8/regulatory`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-8/webhook-subscription
+   * body: { url: string, eventTypes: string[] }
+   * -> PartnerView
+   */
+  patchDraftStep8WebhookSubscription: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-8/webhook-subscription`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
   // ---------- System health ----------
   /**
    * GET /v1/admin/system/health -> SystemHealth
@@ -666,6 +827,60 @@ export const adminApi = {
     request(
       `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-4-settlement`,
       { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
+  // ---------- Partner lifecycle FSM (Slice 8) ----------
+  /**
+   * POST /v1/admin/partners/{code}/lifecycle/propose
+   * body: { action:'SUSPEND'|'REACTIVATE'|'TERMINATE', reason, notes? }
+   * -> LifecycleChangeRequestView { changeRequestId, action, status, proposedBy, proposedAt }
+   */
+  proposeLifecycleTransition: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/lifecycle/propose`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * POST /v1/admin/partners/{code}/lifecycle/execute
+   * body: { changeRequestId }
+   * -> PartnerView with updated status
+   */
+  executeLifecycleTransition: (partnerCode, changeRequestId) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/lifecycle/execute`,
+      { method: 'POST', body: JSON.stringify({ changeRequestId }) },
+    ),
+
+  // ---------- Partner credentials (Slice 8) ----------
+  /**
+   * GET /v1/admin/partners/{code}/credentials
+   * -> PartnerCredentialView[] { id, env, kind, prefix, last4, issuedAt, expiresAt, status }
+   */
+  getPartnerCredentials: (partnerCode) =>
+    request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/credentials`),
+
+  /**
+   * POST /v1/admin/partners/{code}/credentials/rotate
+   * body: { credentialId }
+   * -> OneTimeCredentialView { id, env, kind, prefix, last4, issuedAt, expiresAt,
+   *                            plaintextSecret, allCredentials:[PartnerCredentialView] }
+   * plaintextSecret is shown once — never persist.
+   */
+  rotatePartnerCredential: (partnerCode, credentialId) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/credentials/rotate`,
+      { method: 'POST', body: JSON.stringify({ credentialId }) },
+    ),
+
+  /**
+   * GET /v1/admin/partners/{code}/audit?page=&size=
+   * -> Page<AuditEntry> { content, page, size, total }
+   * Scoped to one partner; mirrors global audit but filtered by partnerCode.
+   */
+  getPartnerAuditPage: (partnerCode, page = 0, size = 20) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/audit${qs({ page, size })}`,
     ),
 
   // ---------- Prefunding balance (Slice 5B.1 backend) ----------

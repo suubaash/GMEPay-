@@ -166,12 +166,32 @@ public class PartnerStore {
 
         if (priorOpt.isPresent()) {
             PartnerEntity prior = priorOpt.get();
+            // Slice 8 post-activation immutability (ADR-011): once go_live_at is
+            // stamped, the identity-critical attributes are frozen. The guard
+            // throws ApiException(IMMUTABLE_AFTER_ACTIVATION) BEFORE any row is
+            // touched, so a locked write leaves no half-superseded state.
+            com.gme.pay.registry.lifecycle.PartnerImmutabilityGuard
+                    .checkFourFieldWrite(prior, partner);
             // Carry forward the business-time start so the bitemporal timeline
             // for this partner_code stays continuous in business time even as
             // transaction-time changes accumulate. A future Slice 2+ payload that
             // wants to back-date a fact will set valid_from explicitly.
             fresh.setValidFrom(prior.getValidFrom());
             fresh.setValidTo(prior.getValidTo());
+
+            // Slice 8 lifecycle carry-forward (V025): the domain Partner record
+            // does not carry status or the lifecycle stamps, so a four-field
+            // save must not reset a partner's FSM position (pre-V025 behaviour
+            // silently re-defaulted status to ONBOARDING) nor erase go_live_at —
+            // losing that stamp would silently disengage the immutability lock.
+            fresh.setStatus(prior.getStatus());
+            fresh.setGoLiveAt(prior.getGoLiveAt());
+            fresh.setActivatedBy(prior.getActivatedBy());
+            fresh.setSuspensionReason(prior.getSuspensionReason());
+            fresh.setSuspensionNotes(prior.getSuspensionNotes());
+            fresh.setSuspendedAt(prior.getSuspendedAt());
+            fresh.setTerminatedAt(prior.getTerminatedAt());
+            fresh.setTerminationReason(prior.getTerminationReason());
 
             // Slice 6 currency split (V016 Expand): the domain Partner record
             // does not carry collection_ccy / settle_a_ccy yet, so a save through

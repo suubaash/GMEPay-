@@ -747,6 +747,409 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- Slice 7 (7A/7B) scheme-enablement + corridor endpoints (PARTNER_SETUP_PLAN §Slice 7)
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerSchemeView> patchDraftStep7Schemes(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep7Schemes request) {
+        try {
+            List<com.gme.pay.contracts.PartnerSchemeView> saved = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-7/schemes", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerSchemeView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCorridorView> patchDraftStep7Corridors(
+            String partnerCode, com.gme.pay.contracts.PartnerCommand.UpdateStep7Corridors request) {
+        try {
+            List<com.gme.pay.contracts.PartnerCorridorView> saved = restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-7/corridors", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCorridorView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (validation → 400, unknown draft → 404,
+            // non-ONBOARDING → 409) through to the Admin UI with the upstream
+            // message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerSchemeView> listSchemeEnablements(
+            String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.PartnerSchemeView> schemes = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/schemes", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerSchemeView>>() {});
+            return schemes == null ? List.of() : schemes;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero schemes returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listSchemeEnablements({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCorridorView> listCorridors(String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.PartnerCorridorView> corridors = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/corridors", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCorridorView>>() {});
+            return corridors == null ? List.of() : corridors;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner (a partner with zero corridors returns []);
+            // propagate so the wizard can distinguish the two.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listCorridors({}): {}",
+                    partnerCode, network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.SchemeOperatingHoursView> getSchemeOperatingHours(
+            String schemeId) {
+        try {
+            List<com.gme.pay.contracts.SchemeOperatingHoursView> hours = restClient.get()
+                    .uri("/v1/schemes/{schemeId}/operating-hours", schemeId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.SchemeOperatingHoursView>>() {});
+            return hours == null ? List.of() : hours;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Unknown schemeId → 404 from config-registry; degrade to empty
+            // list (reference data — unsupported scheme, not an error the UI
+            // must distinguish from "no rows").
+            log.warn("getSchemeOperatingHours({}): upstream {}", schemeId, e.getStatusCode());
+            return List.of();
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getSchemeOperatingHours({}): {}",
+                    schemeId, network.getMessage());
+            return List.of();
+        }
+    }
+
+    // -------- Slice 8 Lane A lifecycle endpoints ---------------------------------
+
+    @Override
+    public org.springframework.http.ResponseEntity<?> lifecycleActivate(
+            String partnerCode, String actor) {
+        try {
+            org.springframework.http.ResponseEntity<Object> resp = restClient.post()
+                    .uri("/v1/admin/partners/{partnerCode}/lifecycle/activate", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .retrieve()
+                    .toEntity(Object.class);
+            return resp;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public org.springframework.http.ResponseEntity<?> lifecycleSuspend(
+            String partnerCode, String reason, String notes, String actor) {
+        try {
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            if (reason != null) {
+                body.put("reason", reason);
+            }
+            if (notes != null) {
+                body.put("notes", notes);
+            }
+            org.springframework.http.ResponseEntity<Object> resp = restClient.post()
+                    .uri("/v1/admin/partners/{partnerCode}/lifecycle/suspend", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toEntity(Object.class);
+            return resp;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public org.springframework.http.ResponseEntity<?> lifecycleReactivate(
+            String partnerCode, String actor) {
+        try {
+            org.springframework.http.ResponseEntity<Object> resp = restClient.post()
+                    .uri("/v1/admin/partners/{partnerCode}/lifecycle/reactivate", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .retrieve()
+                    .toEntity(Object.class);
+            return resp;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public org.springframework.http.ResponseEntity<?> lifecycleTerminate(
+            String partnerCode, String reason, String actor) {
+        try {
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            if (reason != null) {
+                body.put("reason", reason);
+            }
+            org.springframework.http.ResponseEntity<Object> resp = restClient.post()
+                    .uri("/v1/admin/partners/{partnerCode}/lifecycle/terminate", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toEntity(Object.class);
+            return resp;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.ActivationGateView lifecyclePreconditions(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/admin/partners/{partnerCode}/lifecycle/preconditions", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.ActivationGateView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    // -------- Slice 8 Lane B credential / ip-allowlist / mtls endpoints ----------
+
+    @Override
+    public java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> patchDraftStep8IpAllowlist(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8Credentials request,
+            String actor) {
+        try {
+            java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> result =
+                    restClient.patch()
+                            .uri("/v1/admin/partners/draft/{partnerCode}/step-8/ip-allowlist",
+                                    partnerCode)
+                            .header("X-Actor", actor == null ? "" : actor)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(request)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<
+                                    java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView>>() {});
+            return result == null ? java.util.List.of() : result;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> getIpAllowlist(
+            String partnerCode) {
+        try {
+            java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView> result =
+                    restClient.get()
+                            .uri("/v1/admin/partners/{partnerCode}/ip-allowlist", partnerCode)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<
+                                    java.util.List<com.gme.pay.contracts.PartnerIpAllowlistView>>() {});
+            return result == null ? java.util.List.of() : result;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getIpAllowlist({}): {}",
+                    partnerCode, network.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.PartnerMtlsCertView patchDraftStep8MtlsCert(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UploadMtlsCert request,
+            String actor) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/admin/partners/draft/{partnerCode}/step-8/mtls-cert", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PartnerMtlsCertView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public java.util.List<com.gme.pay.contracts.PartnerMtlsCertView> getMtlsCerts(
+            String partnerCode) {
+        try {
+            java.util.List<com.gme.pay.contracts.PartnerMtlsCertView> result =
+                    restClient.get()
+                            .uri("/v1/admin/partners/{partnerCode}/mtls-cert", partnerCode)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<
+                                    java.util.List<com.gme.pay.contracts.PartnerMtlsCertView>>() {});
+            return result == null ? java.util.List.of() : result;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getMtlsCerts({}): {}",
+                    partnerCode, network.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.IssuedCredentialBundle rotateCredentials(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.RotateCredentials request,
+            String actor) {
+        try {
+            return restClient.post()
+                    .uri("/v1/admin/partners/{partnerCode}/credentials/rotate", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.IssuedCredentialBundle.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public java.util.List<com.gme.pay.contracts.PartnerCredentialView> listCredentials(
+            String partnerCode) {
+        try {
+            java.util.List<com.gme.pay.contracts.PartnerCredentialView> result =
+                    restClient.get()
+                            .uri("/v1/admin/partners/{partnerCode}/credentials", partnerCode)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<
+                                    java.util.List<com.gme.pay.contracts.PartnerCredentialView>>() {});
+            return result == null ? java.util.List.of() : result;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listCredentials({}): {}",
+                    partnerCode, network.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    // -------- Slice 8 Lane C regulatory endpoints --------------------------------
+
+    @Override
+    public com.gme.pay.contracts.PartnerRegulatoryConfigView patchDraftStep8Regulatory(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8Regulatory request,
+            String actor) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/admin/partners/draft/{partnerCode}/step-8/regulatory", partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PartnerRegulatoryConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public com.gme.pay.contracts.PartnerRegulatoryConfigView getRegulatory(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/admin/partners/{partnerCode}/regulatory", partnerCode)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PartnerRegulatoryConfigView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    // -------- Slice 8 Lane D webhook-subscription endpoints ----------------------
+
+    @Override
+    public com.gme.pay.contracts.WebhookSubscriptionView patchDraftStep8WebhookSubscription(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep8WebhookSubscription request,
+            String actor) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-8/webhook-subscription",
+                            partnerCode)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.WebhookSubscriptionView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public java.util.List<com.gme.pay.contracts.WebhookSubscriptionView> getWebhookSubscriptions(
+            String partnerCode) {
+        try {
+            java.util.List<com.gme.pay.contracts.WebhookSubscriptionView> result =
+                    restClient.get()
+                            .uri("/v1/partners/{partnerCode}/webhook-subscriptions", partnerCode)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<
+                                    java.util.List<com.gme.pay.contracts.WebhookSubscriptionView>>() {});
+            return result == null ? java.util.List.of() : result;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    e.getStatusCode(), extractUpstreamMessage(e));
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getWebhookSubscriptions({}): {}",
+                    partnerCode, network.getMessage());
+            return java.util.List.of();
+        }
+    }
+
     /** Parse the uploaded MIME type, falling back to octet-stream on junk input. */
     private static MediaType safeMediaType(String contentType) {
         if (contentType == null || contentType.isBlank()) {

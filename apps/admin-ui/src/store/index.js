@@ -24,6 +24,9 @@ import prefundingConfigReducer from './prefundingConfigSlice';
 import balanceReducer from './balanceSlice';
 import commercialTermsReducer from './commercialTermsSlice';
 import rulesReducer from './rulesSlice';
+import partnerSchemesReducer from './partnerSchemesSlice';
+import partnerLifecycleReducer from './partnerLifecycleSlice';
+import lifecycleReducer from './lifecycleSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -47,6 +50,8 @@ import rulesReducer from './rulesSlice';
  *  - balance           : live balance + alerts per partner (Slice 5, agent 5B.2).
  *  - commercialTerms   : commercial terms read/write path (Slice 6, agent 6B.2).
  *  - rules             : pricing rules read/write path (Slice 6, agent 6A.2).
+ *  - partnerSchemes    : scheme enrollments + corridor definitions (Slice 7).
+ *  - lifecycle         : activation preconditions, propose/execute, step-8 patches (Slice 8).
  *  - systemHealth      : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -72,6 +77,9 @@ export const store = configureStore({
     balance: balanceReducer,
     commercialTerms: commercialTermsReducer,
     rules: rulesReducer,
+    partnerSchemes: partnerSchemesReducer,
+    partnerLifecycle: partnerLifecycleReducer,
+    lifecycle: lifecycleReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },
