@@ -22,6 +22,12 @@ public class ZeroPayAdapterProperties {
     private int sftpPort = 22;
     private String maiTag = "29";
 
+    /** Institution code embedded in ZP00xx batch file headers. Defaults to "GME001". */
+    private String institutionCode = "GME001";
+
+    /** KST batch window enable flag (default false — scheduler fires only when true). */
+    private boolean batchEnabled = false;
+
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
@@ -50,4 +56,10 @@ public class ZeroPayAdapterProperties {
 
     public String getMaiTag() { return maiTag; }
     public void setMaiTag(String maiTag) { this.maiTag = maiTag; }
+
+    public String getInstitutionCode() { return institutionCode; }
+    public void setInstitutionCode(String institutionCode) { this.institutionCode = institutionCode; }
+
+    public boolean isBatchEnabled() { return batchEnabled; }
+    public void setBatchEnabled(boolean batchEnabled) { this.batchEnabled = batchEnabled; }
 }

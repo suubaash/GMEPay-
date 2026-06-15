@@ -5,7 +5,9 @@ import com.gme.pay.scheme.zeropay.adapter.model.CpmAuthRequest;
 import com.gme.pay.scheme.zeropay.adapter.model.CpmAuthResponse;
 import com.gme.pay.scheme.zeropay.adapter.model.MerchantIdentifier;
 import com.gme.pay.scheme.zeropay.adapter.model.PrepareToken;
+import com.gme.pay.scheme.zeropay.batch.ZpBatchDataPort;
 import com.gme.pay.scheme.zeropay.client.ZeroPaySchemeApiClient;
+import com.gme.pay.scheme.zeropay.sftp.SftpTransport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,11 +43,17 @@ class ZeroPaySchemeAdapterCpmRefundTest {
     @Mock
     private ZeroPaySchemeApiClient schemeApiClient;
 
+    @Mock
+    private SftpTransport sftpTransport;
+
+    @Mock
+    private ZpBatchDataPort batchDataPort;
+
     private ZeroPaySchemeAdapter adapter;
 
     @BeforeEach
     void setUp() {
-        adapter = new ZeroPaySchemeAdapter(properties, schemeApiClient);
+        adapter = new ZeroPaySchemeAdapter(properties, schemeApiClient, sftpTransport, batchDataPort);
     }
 
     // -----------------------------------------------------------------------
