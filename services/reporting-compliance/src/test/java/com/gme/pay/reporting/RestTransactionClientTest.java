@@ -23,12 +23,21 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 /**
  * Unit tests for {@link RestTransactionClient} using {@link MockRestServiceServer}.
  *
- * <p>No real transaction-mgmt service is needed. Tests verify:
+ * <p>JSON fixtures use the canonical camelCase field names from transaction-mgmt's
+ * {@code TransactionQueryPageResponse} / {@code TransactionResponse} contract:
  * <ul>
- *   <li>The client calls the correct URI with correct query parameters.</li>
+ *   <li>Page wrapper: {@code content}, {@code page}, {@code size}, {@code totalElements}</li>
+ *   <li>Item fields: {@code txnRef}, {@code partnerRef}, {@code sendAmount}, {@code sendCcy},
+ *       {@code targetPayout}, {@code targetCcy}, {@code status}, {@code createdAt},
+ *       {@code updatedAt}, {@code appliedFxRate}, {@code prefundingDeductedUsd}, etc.</li>
+ * </ul>
+ *
+ * <p>Tests verify:
+ * <ul>
+ *   <li>The client calls the correct URI (status=APPROVED, camelCase params).</li>
  *   <li>JSON is correctly deserialized into {@link CommittedTransaction} domain objects.</li>
- *   <li>Pagination: the client pages through all results when total_pages > 1.</li>
- *   <li>Null/missing direction records are skipped gracefully.</li>
+ *   <li>Direction is derived correctly from currency pair (KRW target → INBOUND, etc.).</li>
+ *   <li>Pagination: the client pages through all results when there are multiple pages.</li>
  *   <li>Single-page empty response returns an empty list (never null).</li>
  * </ul>
  */
@@ -40,7 +49,6 @@ class RestTransactionClientTest {
     @BeforeEach
     void setUp() {
         // Use RestTemplate adapter so MockRestServiceServer can intercept calls.
-        // RestClient.builder().requestFactory() accepts a RestTemplate's ClientHttpRequestFactory.
         RestTemplate restTemplate = new RestTemplate();
         mockServer = MockRestServiceServer.createServer(restTemplate);
 
@@ -53,15 +61,15 @@ class RestTransactionClientTest {
     }
 
     // =========================================================================
-    // TEST 1: Single page of two transactions — both deserialized correctly
+    // TEST 1: Single page — two transactions deserialized correctly
     // =========================================================================
 
     @Test
-    @DisplayName("fetchCommitted: single page response with INBOUND+OUTBOUND transactions")
+    @DisplayName("fetchCommitted: single page with USD→KRW (INBOUND) and USD→USD (OUTBOUND) transactions")
     void fetchCommitted_singlePage_twoTransactions() {
         mockServer.expect(requestTo(
                 "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-01-15&to=2026-01-15&size=500&page=0&status=COMMITTED"))
+                + "?from=2026-01-15&to=2026-01-15&size=500&page=0&status=APPROVED"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(singlePageTwoRecordsJson(), MediaType.APPLICATION_JSON));
 
@@ -72,58 +80,117 @@ class RestTransactionClientTest {
 
         assertEquals(2, result.size(), "Should return exactly 2 transactions");
 
-        // First record: INBOUND
+        // First record: USD → KRW => INBOUND
         CommittedTransaction inbound = result.get(0);
-        assertEquals(1001L, inbound.getTxnId());
         assertEquals("TXN-2026-001", inbound.getTxnRef());
-        assertEquals(TransactionDirection.INBOUND, inbound.getDirection());
+        assertEquals(TransactionDirection.INBOUND, inbound.getDirection(),
+                "USD→KRW must be derived as INBOUND");
         assertFalse(inbound.isSameCcyShortcircuit());
-        assertEquals(0, new BigDecimal("1.01010103").compareTo(inbound.getOfferRateColl()),
-                "offerRateColl (BOK FX1015 field #14) must be deserialized correctly");
-        assertEquals(0, new BigDecimal("1316.25000000").compareTo(inbound.getCrossRate()));
         assertEquals("USD", inbound.getCollectionCcy());
-        assertEquals(0, new BigDecimal("38.9867").compareTo(inbound.getCollectionAmount()));
+        assertEquals(0, new BigDecimal("38.9867").compareTo(inbound.getCollectionAmount()),
+                "sendAmount must map to collectionAmount");
         assertEquals("KRW", inbound.getPayoutCcy());
-        assertEquals(42L, inbound.getPartnerId());
+        assertEquals(0, new BigDecimal("50000").compareTo(inbound.getPayoutAmount()),
+                "targetPayout must map to payoutAmount");
+        // crossRate from appliedFxRate
+        assertEquals(0, new BigDecimal("1282.05128205").compareTo(inbound.getCrossRate()),
+                "appliedFxRate must map to crossRate");
+        // usdAmount from prefundingDeductedUsd
+        assertEquals(0, new BigDecimal("37.04").compareTo(inbound.getUsdAmount()),
+                "prefundingDeductedUsd must map to usdAmount");
+        // offerRateColl is null — not available in GET response
+        assertNull(inbound.getOfferRateColl(),
+                "offerRateColl must be null (not available in canonical GET response)");
 
-        // Second record: OUTBOUND
+        // Second record: USD → USD => OUTBOUND (cross-border)
         CommittedTransaction outbound = result.get(1);
-        assertEquals(1002L, outbound.getTxnId());
-        assertEquals(TransactionDirection.OUTBOUND, outbound.getDirection());
+        assertEquals("TXN-2026-002", outbound.getTxnRef());
+        assertEquals(TransactionDirection.OUTBOUND, outbound.getDirection(),
+                "USD→USD (non-KRW) must be derived as OUTBOUND");
+        assertFalse(outbound.isSameCcyShortcircuit());
     }
 
     // =========================================================================
-    // TEST 2: Pagination — two pages, client fetches both
+    // TEST 2: Direction derivation — KRW → USD = OUTBOUND
+    // =========================================================================
+
+    @Test
+    @DisplayName("fetchCommitted: KRW→USD transaction is derived as OUTBOUND")
+    void fetchCommitted_krwSenderUsdTarget_derivedAsOutbound() {
+        mockServer.expect(requestTo(
+                "http://transaction-mgmt:8080/v1/transactions"
+                + "?from=2026-02-01&to=2026-02-28&size=500&page=0&status=APPROVED"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(krwToUsdJson(), MediaType.APPLICATION_JSON));
+
+        List<CommittedTransaction> result =
+                client.fetchCommitted(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 2, 28), null);
+
+        mockServer.verify();
+        assertEquals(1, result.size());
+        assertEquals(TransactionDirection.OUTBOUND, result.get(0).getDirection(),
+                "KRW→USD must be OUTBOUND");
+    }
+
+    // =========================================================================
+    // TEST 3: Direction derivation — KRW → KRW = DOMESTIC (same-currency)
+    // =========================================================================
+
+    @Test
+    @DisplayName("fetchCommitted: KRW→KRW transaction is derived as DOMESTIC (same-currency)")
+    void fetchCommitted_krwToKrw_derivedAsDomestic() {
+        mockServer.expect(requestTo(
+                "http://transaction-mgmt:8080/v1/transactions"
+                + "?from=2026-02-01&to=2026-02-28&size=500&page=0&status=APPROVED"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(krwToKrwJson(), MediaType.APPLICATION_JSON));
+
+        List<CommittedTransaction> result =
+                client.fetchCommitted(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 2, 28), null);
+
+        mockServer.verify();
+        assertEquals(1, result.size());
+        CommittedTransaction domestic = result.get(0);
+        assertEquals(TransactionDirection.DOMESTIC, domestic.getDirection(),
+                "KRW→KRW must be DOMESTIC");
+        assertTrue(domestic.isSameCcyShortcircuit(),
+                "DOMESTIC must have sameCcyShortcircuit=true");
+    }
+
+    // =========================================================================
+    // TEST 4: Pagination — two pages fetched
     // =========================================================================
 
     @Test
     @DisplayName("fetchCommitted: paginates through two pages of results")
     void fetchCommitted_twoPages_fetchesBoth() {
-        // Page 0 response
+        // Page 0: returns 500 records (full page) so client fetches page 1
         mockServer.expect(requestTo(
                 "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-01-01&to=2026-01-31&size=500&page=0&status=COMMITTED"))
+                + "?from=2026-01-01&to=2026-01-31&size=500&page=0&status=APPROVED"))
                 .andExpect(method(HttpMethod.GET))
-                .andRespond(withSuccess(pageJson(0, 2, 1001L, "INBOUND"), MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess(
+                        pageJsonWithSize(0, 1000L, "TXN-1001", "USD", "KRW", 500),
+                        MediaType.APPLICATION_JSON));
 
-        // Page 1 response
+        // Page 1: returns fewer than 500 records (end of results)
         mockServer.expect(requestTo(
                 "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-01-01&to=2026-01-31&size=500&page=1&status=COMMITTED"))
+                + "?from=2026-01-01&to=2026-01-31&size=500&page=1&status=APPROVED"))
                 .andExpect(method(HttpMethod.GET))
-                .andRespond(withSuccess(pageJson(1, 2, 1002L, "OUTBOUND"), MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess(
+                        pageJsonWithSize(1, 1000L, "TXN-1002", "USD", "KRW", 1),
+                        MediaType.APPLICATION_JSON));
 
         List<CommittedTransaction> result =
                 client.fetchCommitted(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31), null);
 
         mockServer.verify();
-        assertEquals(2, result.size(), "Should collect 1 record from each of 2 pages");
-        assertEquals(1001L, result.get(0).getTxnId());
-        assertEquals(1002L, result.get(1).getTxnId());
+        assertEquals(501, result.size(), "Should collect 500 from page 0 + 1 from page 1");
     }
 
     // =========================================================================
-    // TEST 3: Partner filter appended to URI
+    // TEST 5: Partner filter appended to URI
     // =========================================================================
 
     @Test
@@ -131,7 +198,7 @@ class RestTransactionClientTest {
     void fetchCommitted_withPartnerId_appendsToUri() {
         mockServer.expect(requestTo(
                 "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-03-01&to=2026-03-31&size=500&page=0&status=COMMITTED&partnerId=99"))
+                + "?from=2026-03-01&to=2026-03-31&size=500&page=0&status=APPROVED&partnerId=99"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(emptyPageJson(), MediaType.APPLICATION_JSON));
 
@@ -143,7 +210,7 @@ class RestTransactionClientTest {
     }
 
     // =========================================================================
-    // TEST 4: Empty response returns empty list — never null
+    // TEST 6: Empty response returns empty list — never null
     // =========================================================================
 
     @Test
@@ -151,7 +218,7 @@ class RestTransactionClientTest {
     void fetchCommitted_emptyPage_returnsEmptyList() {
         mockServer.expect(requestTo(
                 "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-06-01&to=2026-06-01&size=500&page=0&status=COMMITTED"))
+                + "?from=2026-06-01&to=2026-06-01&size=500&page=0&status=APPROVED"))
                 .andRespond(withSuccess(emptyPageJson(), MediaType.APPLICATION_JSON));
 
         List<CommittedTransaction> result =
@@ -162,132 +229,142 @@ class RestTransactionClientTest {
     }
 
     // =========================================================================
-    // TEST 5: Unknown direction is skipped gracefully
+    // JSON fixtures — camelCase, matching canonical TransactionQueryPageResponse
     // =========================================================================
 
-    @Test
-    @DisplayName("fetchCommitted: record with unknown direction is skipped without throwing")
-    void fetchCommitted_unknownDirection_isSkipped() {
-        mockServer.expect(requestTo(
-                "http://transaction-mgmt:8080/v1/transactions"
-                + "?from=2026-04-01&to=2026-04-01&size=500&page=0&status=COMMITTED"))
-                .andRespond(withSuccess(unknownDirectionJson(), MediaType.APPLICATION_JSON));
-
-        List<CommittedTransaction> result =
-                client.fetchCommitted(LocalDate.of(2026, 4, 1), LocalDate.of(2026, 4, 1), null);
-
-        // The bad record is skipped; list is empty (not exception)
-        assertNotNull(result);
-        assertEquals(0, result.size(), "Record with unknown direction must be skipped");
-    }
-
-    // =========================================================================
-    // JSON fixtures
-    // =========================================================================
-
+    /**
+     * Single page: one USD→KRW (INBOUND) and one USD→USD (OUTBOUND) transaction.
+     * Uses canonical camelCase field names.
+     */
     private static String singlePageTwoRecordsJson() {
         return """
                 {
                   "content": [
                     {
-                      "txn_id": 1001,
-                      "txn_ref": "TXN-2026-001",
-                      "direction": "INBOUND",
-                      "same_ccy_shortcircuit": false,
-                      "offer_rate_coll": "1.01010103",
-                      "cross_rate": "1316.25000000",
-                      "collection_amount": "38.9867",
-                      "collection_ccy": "USD",
-                      "payout_amount": "50000",
-                      "payout_ccy": "KRW",
-                      "usd_amount": "37.0370",
-                      "committed_at": "2026-01-15T10:00:00Z",
-                      "partner_id": 42
+                      "txnRef":                "TXN-2026-001",
+                      "partnerRef":            "PARTNER-REF-001",
+                      "sendAmount":            "38.9867",
+                      "sendCcy":               "USD",
+                      "targetPayout":          "50000",
+                      "targetCcy":             "KRW",
+                      "status":                "APPROVED",
+                      "createdAt":             "2026-01-15T10:00:00Z",
+                      "updatedAt":             "2026-01-15T10:05:00Z",
+                      "appliedFxRate":         "1282.05128205",
+                      "prefundingDeductedUsd": "37.04",
+                      "merchantId":            "MERCHANT-001"
                     },
                     {
-                      "txn_id": 1002,
-                      "txn_ref": "TXN-2026-002",
-                      "direction": "OUTBOUND",
-                      "same_ccy_shortcircuit": false,
-                      "offer_rate_coll": "1.00500000",
-                      "cross_rate": "0.99502488",
-                      "collection_amount": "105.00",
-                      "collection_ccy": "USD",
-                      "payout_amount": "100.00",
-                      "payout_ccy": "USD",
-                      "usd_amount": "104.47",
-                      "committed_at": "2026-01-15T11:00:00Z",
-                      "partner_id": 43
+                      "txnRef":                "TXN-2026-002",
+                      "partnerRef":            "PARTNER-REF-002",
+                      "sendAmount":            "105.00",
+                      "sendCcy":               "USD",
+                      "targetPayout":          "100.00",
+                      "targetCcy":             "USD",
+                      "status":                "APPROVED",
+                      "createdAt":             "2026-01-15T11:00:00Z",
+                      "updatedAt":             "2026-01-15T11:05:00Z",
+                      "appliedFxRate":         null,
+                      "prefundingDeductedUsd": "104.47"
                     }
                   ],
-                  "total_elements": 2,
-                  "total_pages": 1,
-                  "page": 0
+                  "page":          0,
+                  "size":          500,
+                  "totalElements": 2
                 }
                 """;
     }
 
-    private static String pageJson(int page, int totalPages, long txnId, String direction) {
+    /** KRW→USD outbound transaction. */
+    private static String krwToUsdJson() {
         return """
                 {
                   "content": [
                     {
-                      "txn_id": %d,
-                      "txn_ref": "TXN-%d",
-                      "direction": "%s",
-                      "same_ccy_shortcircuit": false,
-                      "offer_rate_coll": "1.00000000",
-                      "cross_rate": "1.00000000",
-                      "collection_amount": "100.00",
-                      "collection_ccy": "USD",
-                      "payout_amount": "100.00",
-                      "payout_ccy": "USD",
-                      "usd_amount": "100.00",
-                      "committed_at": "2026-01-10T09:00:00Z",
-                      "partner_id": 1
+                      "txnRef":       "TXN-KRW-OUT-001",
+                      "partnerRef":   "PARTNER-KRW-001",
+                      "sendAmount":   "130000",
+                      "sendCcy":      "KRW",
+                      "targetPayout": "100.00",
+                      "targetCcy":    "USD",
+                      "status":       "APPROVED",
+                      "createdAt":    "2026-02-15T09:00:00Z",
+                      "updatedAt":    "2026-02-15T09:05:00Z",
+                      "appliedFxRate": "0.00076923"
                     }
                   ],
-                  "total_elements": %d,
-                  "total_pages": %d,
-                  "page": %d
+                  "page":          0,
+                  "size":          500,
+                  "totalElements": 1
                 }
-                """.formatted(txnId, txnId, direction, totalPages, totalPages, page);
+                """;
+    }
+
+    /** KRW→KRW domestic/same-currency transaction. */
+    private static String krwToKrwJson() {
+        return """
+                {
+                  "content": [
+                    {
+                      "txnRef":       "TXN-KRW-DOM-001",
+                      "partnerRef":   "PARTNER-DOM-001",
+                      "sendAmount":   "15500",
+                      "sendCcy":      "KRW",
+                      "targetPayout": "15500",
+                      "targetCcy":    "KRW",
+                      "status":       "APPROVED",
+                      "createdAt":    "2026-02-15T10:00:00Z",
+                      "updatedAt":    "2026-02-15T10:01:00Z"
+                    }
+                  ],
+                  "page":          0,
+                  "size":          500,
+                  "totalElements": 1
+                }
+                """;
+    }
+
+    /**
+     * Builds a page JSON with a configurable number of records (all with the same direction).
+     * Used for pagination tests. When count < 500, the pagination loop stops.
+     */
+    private static String pageJsonWithSize(int page, long totalElements,
+                                            String txnRefPrefix, String sendCcy, String targetCcy,
+                                            int count) {
+        StringBuilder records = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            if (i > 0) records.append(",\n");
+            records.append(String.format("""
+                    {
+                      "txnRef":       "%s-%d",
+                      "partnerRef":   "PARTNER-%d",
+                      "sendAmount":   "100.00",
+                      "sendCcy":      "%s",
+                      "targetPayout": "130000",
+                      "targetCcy":    "%s",
+                      "status":       "APPROVED",
+                      "createdAt":    "2026-01-10T09:00:00Z",
+                      "updatedAt":    "2026-01-10T09:05:00Z",
+                      "appliedFxRate": "1300.00000000"
+                    }""", txnRefPrefix, (page * 500 + i), (page * 500 + i), sendCcy, targetCcy));
+        }
+        return """
+                {
+                  "content": [ %s ],
+                  "page":          %d,
+                  "size":          500,
+                  "totalElements": %d
+                }
+                """.formatted(records, page, totalElements);
     }
 
     private static String emptyPageJson() {
         return """
                 {
-                  "content": [],
-                  "total_elements": 0,
-                  "total_pages": 1,
-                  "page": 0
-                }
-                """;
-    }
-
-    private static String unknownDirectionJson() {
-        return """
-                {
-                  "content": [
-                    {
-                      "txn_id": 9999,
-                      "txn_ref": "TXN-BAD",
-                      "direction": "UNKNOWN_FUTURE_DIR",
-                      "same_ccy_shortcircuit": false,
-                      "offer_rate_coll": "1.00000000",
-                      "cross_rate": "1.00000000",
-                      "collection_amount": "50.00",
-                      "collection_ccy": "USD",
-                      "payout_amount": "50.00",
-                      "payout_ccy": "USD",
-                      "usd_amount": "50.00",
-                      "committed_at": "2026-04-01T09:00:00Z",
-                      "partner_id": 1
-                    }
-                  ],
-                  "total_elements": 1,
-                  "total_pages": 1,
-                  "page": 0
+                  "content":       [],
+                  "page":          0,
+                  "size":          500,
+                  "totalElements": 0
                 }
                 """;
     }

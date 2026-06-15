@@ -10,29 +10,39 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Response DTO for GET /v1/transactions/{txnRef} and state-transition endpoints.
- * Defined in this module – not a shared lib type.
+ * Response DTO for GET /v1/transactions (paged list) and GET /v1/transactions/{txnRef}.
  *
- * <p>UC-10 additive fields (Phase 4, Stage 1):
+ * <p>Phase-4 enriched shape — all fields camelCase. Consumers that only read the
+ * original 9 fields are unaffected ({@code @JsonInclude(NON_NULL)} keeps the payload compact).
+ *
+ * <p>Field catalogue:
  * <ul>
- *   <li>{@code qrSchemeId}             – QR scheme identifier (e.g. "zeropay_kr"). Null until set by scheme-adapter.</li>
- *   <li>{@code krwAmount}              – KRW payout amount. Maps to {@code targetPayout} when {@code targetCcy == "KRW"}; null otherwise until persisted.</li>
- *   <li>{@code payerCurrency}          – ISO-4217 code of the payer's currency (e.g. "USD", "JPY").</li>
- *   <li>{@code payerCurrencyAmount}    – Amount in the payer's currency. Maps to {@code sendAmount} for OVERSEAS path.</li>
- *   <li>{@code appliedFxRate}          – FX rate applied at commit (targetPayout / sendAmount for cross-ccy). Null until commit.</li>
- *   <li>{@code rateTimestamp}          – UTC instant the FX rate was locked. Null until commit.</li>
- *   <li>{@code prefundingDeductedUsd}  – USD deducted from prefunding balance. Null until APPROVED (OVERSEAS only).</li>
- *   <li>{@code statusHistory}          – Ordered list of status transitions (oldest first). Null until tracking is wired.</li>
- *   <li>{@code merchantId}             – Merchant terminal/store identifier from the QR scheme. Null until scheme-adapter sets it.</li>
- *   <li>{@code merchantName}           – Merchant display name. Null until scheme-adapter sets it.</li>
+ *   <li>{@code txnRef}               – transaction-mgmt internal UUID reference</li>
+ *   <li>{@code partnerRef}           – partner reference (legacy: partnerTxnRef for new txns)</li>
+ *   <li>{@code sendAmount}           – amount sent by payer (= collectionAmount)</li>
+ *   <li>{@code sendCcy}              – payer currency (= collectionCurrency)</li>
+ *   <li>{@code targetPayout}         – payout amount in targetCcy / payoutCurrency</li>
+ *   <li>{@code targetCcy}            – payout currency</li>
+ *   <li>{@code status}               – current TransactionStatus</li>
+ *   <li>{@code createdAt}            – UTC creation instant</li>
+ *   <li>{@code updatedAt}            – UTC last-update instant</li>
+ *   <li>{@code qrSchemeId}           – QR scheme identifier (= schemeId, e.g. "zeropay_kr")</li>
+ *   <li>{@code krwAmount}            – KRW payout amount (= targetPayout when targetCcy=="KRW")</li>
+ *   <li>{@code payerCurrency}        – ISO-4217 payer currency (= sendCcy / collectionCurrency)</li>
+ *   <li>{@code payerCurrencyAmount}  – amount in payer's currency (= sendAmount / collectionAmount)</li>
+ *   <li>{@code appliedFxRate}        – FX rate = targetPayout / sendAmount (cross-ccy only)</li>
+ *   <li>{@code rateTimestamp}        – UTC instant FX rate was locked (TODO: populate)</li>
+ *   <li>{@code prefundingDeductedUsd}– USD deducted from prefunding balance (= prefundDeductedUsd)</li>
+ *   <li>{@code statusHistory}        – ordered status transitions (TODO: wire tracking table)</li>
+ *   <li>{@code merchantId}           – scheme merchant terminal identifier</li>
+ *   <li>{@code merchantName}         – merchant display name (TODO: from scheme-adapter)</li>
  * </ul>
  *
  * <p>ADDITIVE ONLY – do not rename or remove existing fields; payment-executor and
  * reporting-compliance consume this record concurrently.
  *
  * <p>Money fields use {@link BigDecimal} serialized as decimal strings on the wire
- * (MONEY_CONVENTION.md). {@code @JsonInclude(NON_NULL)} keeps the payload compact
- * for existing consumers that do not yet read the new fields.
+ * (MONEY_CONVENTION.md).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record TransactionResponse(
@@ -48,23 +58,23 @@ public record TransactionResponse(
         Instant updatedAt,
 
         // --- UC-10 additive fields ---
-        /** QR scheme identifier, e.g. "zeropay_kr". TODO: populate from scheme-adapter event. */
+        /** QR scheme identifier, e.g. "zeropay_kr". Populated from schemeId (V003). */
         String qrSchemeId,
-        /** KRW payout amount. Derived from targetPayout when targetCcy=="KRW". TODO: persist separately for multi-leg flows. */
+        /** KRW payout amount. Derived from targetPayout when targetCcy=="KRW". */
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal krwAmount,
         /** ISO-4217 payer currency, e.g. "USD". Maps to sendCcy on the OVERSEAS path. */
         String payerCurrency,
         /** Amount in the payer's currency. Maps to sendAmount on the OVERSEAS path. */
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal payerCurrencyAmount,
-        /** FX rate applied at commit (targetPayout / sendAmount). TODO: lock at commit-time and persist. */
+        /** FX rate applied at commit (targetPayout / sendAmount). */
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal appliedFxRate,
         /** UTC instant the FX rate was locked. TODO: persist rateTimestamp at commit-time. */
         Instant rateTimestamp,
-        /** USD deducted from the partner's prefunding balance. TODO: populated by prefunding service post-deduction. */
+        /** USD deducted from the partner's prefunding balance. Populated from prefundDeductedUsd. */
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal prefundingDeductedUsd,
         /** Ordered status-transition history (oldest first). TODO: wire status-history tracking table. */
         List<StatusEntry> statusHistory,
-        /** Merchant terminal/store id from the QR scheme. TODO: populate from scheme-adapter. */
+        /** Merchant terminal/store id from the QR scheme. */
         String merchantId,
         /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
         String merchantName
@@ -78,9 +88,8 @@ public record TransactionResponse(
     public record StatusEntry(String status, Instant at) {}
 
     /**
-     * Maps from domain aggregate — existing fields only.
-     * UC-10 additive fields are null (not yet wired to persistence / scheme-adapter).
-     * Consumers that only read the original 9 fields are unaffected.
+     * Maps from domain aggregate — includes V003 Phase-4 fields.
+     * UC-10 additive fields that have no persistence backing yet remain null.
      */
     public static TransactionResponse from(Transaction txn) {
         // Derive UC-10 best-effort values from existing aggregate fields.
@@ -93,7 +102,7 @@ public record TransactionResponse(
         BigDecimal fxRate = null;
         if (txn.sendAmount() != null && txn.targetPayout() != null
                 && txn.sendAmount().signum() != 0
-                && !txn.sendCcy().equals(txn.targetCcy())) {
+                && txn.sendCcy() != null && !txn.sendCcy().equals(txn.targetCcy())) {
             fxRate = txn.targetPayout().divide(txn.sendAmount(), 8, java.math.RoundingMode.HALF_UP);
         }
         return new TransactionResponse(
@@ -106,17 +115,17 @@ public record TransactionResponse(
                 txn.status(),
                 txn.createdAt(),
                 txn.updatedAt(),
-                // UC-10 additive — null until downstream services wire them in
-                null,       // qrSchemeId
-                krwAmt,     // krwAmount
-                payerCcy,   // payerCurrency
-                payerAmt,   // payerCurrencyAmount
-                fxRate,     // appliedFxRate
-                null,       // rateTimestamp — TODO: lock at commit-time
-                null,       // prefundingDeductedUsd — TODO: populated by prefunding post-deduction
-                null,       // statusHistory — TODO: wire status-history tracking
-                null,       // merchantId — TODO: from scheme-adapter
-                null        // merchantName — TODO: from scheme-adapter
+                // UC-10 / V003 fields
+                txn.schemeId(),     // qrSchemeId — populated from V003 schemeId
+                krwAmt,             // krwAmount
+                payerCcy,           // payerCurrency
+                payerAmt,           // payerCurrencyAmount
+                fxRate,             // appliedFxRate
+                null,               // rateTimestamp — TODO: lock at commit-time
+                txn.prefundDeductedUsd(),   // prefundingDeductedUsd
+                null,               // statusHistory — TODO: wire status-history tracking
+                txn.merchantId(),   // merchantId — from V003
+                null                // merchantName — TODO: from scheme-adapter
         );
     }
 }

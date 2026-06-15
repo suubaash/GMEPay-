@@ -21,6 +21,9 @@ import java.util.UUID;
  *   <li>{@code settlementRoundingMode} – the {@link RoundingMode} actually applied</li>
  *   <li>{@code roundingResidual}       – {@code precise - booked}, fed to revenue-ledger as rounding gain/loss</li>
  * </ul>
+ *
+ * <p>Phase-4 (V003) enrichment adds the payment-executor 11-field create contract and
+ * the 8-field status-patch lock fields.
  */
 public class Transaction {
 
@@ -39,7 +42,29 @@ public class Transaction {
     private RoundingMode settlementRoundingMode;
     private BigDecimal roundingResidual;
 
-    /** Creates a new transaction in {@link TransactionStatus#CREATED} state. */
+    // V003: payment-executor 11-field create contract (nullable on old rows).
+    private final Long partnerId;
+    private final String partnerTxnRef;
+    private final String schemeId;
+    private final String direction;
+    private final String paymentMode;
+    private final String payoutCurrency;
+    private final BigDecimal collectionAmount;
+    private final String collectionCurrency;
+    private final String merchantId;
+    private final String quoteId;
+    private final String paymentId;
+
+    // V003: status-patch lock fields (nullable until PATCH applied).
+    private String schemeTxnRef;
+    private String schemeApprovalCode;
+    private BigDecimal prefundDeductedUsd;
+    private Instant approvedAt;
+
+    /**
+     * Creates a new transaction in {@link TransactionStatus#CREATED} state
+     * using the legacy 5-field signature (kept for backward compat with unit tests).
+     */
     public Transaction(
             String partnerRef,
             BigDecimal sendAmount,
@@ -52,6 +77,57 @@ public class Transaction {
         this.sendCcy = Objects.requireNonNull(sendCcy, "sendCcy");
         this.targetPayout = Objects.requireNonNull(targetPayout, "targetPayout");
         this.targetCcy = Objects.requireNonNull(targetCcy, "targetCcy");
+        this.status = TransactionStatus.CREATED;
+        this.createdAt = Instant.now();
+        this.updatedAt = this.createdAt;
+        // V003 fields null for legacy path
+        this.partnerId = null;
+        this.partnerTxnRef = null;
+        this.schemeId = null;
+        this.direction = null;
+        this.paymentMode = null;
+        this.payoutCurrency = null;
+        this.collectionAmount = null;
+        this.collectionCurrency = null;
+        this.merchantId = null;
+        this.quoteId = null;
+        this.paymentId = null;
+    }
+
+    /**
+     * Creates a new transaction using the full payment-executor 11-field contract.
+     * partnerRef is derived from partnerTxnRef for backward compat.
+     */
+    public Transaction(
+            Long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            BigDecimal targetPayout,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId) {
+        this.txnRef = UUID.randomUUID().toString();
+        this.paymentId = UUID.randomUUID().toString();
+        this.partnerId = Objects.requireNonNull(partnerId, "partnerId");
+        this.partnerTxnRef = Objects.requireNonNull(partnerTxnRef, "partnerTxnRef");
+        this.schemeId = schemeId;
+        this.direction = direction;
+        this.paymentMode = paymentMode;
+        this.targetPayout = Objects.requireNonNull(targetPayout, "targetPayout");
+        this.payoutCurrency = Objects.requireNonNull(payoutCurrency, "payoutCurrency");
+        this.collectionAmount = Objects.requireNonNull(collectionAmount, "collectionAmount");
+        this.collectionCurrency = Objects.requireNonNull(collectionCurrency, "collectionCurrency");
+        this.merchantId = merchantId;
+        this.quoteId = quoteId;
+        // Legacy fields mapped from V003 inputs
+        this.partnerRef = partnerTxnRef;
+        this.sendAmount = collectionAmount;
+        this.sendCcy = collectionCurrency;
+        this.targetCcy = payoutCurrency;
         this.status = TransactionStatus.CREATED;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
@@ -88,6 +164,18 @@ public class Transaction {
                 ? null
                 : RoundingMode.valueOf(settlementRoundingMode);
         this.roundingResidual = roundingResidual;
+        // V003 fields absent in legacy rows
+        this.partnerId = null;
+        this.partnerTxnRef = null;
+        this.schemeId = null;
+        this.direction = null;
+        this.paymentMode = null;
+        this.payoutCurrency = null;
+        this.collectionAmount = null;
+        this.collectionCurrency = null;
+        this.merchantId = null;
+        this.quoteId = null;
+        this.paymentId = null;
     }
 
     /**
@@ -121,9 +209,82 @@ public class Transaction {
         this.bookedSettlementAmount = bookedSettlementAmount;
         this.settlementRoundingMode = settlementRoundingMode;
         this.roundingResidual = roundingResidual;
+        // V003 fields absent in legacy rows
+        this.partnerId = null;
+        this.partnerTxnRef = null;
+        this.schemeId = null;
+        this.direction = null;
+        this.paymentMode = null;
+        this.payoutCurrency = null;
+        this.collectionAmount = null;
+        this.collectionCurrency = null;
+        this.merchantId = null;
+        this.quoteId = null;
+        this.paymentId = null;
     }
 
-    // --- mutators (package-visible; only the state machine touches these) ---
+    /**
+     * Full rehydration constructor (V003+): restores all fields including Phase-4 enrichment
+     * columns and status-patch lock fields.
+     */
+    public Transaction(
+            String txnRef,
+            String partnerRef,
+            BigDecimal sendAmount,
+            String sendCcy,
+            BigDecimal targetPayout,
+            String targetCcy,
+            TransactionStatus status,
+            Instant createdAt,
+            Instant updatedAt,
+            BigDecimal bookedSettlementAmount,
+            RoundingMode settlementRoundingMode,
+            BigDecimal roundingResidual,
+            Long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId,
+            String paymentId,
+            String schemeTxnRef,
+            String schemeApprovalCode,
+            BigDecimal prefundDeductedUsd,
+            Instant approvedAt) {
+        this.txnRef = txnRef;
+        this.partnerRef = partnerRef;
+        this.sendAmount = sendAmount;
+        this.sendCcy = sendCcy;
+        this.targetPayout = targetPayout;
+        this.targetCcy = targetCcy;
+        this.status = status;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+        this.bookedSettlementAmount = bookedSettlementAmount;
+        this.settlementRoundingMode = settlementRoundingMode;
+        this.roundingResidual = roundingResidual;
+        this.partnerId = partnerId;
+        this.partnerTxnRef = partnerTxnRef;
+        this.schemeId = schemeId;
+        this.direction = direction;
+        this.paymentMode = paymentMode;
+        this.payoutCurrency = payoutCurrency;
+        this.collectionAmount = collectionAmount;
+        this.collectionCurrency = collectionCurrency;
+        this.merchantId = merchantId;
+        this.quoteId = quoteId;
+        this.paymentId = paymentId;
+        this.schemeTxnRef = schemeTxnRef;
+        this.schemeApprovalCode = schemeApprovalCode;
+        this.prefundDeductedUsd = prefundDeductedUsd;
+        this.approvedAt = approvedAt;
+    }
+
+    // --- mutators (only the state machine and service touch these) ---
 
     /** Called exclusively by {@link com.gme.pay.txn.domain.statemachine.TransactionStateMachine}. */
     public void applyStatus(TransactionStatus newStatus) {
@@ -177,6 +338,26 @@ public class Transaction {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Applies the status-patch lock fields from the PATCH /v1/transactions/{ref}/status
+     * endpoint. These fields are set once when the payment-executor commits the scheme result.
+     */
+    public void applyStatusPatch(String schemeTxnRef, String schemeApprovalCode,
+                                 BigDecimal prefundDeductedUsd, Instant approvedAt,
+                                 BigDecimal bookedSettlementAmount, String settlementRoundingMode,
+                                 BigDecimal roundingResidual) {
+        this.schemeTxnRef = schemeTxnRef;
+        this.schemeApprovalCode = schemeApprovalCode;
+        this.prefundDeductedUsd = prefundDeductedUsd;
+        this.approvedAt = approvedAt;
+        if (bookedSettlementAmount != null && settlementRoundingMode != null && roundingResidual != null) {
+            this.bookedSettlementAmount = bookedSettlementAmount;
+            this.settlementRoundingMode = RoundingMode.valueOf(settlementRoundingMode);
+            this.roundingResidual = roundingResidual;
+        }
+        this.updatedAt = Instant.now();
+    }
+
     // --- accessors ---
 
     public String txnRef()       { return txnRef; }
@@ -192,4 +373,21 @@ public class Transaction {
     public BigDecimal bookedSettlementAmount()     { return bookedSettlementAmount; }
     public RoundingMode settlementRoundingMode()   { return settlementRoundingMode; }
     public BigDecimal roundingResidual()           { return roundingResidual; }
+
+    // V003 accessors
+    public Long partnerId()              { return partnerId; }
+    public String partnerTxnRef()        { return partnerTxnRef; }
+    public String schemeId()             { return schemeId; }
+    public String direction()            { return direction; }
+    public String paymentMode()          { return paymentMode; }
+    public String payoutCurrency()       { return payoutCurrency; }
+    public BigDecimal collectionAmount() { return collectionAmount; }
+    public String collectionCurrency()   { return collectionCurrency; }
+    public String merchantId()           { return merchantId; }
+    public String quoteId()              { return quoteId; }
+    public String paymentId()            { return paymentId; }
+    public String schemeTxnRef()         { return schemeTxnRef; }
+    public String schemeApprovalCode()   { return schemeApprovalCode; }
+    public BigDecimal prefundDeductedUsd() { return prefundDeductedUsd; }
+    public Instant approvedAt()          { return approvedAt; }
 }

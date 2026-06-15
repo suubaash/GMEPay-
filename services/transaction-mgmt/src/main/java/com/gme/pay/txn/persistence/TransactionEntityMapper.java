@@ -12,6 +12,9 @@ import java.math.RoundingMode;
  * <p>Lives in {@code persistence} so the domain model stays free of JPA imports.
  * Stateless – methods are static.  Rounding-mode is persisted as the enum's
  * {@code name()} (e.g. {@code "HALF_UP"}) for cross-DB portability.
+ *
+ * <p>V003: maps Phase-4 enrichment columns (payment-executor 11-field create contract
+ * and status-patch lock fields).
  */
 public final class TransactionEntityMapper {
 
@@ -33,6 +36,22 @@ public final class TransactionEntityMapper {
         e.setRoundingResidual(txn.roundingResidual());
         e.setCreatedAt(txn.createdAt());
         e.setUpdatedAt(txn.updatedAt());
+        // V003
+        e.setPartnerId(txn.partnerId());
+        e.setPartnerTxnRef(txn.partnerTxnRef());
+        e.setSchemeId(txn.schemeId());
+        e.setDirection(txn.direction());
+        e.setPaymentMode(txn.paymentMode());
+        e.setPayoutCurrency(txn.payoutCurrency());
+        e.setCollectionAmount(txn.collectionAmount());
+        e.setCollectionCurrency(txn.collectionCurrency());
+        e.setMerchantId(txn.merchantId());
+        e.setQuoteId(txn.quoteId());
+        e.setPaymentId(txn.paymentId());
+        e.setSchemeTxnRef(txn.schemeTxnRef());
+        e.setSchemeApprovalCode(txn.schemeApprovalCode());
+        e.setPrefundDeductedUsd(txn.prefundDeductedUsd());
+        e.setApprovedAt(txn.approvedAt());
         return e;
     }
 
@@ -53,6 +72,22 @@ public final class TransactionEntityMapper {
                 e.getUpdatedAt(),
                 e.getBookedSettlementAmount(),
                 mode,
-                e.getRoundingResidual());
+                e.getRoundingResidual(),
+                // V003 enrichment
+                e.getPartnerId(),
+                e.getPartnerTxnRef(),
+                e.getSchemeId(),
+                e.getDirection(),
+                e.getPaymentMode(),
+                e.getPayoutCurrency(),
+                e.getCollectionAmount(),
+                e.getCollectionCurrency(),
+                e.getMerchantId(),
+                e.getQuoteId(),
+                e.getPaymentId(),
+                e.getSchemeTxnRef(),
+                e.getSchemeApprovalCode(),
+                e.getPrefundDeductedUsd(),
+                e.getApprovedAt());
     }
 }
