@@ -88,6 +88,45 @@ public class PrefundingService {
         return newBalance;
     }
 
+    /**
+     * Atomically reverses a prior deduction identified by {@code txnRef}: credits the originally
+     * debited amount back onto the partner's balance and appends a CREDIT entry tagged with the same
+     * {@code txnRef} (a regular credit carries a null txnRef, so a CREDIT + txnRef IS the reversal
+     * marker — no new entry type / migration needed). Idempotent: if the deduction was already
+     * reversed (a CREDIT for this txnRef exists) or no DEBIT exists, nothing is written and the
+     * reversed amount is reported as zero.
+     *
+     * @return the amount actually credited back + the resulting balance
+     */
+    @Transactional
+    public ReverseResult reverse(String partnerId, String txnRef) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        java.util.List<LedgerEntryEntity> entries = ledger.findByPartnerIdAndTxnRef(partnerId, txnRef);
+        boolean alreadyReversed = entries.stream().anyMatch(e -> ENTRY_CREDIT.equals(e.getEntryType()));
+        BigDecimal debited = entries.stream()
+                .filter(e -> ENTRY_DEBIT.equals(e.getEntryType()))
+                .map(LedgerEntryEntity::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (alreadyReversed || debited.signum() == 0) {
+            // Idempotent no-op: nothing to reverse (or already reversed). Report zero reversed.
+            return new ReverseResult(BigDecimal.ZERO, row.getBalance());
+        }
+        BigDecimal previousBalance = row.getBalance();
+        PrefundingAccount account = toDomain(row);
+        BigDecimal newBalance = account.credit(debited);
+        Instant now = Instant.now();
+        row.setBalance(newBalance);
+        row.setUpdatedAt(now);
+        PartnerBalanceEntity saved = balances.save(row);
+        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT, debited,
+                row.getCurrency(), now));
+        tierAlerts.afterBalanceChange(saved, previousBalance);
+        return new ReverseResult(debited, newBalance);
+    }
+
+    /** Outcome of a reverse: the amount credited back and the balance after. */
+    public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter) {}
+
     private PartnerBalanceEntity lockOrThrow(String partnerId) {
         return balances.lockByPartnerId(partnerId)
                 .orElseThrow(() -> new ApiException(ErrorCode.VALIDATION_ERROR,

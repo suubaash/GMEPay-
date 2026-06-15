@@ -2,6 +2,8 @@ package com.gme.pay.payment.client.rest;
 
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +30,8 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestRevenueLedgerClient.class);
     private static final String PATH = "/v1/journals/rounding-residual";
+    private static final String CAPTURE_PATH = "/v1/revenue/capture";
+    private static final String REVERSAL_PATH = "/v1/journals/reversal";
 
     private final RestClient restClient;
 
@@ -65,6 +69,65 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
             // Could be 4xx, connection refused, timeout, etc. Same policy: log and continue.
             log.warn("revenue-ledger residual post failed ref={} residual={} {}: {}",
                     reference, residual, currency, ex.toString());
+        }
+    }
+
+    @Override
+    public void postRevenueCapture(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
+                                   BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd,
+                                   BigDecimal serviceCharge, String serviceChargeCcy,
+                                   BigDecimal feeSharePct) {
+        // LinkedHashMap (not Map.of): 9 entries, and a stable order keeps the JSON deterministic.
+        // revenueDate is sent as an ISO string so it does not depend on this client's date-format config.
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("txnRef", txnRef);
+        body.put("partnerId", partnerId);
+        body.put("schemeId", schemeId);
+        body.put("revenueDate", revenueDate == null ? null : revenueDate.toString());
+        body.put("collectionMarginUsd", collectionMarginUsd);
+        body.put("payoutMarginUsd", payoutMarginUsd);
+        body.put("serviceChargeAmount", serviceCharge);
+        body.put("serviceChargeCcy", serviceChargeCcy);
+        body.put("feeSharePct", feeSharePct);
+        try {
+            restClient.post()
+                    .uri(CAPTURE_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (HttpServerErrorException ex) {
+            log.error("revenue-ledger 5xx posting revenue capture ref={} {}: {}",
+                    txnRef, ex.getStatusCode(), ex.toString());
+            // do NOT propagate — capture is best-effort, retriable offline
+        } catch (Exception ex) {
+            log.warn("revenue-ledger capture post failed ref={}: {}", txnRef, ex.toString());
+        }
+    }
+
+    @Override
+    public void postReversalJournal(String reference, BigDecimal reversalAmount, String currency) {
+        if (reversalAmount == null || reversalAmount.signum() == 0) {
+            return; // nothing to reverse — no-op by contract
+        }
+        Map<String, Object> body = Map.of(
+                "reference", reference,
+                "reversalAmount", reversalAmount,
+                "currency", currency);
+        try {
+            restClient.post()
+                    .uri(REVERSAL_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (HttpServerErrorException ex) {
+            log.error("revenue-ledger 5xx posting reversal ref={} amount={} {}: {}",
+                    reference, reversalAmount, currency, ex.getStatusCode(), ex);
+            // do NOT propagate — the cancel already happened; reversal is retriable offline
+        } catch (Exception ex) {
+            log.warn("revenue-ledger reversal post failed ref={} amount={} {}: {}",
+                    reference, reversalAmount, currency, ex.toString());
         }
     }
 }

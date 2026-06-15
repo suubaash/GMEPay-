@@ -98,4 +98,36 @@ class RestRevenueLedgerClientTest {
                 client.postRoundingResidual("TXN-204", new BigDecimal("0.01"), "USD"));
         server.verify();
     }
+
+    @Test
+    void revenueCapture_postsExpectedJson_andReturnsNormally() {
+        server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/capture"))
+              .andExpect(method(HttpMethod.POST))
+              .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+              .andExpect(jsonPath("$.txnRef").value("TXN-9"))
+              .andExpect(jsonPath("$.partnerId").value(42))
+              .andExpect(jsonPath("$.revenueDate").value("2026-06-15"))   // sent as ISO string
+              .andExpect(jsonPath("$.serviceChargeAmount").value(500))
+              .andExpect(jsonPath("$.serviceChargeCcy").value("KRW"))
+              .andRespond(withStatus(HttpStatus.CREATED));
+
+        assertDoesNotThrow(() -> client.postRevenueCapture(
+                "TXN-9", 42L, 0L, java.time.LocalDate.of(2026, 6, 15),
+                new BigDecimal("1.00"), new BigDecimal("0.50"),
+                new BigDecimal("500"), "KRW", new BigDecimal("0.70")));
+
+        server.verify();
+    }
+
+    @Test
+    void revenueCapture_serverError_doesNotPropagateToCaller() {
+        // 5xx: capture is best-effort; must never fail the commit path.
+        server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/capture"))
+              .andRespond(withServerError());
+        assertDoesNotThrow(() -> client.postRevenueCapture(
+                "TXN-5XX", 42L, 0L, java.time.LocalDate.of(2026, 6, 15),
+                new BigDecimal("1.00"), new BigDecimal("0.50"),
+                new BigDecimal("500"), "KRW", new BigDecimal("0.70")));
+        server.verify();
+    }
 }

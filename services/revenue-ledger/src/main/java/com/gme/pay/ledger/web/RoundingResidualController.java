@@ -81,4 +81,46 @@ public class RoundingResidualController {
         }
         return ResponseEntity.ok(journal);
     }
+
+    /**
+     * Post a structured reversal journal for a cancelled/refunded payment (P1-2). Consumed (sync)
+     * by payment-executor's cancel path so the reversal is booked rather than absorbed as a zero
+     * residual.
+     *
+     * <pre>
+     *   POST /v1/journals/reversal
+     *   { "reference": "TXN-00001", "reversalAmount": "125.50", "currency": "USD" }
+     *
+     *   200 OK with the posted Journal when reversalAmount != 0
+     *   204 No Content when reversalAmount == 0
+     *   400 Bad Request when reference / currency / reversalAmount is missing
+     * </pre>
+     */
+    @PostMapping("/reversal")
+    public ResponseEntity<?> postReversal(@RequestBody ReversalRequest body) {
+        if (body == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error_code", "MISSING_BODY", "message", "request body required"));
+        }
+        if (body.reference() == null || body.reference().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error_code", "MISSING_REFERENCE", "message", "reference required"));
+        }
+        if (body.currency() == null || body.currency().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error_code", "MISSING_CURRENCY", "message", "currency required"));
+        }
+        if (body.reversalAmount() == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error_code", "MISSING_AMOUNT", "message", "reversalAmount required"));
+        }
+
+        Journal journal = ledgerPostingService.postReversalJournal(
+                body.reference(), body.reversalAmount(), body.currency());
+
+        if (journal == null) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(journal);
+    }
 }

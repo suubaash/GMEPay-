@@ -30,6 +30,9 @@ class TransactionTransitionsTest {
             "PENDING_DEBIT, APPROVED",
             "PENDING_DEBIT, FAILED",
             "PENDING_DEBIT, CANCELLED",
+            // P1-2: APPROVED is reversible (same-day cancel) / refundable
+            "APPROVED, REVERSED",
+            "APPROVED, REFUNDED",
     })
     @DisplayName("Allowed transitions are recognised")
     void allowedTransitions(TransactionStatus from, TransactionStatus to) {
@@ -74,15 +77,18 @@ class TransactionTransitionsTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("Terminal states have empty allowed-from sets")
-    void terminalStatesHaveNoOutgoing() {
-        for (TransactionStatus terminal : new TransactionStatus[]{
-                TransactionStatus.APPROVED,
+    @DisplayName("Sink states have empty allowed-from sets")
+    void sinkStatesHaveNoOutgoing() {
+        // APPROVED is terminal for the expiry sweeper (isTerminal()=true) but is reversible/refundable
+        // in the transition table (P1-2), so it has outgoing edges. The true sinks are these four.
+        for (TransactionStatus sink : new TransactionStatus[]{
                 TransactionStatus.FAILED,
-                TransactionStatus.CANCELLED}) {
-            Set<TransactionStatus> outgoing = TransactionTransitions.allowedFrom(terminal);
+                TransactionStatus.CANCELLED,
+                TransactionStatus.REVERSED,
+                TransactionStatus.REFUNDED}) {
+            Set<TransactionStatus> outgoing = TransactionTransitions.allowedFrom(sink);
             assertTrue(outgoing.isEmpty(),
-                    () -> "Expected no outgoing transitions from " + terminal + " but got: " + outgoing);
+                    () -> "Expected no outgoing transitions from " + sink + " but got: " + outgoing);
         }
     }
 
@@ -112,10 +118,12 @@ class TransactionTransitionsTest {
     }
 
     @Test
-    @DisplayName("APPROVED, FAILED, CANCELLED are terminal")
+    @DisplayName("APPROVED, FAILED, CANCELLED, REVERSED, REFUNDED are terminal (sweeper does not expire them)")
     void terminalStatuses() {
         assertTrue(TransactionStatus.APPROVED.isTerminal(),  "APPROVED must be terminal");
         assertTrue(TransactionStatus.FAILED.isTerminal(),    "FAILED must be terminal");
         assertTrue(TransactionStatus.CANCELLED.isTerminal(), "CANCELLED must be terminal");
+        assertTrue(TransactionStatus.REVERSED.isTerminal(),  "REVERSED must be terminal");
+        assertTrue(TransactionStatus.REFUNDED.isTerminal(),  "REFUNDED must be terminal");
     }
 }

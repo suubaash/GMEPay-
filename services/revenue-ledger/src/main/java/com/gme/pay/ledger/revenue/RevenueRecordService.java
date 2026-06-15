@@ -27,10 +27,16 @@ public class RevenueRecordService {
     public RevenueAggregate getRevenueByPartner(long partnerId, LocalDate start, LocalDate end) {
         validateRange(start, end);
         BigDecimal fxMargin = store.sumFxMarginUsdByPartnerAndDateRange(partnerId, start, end);
-        // Transaction count and per-scheme breakdown are deferred to the full persistence layer;
-        // this wave returns a single aggregate per partner with zeroed scheme/count fields.
-        return new RevenueAggregate(partnerId, 0L, 0L,
-                coalesce(fxMargin), BigDecimal.ZERO, "USD");
+        BigDecimal serviceCharge = store.sumServiceChargeByPartnerAndDateRange(partnerId, start, end);
+        long txnCount = store.countByPartnerAndDateRange(partnerId, start, end);
+        // A partner normally bills service charge in a single currency; report it (default USD when
+        // the partner has no rows in range, matching the fxMargin USD denomination).
+        String serviceChargeCcy = store.serviceChargeCcyByPartnerAndDateRange(partnerId, start, end);
+        // schemeId is 0 on the per-partner aggregate (it spans all of the partner's schemes); the
+        // per-scheme breakdown is served separately via getServiceChargeByScheme.
+        return new RevenueAggregate(partnerId, 0L, txnCount,
+                coalesce(fxMargin), coalesce(serviceCharge),
+                serviceChargeCcy == null ? "USD" : serviceChargeCcy);
     }
 
     /**

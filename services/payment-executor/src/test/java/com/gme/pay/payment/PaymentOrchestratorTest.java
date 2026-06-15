@@ -78,8 +78,9 @@ class PaymentOrchestratorTest {
         }
 
         @Override
-        public void reverse(long partnerId, String txnRef) {
+        public ReverseResult reverse(long partnerId, String txnRef) {
             callLog.add("PREFUND:REVERSE");
+            return new ReverseResult(new BigDecimal("125.50"), new BigDecimal("1088.485"));
         }
     };
 
@@ -92,8 +93,9 @@ class PaymentOrchestratorTest {
         }
 
         @Override
-        public void reverse(long partnerId, String txnRef) {
+        public ReverseResult reverse(long partnerId, String txnRef) {
             callLog.add("PREFUND:REVERSE");
+            return new ReverseResult(new BigDecimal("125.50"), new BigDecimal("1088.485"));
         }
     };
 
@@ -218,7 +220,7 @@ class PaymentOrchestratorTest {
             }
 
             @Override
-            public void reverse(long partnerId, String txnRef) {
+            public ReverseResult reverse(long partnerId, String txnRef) {
                 throw new AssertionError("PrefundingClient.reverse must NOT be called for LOCAL partners");
             }
         };
@@ -254,6 +256,43 @@ class PaymentOrchestratorTest {
         // Deduct comes before reverse
         assertOrder("DEDUCT before REVERSE",
                 indexOf("PREFUND:DEDUCT"), indexOf("PREFUND:REVERSE"));
+    }
+
+    // ======================================================================
+    // Test 5: OVERSEAS cancel records the REAL reversed USD + posts a reversal journal (P1-2)
+    // ======================================================================
+
+    @Test
+    @DisplayName("OVERSEAS cancel: reverses the real prefund USD and posts a reversal journal")
+    void overseas_cancel_reversesRealUsdAndPostsReversalJournal() {
+        java.util.concurrent.atomic.AtomicReference<String> revRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> revAmt = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> revCcy = new java.util.concurrent.atomic.AtomicReference<>();
+        com.gme.pay.payment.domain.client.RevenueLedgerClient recordingLedger =
+                new com.gme.pay.payment.domain.client.RevenueLedgerClient() {
+                    @Override
+                    public void postRoundingResidual(String reference, BigDecimal residual, String currency) { }
+                    @Override
+                    public void postReversalJournal(String reference, BigDecimal reversalAmount, String currency) {
+                        revRef.set(reference);
+                        revAmt.set(reversalAmount);
+                        revCcy.set(currency);
+                    }
+                };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, fakePrefunding, fakeQr, fakeScheme, fakeTxn, null, recordingLedger);
+
+        PaymentOrchestrator.CancelResult result = orchestrator.cancelPayment(
+                "pay_1", "ZP_TXN_1", PartnerType.OVERSEAS, 42L, "txn_1", "PARTNER_INITIATED");
+
+        // The cancel result carries the ACTUAL reversed USD (fakePrefunding returns 125.50), not ZERO.
+        assertEquals(0, result.prefundReturnedUsd().compareTo(new BigDecimal("125.50")),
+                "cancel must surface the real reversed prefund USD");
+        // A structured reversal journal was posted to revenue-ledger for that amount.
+        assertEquals("txn_1", revRef.get(), "reversal journal keyed by txnRef");
+        assertEquals(0, revAmt.get().compareTo(new BigDecimal("125.50")));
+        assertEquals("USD", revCcy.get());
     }
 
     // ---- helpers ----

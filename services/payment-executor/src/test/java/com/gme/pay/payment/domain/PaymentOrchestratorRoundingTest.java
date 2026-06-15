@@ -85,8 +85,9 @@ class PaymentOrchestratorRoundingTest {
                 return new DeductionResult(amountUsd, new BigDecimal("962.985"));
             }
             @Override
-            public void reverse(long partnerId, String txnRef) {
+            public ReverseResult reverse(long partnerId, String txnRef) {
                 callLog.add("PREFUND:REVERSE");
+                return new ReverseResult(BigDecimal.ZERO, BigDecimal.ZERO);
             }
         };
 
@@ -111,15 +112,36 @@ class PaymentOrchestratorRoundingTest {
                 id -> new PartnerConfigClient.PartnerConfigView(id, "OVERSEAS", "USD", RoundingMode.DOWN);
         SettlementBookingService bookingService = new SettlementBookingService(fakePartnerConfig);
 
-        // ---- fake 7: recording revenue-ledger client ----
+        // ---- fake 7: recording revenue-ledger client (records BOTH residual + revenue capture) ----
         AtomicReference<String> postedRef = new AtomicReference<>();
         AtomicReference<BigDecimal> postedResidual = new AtomicReference<>();
         AtomicReference<String> postedCurrency = new AtomicReference<>();
-        RevenueLedgerClient recordingLedger = (reference, residual, currency) -> {
-            callLog.add("LEDGER:POST_RESIDUAL");
-            postedRef.set(reference);
-            postedResidual.set(residual);
-            postedCurrency.set(currency);
+        AtomicReference<String> capturedTxnRef = new AtomicReference<>();
+        AtomicReference<BigDecimal> capturedCollMargin = new AtomicReference<>();
+        AtomicReference<BigDecimal> capturedPayMargin = new AtomicReference<>();
+        AtomicReference<BigDecimal> capturedSvcCharge = new AtomicReference<>();
+        AtomicReference<String> capturedSvcCcy = new AtomicReference<>();
+        RevenueLedgerClient recordingLedger = new RevenueLedgerClient() {
+            @Override
+            public void postRoundingResidual(String reference, BigDecimal residual, String currency) {
+                callLog.add("LEDGER:POST_RESIDUAL");
+                postedRef.set(reference);
+                postedResidual.set(residual);
+                postedCurrency.set(currency);
+            }
+            @Override
+            public void postRevenueCapture(String txnRef, long partnerId, long schemeId,
+                                           java.time.LocalDate revenueDate,
+                                           BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd,
+                                           BigDecimal serviceCharge, String serviceChargeCcy,
+                                           BigDecimal feeSharePct) {
+                callLog.add("LEDGER:CAPTURE");
+                capturedTxnRef.set(txnRef);
+                capturedCollMargin.set(collectionMarginUsd);
+                capturedPayMargin.set(payoutMarginUsd);
+                capturedSvcCharge.set(serviceCharge);
+                capturedSvcCcy.set(serviceChargeCcy);
+            }
         };
 
         // ---- orchestrator under test ----
@@ -158,5 +180,17 @@ class PaymentOrchestratorRoundingTest {
         assertTrue(commitIdx >= 0, "expected TXN:COMMIT:APPROVED in log " + callLog);
         assertTrue(ledgerIdx > commitIdx,
                 "residual must be posted AFTER commit; log: " + callLog);
+
+        // ---- assert: per-transaction revenue capture posted AFTER commit (P1-4) ----
+        assertEquals("txn_ROUND_001", capturedTxnRef.get(), "capture keyed by txnRef");
+        assertEquals(0, capturedCollMargin.get().compareTo(new BigDecimal("0.925380")),
+                "collection margin from the quote");
+        assertEquals(0, capturedPayMargin.get().compareTo(new BigDecimal("0.370152")),
+                "payout margin from the quote");
+        assertEquals(0, capturedSvcCharge.get().compareTo(new BigDecimal("0.35")),
+                "service charge from the quote");
+        assertEquals("USD", capturedSvcCcy.get());
+        int captureIdx = callLog.indexOf("LEDGER:CAPTURE");
+        assertTrue(captureIdx > commitIdx, "revenue capture must be posted AFTER commit; log: " + callLog);
     }
 }

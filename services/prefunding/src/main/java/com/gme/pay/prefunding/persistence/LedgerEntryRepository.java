@@ -11,4 +11,7 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntryEntity, 
     List<LedgerEntryEntity> findByPartnerIdOrderByCreatedAtAscIdAsc(String partnerId);
 
     long countByPartnerId(String partnerId);
+
+    /** All ledger entries for one (partner, txnRef) — used to compute + guard a reversal. */
+    List<LedgerEntryEntity> findByPartnerIdAndTxnRef(String partnerId, String txnRef);
 }

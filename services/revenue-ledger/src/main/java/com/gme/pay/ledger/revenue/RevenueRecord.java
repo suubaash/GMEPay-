@@ -10,6 +10,11 @@ import java.util.Objects;
  * <p>This is an insert-only value — monetary fields are immutable after creation, matching the
  * rate-lock immutability rule (RATE-04 §9.4).
  *
+ * <p>Keyed by {@code txnRef} — the transaction-mgmt business reference (e.g. {@code "TXN-..."}) that
+ * the payment path carries end-to-end. (Earlier this was a numeric {@code txnId}, but the orchestrated
+ * payment path never has the numeric surrogate — only the string reference — so the natural,
+ * universally-available key is {@code txnRef}.)
+ *
  * <p>For same-currency (domestic) transactions, {@code fxMarginUsd} is exactly {@code 0.0000}.
  * Service charge is always recorded even when margins are zero.
  *
@@ -17,7 +22,7 @@ import java.util.Objects;
  */
 public final class RevenueRecord {
 
-    private final long txnId;
+    private final String txnRef;
     private final long partnerId;
     private final long schemeId;
     private final LocalDate revenueDate;
@@ -26,9 +31,13 @@ public final class RevenueRecord {
     private final String serviceChargeCcy;
     private final BigDecimal feeSharePct;
 
-    private RevenueRecord(long txnId, long partnerId, long schemeId, LocalDate revenueDate,
+    private RevenueRecord(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
                           BigDecimal fxMarginUsd, BigDecimal serviceChargeAmount,
                           String serviceChargeCcy, BigDecimal feeSharePct) {
+        Objects.requireNonNull(txnRef, "txnRef required");
+        if (txnRef.isBlank()) {
+            throw new IllegalArgumentException("txnRef must not be blank");
+        }
         Objects.requireNonNull(revenueDate, "revenueDate required");
         Objects.requireNonNull(fxMarginUsd, "fxMarginUsd required");
         Objects.requireNonNull(serviceChargeAmount, "serviceChargeAmount required");
@@ -40,7 +49,7 @@ public final class RevenueRecord {
         if (serviceChargeAmount.compareTo(BigDecimal.ZERO) < 0) {
             throw new IllegalArgumentException("serviceChargeAmount must be >= 0");
         }
-        this.txnId = txnId;
+        this.txnRef = txnRef;
         this.partnerId = partnerId;
         this.schemeId = schemeId;
         this.revenueDate = revenueDate;
@@ -51,26 +60,38 @@ public final class RevenueRecord {
     }
 
     /** Create a revenue record. fxMarginUsd = collectionMarginUsd + payoutMarginUsd. */
-    public static RevenueRecord of(long txnId, long partnerId, long schemeId, LocalDate revenueDate,
+    public static RevenueRecord of(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
                                    BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd,
                                    BigDecimal serviceChargeAmount, String serviceChargeCcy,
                                    BigDecimal feeSharePct) {
         Objects.requireNonNull(collectionMarginUsd, "collectionMarginUsd required");
         Objects.requireNonNull(payoutMarginUsd, "payoutMarginUsd required");
         BigDecimal fxMarginUsd = collectionMarginUsd.add(payoutMarginUsd);
-        return new RevenueRecord(txnId, partnerId, schemeId, revenueDate,
+        return new RevenueRecord(txnRef, partnerId, schemeId, revenueDate,
                 fxMarginUsd, serviceChargeAmount, serviceChargeCcy, feeSharePct);
     }
 
     /** Create a revenue record for a same-currency (domestic) transaction where fxMarginUsd = 0. */
-    public static RevenueRecord sameCurrency(long txnId, long partnerId, long schemeId, LocalDate revenueDate,
+    public static RevenueRecord sameCurrency(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
                                              BigDecimal serviceChargeAmount, String serviceChargeCcy,
                                              BigDecimal feeSharePct) {
-        return new RevenueRecord(txnId, partnerId, schemeId, revenueDate,
+        return new RevenueRecord(txnRef, partnerId, schemeId, revenueDate,
                 BigDecimal.ZERO, serviceChargeAmount, serviceChargeCcy, feeSharePct);
     }
 
-    public long txnId() { return txnId; }
+    /**
+     * Rebuild a record from already-persisted fields, where {@code fxMarginUsd} is the stored total
+     * (not the two component margins). Used by the JPA store on read-back so the persisted total is
+     * preserved exactly. Other callers should prefer {@link #of} / {@link #sameCurrency}.
+     */
+    public static RevenueRecord rehydrate(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
+                                          BigDecimal fxMarginUsd, BigDecimal serviceChargeAmount,
+                                          String serviceChargeCcy, BigDecimal feeSharePct) {
+        return new RevenueRecord(txnRef, partnerId, schemeId, revenueDate,
+                fxMarginUsd, serviceChargeAmount, serviceChargeCcy, feeSharePct);
+    }
+
+    public String txnRef() { return txnRef; }
     public long partnerId() { return partnerId; }
     public long schemeId() { return schemeId; }
     public LocalDate revenueDate() { return revenueDate; }

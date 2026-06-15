@@ -230,11 +230,14 @@ class TransactionContractIT {
     void getTransactions_dateFilter() throws Exception {
         createTxn("DATE-FILTER-001", 77L);
 
-        // Today's date filter should include the just-created transaction
-        String today = java.time.LocalDate.now().toString();
+        // A date window around "now" should include the just-created transaction. Uses a
+        // [-1, +1] day window so the assertion is robust to the UTC/KST day boundary: createdAt is
+        // a UTC Instant while LocalDate.now() can already be the next day in KST near midnight, so a
+        // same-day from=to=today filter would spuriously miss the row.
+        java.time.LocalDate today = java.time.LocalDate.now();
         MvcResult result = mockMvc.perform(get("/v1/transactions")
-                        .param("from", today)
-                        .param("to", today)
+                        .param("from", today.minusDays(1).toString())
+                        .param("to", today.plusDays(1).toString())
                         .param("partnerId", "77")
                         .param("page", "0")
                         .param("size", "10"))

@@ -41,9 +41,25 @@ public class PrefundingController {
         return new BalanceResponse(partnerId, newBalance);
     }
 
+    /**
+     * Reverse a prior deduction for {@code txnRef} (same-day cancel / refund). Returns the amount
+     * actually credited back ({@code reversedUsd}) so the caller can record the real reversal rather
+     * than a placeholder zero. Idempotent: a second reverse for the same txnRef reports
+     * {@code reversedUsd=0}.
+     */
+    @PostMapping("/{partnerId}/reverse")
+    public ReverseResponse reverse(@PathVariable String partnerId, @RequestBody ReverseRequest req) {
+        PrefundingService.ReverseResult r = service.reverse(partnerId, req.txnRef());
+        return new ReverseResponse(partnerId, r.reversedAmount(), r.balanceAfter());
+    }
+
     public record DeductRequest(String txnRef, BigDecimal amount) { }
 
     public record CreditRequest(BigDecimal amount) { }
 
+    public record ReverseRequest(String txnRef) { }
+
     public record BalanceResponse(String partnerId, BigDecimal balance) { }
+
+    public record ReverseResponse(String partnerId, BigDecimal reversedUsd, BigDecimal balance) { }
 }
