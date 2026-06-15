@@ -138,8 +138,25 @@ export default function AppShell({ children }) {
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <AppBar
         position="fixed"
-        sx={{ zIndex: (t) => t.zIndex.drawer + 1 }}
         elevation={0}
+        sx={(t) => ({
+          zIndex: t.zIndex.drawer + 1,
+          color: 'text.primary',
+          backgroundColor: t.palette.mode === 'dark' ? 'rgba(18,18,24,0.72)' : 'rgba(255,255,255,0.72)',
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+          borderBottom: `1px solid ${t.palette.divider}`,
+          boxShadow: '0 4px 24px rgba(16,24,40,0.06)',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 3,
+            background: 'linear-gradient(90deg,#FF4D63,#E11B2E)',
+          },
+        })}
       >
         <Toolbar>
           <Typography
@@ -148,32 +165,70 @@ export default function AppShell({ children }) {
             component={Link}
             href="/"
             sx={{
-              fontWeight: 700,
-              color: 'inherit',
+              fontWeight: 800,
               textDecoration: 'none',
               mr: 3,
+              letterSpacing: '-0.02em',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
             }}
             aria-label="GMEPay+ Ops home"
           >
-            GMEPay+ Ops
+            <Box
+              component="span"
+              sx={{
+                width: 28,
+                height: 28,
+                borderRadius: '9px',
+                background: 'linear-gradient(135deg,#FF4D63,#E11B2E)',
+                boxShadow: '0 4px 12px rgba(225,27,46,.45)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontSize: 15,
+                fontWeight: 900,
+              }}
+            >
+              G
+            </Box>
+            <Box
+              component="span"
+              sx={{
+                background: 'linear-gradient(135deg,#FF4D63,#E11B2E)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              GMEPay+
+            </Box>
+            <Box component="span" sx={{ color: 'text.secondary', fontWeight: 700 }}>
+              Ops
+            </Box>
           </Typography>
 
           {/* Search placeholder (no real data; reserves the slot). */}
           <Box
             sx={(t) => ({
               position: 'relative',
-              borderRadius: 1,
-              backgroundColor: alpha(t.palette.common.white, 0.15),
+              borderRadius: 999,
+              border: `1px solid ${t.palette.divider}`,
+              backgroundColor: alpha(t.palette.text.primary, 0.04),
               '&:hover': {
-                backgroundColor: alpha(t.palette.common.white, 0.25),
+                backgroundColor: alpha(t.palette.text.primary, 0.07),
+                borderColor: 'rgba(225,27,46,0.3)',
               },
+              transition: 'background-color .2s, border-color .2s',
               mr: 2,
               ml: 0,
               flexGrow: 1,
-              maxWidth: 480,
+              maxWidth: 460,
               display: 'flex',
               alignItems: 'center',
-              pl: 1.5,
+              pl: 1.75,
+              py: 0.25,
             })}
           >
             <SearchIcon fontSize="small" />
@@ -223,7 +278,7 @@ export default function AppShell({ children }) {
               aria-haspopup="true"
               aria-expanded={menuOpen ? 'true' : undefined}
             >
-              <Avatar sx={{ width: 32, height: 32, bgcolor: 'secondary.main' }}>
+              <Avatar sx={{ width: 34, height: 34, background: 'linear-gradient(135deg,#FF4D63,#E11B2E)', boxShadow: '0 4px 10px rgba(225,27,46,.35)' }}>
                 {avatarLetter}
               </Avatar>
             </IconButton>
@@ -294,10 +349,12 @@ export default function AppShell({ children }) {
           </List>
         </Box>
       </Drawer>
-      <Box component="main" sx={{ flexGrow: 1, p: 3, bgcolor: 'background.default' }}>
+      <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 3 }, minWidth: 0 }}>
         <Toolbar />
         <Container maxWidth="xl" disableGutters>
-          {children}
+          <Box key={pathname} sx={{ animation: 'gmeFadeUp .45s cubic-bezier(.2,.7,.2,1)' }}>
+            {children}
+          </Box>
         </Container>
       </Box>
     </Box>

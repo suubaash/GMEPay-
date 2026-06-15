@@ -22,10 +22,14 @@ public class HubClient {
 
     private static final Logger log = LoggerFactory.getLogger(HubClient.class);
 
-    private final RestClient restClient;
+    private final RestClient restClient;        // payment-executor hub (/v1/pay)
+    private final RestClient schemeRestClient;  // scheme sim (/v1/scheme/qr/decode)
 
-    public HubClient(RestClient gmepayRestClient) {
+    public HubClient(
+            @org.springframework.beans.factory.annotation.Qualifier("gmepayRestClient") RestClient gmepayRestClient,
+            @org.springframework.beans.factory.annotation.Qualifier("schemeRestClient") RestClient schemeRestClient) {
         this.restClient = gmepayRestClient;
+        this.schemeRestClient = schemeRestClient;
     }
 
     // -------------------------------------------------------------------------
@@ -35,7 +39,7 @@ public class HubClient {
     /** Returns null if the hub is down or the decode fails. */
     public QrPreview decodeQr(String qrPayload) {
         try {
-            return restClient.post()
+            return schemeRestClient.post()
                     .uri("/v1/scheme/qr/decode")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("qrPayload", qrPayload))
