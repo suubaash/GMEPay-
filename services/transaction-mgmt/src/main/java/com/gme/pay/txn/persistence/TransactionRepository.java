@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Spring Data JPA repository for {@link TransactionEntity} rows.
@@ -46,4 +47,24 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
             @Param("status")      String status,
             @Param("partnerId")   Long partnerId,
             Pageable pageable);
+
+    /**
+     * Returns non-terminal transactions whose {@code createdAt} is older than
+     * {@code expiryBefore} and whose status is in the provided set of sweepable statuses.
+     *
+     * <p>Only CREATED and PENDING_DEBIT are sweepable (both can legally transition to FAILED
+     * per {@link com.gme.pay.txn.domain.statemachine.TransactionTransitions}).
+     * Terminal states (APPROVED, FAILED, CANCELLED) are never returned here.
+     *
+     * @param expiryBefore   upper-exclusive bound on createdAt (i.e. now minus timeout)
+     * @param sweepStatuses  set of status names to sweep (e.g. ["CREATED","PENDING_DEBIT"])
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE t.createdAt < :expiryBefore
+              AND t.status IN :sweepStatuses
+            """)
+    List<TransactionEntity> findExpiredNonTerminal(
+            @Param("expiryBefore") Instant expiryBefore,
+            @Param("sweepStatuses") List<String> sweepStatuses);
 }

@@ -5,7 +5,9 @@ import com.gme.pay.txn.domain.model.TransactionStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -36,4 +38,15 @@ public interface TransactionRepository {
     Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                     TransactionStatus status, Long partnerId,
                                     Pageable pageable);
+
+    /**
+     * Returns transactions in a non-terminal sweepable state whose {@code createdAt}
+     * is strictly before {@code expiryBefore}.
+     *
+     * <p>Only states that can legally transition to FAILED are returned
+     * (currently CREATED and PENDING_DEBIT).  Terminal states are never swept.
+     *
+     * @param expiryBefore  cutoff instant (exclusive); rows older than this are candidates
+     */
+    List<Transaction> findExpiredNonTerminal(Instant expiryBefore);
 }

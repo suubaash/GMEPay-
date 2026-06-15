@@ -55,3 +55,28 @@ gateway:
   replay-protection:
     fail-open: true
   trust-proxy: false
+
+# HMAC signature verification settings
+security:
+  gateway:
+    hmac:
+      # Maximum permitted age of X-Timestamp in either direction (seconds).
+      # Partners whose system clock drifts beyond this window will receive 401 EXPIRED_TIMESTAMP.
+      clock-skew-seconds: 300
+
+    # mTLS client-certificate fingerprint verification.
+    # In production Nginx terminates mTLS and forwards the SHA-256 fingerprint of the verified
+    # client certificate as the X-Client-Cert-Fingerprint header.  This filter checks that
+    # fingerprint against the value stored in partner_mtls_cert.
+    # Set enabled=true only in environments where the gateway sits behind an Nginx mTLS proxy;
+    # leaving it false (default) means mTLS is not enforced locally or in tests.
+    mtls:
+      enabled: false
+      client-cert-header: X-Client-Cert-Fingerprint
+
+    # IP-allowlist settings (Slice 8)
+    allowlist:
+      trust_header_only_in_dev: true
+      default-environment: sandbox
+      fail-open: true
+      cache-ttl-seconds: 60

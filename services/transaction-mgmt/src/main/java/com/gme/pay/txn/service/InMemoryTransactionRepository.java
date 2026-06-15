@@ -8,9 +8,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Persistence adapter for {@link TransactionRepository}.
@@ -58,5 +61,22 @@ public class InMemoryTransactionRepository implements TransactionRepository {
         return jpaRepository
                 .findByFilters(fromInstant, toInstant, statusStr, partnerId, pageable)
                 .map(TransactionEntityMapper::toDomain);
+    }
+
+    /**
+     * Sweepable (non-terminal) statuses that can legally transition to FAILED.
+     * APPROVED/FAILED/CANCELLED are terminal and must never be swept.
+     */
+    private static final List<String> SWEEPABLE_STATUSES = List.of(
+            TransactionStatus.CREATED.name(),
+            TransactionStatus.PENDING_DEBIT.name()
+    );
+
+    @Override
+    public List<Transaction> findExpiredNonTerminal(Instant expiryBefore) {
+        return jpaRepository.findExpiredNonTerminal(expiryBefore, SWEEPABLE_STATUSES)
+                .stream()
+                .map(TransactionEntityMapper::toDomain)
+                .collect(Collectors.toList());
     }
 }

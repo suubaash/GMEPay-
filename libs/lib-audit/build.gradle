@@ -11,11 +11,26 @@ dependencies {
     api project(':libs:lib-events')
     implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
     implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
     implementation 'org.slf4j:slf4j-api'
+    // JDBC DataSource support — optional at runtime; DbAuditPublisher is conditional
+    compileOnly 'org.springframework:spring-jdbc'
+    // Flyway core for migration (optional — services bring their own Flyway boot starter)
+    compileOnly 'org.flywaydb:flyway-core'
 
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // H2 in-memory DB for DbAuditPublisher slice tests (no Docker needed)
+    testImplementation 'com.h2database:h2'
+    // Spring JDBC needed at test compile time for JdbcTemplate usage
+    testImplementation 'org.springframework:spring-jdbc'
+    // Flyway needed at test time to run the lib-audit migration
+    testImplementation 'org.flywaydb:flyway-core'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+    // Spring Kafka test support for KafkaAuditPublisher gating test
+    testImplementation 'org.springframework.kafka:spring-kafka'
+    testImplementation 'org.springframework.boot:spring-boot-autoconfigure'
 }

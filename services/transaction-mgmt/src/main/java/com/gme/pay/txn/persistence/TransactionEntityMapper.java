@@ -52,6 +52,7 @@ public final class TransactionEntityMapper {
         e.setSchemeApprovalCode(txn.schemeApprovalCode());
         e.setPrefundDeductedUsd(txn.prefundDeductedUsd());
         e.setApprovedAt(txn.approvedAt());
+        e.setFailureReason(txn.failureReason());
         return e;
     }
 
@@ -88,6 +89,7 @@ public final class TransactionEntityMapper {
                 e.getSchemeTxnRef(),
                 e.getSchemeApprovalCode(),
                 e.getPrefundDeductedUsd(),
-                e.getApprovedAt());
+                e.getApprovedAt(),
+                e.getFailureReason());
     }
 }

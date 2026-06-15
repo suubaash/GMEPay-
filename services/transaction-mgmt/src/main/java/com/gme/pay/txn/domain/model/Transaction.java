@@ -61,6 +61,9 @@ public class Transaction {
     private BigDecimal prefundDeductedUsd;
     private Instant approvedAt;
 
+    // OI-01: reason code set when a transaction enters FAILED (e.g. "APPROVAL_TIMEOUT").
+    private String failureReason;
+
     /**
      * Creates a new transaction in {@link TransactionStatus#CREATED} state
      * using the legacy 5-field signature (kept for backward compat with unit tests).
@@ -255,6 +258,48 @@ public class Transaction {
             String schemeApprovalCode,
             BigDecimal prefundDeductedUsd,
             Instant approvedAt) {
+        this(txnRef, partnerRef, sendAmount, sendCcy, targetPayout, targetCcy,
+                status, createdAt, updatedAt,
+                bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                payoutCurrency, collectionAmount, collectionCurrency,
+                merchantId, quoteId, paymentId,
+                schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                null /* failureReason */);
+    }
+
+    /**
+     * Full rehydration constructor (V004+): restores all fields including OI-01 failureReason.
+     */
+    public Transaction(
+            String txnRef,
+            String partnerRef,
+            BigDecimal sendAmount,
+            String sendCcy,
+            BigDecimal targetPayout,
+            String targetCcy,
+            TransactionStatus status,
+            Instant createdAt,
+            Instant updatedAt,
+            BigDecimal bookedSettlementAmount,
+            RoundingMode settlementRoundingMode,
+            BigDecimal roundingResidual,
+            Long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId,
+            String paymentId,
+            String schemeTxnRef,
+            String schemeApprovalCode,
+            BigDecimal prefundDeductedUsd,
+            Instant approvedAt,
+            String failureReason) {
         this.txnRef = txnRef;
         this.partnerRef = partnerRef;
         this.sendAmount = sendAmount;
@@ -282,6 +327,7 @@ public class Transaction {
         this.schemeApprovalCode = schemeApprovalCode;
         this.prefundDeductedUsd = prefundDeductedUsd;
         this.approvedAt = approvedAt;
+        this.failureReason = failureReason;
     }
 
     // --- mutators (only the state machine and service touch these) ---
@@ -339,6 +385,15 @@ public class Transaction {
     }
 
     /**
+     * Records the reason code for a FAILED terminal transition (OI-01).
+     * Idempotent — a second call overwrites, but the FSM prevents re-entering FAILED.
+     */
+    public void applyFailureReason(String reason) {
+        this.failureReason = reason;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
      * Applies the status-patch lock fields from the PATCH /v1/transactions/{ref}/status
      * endpoint. These fields are set once when the payment-executor commits the scheme result.
      */
@@ -390,4 +445,5 @@ public class Transaction {
     public String schemeApprovalCode()   { return schemeApprovalCode; }
     public BigDecimal prefundDeductedUsd() { return prefundDeductedUsd; }
     public Instant approvedAt()          { return approvedAt; }
+    public String failureReason()        { return failureReason; }
 }

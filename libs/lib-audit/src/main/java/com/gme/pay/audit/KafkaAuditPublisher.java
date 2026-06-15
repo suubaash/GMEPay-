@@ -32,6 +32,17 @@ import org.springframework.kafka.core.KafkaTemplate;
  * transient broker outage must never roll back a business write. Production wiring
  * will sit this publisher behind the outbox so the topic message is only handed to
  * Kafka after commit (i.e. the at-least-once guarantee is in the outbox, not here).
+ *
+ * <h3>Activation</h3>
+ * <p>Registered by {@link AuditPublisherAutoConfiguration} when
+ * {@code spring.kafka.bootstrap-servers} is present in the environment.  That
+ * auto-configuration creates a dedicated {@link KafkaTemplate} for audit so this
+ * class itself remains framework-free.  When Kafka is not configured, the auto-config
+ * backs off and only {@link DbAuditPublisher} or {@link LogAuditPublisher} are active.
+ *
+ * <p>This class carries no {@code @Component} annotation — instantiation is always
+ * driven by {@link AuditPublisherAutoConfiguration} so consuming services never need
+ * to scan this package.
  */
 public final class KafkaAuditPublisher implements AuditPublisher {
 

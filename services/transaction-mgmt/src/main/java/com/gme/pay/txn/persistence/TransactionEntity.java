@@ -111,6 +111,10 @@ public class TransactionEntity {
     @Column(name = "payment_id", length = 64)
     private String paymentId;
 
+    /** Reason code for terminal FAILED transitions (e.g. "APPROVAL_TIMEOUT"). Nullable. */
+    @Column(name = "failure_reason", length = 64)
+    private String failureReason;
+
     /** Required no-arg constructor for JPA. */
     public TransactionEntity() {}
 
@@ -202,4 +206,7 @@ public class TransactionEntity {
 
     public String getPaymentId() { return paymentId; }
     public void setPaymentId(String paymentId) { this.paymentId = paymentId; }
+
+    public String getFailureReason() { return failureReason; }
+    public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
 }

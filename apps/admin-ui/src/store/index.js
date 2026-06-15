@@ -28,6 +28,11 @@ import partnerSchemesReducer from './partnerSchemesSlice';
 import partnerLifecycleReducer from './partnerLifecycleSlice';
 import lifecycleReducer from './lifecycleSlice';
 import reconExceptionsReducer from './reconExceptionsSlice';
+import usersReducer from './usersSlice';
+import rbacReducer from './rbacSlice';
+import reportsReducer from './reportsSlice';
+import txnSearchReducer from './txnSearchSlice';
+import complianceReducer from './complianceSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -54,6 +59,11 @@ import reconExceptionsReducer from './reconExceptionsSlice';
  *  - partnerSchemes    : scheme enrollments + corridor definitions (Slice 7).
  *  - lifecycle         : activation preconditions, propose/execute, step-8 patches (Slice 8).
  *  - reconExceptions   : settlement recon exceptions ops queue (UC-04-03, BS-04).
+ *  - users             : operator/user management (CRUD + enable/disable).
+ *  - rbac              : roles, permissions, and role assignments.
+ *  - reports           : operational/financial report catalog + generation.
+ *  - txnSearch         : advanced transaction search (real GET /v1/admin/transactions).
+ *  - compliance        : compliance review queue + case detail.
  *  - systemHealth      : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -83,6 +93,11 @@ export const store = configureStore({
     partnerLifecycle: partnerLifecycleReducer,
     lifecycle: lifecycleReducer,
     reconExceptions: reconExceptionsReducer,
+    users: usersReducer,
+    rbac: rbacReducer,
+    reports: reportsReducer,
+    txnSearch: txnSearchReducer,
+    compliance: complianceReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },

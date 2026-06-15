@@ -4,6 +4,7 @@ import com.gme.pay.gateway.partner.PartnerCredentialService;
 import com.gme.pay.gateway.partner.PartnerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -18,14 +19,21 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 
 /**
  * GlobalFilter — HMAC-SHA256 request signature verification (API-05 §3.2).
  *
- * <p>Execution order: 4 (after TimestampValidationFilter=3, before ReplayProtectionFilter=5).
+ * <p>Execution order: 4 (after PartnerIpAllowlistFilter=2, before ReplayProtectionFilter=5).
  *
  * <p>Algorithm:
  * <ol>
+ *   <li>Validate {@code X-Timestamp} is present, parses as ISO-8601, and falls within the
+ *       configured clock-skew window ({@code security.gateway.hmac.clock-skew-seconds},
+ *       default 300 s = 5 min). Reject stale/future timestamps with 401 EXPIRED_TIMESTAMP.</li>
  *   <li>Resolve partner by {@code X-API-Key} — 401 INVALID_API_KEY if unknown.</li>
  *   <li>Buffer request body via {@link DataBufferUtils#join}.</li>
  *   <li>Build canonical string and compute HMAC-SHA256 with the partner secret.</li>
@@ -33,6 +41,12 @@ import java.nio.charset.StandardCharsets;
  *   <li>On success, store {@code partner_id} and {@code partner_credentials} as exchange
  *       attributes for downstream filters (rate-limit key resolver, replay filter).</li>
  * </ol>
+ *
+ * <p><b>Clock-skew window</b>: the {@code X-Timestamp} value is the UTC ISO-8601 string the
+ * partner puts in the canonical string (e.g. {@code 2026-06-15T12:00:00.000Z}). This filter
+ * rejects requests whose timestamp differs from server wall-clock by more than
+ * {@code security.gateway.hmac.clock-skew-seconds} in either direction, guarding against
+ * replay attacks. The {@code Clock} is injectable so tests can pin a deterministic instant.
  */
 @Component
 public class HmacSignatureFilter implements GlobalFilter, Ordered {
@@ -43,12 +57,29 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
     /** Filter execution order position (higher number = later in chain). */
     public static final int ORDER = 4;
 
+    /** Default clock-skew tolerance: 5 minutes in either direction. */
+    public static final long DEFAULT_CLOCK_SKEW_SECONDS = 300L;
+
     private static final Logger log = LoggerFactory.getLogger(HmacSignatureFilter.class);
 
     private final PartnerCredentialService credentialService;
+    private final Clock clock;
+    private final Duration clockSkew;
 
-    public HmacSignatureFilter(PartnerCredentialService credentialService) {
+    /** Primary constructor — Spring wires this one. Clock is wall-clock UTC. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public HmacSignatureFilter(
+            PartnerCredentialService credentialService,
+            @Value("${security.gateway.hmac.clock-skew-seconds:" + DEFAULT_CLOCK_SKEW_SECONDS + "}")
+            long clockSkewSeconds) {
+        this(credentialService, Clock.systemUTC(), clockSkewSeconds);
+    }
+
+    /** Package-private constructor for tests to inject a pinned clock. */
+    HmacSignatureFilter(PartnerCredentialService credentialService, Clock clock, long clockSkewSeconds) {
         this.credentialService = credentialService;
+        this.clock = clock;
+        this.clockSkew = Duration.ofSeconds(clockSkewSeconds);
     }
 
     @Override
@@ -70,6 +101,12 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
                     "X-API-Key header is missing or empty");
         }
 
+        // Validate timestamp before touching credentials (no signing surface exposure).
+        Mono<Void> timestampError = validateTimestamp(exchange, timestamp);
+        if (timestampError != null) {
+            return timestampError;
+        }
+
         return credentialService.findByApiKey(apiKey)
                 .switchIfEmpty(Mono.defer(() ->
                         GatewayErrorWriter.writeError(
@@ -78,6 +115,38 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
                                 .then(Mono.empty())))
                 .flatMap(creds -> verifySignatureAndDelegate(
                         exchange, chain, creds, timestamp, signature));
+    }
+
+    /**
+     * Returns a non-null {@link Mono} (the 401 error response) when the timestamp is missing,
+     * unparseable, or outside the clock-skew window; {@code null} means the timestamp is valid
+     * and processing should continue.
+     */
+    private Mono<Void> validateTimestamp(ServerWebExchange exchange, String timestamp) {
+        if (timestamp == null || timestamp.isBlank()) {
+            return GatewayErrorWriter.writeError(
+                    exchange, HttpStatus.UNAUTHORIZED, "EXPIRED_TIMESTAMP",
+                    "X-Timestamp header is missing or empty");
+        }
+        Instant requestTime;
+        try {
+            requestTime = Instant.parse(timestamp);
+        } catch (DateTimeParseException e) {
+            return GatewayErrorWriter.writeError(
+                    exchange, HttpStatus.UNAUTHORIZED, "EXPIRED_TIMESTAMP",
+                    "X-Timestamp is not a valid ISO-8601 UTC instant");
+        }
+        Instant now = clock.instant();
+        Duration delta = Duration.between(requestTime, now).abs();
+        if (delta.compareTo(clockSkew) > 0) {
+            log.warn("HMAC timestamp outside clock-skew window: ts={} now={} delta={}s",
+                    timestamp, now, delta.toSeconds());
+            return GatewayErrorWriter.writeError(
+                    exchange, HttpStatus.UNAUTHORIZED, "EXPIRED_TIMESTAMP",
+                    "X-Timestamp is outside the permitted clock-skew window of "
+                            + clockSkew.toSeconds() + " seconds");
+        }
+        return null; // timestamp valid
     }
 
     private Mono<Void> verifySignatureAndDelegate(

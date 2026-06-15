@@ -21,6 +21,13 @@ import java.util.Map;
 @Service
 public class StubPartnerCredentialService implements PartnerCredentialService {
 
+    /**
+     * SHA-256 fingerprint (lower-case hex) of the stub mTLS certificate used in tests.
+     * Matches the value hardcoded in {@code MtlsFingerprintFilterTest}.
+     */
+    public static final String STUB_MTLS_FINGERPRINT =
+            "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+
     private static final Map<String, PartnerCredentials> STORE = Map.of(
             "pk_test_abc", new PartnerCredentials(
                     "partner_test_001",
@@ -28,7 +35,16 @@ public class StubPartnerCredentialService implements PartnerCredentialService {
                     "sk_test_xyz",
                     List.of(),
                     PartnerCredentials.PartnerType.OVERSEAS,
-                    300));
+                    300,
+                    STUB_MTLS_FINGERPRINT),
+            "pk_test_no_mtls", new PartnerCredentials(
+                    "partner_test_002",
+                    "pk_test_no_mtls",
+                    "sk_test_no_mtls",
+                    List.of(),
+                    PartnerCredentials.PartnerType.OVERSEAS,
+                    300,
+                    null));
 
     @Override
     public Mono<PartnerCredentials> findByApiKey(String apiKey) {
