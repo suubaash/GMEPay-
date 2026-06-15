@@ -7,9 +7,14 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   Divider,
   Grid,
   Stack,
+  Step,
+  StepContent,
+  StepLabel,
+  Stepper,
   Typography
 } from '@mui/material';
 import { useDispatch, useSelector } from 'react-redux';
@@ -23,26 +28,35 @@ import Breadcrumbs from '@/components/Breadcrumbs';
 import { useSnackbar } from '@/components/SnackbarProvider';
 
 /**
- * Transaction detail page.
+ * Transaction detail page — UC-10-03.
  *
  * Wire shape (TransactionDetail):
  *   {
- *     summary: { txnId, partnerId, state, amount, currency, committedAt },
+ *     summary: {
+ *       txnId, partnerId, state, amount, currency, committedAt,
+ *       // UC-10-02 additive:
+ *       qrSchemeId, krwAmount, payerCurrency, payerCurrencyAmount,
+ *       appliedFxRate, rateTimestamp, prefundingDeductedUsd
+ *     },
  *     schemeTxnRef:       string,
  *     schemeApprovalCode: string,
  *     prefundDeductedUsd: string,      // BigDecimal-as-string
  *     approvedAt:         string|null, // ISO instant
  *     bookedSettlementAmount: string,
  *     settlementRoundingMode: string,
- *     roundingResidual: string
+ *     roundingResidual: string,
+ *     // UC-10-03 additive:
+ *     merchantId:    string|null,
+ *     merchantName:  string|null,
+ *     statusHistory: Array<{ status: string, at: string }>|null  // oldest-first
  *   }
  *
- * The settlement currency is the same as the summary currency on the wire;
- * residual + booked amount inherit it.
+ * Internal revenue (FX margin, GME revenue) is stripped by the BFF — never
+ * rendered here.
  *
- * On 404 we redirect to /transactions with a toast (BFF returns 404 both for
- * unknown IDs and IDs that belong to a different partner — see
- * PartnerPortalController#transactionDetail).
+ * Money MUST NOT be cast to JS Number. Render decimal strings via <MoneyDisplay />.
+ *
+ * On 404 we redirect to /transactions with a toast.
  */
 export default function TransactionDetailPage() {
   const params = useParams();
@@ -87,6 +101,17 @@ export default function TransactionDetailPage() {
   const committedAt = summary?.committedAt ?? null;
   const approvedAt = data?.approvedAt ?? null;
 
+  // UC-10-03 fields
+  const krwAmount = summary?.krwAmount ?? null;
+  const payerCurrency = summary?.payerCurrency ?? null;
+  const payerCurrencyAmount = summary?.payerCurrencyAmount ?? null;
+  const appliedFxRate = summary?.appliedFxRate ?? null;
+  const rateTimestamp = summary?.rateTimestamp ?? null;
+  const prefundingDeductedUsd = summary?.prefundingDeductedUsd ?? data?.prefundDeductedUsd ?? null;
+  const merchantId = data?.merchantId ?? null;
+  const merchantName = data?.merchantName ?? null;
+  const statusHistory = Array.isArray(data?.statusHistory) ? data.statusHistory : null;
+
   return (
     <Stack spacing={3}>
       <Box>
@@ -110,6 +135,7 @@ export default function TransactionDetailPage() {
 
       {data && summary && (
         <>
+          {/* Summary card */}
           <Card>
             <CardContent>
               <Grid container spacing={3}>
@@ -149,6 +175,86 @@ export default function TransactionDetailPage() {
 
               <Divider sx={{ my: 3 }} />
 
+              {/* UC-10-03: Merchant info */}
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Merchant ID
+                  </Typography>
+                  <Typography sx={{ fontFamily: 'monospace' }}>
+                    {merchantId ?? '—'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Merchant name
+                  </Typography>
+                  <Typography>{merchantName ?? '—'}</Typography>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    QR scheme
+                  </Typography>
+                  <Box sx={{ mt: 0.5 }}>
+                    {summary?.qrSchemeId
+                      ? <Chip label={summary.qrSchemeId} size="small" variant="outlined" />
+                      : <Typography>—</Typography>}
+                  </Box>
+                </Grid>
+              </Grid>
+
+              <Divider sx={{ my: 3 }} />
+
+              {/* UC-10-03: KRW + payer-ccy amounts, FX rate */}
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    KRW amount
+                  </Typography>
+                  <Typography>
+                    {krwAmount != null
+                      ? <MoneyDisplay amount={krwAmount} currency="KRW" showRawTooltip />
+                      : '—'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Payer amount
+                  </Typography>
+                  <Typography>
+                    {payerCurrencyAmount != null && payerCurrency
+                      ? <MoneyDisplay amount={payerCurrencyAmount} currency={payerCurrency} showRawTooltip />
+                      : '—'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Applied FX rate
+                  </Typography>
+                  <Typography sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {appliedFxRate != null ? appliedFxRate : '—'}
+                  </Typography>
+                  {rateTimestamp && (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                      Rate locked: {new Date(rateTimestamp).toLocaleString()}
+                    </Typography>
+                  )}
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Prefunding deducted
+                  </Typography>
+                  <Typography>
+                    {prefundingDeductedUsd != null
+                      ? <MoneyDisplay amount={prefundingDeductedUsd} currency="USD" showRawTooltip />
+                      : '—'}
+                  </Typography>
+                </Grid>
+              </Grid>
+
+              <Divider sx={{ my: 3 }} />
+
+              {/* Original settlement fields */}
               <Grid container spacing={3}>
                 <Grid item xs={12} md={3}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -168,18 +274,6 @@ export default function TransactionDetailPage() {
                 </Grid>
                 <Grid item xs={12} md={3}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                    Prefund deducted
-                  </Typography>
-                  <Typography>
-                    <MoneyDisplay
-                      amount={data.prefundDeductedUsd ?? '0'}
-                      currency="USD"
-                      showRawTooltip
-                    />
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                     Booked settlement
                   </Typography>
                   <Typography>
@@ -189,13 +283,6 @@ export default function TransactionDetailPage() {
                       showRawTooltip
                     />
                   </Typography>
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                    Rounding mode
-                  </Typography>
-                  <Typography>{data.settlementRoundingMode ?? '—'}</Typography>
                 </Grid>
                 <Grid item xs={12} md={3}>
                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -210,9 +297,41 @@ export default function TransactionDetailPage() {
                     />
                   </Typography>
                 </Grid>
+
+                <Grid item xs={12} md={3}>
+                  <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    Rounding mode
+                  </Typography>
+                  <Typography>{data.settlementRoundingMode ?? '—'}</Typography>
+                </Grid>
               </Grid>
             </CardContent>
           </Card>
+
+          {/* UC-10-03: Status history timeline */}
+          {statusHistory && statusHistory.length > 0 && (
+            <Card>
+              <CardContent>
+                <Typography variant="h3" sx={{ mb: 2 }}>
+                  Status history
+                </Typography>
+                <Stepper orientation="vertical" data-testid="status-history-stepper">
+                  {statusHistory.map((entry, idx) => (
+                    <Step key={`${entry.status}-${idx}`} active completed={idx < statusHistory.length - 1}>
+                      <StepLabel>
+                        <StatusChip status={entry.status} />
+                      </StepLabel>
+                      <StepContent>
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                          {entry.at ? new Date(entry.at).toLocaleString() : '—'}
+                        </Typography>
+                      </StepContent>
+                    </Step>
+                  ))}
+                </Stepper>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </Stack>

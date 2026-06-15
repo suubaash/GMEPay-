@@ -151,16 +151,28 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
     }
 
     /**
-     * CPM prepare — not yet implemented for sim-scheme (no CPM token issuance endpoint needed
-     * for the current increment). Returns a sentinel token so the interface compiles.
+     * CPM prepare — issues a CPM token via sim-scheme {@code POST /cpm/token}.
      *
-     * <p>TODO: implement when CPM token issuance is added to sim-scheme.</p>
+     * <p>The token ID (cpmToken) is stored in {@link PrepareToken#tokenId()} so that
+     * {@link #authoriseCpm} can pass it as the {@code cpmToken} parameter to authorize.</p>
      */
     @Override
     public PrepareToken prepareCPM(MerchantIdentifier merchantIdentifier) {
-        // TODO: ZeroPay CPM - call sim-scheme /cpm/token endpoint
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay CPM - prepareCPM not yet implemented for sim-scheme");
+        ZeroPaySchemeApiClient.CpmTokenResponse tokenResp = schemeApiClient.fetchCpmToken(
+                merchantIdentifier.merchantId(),
+                "WALLET"  // funding source placeholder for the sim
+        );
+        Instant expiresAt;
+        try {
+            expiresAt = Instant.parse(tokenResp.expiresAt());
+        } catch (Exception ignored) {
+            expiresAt = Instant.now().plusSeconds(300);
+        }
+        return new PrepareToken(
+                tokenResp.cpmToken(),       // tokenId — passed to authoriseCpm as qrCodeId
+                merchantIdentifier.merchantId(),
+                expiresAt
+        );
     }
 
     /**
@@ -236,7 +248,9 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
         return new MpmSubmitResponse(
                 commitResp.schemeTxnRef(),
                 "00",
-                "CAPTURED"
+                "CAPTURED",
+                authResp.authId(),
+                commitResp.committedAt()
         );
     }
 
@@ -256,11 +270,27 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
         );
     }
 
+    /**
+     * Cancels/refunds a previously committed payment via sim-scheme
+     * {@code POST /payments/{authId}/refund}.
+     *
+     * <p>The {@code authId} parameter is the authorise-level authId stored in
+     * {@code SubmitPaymentResponse.schemeApprovalCode} by the MPM / CPM submit path.
+     * The caller (ZeroPaySchemeController) passes {@code request.schemeTxnRef} which
+     * has been populated with the authId in our /cancel contract (see controller).</p>
+     *
+     * @param authId  the authorise-level authId (NOT the commit-level schemeTxnRef)
+     * @return cancel result with refund ID
+     */
     @Override
-    public CancelResult cancelPayment(String gmeTxnId) {
-        // TODO: ZeroPay Phase 2 - map gmeTxnId to authId and call sim-scheme refund
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - cancelPayment");
+    public CancelResult cancelPayment(String authId) {
+        ZeroPaySchemeApiClient.RefundResponse refundResp =
+                schemeApiClient.refund(authId, null);
+        return new CancelResult(
+                "REFUNDED".equals(refundResp.status()),
+                refundResp.status(),
+                refundResp.refundId()
+        );
     }
 
     @Override

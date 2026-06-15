@@ -14,27 +14,42 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * REST adapter that loads a previously issued rate quote from the rate-fx service
- * via {@code POST /v1/rates}.
+ * REST adapter for rate lookups.
  *
- * <p>Base URL is read from {@code gmepay.rate-fx.base-url} (default
- * {@code http://rate-fx:8080}).
+ * <ul>
+ *   <li>{@link #loadQuote} — {@code POST /v1/rates} against rate-fx service
+ *       ({@code gmepay.rate-fx.base-url}, default {@code http://rate-fx:8080}).
+ *   <li>{@link #fetchLiveRate} — {@code GET /v1/rates?base=&quote=} against
+ *       sim-rate-provider ({@code gmepay.sim-rate-provider.base-url},
+ *       default {@code http://localhost:9101}).
+ * </ul>
  */
 @Component
 @Primary
 public class RestRateClient implements RateClient {
 
     private final RestClient restClient;
+    private final RestClient simRateClient;
 
     @Autowired
     public RestRateClient(
             RestClient.Builder builder,
-            @Value("${gmepay.rate-fx.base-url:http://rate-fx:8080}") String baseUrl) {
+            @Value("${gmepay.rate-fx.base-url:http://rate-fx:8080}") String baseUrl,
+            @Value("${gmepay.sim-rate-provider.base-url:http://localhost:9101}") String simRateBaseUrl) {
         this.restClient = builder.baseUrl(baseUrl).build();
+        this.simRateClient = builder.clone().baseUrl(simRateBaseUrl).build();
     }
 
+    /** Test constructor — both clients pre-built. */
+    RestRateClient(RestClient restClient, RestClient simRateClient) {
+        this.restClient = restClient;
+        this.simRateClient = simRateClient;
+    }
+
+    /** Legacy test constructor — only quote-lookup client; live-rate will NPE. */
     RestRateClient(RestClient restClient) {
         this.restClient = restClient;
+        this.simRateClient = restClient; // fallback for legacy tests
     }
 
     @Override
@@ -63,8 +78,48 @@ public class RestRateClient implements RateClient {
         }
     }
 
+    @Override
+    public LiveRate fetchLiveRate(String base, String quote) {
+        try {
+            LiveRateResponse body = simRateClient.get()
+                    .uri("/v1/rates?base={base}&quote={quote}", base, quote)
+                    .retrieve()
+                    .body(LiveRateResponse.class);
+
+            if (body == null) {
+                throw new PaymentException(
+                        "sim-rate-provider returned empty body for " + base + "/" + quote);
+            }
+            return body.toView();
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "sim-rate-provider GET /v1/rates failed for " + base + "/" + quote + ": "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "sim-rate-provider GET /v1/rates failed for " + base + "/" + quote + ": "
+                            + ex.getMessage(), ex);
+        }
+    }
+
     /** Wire format for the quote-lookup request body. */
     record QuoteLookupRequest(String quoteId, long partnerId) {}
+
+    /** Wire format for sim-rate-provider response: {base, quote, rate, asOf, source}. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record LiveRateResponse(
+            String base,
+            String quote,
+            BigDecimal rate,
+            Instant asOf,
+            String source
+    ) {
+        LiveRate toView() {
+            return new LiveRate(base, quote, rate, asOf != null ? asOf : Instant.now(), source);
+        }
+    }
 
     /** Wire format for the quote-lookup response (mirrors {@link RateQuoteView}). */
     @JsonIgnoreProperties(ignoreUnknown = true)

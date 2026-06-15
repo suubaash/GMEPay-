@@ -154,6 +154,68 @@ public class ZeroPaySchemeApiClient {
     }
 
     // -------------------------------------------------------------------------
+    // CPM token issuance
+    // -------------------------------------------------------------------------
+
+    /**
+     * POST /cpm/token — issues a CPM token for the given customer and funding source.
+     *
+     * @param customerId  the wallet customer ID
+     * @param fundingRef  the funding source reference (e.g. "WALLET")
+     * @return parsed {@link CpmTokenResponse}
+     */
+    public CpmTokenResponse fetchCpmToken(String customerId, String fundingRef) {
+        try {
+            CpmTokenResponse resp = restClient.post()
+                    .uri("/cpm/token")
+                    .body(new CpmTokenRequest(customerId, fundingRef))
+                    .retrieve()
+                    .body(CpmTokenResponse.class);
+            if (resp == null) {
+                throw new ApiException(ErrorCode.SCHEME_UNAVAILABLE,
+                        "sim-scheme returned empty CPM token response");
+            }
+            return resp;
+        } catch (RestClientResponseException ex) {
+            throw mapError(ex, "cpm/token");
+        } catch (ResourceAccessException ex) {
+            throw new ApiException(ErrorCode.SCHEME_UNAVAILABLE,
+                    "sim-scheme unreachable during cpm/token: " + ex.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Refund
+    // -------------------------------------------------------------------------
+
+    /**
+     * POST /payments/{authId}/refund — refunds a previously committed payment.
+     *
+     * @param authId  the authId from the original authorize call
+     * @param amount  the amount to refund (null for full refund, but sim-scheme requires it)
+     * @return parsed {@link RefundResponse}
+     */
+    public RefundResponse refund(String authId, BigDecimal amount) {
+        try {
+            RefundResponse resp = restClient.post()
+                    .uri("/payments/{authId}/refund", authId)
+                    .body(new RefundRequest(amount))
+                    .retrieve()
+                    .body(RefundResponse.class);
+            if (resp == null) {
+                throw new ApiException(ErrorCode.SCHEME_UNAVAILABLE,
+                        "sim-scheme returned empty refund response");
+            }
+            return resp;
+        } catch (RestClientResponseException ex) {
+            throw mapError(ex, "refund");
+        } catch (ResourceAccessException ex) {
+            throw new ApiException(ErrorCode.SCHEME_UNAVAILABLE,
+                    "sim-scheme unreachable during refund: " + ex.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Error mapping
     // -------------------------------------------------------------------------
 
@@ -220,5 +282,22 @@ public class ZeroPaySchemeApiClient {
             String mode,
             String amount,   // null for static; plain string for dynamic
             String currency
+    ) {}
+
+    record CpmTokenRequest(String customerId, String fundingRef) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CpmTokenResponse(
+            String mode,
+            String cpmToken,
+            String expiresAt
+    ) {}
+
+    record RefundRequest(BigDecimal amount) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record RefundResponse(
+            String refundId,
+            String status
     ) {}
 }

@@ -81,7 +81,11 @@ public class MongoBackedMerchantRepository implements MerchantRepository {
                 doc.getMerchantType(),
                 doc.getFeeType(),
                 doc.getStatus(),
-                doc.isActive());
+                doc.isActive(),
+                doc.getPayoutCurrency(),
+                doc.getSchemeId(),
+                doc.getCity(),
+                doc.getMcc());
     }
 
     /** Maps a domain {@link Merchant} to its persistence document (id = QR code). */
@@ -94,6 +98,10 @@ public class MongoBackedMerchantRepository implements MerchantRepository {
                 merchant.merchantType(),
                 merchant.feeType(),
                 merchant.status(),
-                merchant.active());
+                merchant.active(),
+                merchant.payoutCurrency(),
+                merchant.schemeId(),
+                merchant.city(),
+                merchant.mcc());
     }
 }

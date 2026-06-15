@@ -683,6 +683,47 @@ export const adminApi = {
       { method: 'PATCH', body: JSON.stringify(body ?? {}) },
     ),
 
+  // ---------- Settlement exceptions (UC-04-03, BS-04) ----------
+  /**
+   * GET /v1/settlement/exceptions?batchId=&exceptionStatus=&matchStatus=
+   * -> ReconExceptionResponse[]
+   *
+   * ReconExceptionResponse:
+   *   { id, batchId, merchantId,
+   *     gmeAmount (BigDecimal string), schemeAmount (BigDecimal|null),
+   *     discrepancyAmount (BigDecimal string),
+   *     matchStatus: DISCREPANCY|MISSING_SCHEME|MISSING_INTERNAL,
+   *     exceptionStatus: OPEN|RESOLVED|RE_RUN,
+   *     operatorId:string|null, resolutionNote:string|null,
+   *     resolutionAction:string|null, resolvedAt:ISO|null, createdAt:ISO }
+   *
+   * Money fields are BigDecimal serialised as strings. Never Number()-cast.
+   */
+  listReconExceptions: (filters) =>
+    request(`/v1/settlement/exceptions${qs(filters)}`),
+
+  /**
+   * POST /v1/settlement/exceptions/{id}/resolve
+   * body: { operatorId, note, resolutionAction }
+   * -> ReconExceptionResponse (updated row with exceptionStatus=RESOLVED)
+   */
+  resolveReconException: (id, body) =>
+    request(`/v1/settlement/exceptions/${encodeURIComponent(id)}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * POST /v1/settlement/exceptions/{id}/re-run
+   * body: { operatorId }
+   * -> ReconExceptionResponse (updated row with exceptionStatus=RE_RUN)
+   */
+  reRunReconException: (id, body) =>
+    request(`/v1/settlement/exceptions/${encodeURIComponent(id)}/re-run`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // ---------- System health ----------
   /**
    * GET /v1/admin/system/health -> SystemHealth

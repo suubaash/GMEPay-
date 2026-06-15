@@ -200,6 +200,105 @@ public class PaymentOrchestrator {
     }
 
     /**
+     * Executes a CPM (Consumer-Presented Mode) payment end-to-end.
+     *
+     * <p>CPM flow: the customer presents a QR code on their device;
+     * the merchant terminal scans it and passes the token here for authorisation.
+     *
+     * @param cmd         the CPM payment command from the REST layer
+     * @param partnerType whether the partner is OVERSEAS (prefunding) or LOCAL
+     * @return the orchestration result
+     */
+    public PaymentResult executeCpm(CpmPaymentCommand cmd, PartnerType partnerType) {
+
+        // Step 1: Create PENDING transaction record
+        TransactionClient.CreateResult txn = transactionClient.createPending(
+                new TransactionClient.CreateRequest(
+                        cmd.partnerId(),
+                        cmd.partnerTxnRef(),
+                        cmd.schemeId(),
+                        "CPM",
+                        PaymentMode.CPM.name(),
+                        cmd.payoutAmount(),
+                        cmd.payoutCurrency(),
+                        cmd.collectionAmount(),
+                        cmd.collectionCurrency(),
+                        cmd.merchantId(),
+                        null  // no quoteId for CPM
+                )
+        );
+
+        // Step 2: Prefunding deduction for OVERSEAS partners
+        PrefundingClient.DeductionResult deduction = null;
+        if (partnerType == PartnerType.OVERSEAS) {
+            deduction = prefundingClient.deduct(
+                    cmd.partnerId(), txn.txnRef(), cmd.collectionUsd());
+        }
+
+        // Step 3: Submit CPM to scheme (authorize + commit in one scheme-adapter call)
+        SchemeClient.CpmSubmitResponse schemeResponse;
+        try {
+            schemeResponse = schemeClient.submitCpm(
+                    new SchemeClient.CpmSubmitRequest(
+                            txn.txnRef(),
+                            cmd.cpmToken(),
+                            cmd.payoutAmount(),
+                            cmd.payoutCurrency(),
+                            cmd.schemeId()
+                    )
+            );
+        } catch (SchemeDeclinedException ex) {
+            if (partnerType == PartnerType.OVERSEAS) {
+                prefundingClient.reverse(cmd.partnerId(), txn.txnRef());
+            }
+            transactionClient.commitStatus(txn.txnRef(),
+                    new TransactionClient.StatusPatch(
+                            PaymentStatus.FAILED, null, null, null, null));
+            throw ex;
+        } catch (SchemeTimeoutException ex) {
+            transactionClient.commitStatus(txn.txnRef(),
+                    new TransactionClient.StatusPatch(
+                            PaymentStatus.UNCERTAIN, null, null,
+                            deduction != null ? deduction.deductedUsd() : null, null));
+            throw ex;
+        }
+
+        // Step 4: Commit APPROVED
+        BigDecimal deductedUsd = deduction != null ? deduction.deductedUsd() : null;
+        transactionClient.commitStatus(txn.txnRef(),
+                new TransactionClient.StatusPatch(
+                        PaymentStatus.APPROVED,
+                        schemeResponse.schemeTxnRef(),
+                        schemeResponse.schemeApprovalCode(),
+                        deductedUsd,
+                        schemeResponse.approvedAt()
+                )
+        );
+
+        // Step 5: Post rounding residual (non-blocking) — CPM does not have FX rounding
+        // by design; skip unless a settlement booking was made.
+
+        return new PaymentResult(
+                txn.paymentId(),
+                PaymentStatus.APPROVED,
+                schemeResponse.schemeTxnRef(),
+                cmd.merchantId(),   // merchantName not available without QR decode
+                cmd.merchantId(),
+                cmd.payoutAmount(),
+                cmd.payoutCurrency(),
+                null,               // no offer rate for CPM
+                cmd.collectionAmount(),
+                cmd.collectionCurrency(),
+                null,               // no service charge at orchestrator level
+                cmd.collectionCurrency(),
+                deductedUsd,
+                cmd.partnerTxnRef(),
+                txn.createdAt(),
+                schemeResponse.approvedAt()
+        );
+    }
+
+    /**
      * Cancels an approved same-day payment.
      *
      * @param paymentId     the GMEPay+ payment ID
@@ -274,6 +373,33 @@ public class PaymentOrchestrator {
             String partnerTxnRef,
             Instant createdAt,
             Instant approvedAt
+    ) {}
+
+    /**
+     * Command object for a CPM payment execution.
+     *
+     * @param partnerId        authenticated caller
+     * @param partnerTxnRef    partner's own transaction reference (must be unique)
+     * @param schemeId         requested scheme (e.g. "zeropay")
+     * @param cpmToken         the CPM token (issued by the scheme, presented by the customer)
+     * @param merchantId       the merchant identifier (from QR decode or partner-provided)
+     * @param payoutAmount     the amount to pay out (denomination in payoutCurrency)
+     * @param payoutCurrency   ISO currency code (e.g. "KRW")
+     * @param collectionAmount the amount charged to the partner (denomination in collectionCurrency)
+     * @param collectionCurrency ISO currency code for the collection
+     * @param collectionUsd    USD equivalent of the collection amount (for prefunding)
+     */
+    public record CpmPaymentCommand(
+            long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String cpmToken,
+            String merchantId,
+            BigDecimal payoutAmount,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            BigDecimal collectionUsd
     ) {}
 
     /** Outcome of a successful cancellation. */

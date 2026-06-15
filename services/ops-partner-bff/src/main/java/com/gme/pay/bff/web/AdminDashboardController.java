@@ -350,7 +350,7 @@ public class AdminDashboardController {
         Instant approvedAt = summary.committedAt() == null
                 ? null
                 : summary.committedAt().minus(2, ChronoUnit.SECONDS);
-        return new TransactionDetail(
+        return TransactionDetail.of(
                 summary,
                 "SCH-" + summary.txnId(),
                 "AP-" + summary.txnId(),

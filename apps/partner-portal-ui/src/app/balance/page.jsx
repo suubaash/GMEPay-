@@ -8,6 +8,9 @@ import {
   Chip,
   Divider,
   Grid,
+  List,
+  ListItem,
+  ListItemText,
   Stack,
   Typography
 } from '@mui/material';
@@ -20,14 +23,28 @@ import LoadingSkeleton from '@/components/LoadingSkeleton';
 import ErrorAlert from '@/components/ErrorAlert';
 
 /**
- * Balance page.
+ * Balance page — UC-10-01.
  *
  * Wire shape (BalanceView):
- *   { partnerId, currency, balance, lowBalanceThreshold }
+ *   {
+ *     partnerCode: string,
+ *     currency:    string,
+ *     balance:     string,          // BigDecimal-as-string
+ *     threshold:   string,          // BigDecimal-as-string
+ *     pctOfThreshold: string|null,  // BigDecimal-as-string; balance/threshold*100, scale-2
+ *     recentDeductions: Array<{
+ *       amountUsd: string,          // BigDecimal-as-string, USD, scale-8
+ *       at:        string,          // ISO instant (display in KST)
+ *       txnRef:    string
+ *     }>|null                       // newest-first; null until prefunding wires it
+ *   }
  *
- * `balance` and `lowBalanceThreshold` are BigDecimal-as-string in major units
- * (docs/MONEY_CONVENTION.md). There is NO `lastUpdatedAt` field — the UI
- * omits a "last updated" row to avoid showing a hardcoded fake timestamp.
+ * Legacy BFF wire also carries { partnerId, lowBalanceThreshold } for backward compat;
+ * this page accepts both shapes defensively.
+ *
+ * Money MUST NOT be cast to JS Number. `balance` and `threshold` are decimal
+ * strings — use Number() only for the isHealthy comparisons (display only, not
+ * for financial arithmetic).
  */
 
 // Lottie is browser-only — import lazily.
@@ -71,6 +88,16 @@ const HEALTHY_PULSE_LOTTIE = {
   markers: []
 };
 
+/**
+ * Resolve the threshold from either BalanceView (UC-10) or the legacy BFF
+ * shape (lowBalanceThreshold). Returns null if absent.
+ */
+function resolveThreshold(data) {
+  if (!data) return null;
+  // UC-10-01 BalanceView uses `threshold`; legacy BFF used `lowBalanceThreshold`
+  return data.threshold ?? data.lowBalanceThreshold ?? null;
+}
+
 function isHealthy(balanceAmount, thresholdAmount) {
   const b = Number(balanceAmount);
   const t = Number(thresholdAmount);
@@ -83,6 +110,27 @@ function isCelebratory(balanceAmount, thresholdAmount) {
   const t = Number(thresholdAmount);
   if (!Number.isFinite(b) || !Number.isFinite(t)) return false;
   return b > t * 3;
+}
+
+/**
+ * Display a UTC ISO instant in KST (Asia/Seoul, UTC+9).
+ * Falls back to browser locale if the Intl API is unavailable.
+ */
+function toKST(isoInstant) {
+  if (!isoInstant) return '—';
+  try {
+    return new Date(isoInstant).toLocaleString('en-GB', {
+      timeZone: 'Asia/Seoul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }) + ' KST';
+  } catch {
+    return new Date(isoInstant).toLocaleString();
+  }
 }
 
 export default function BalancePage() {
@@ -108,7 +156,18 @@ export default function BalancePage() {
 
   const currency = data?.currency ?? '';
   const balanceAmount = data?.balance ?? '0';
-  const thresholdAmount = data?.lowBalanceThreshold ?? '0';
+  const thresholdAmount = resolveThreshold(data) ?? '0';
+  const pctOfThreshold = data?.pctOfThreshold ?? null;
+  const recentDeductions = Array.isArray(data?.recentDeductions) ? data.recentDeductions : null;
+
+  // Status chip: Healthy / Low / Unknown
+  function balanceStatusChip(balAmt, thr) {
+    const hasThreshold = thr && thr !== '0';
+    if (!hasThreshold) return <Chip label="No threshold set" color="default" />;
+    if (isCelebratory(balAmt, thr)) return <Chip label="Healthy" color="success" />;
+    if (isHealthy(balAmt, thr)) return <Chip label="Healthy" color="success" />;
+    return <Chip label="Below threshold" color="warning" />;
+  }
 
   return (
     <Stack spacing={3}>
@@ -155,23 +214,29 @@ export default function BalancePage() {
                         <MoneyDisplay amount={thresholdAmount} currency={currency} />
                       </Typography>
                     </Box>
+                    {pctOfThreshold != null && (
+                      <Box>
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                          % of threshold
+                        </Typography>
+                        <Typography variant="h4" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {pctOfThreshold}%
+                        </Typography>
+                      </Box>
+                    )}
                     <Box>
                       <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                         Status
                       </Typography>
-                      <Box sx={{ mt: 0.5 }}>
-                        {isHealthy(balanceAmount, thresholdAmount) ? (
-                          <Chip label="Healthy" color="success" />
-                        ) : (
-                          <Chip label="Below threshold" color="warning" />
-                        )}
+                      <Box sx={{ mt: 0.5 }} data-testid="balance-status-chip">
+                        {balanceStatusChip(balanceAmount, thresholdAmount)}
                       </Box>
                     </Box>
                     <Box>
                       <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                         Partner
                       </Typography>
-                      <Typography variant="body1">{data.partnerId ?? '—'}</Typography>
+                      <Typography variant="body1">{data.partnerCode ?? data.partnerId ?? '—'}</Typography>
                     </Box>
                   </Stack>
                 </Stack>
@@ -198,6 +263,55 @@ export default function BalancePage() {
                 )}
               </Grid>
             </Grid>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* UC-10-01: Recent deduction history */}
+      {recentDeductions && recentDeductions.length > 0 && (
+        <Card>
+          <CardContent>
+            <Typography variant="h3" sx={{ mb: 1 }}>
+              Recent deductions
+            </Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+              Most recent prefunding deductions, newest first. Times are in KST.
+            </Typography>
+            <List dense data-testid="deduction-history-list">
+              {recentDeductions.map((d, idx) => (
+                <React.Fragment key={`${d.txnRef}-${idx}`}>
+                  {idx > 0 && <Divider component="li" />}
+                  <ListItem alignItems="flex-start">
+                    <ListItemText
+                      primary={
+                        <Stack direction="row" spacing={2} alignItems="center">
+                          <MoneyDisplay amount={d.amountUsd} currency="USD" showRawTooltip />
+                          <Typography
+                            component="span"
+                            variant="caption"
+                            sx={{ fontFamily: 'monospace', color: 'text.secondary' }}
+                          >
+                            {d.txnRef}
+                          </Typography>
+                        </Stack>
+                      }
+                      secondary={toKST(d.at)}
+                    />
+                  </ListItem>
+                </React.Fragment>
+              ))}
+            </List>
+          </CardContent>
+        </Card>
+      )}
+
+      {recentDeductions && recentDeductions.length === 0 && (
+        <Card>
+          <CardContent>
+            <Typography variant="h3" sx={{ mb: 1 }}>Recent deductions</Typography>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              No deductions recorded yet.
+            </Typography>
           </CardContent>
         </Card>
       )}

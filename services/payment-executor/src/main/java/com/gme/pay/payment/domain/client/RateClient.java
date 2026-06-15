@@ -19,6 +19,36 @@ public interface RateClient {
      */
     RateQuoteView loadQuote(String quoteId, long partnerId);
 
+    /**
+     * Fetches the current mid-market FX rate from the rate provider simulator.
+     *
+     * <p>Used by the SENDMN overseas path which computes the FX margin inline
+     * rather than requiring a pre-issued quote. Backed by
+     * {@code GET /v1/rates?base={base}&quote={quote}} on sim-rate-provider (:9101).
+     *
+     * <p>Default implementation throws {@link UnsupportedOperationException} — only used by
+     * implementations that support the SENDMN path. Existing {@code loadQuote}-only lambdas
+     * in tests remain valid.
+     *
+     * @param base  base currency (e.g. "KRW")
+     * @param quote quote currency (e.g. "MNT")
+     * @return the live rate view with the mid-market rate
+     * @throws com.gme.pay.payment.domain.PaymentException if the rate provider is unreachable
+     */
+    default LiveRate fetchLiveRate(String base, String quote) {
+        throw new UnsupportedOperationException(
+                "fetchLiveRate not implemented in this RateClient — use RestRateClient");
+    }
+
+    /** Mid-market rate returned by sim-rate-provider. */
+    record LiveRate(
+            String base,
+            String quote,
+            BigDecimal rate,
+            Instant asOf,
+            String source
+    ) {}
+
     /** Immutable view of a rate quote returned by rate-fx. */
     record RateQuoteView(
             String quoteId,

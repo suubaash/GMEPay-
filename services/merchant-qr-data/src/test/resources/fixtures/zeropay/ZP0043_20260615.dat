@@ -1,0 +1,8 @@
+# ZP0043 — QR code registration / deactivation (fixture)
+# Layout: record_type|qr_code|merchant_id|status
+# record_type: QR=register, QD=deactivate
+# TODO(spec): layout is an approximation; validate against official ZeroPay spec
+QR|QR00000000000000010A|M0000000010|ACTIVE
+QR|QR00000000000000011B|M0000000011|ACTIVE
+QD|QR00000000000000013D|M0000000013|DEACTIVATED
+QR|QR00000000000000014E|M0000000014|ACTIVE

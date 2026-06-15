@@ -27,6 +27,7 @@ import rulesReducer from './rulesSlice';
 import partnerSchemesReducer from './partnerSchemesSlice';
 import partnerLifecycleReducer from './partnerLifecycleSlice';
 import lifecycleReducer from './lifecycleSlice';
+import reconExceptionsReducer from './reconExceptionsSlice';
 
 /**
  * Redux Toolkit root store for the admin-ui.
@@ -52,6 +53,7 @@ import lifecycleReducer from './lifecycleSlice';
  *  - rules             : pricing rules read/write path (Slice 6, agent 6A.2).
  *  - partnerSchemes    : scheme enrollments + corridor definitions (Slice 7).
  *  - lifecycle         : activation preconditions, propose/execute, step-8 patches (Slice 8).
+ *  - reconExceptions   : settlement recon exceptions ops queue (UC-04-03, BS-04).
  *  - systemHealth      : live service status (BFF aggregator, C4).
  *  - ui           : chrome-only state (palette mode, etc.).
  */
@@ -80,6 +82,7 @@ export const store = configureStore({
     partnerSchemes: partnerSchemesReducer,
     partnerLifecycle: partnerLifecycleReducer,
     lifecycle: lifecycleReducer,
+    reconExceptions: reconExceptionsReducer,
     systemHealth: systemHealthReducer,
     ui: uiReducer,
   },

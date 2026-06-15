@@ -1,12 +1,16 @@
 package com.gme.pay.payment.domain;
 
 import com.gme.pay.payment.domain.client.QrClient;
+import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
+import com.gme.pay.payment.domain.client.TransactionClient;
 import com.gme.pay.payment.persistence.ExecutionAttemptEntity;
 import com.gme.pay.payment.persistence.ExecutionAttemptRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -50,25 +54,31 @@ public class GmeremitPaymentService {
     private final SchemeClient schemeClient;
     private final ExecutionAttemptRepository attemptRepository;
     private final boolean lenientMerchantValidation;
+    @Nullable private final TransactionClient transactionClient;
+    @Nullable private final RevenueLedgerClient revenueLedgerClient;
 
     /**
-     * Constructor injection.
-     * Spring 6 requirement: when there are 2+ constructors the @Value-bearing one must be
-     * annotated with {@code @Autowired}.
+     * Production constructor.
+     * Spring 6 rule: when there are 2+ constructors the @Autowired annotation must be on
+     * the production (@Value) constructor.
      */
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public GmeremitPaymentService(
             QrClient qrClient,
             SchemeClient schemeClient,
             ExecutionAttemptRepository attemptRepository,
-            @Value("${gmepay.payment.merchant-validation:strict}") String merchantValidation) {
+            @Value("${gmepay.payment.merchant-validation:strict}") String merchantValidation,
+            @Nullable TransactionClient transactionClient,
+            @Nullable RevenueLedgerClient revenueLedgerClient) {
         this.qrClient = qrClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.lenientMerchantValidation = "lenient".equalsIgnoreCase(merchantValidation);
+        this.transactionClient = transactionClient;
+        this.revenueLedgerClient = revenueLedgerClient;
     }
 
-    /** Test-only constructor (skips @Value). */
+    /** Test-only constructor (skips @Value; no transaction/revenue clients). */
     GmeremitPaymentService(QrClient qrClient,
                            SchemeClient schemeClient,
                            ExecutionAttemptRepository attemptRepository,
@@ -77,6 +87,23 @@ public class GmeremitPaymentService {
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.lenientMerchantValidation = lenientMerchantValidation;
+        this.transactionClient = null;
+        this.revenueLedgerClient = null;
+    }
+
+    /** Test constructor with explicit transaction/revenue clients. */
+    GmeremitPaymentService(QrClient qrClient,
+                           SchemeClient schemeClient,
+                           ExecutionAttemptRepository attemptRepository,
+                           boolean lenientMerchantValidation,
+                           @Nullable TransactionClient transactionClient,
+                           @Nullable RevenueLedgerClient revenueLedgerClient) {
+        this.qrClient = qrClient;
+        this.schemeClient = schemeClient;
+        this.attemptRepository = attemptRepository;
+        this.lenientMerchantValidation = lenientMerchantValidation;
+        this.transactionClient = transactionClient;
+        this.revenueLedgerClient = revenueLedgerClient;
     }
 
     /**
@@ -132,10 +159,43 @@ public class GmeremitPaymentService {
         // Step 4: Compute fee
         BigDecimal chargedKrw = amountKrw.add(FEE_KRW);
 
-        // Step 5: Persist execution attempt (H2 in sandbox, Postgres in production)
+        // Step 5: Record transaction in transaction-mgmt (resilient: log + continue on failure)
+        String txnRef = partnerTxnRef; // use partnerTxnRef as our txnRef for domestic
+        if (transactionClient != null) {
+            try {
+                TransactionClient.CreateResult created = transactionClient.createPending(
+                        new TransactionClient.CreateRequest(
+                                0L, partnerTxnRef, SCHEME_ID, "DOMESTIC", "MPM",
+                                amountKrw, "KRW", amountKrw, "KRW",
+                                merchant.merchantId(), null));
+                txnRef = created.txnRef();
+                transactionClient.commitStatus(txnRef,
+                        new TransactionClient.StatusPatch(
+                                PaymentStatus.APPROVED,
+                                schemeResp.schemeTxnRef(),
+                                schemeResp.schemeApprovalCode(),
+                                null,
+                                schemeResp.approvedAt() != null ? schemeResp.approvedAt() : Instant.now()));
+            } catch (RuntimeException ex) {
+                log.warn("transaction-mgmt unavailable for {} — continuing (sandbox): {}",
+                        partnerTxnRef, ex.getMessage());
+            }
+        }
+
+        // Step 6: Book the ₩500 service fee as revenue (non-blocking)
+        if (revenueLedgerClient != null) {
+            try {
+                revenueLedgerClient.postRoundingResidual(txnRef, FEE_KRW, "KRW");
+            } catch (RuntimeException ex) {
+                log.warn("revenue-ledger unavailable for {} — continuing (sandbox): {}",
+                        txnRef, ex.getMessage());
+            }
+        }
+
+        // Step 7: Persist execution attempt (H2 in sandbox, Postgres in production)
         persistAttempt(partnerTxnRef, merchant.merchantId(), amountKrw, PaymentStatus.APPROVED, schemeResp.schemeTxnRef());
 
-        // Step 6: Build result
+        // Step 8: Build result
         String committedAt = KST_FMT.format(
                 schemeResp.approvedAt() != null ? schemeResp.approvedAt() : Instant.now());
 
@@ -175,7 +235,8 @@ public class GmeremitPaymentService {
     /**
      * Outcome of a {@link #pay} call.
      *
-     * <p>Use the static factories {@link #approved} and {@link #declined} to construct instances.
+     * <p>Use the static factories {@link #approved}, {@link #approvedFx} and
+     * {@link #declined} to construct instances. FX fields are null for domestic payments.
      */
     public record WalletResult(
             boolean approved,
@@ -185,8 +246,13 @@ public class GmeremitPaymentService {
             BigDecimal feeKrw,
             BigDecimal chargedKrw,
             String committedAt,
-            String declineReason
+            String declineReason,
+            // FX-specific fields (null for domestic KRW→KRW payments)
+            Boolean fxApplied,
+            BigDecimal fxRate,
+            BigDecimal payAmountMnt
     ) {
+        /** Factory for domestic KRW→KRW approved results. */
         public static WalletResult approved(String schemeTxnRef,
                                             String merchantName,
                                             BigDecimal payAmountKrw,
@@ -194,12 +260,28 @@ public class GmeremitPaymentService {
                                             BigDecimal chargedKrw,
                                             String committedAt) {
             return new WalletResult(true, schemeTxnRef, merchantName,
-                    payAmountKrw, feeKrw, chargedKrw, committedAt, null);
+                    payAmountKrw, feeKrw, chargedKrw, committedAt, null,
+                    null, null, null);
+        }
+
+        /** Factory for FX (overseas) approved results. */
+        public static WalletResult approvedFx(String schemeTxnRef,
+                                              String merchantName,
+                                              BigDecimal payAmountKrw,
+                                              BigDecimal feeKrw,
+                                              BigDecimal chargedKrw,
+                                              String committedAt,
+                                              BigDecimal fxRate,
+                                              BigDecimal payAmountMnt) {
+            return new WalletResult(true, schemeTxnRef, merchantName,
+                    payAmountKrw, feeKrw, chargedKrw, committedAt, null,
+                    true, fxRate, payAmountMnt);
         }
 
         public static WalletResult declined(String merchantName, String reason) {
             return new WalletResult(false, null, merchantName,
-                    null, null, null, null, reason);
+                    null, null, null, null, reason,
+                    null, null, null);
         }
     }
 }

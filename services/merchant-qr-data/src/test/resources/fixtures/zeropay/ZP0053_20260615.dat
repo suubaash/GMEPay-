@@ -1,0 +1,10 @@
+# ZP0053 — Full QR code list (periodic reconciliation fixture)
+# Layout: qr_code|merchant_id|status
+# No record_type column — all rows are authoritative QR records
+# TODO(spec): layout is an approximation; validate against official ZeroPay spec
+QR00000000000000010A|M0000000010|ACTIVE
+QR00000000000000011B|M0000000011|ACTIVE
+QR00000000000000012C|M0000000012|ACTIVE
+QR00000000000000014E|M0000000014|ACTIVE
+QR00000000000000020F|M0000000020|ACTIVE
+QR00000000000000021G|M0000000021|ACTIVE

@@ -91,7 +91,8 @@ class MerchantMongoStoreIntegrationTest {
     @Test
     void upsertThenGet_servedFromMongo() {
         mongoBackedMerchantRepository.upsert(new Merchant(
-                "M0000000IT1", QR, "Container Mart", "RETAIL", "DOMESTIC", "ACTIVE", true));
+                "M0000000IT1", QR, "Container Mart", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5411"));
 
         ResponseEntity<MerchantResponse> response =
                 restTemplate.getForEntity("/v1/merchants/" + QR, MerchantResponse.class);
@@ -101,19 +102,23 @@ class MerchantMongoStoreIntegrationTest {
         assertNotNull(body);
         assertEquals("M0000000IT1", body.merchantId());
         assertEquals(QR, body.qrCodeId());
-        assertEquals("Container Mart", body.name());
+        assertEquals("Container Mart", body.merchantName());
         assertEquals("RETAIL", body.merchantType());
         assertEquals("DOMESTIC", body.feeType());
         assertEquals("ACTIVE", body.status());
         assertTrue(body.active());
+        assertEquals("KRW", body.payoutCurrency());
+        assertEquals("ZEROPAY", body.schemeId());
     }
 
     @Test
     void upsertSameQrTwice_isIdempotent_andGetReflectsLatest() {
         mongoBackedMerchantRepository.upsert(new Merchant(
-                "M0000000IT1", QR, "Old Name", "RETAIL", "DOMESTIC", "ACTIVE", true));
+                "M0000000IT1", QR, "Old Name", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5411"));
         mongoBackedMerchantRepository.upsert(new Merchant(
-                "M0000000IT1", QR, "New Name", "RETAIL", "CROSSBORDER", "SUSPENDED", false));
+                "M0000000IT1", QR, "New Name", "RETAIL", "CROSSBORDER", "SUSPENDED", false,
+                "USD", "ZEROPAY", "Busan", "6211"));
 
         long count = mongoTemplate.count(
                 new org.springframework.data.mongodb.core.query.Query(), MerchantDocument.class);
@@ -124,7 +129,7 @@ class MerchantMongoStoreIntegrationTest {
         assertEquals(HttpStatus.OK, response.getStatusCode());
         MerchantResponse body = response.getBody();
         assertNotNull(body);
-        assertEquals("New Name", body.name());
+        assertEquals("New Name", body.merchantName());
         assertEquals("CROSSBORDER", body.feeType());
         assertEquals("SUSPENDED", body.status());
         assertFalse(body.active());

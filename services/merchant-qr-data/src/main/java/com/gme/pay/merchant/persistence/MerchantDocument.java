@@ -45,6 +45,18 @@ public class MerchantDocument {
     /** True when the merchant is currently active for payment acceptance. */
     private boolean active;
 
+    /** ISO 4217 payout currency (e.g. {@code KRW}). Required by payment-executor RestQrClient. */
+    private String payoutCurrency;
+
+    /** Scheme identifier routing payments (e.g. {@code ZEROPAY}). Required by payment-executor RestQrClient. */
+    private String schemeId;
+
+    /** City / locality of the merchant outlet. */
+    private String city;
+
+    /** ISO 18245 Merchant Category Code (4-digit string, e.g. {@code 5411}). */
+    private String mcc;
+
     public MerchantDocument() {
         // required by Spring Data Mongo
     }
@@ -66,6 +78,26 @@ public class MerchantDocument {
         this.feeType = feeType;
         this.status = status;
         this.active = active;
+    }
+
+    public MerchantDocument(
+            String id,
+            String merchantId,
+            String qrCode,
+            String name,
+            String merchantType,
+            String feeType,
+            String status,
+            boolean active,
+            String payoutCurrency,
+            String schemeId,
+            String city,
+            String mcc) {
+        this(id, merchantId, qrCode, name, merchantType, feeType, status, active);
+        this.payoutCurrency = payoutCurrency;
+        this.schemeId = schemeId;
+        this.city = city;
+        this.mcc = mcc;
     }
 
     public String getId() {
@@ -130,5 +162,37 @@ public class MerchantDocument {
 
     public void setActive(boolean active) {
         this.active = active;
+    }
+
+    public String getPayoutCurrency() {
+        return payoutCurrency;
+    }
+
+    public void setPayoutCurrency(String payoutCurrency) {
+        this.payoutCurrency = payoutCurrency;
+    }
+
+    public String getSchemeId() {
+        return schemeId;
+    }
+
+    public void setSchemeId(String schemeId) {
+        this.schemeId = schemeId;
+    }
+
+    public String getCity() {
+        return city;
+    }
+
+    public void setCity(String city) {
+        this.city = city;
+    }
+
+    public String getMcc() {
+        return mcc;
+    }
+
+    public void setMcc(String mcc) {
+        this.mcc = mcc;
     }
 }

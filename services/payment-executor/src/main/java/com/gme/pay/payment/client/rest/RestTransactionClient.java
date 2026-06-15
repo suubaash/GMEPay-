@@ -89,7 +89,10 @@ public class RestTransactionClient implements TransactionClient {
                             patch.schemeTxnRef(),
                             patch.schemeApprovalCode(),
                             patch.prefundDeductedUsd(),
-                            patch.approvedAt()))
+                            patch.approvedAt(),
+                            patch.bookedSettlementAmount(),
+                            patch.settlementRoundingMode(),
+                            patch.roundingResidual()))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException ex) {
@@ -131,6 +134,9 @@ public class RestTransactionClient implements TransactionClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             BigDecimal prefundDeductedUsd,
-            Instant approvedAt
+            Instant approvedAt,
+            BigDecimal bookedSettlementAmount,
+            String settlementRoundingMode,
+            BigDecimal roundingResidual
     ) {}
 }

@@ -51,13 +51,13 @@ class PartnerPortalControllerTest {
 
         TransactionMgmtClient transactions = new TransactionMgmtClient() {
             private final List<TransactionSummary> txns = List.of(
-                    new TransactionSummary("T-A", PARTNER, "COMMITTED",
+                    TransactionSummary.of("T-A", PARTNER, "COMMITTED",
                             new BigDecimal("12.00"), "USD",
                             Instant.parse("2026-06-09T09:00:00Z")),
-                    new TransactionSummary("T-B", PARTNER, "COMMITTED",
+                    TransactionSummary.of("T-B", PARTNER, "COMMITTED",
                             new BigDecimal("34.00"), "USD",
                             Instant.parse("2026-06-09T10:00:00Z")),
-                    new TransactionSummary("T-C", PARTNER, "COMMITTED",
+                    TransactionSummary.of("T-C", PARTNER, "COMMITTED",
                             new BigDecimal("56.00"), "USD",
                             Instant.parse("2026-06-09T11:00:00Z")));
 
@@ -137,26 +137,31 @@ class PartnerPortalControllerTest {
     }
 
     @Test
-    @DisplayName("GET /v1/portal/{partnerId}/overview combines balance, recent count and last settlement")
+    @DisplayName("GET /v1/portal/{partnerId}/overview combines canonical balance, recent count and last settlement")
     void overview_combinesAllUpstreams() throws Exception {
         mvc.perform(get("/v1/portal/{p}/overview", PARTNER))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.partnerId").value(PARTNER))
-                .andExpect(jsonPath("$.balance.partnerId").value(PARTNER))
+                // UC-10-01: canonical BalanceView uses partnerCode (not partnerId)
+                .andExpect(jsonPath("$.balance.partnerCode").value(PARTNER))
                 .andExpect(jsonPath("$.balance.currency").value("USD"))
-                .andExpect(jsonPath("$.balance.balance").value(4321.10))
+                // balance is a decimal STRING per MONEY_CONVENTION
+                .andExpect(jsonPath("$.balance.balance").value("4321.10"))
                 .andExpect(jsonPath("$.recentTxnCount").value(3))
                 .andExpect(jsonPath("$.lastSettlementDate").value("2026-06-08"));
     }
 
     @Test
-    @DisplayName("GET /v1/portal/{partnerId}/balance returns the prefunding view")
+    @DisplayName("GET /v1/portal/{partnerId}/balance returns the canonical BalanceView (UC-10-01)")
     void balance_returnsPrefundingView() throws Exception {
         mvc.perform(get("/v1/portal/{p}/balance", PARTNER))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.partnerId").value(PARTNER))
-                .andExpect(jsonPath("$.lowBalanceThreshold").value(1000.00));
+                // UC-10-01: canonical BalanceView fields
+                .andExpect(jsonPath("$.partnerCode").value(PARTNER))
+                .andExpect(jsonPath("$.currency").value("USD"))
+                // threshold is a decimal STRING per MONEY_CONVENTION
+                .andExpect(jsonPath("$.threshold").value("1000.00"));
     }
 
     @Test

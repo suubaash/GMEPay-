@@ -204,4 +204,79 @@ class ZeroPaySchemeApiClientTest {
         assertEquals(ErrorCode.MERCHANT_NOT_FOUND, ex.errorCode());
         server.verify();
     }
+
+    // -----------------------------------------------------------------------
+    // fetchCpmToken — happy path
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("fetchCpmToken: returns parsed CpmTokenResponse with cpmToken")
+    void fetchCpmToken_happyPath() {
+        server.expect(requestTo(BASE + "/cpm/token"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(
+                        "{\"mode\":\"CPM\","
+                        + "\"cpmToken\":\"CPM-TOKEN-AABB1122\","
+                        + "\"expiresAt\":\"2026-06-15T14:05:00+09:00\"}",
+                        MediaType.APPLICATION_JSON));
+
+        ZeroPaySchemeApiClient.CpmTokenResponse resp = client.fetchCpmToken("M001", "WALLET");
+
+        assertEquals("CPM", resp.mode());
+        assertEquals("CPM-TOKEN-AABB1122", resp.cpmToken());
+        assertEquals("2026-06-15T14:05:00+09:00", resp.expiresAt());
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("fetchCpmToken: 503 maps to SCHEME_UNAVAILABLE ApiException")
+    void fetchCpmToken_503_mapsToSchemeUnavailable() {
+        server.expect(requestTo(BASE + "/cpm/token"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE).body(""));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> client.fetchCpmToken("M001", "WALLET"));
+
+        assertEquals(ErrorCode.SCHEME_UNAVAILABLE, ex.errorCode());
+        server.verify();
+    }
+
+    // -----------------------------------------------------------------------
+    // refund — happy path
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("refund: returns parsed RefundResponse with status REFUNDED")
+    void refund_happyPath() {
+        server.expect(requestTo(BASE + "/payments/AUTH-CPM-001/refund"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(
+                        "{\"refundId\":\"REFUND-AABB1122\","
+                        + "\"status\":\"REFUNDED\"}",
+                        MediaType.APPLICATION_JSON));
+
+        ZeroPaySchemeApiClient.RefundResponse resp =
+                client.refund("AUTH-CPM-001", new BigDecimal("50000"));
+
+        assertEquals("REFUND-AABB1122", resp.refundId());
+        assertEquals("REFUNDED", resp.status());
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("refund: 404 maps to MERCHANT_NOT_FOUND (unknown authId)")
+    void refund_404_mapsToMerchantNotFound() {
+        server.expect(requestTo(BASE + "/payments/AUTH-UNKNOWN/refund"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":\"NOT_FOUND\",\"message\":\"Auth AUTH-UNKNOWN not found\"}"));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> client.refund("AUTH-UNKNOWN", new BigDecimal("50000")));
+
+        assertEquals(ErrorCode.MERCHANT_NOT_FOUND, ex.errorCode());
+        server.verify();
+    }
 }

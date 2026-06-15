@@ -4,3 +4,19 @@ spring:
 
 server:
   port: 8083
+
+# -------------------------------------------------------------------
+# Merchant/QR daily sync ingest (UC-07-01 / UC-07-02)
+# -------------------------------------------------------------------
+gmepay:
+  merchant-sync:
+    # Set to true to enable the @Scheduled daily sync bean.
+    # Default: false so the scheduler is NOT active in local dev / test.
+    enabled: false
+    # Inbound directory scanned by MerchantSyncScheduler.
+    # Drop ZP0041/0043/0045/0047/0051/0053 fixture files here for local testing.
+    # NO real ZeroPay SFTP credentials — local dir only.
+    inbound-dir: ./data/zeropay-inbound
+    # Cron schedule in UTC (02:00 KST = 17:00 UTC previous day).
+    # zone is set to Asia/Seoul in the @Scheduled annotation.
+    cron: "0 0 2 * * *"

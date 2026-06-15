@@ -108,7 +108,7 @@ public class BalanceProvisioningController {
     }
 
     static BalanceView toView(PartnerBalanceEntity row) {
-        return new BalanceView(
+        return BalanceView.of(
                 row.getPartnerId(),
                 row.getCurrency(),
                 row.getBalance(),

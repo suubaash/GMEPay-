@@ -28,6 +28,7 @@ class MerchantLookupServiceTest {
         repository.remove("QR00000000000000001A");
         repository.remove("QR00000000000000002B");
         repository.remove("QR00000000000000003C");
+        repository.remove("QR00000000000000004D");
 
         repository.put(new Merchant(
                 "M0000000099",

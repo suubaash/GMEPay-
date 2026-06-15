@@ -38,6 +38,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import HistoryIcon from '@mui/icons-material/History';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import ScienceIcon from '@mui/icons-material/Science';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -56,6 +57,7 @@ const navItems = [
   { label: 'Schemes', href: '/schemes', icon: <QrCode2Icon /> },
   { label: 'Transactions', href: '/transactions', icon: <ReceiptLongIcon /> },
   { label: 'Settlement', href: '/settlement', icon: <AccountBalanceIcon /> },
+  { label: 'Exceptions', href: '/settlement/exceptions', icon: <ReportProblemOutlinedIcon /> },
   { label: 'Revenue', href: '/revenue', icon: <TrendingUpIcon /> },
   { label: 'Rates Preview', href: '/rates', icon: <ShowChartIcon /> },
   { label: 'Audit Log', href: '/audit', icon: <HistoryIcon /> },

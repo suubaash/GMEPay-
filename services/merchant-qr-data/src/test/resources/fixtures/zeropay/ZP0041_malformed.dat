@@ -1,0 +1,8 @@
+# ZP0041 — Fixture with intentional malformed rows for rejection tests
+# Layout: record_type|merchant_id|name|merchant_type|fee_type|status|payout_currency|scheme_id|city|mcc
+MN|M0000000090|Valid Merchant|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5411
+# --- malformed rows below ---
+TOOFEWCOLUMNS|ONLY_TWO
+|BLANK_RECORD_TYPE|Merchant Name|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5411
+MN||Missing Merchant ID|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5411
+MN|M0000000091|Good Row After Bad|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Busan|5812

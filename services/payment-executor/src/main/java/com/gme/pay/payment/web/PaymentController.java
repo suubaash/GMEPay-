@@ -3,6 +3,7 @@ package com.gme.pay.payment.web;
 import com.gme.pay.payment.domain.PartnerType;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.CancelResult;
+import com.gme.pay.payment.domain.PaymentOrchestrator.CpmPaymentCommand;
 import com.gme.pay.payment.domain.PaymentOrchestrator.MpmPaymentCommand;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
 import com.gme.pay.payment.web.dto.CancelPaymentRequest;
@@ -20,7 +21,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.Instant;
+import java.math.BigDecimal;
 
 /**
  * REST controller exposing the Payment Executor API surface (API-05).
@@ -82,23 +83,47 @@ public class PaymentController {
     }
 
     /**
-     * POST /v1/payments/cpm/generate — generate a CPM QR token.
+     * POST /v1/payments/cpm/generate — execute a CPM (Consumer-Presented Mode) payment.
      *
-     * <p>For CPM the customer presents a QR displayed on their device; the scheme generates the
-     * token here and the merchant's terminal scans it. This wave returns a stub token.
+     * <p>For CPM the customer presents a token-QR on their device; the merchant's terminal
+     * scans it and POSTs here to authorise and capture. This delegates to the orchestrator
+     * which calls the scheme-adapter-zeropay /cpm endpoint.</p>
+     *
+     * <p>The {@code X-Partner-Type} header controls prefunding: OVERSEAS deducts from
+     * the prefunding pool, LOCAL (default for CPM) does not.</p>
      */
     @PostMapping("/cpm/generate")
     public ResponseEntity<CpmGenerateResponse> generateCpmToken(
             @RequestBody CpmGenerateRequest req,
-            @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId) {
+            @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
+            @RequestHeader(value = "X-Partner-Type", defaultValue = "LOCAL") String partnerTypeHeader) {
 
         req.validate();
 
-        // Stub implementation — full CPM orchestration is in WBS 5.6
+        PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
+
+        // For CPM the collectionAmount == payoutAmount (KRW domestic default)
+        BigDecimal collectionAmount = new BigDecimal(req.collectionAmount());
+
+        CpmPaymentCommand cmd = new CpmPaymentCommand(
+                partnerId,
+                req.partnerTxnRef(),
+                req.schemeId(),
+                req.quoteId(),           // quoteId field re-used as the cpmToken for CPM
+                "UNKNOWN",               // merchantId unknown until scheme decode
+                collectionAmount,
+                req.collectionCurrency(),
+                collectionAmount,
+                req.collectionCurrency(),
+                null                     // no USD prefunding amount for LOCAL
+        );
+
+        PaymentResult result = orchestrator.executeCpm(cmd, partnerType);
+
         CpmGenerateResponse response = new CpmGenerateResponse(
-                "pay_cpm_" + System.currentTimeMillis(),
-                "CPM_TOKEN_STUB_" + req.quoteId(),
-                Instant.now().plusSeconds(300),
+                result.paymentId(),
+                result.schemeTxnId(),     // schemeTxnRef returned as the "qr_token" for CPM
+                result.approvedAt(),
                 req.schemeId()
         );
 

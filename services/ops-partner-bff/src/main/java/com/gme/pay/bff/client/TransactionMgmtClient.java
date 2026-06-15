@@ -12,6 +12,10 @@ import java.util.List;
  *
  * <p>Phase C2 adds a filtered, paginated {@link #list(Filter)} for the Admin UI
  * transactions search page.
+ *
+ * <p>UC-10 (Phase 4, Stage 1): {@link TransactionSummary} is enriched with additional
+ * read fields required by UC-10-02 / UC-10-03. All new fields are additive and nullable
+ * so existing stub implementations and tests remain binary-compatible.
  */
 public interface TransactionMgmtClient {
 
@@ -33,14 +37,68 @@ public interface TransactionMgmtClient {
      */
     Page<TransactionSummary> list(Filter filter);
 
+    /**
+     * Partner-facing transaction summary (UC-10-02).
+     *
+     * <p>Original 6 fields are preserved exactly. UC-10 additive fields follow:
+     * <ul>
+     *   <li>{@code qrSchemeId}            – QR scheme identifier (e.g. "zeropay_kr"). Null until set by scheme-adapter.</li>
+     *   <li>{@code krwAmount}             – KRW payout amount (BigDecimal-as-string on the wire). Null for non-KRW payouts.</li>
+     *   <li>{@code payerCurrency}         – ISO-4217 payer currency. Maps to sendCcy on the OVERSEAS path.</li>
+     *   <li>{@code payerCurrencyAmount}   – Amount in the payer's currency (BigDecimal-as-string). Maps to sendAmount.</li>
+     *   <li>{@code appliedFxRate}         – FX rate at commit (BigDecimal-as-string). Null for same-currency transactions.</li>
+     *   <li>{@code rateTimestamp}         – UTC instant the FX rate was locked. Null until persisted.</li>
+     *   <li>{@code prefundingDeductedUsd} – USD deducted from prefunding (BigDecimal-as-string). Null until APPROVED.</li>
+     * </ul>
+     *
+     * <p>IMPORTANT: money fields are BigDecimal; the BFF MUST NOT cast them to JS Number
+     * (precision loss). The UI layer reads them as strings.
+     *
+     * <p>ADDITIVE ONLY — do not rename or remove fields; existing stubs pass null for new fields.
+     */
     record TransactionSummary(
+            // --- original fields ---
             String txnId,
             String partnerId,
             String state,
             BigDecimal amount,
             String currency,
-            Instant committedAt
-    ) {}
+            Instant committedAt,
+            // --- UC-10-02 additive fields ---
+            /** QR scheme identifier. TODO: populate from scheme-adapter event. */
+            String qrSchemeId,
+            /** KRW payout amount. TODO: persist separately for multi-leg flows. */
+            BigDecimal krwAmount,
+            /** ISO-4217 payer currency. */
+            String payerCurrency,
+            /** Amount in the payer's currency. */
+            BigDecimal payerCurrencyAmount,
+            /** Applied FX rate at commit. TODO: lock and persist at commit-time. */
+            BigDecimal appliedFxRate,
+            /** UTC instant FX rate was locked. TODO: persist at commit-time. */
+            Instant rateTimestamp,
+            /** USD deducted from prefunding balance. TODO: populated by prefunding post-deduction. */
+            BigDecimal prefundingDeductedUsd
+    ) {
+        /**
+         * Convenience factory for existing stub/test code that only knows the original 6 fields.
+         * New UC-10 fields default to {@code null}.
+         */
+        public static TransactionSummary of(
+                String txnId, String partnerId, String state,
+                BigDecimal amount, String currency, Instant committedAt) {
+            return new TransactionSummary(txnId, partnerId, state, amount, currency, committedAt,
+                    null, null, null, null, null, null, null);
+        }
+    }
+
+    /**
+     * One entry in the status-transition history (UC-10-03).
+     *
+     * @param status  TransactionStatus name at this point (e.g. "APPROVED")
+     * @param at      UTC instant the status was entered
+     */
+    record StatusEntry(String status, Instant at) {}
 
     /**
      * Filter shape for {@link #list(Filter)}. All criterion fields are optional;
