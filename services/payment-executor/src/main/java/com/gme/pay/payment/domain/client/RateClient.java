@@ -10,12 +10,15 @@ import java.time.Instant;
 public interface RateClient {
 
     /**
-     * Loads a previously issued rate quote from the rate-fx cache.
+     * Loads a previously issued, still-locked rate quote from rate-fx via
+     * {@code GET /v1/quotes/{quoteId}}.
      *
-     * @param quoteId   the quote identifier returned by POST /v1/rates
-     * @param partnerId the authenticated caller's partner ID (for ownership check)
+     * @param quoteId   the quote identifier issued by {@code POST /v1/quotes}
+     * @param partnerId the authenticated caller's partner ID; carried through to the
+     *                  returned view (GET /v1/quotes performs no server-side ownership check)
      * @return the locked quote
-     * @throws com.gme.pay.payment.domain.PaymentException if the quote is expired or invalid
+     * @throws com.gme.pay.payment.domain.PaymentException if the quote is expired or
+     *         unknown (rate-fx returns {@code 409 RATE_QUOTE_EXPIRED})
      */
     RateQuoteView loadQuote(String quoteId, long partnerId);
 

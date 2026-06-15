@@ -10,3 +10,6 @@ build/
 .claude/settings.local.json
 # Per-app Claude Preview launch configs (machine-specific)
 apps/*/.claude/launch.json
+
+# local whole-platform smoke evidence
+.smoke/
