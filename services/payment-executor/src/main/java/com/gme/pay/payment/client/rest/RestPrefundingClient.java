@@ -78,17 +78,24 @@ public class RestPrefundingClient implements PrefundingClient {
     }
 
     @Override
-    public void reverse(long partnerId, String txnRef) {
+    public ReverseResult reverse(long partnerId, String txnRef) {
         try {
-            restClient.post()
+            ReverseResponse body = restClient.post()
                     .uri("/v1/prefunding/{partner}/reverse", partnerId)
                     .body(new ReverseRequest(txnRef))
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(ReverseResponse.class);
+            if (body == null) {
+                // Tolerate an empty body (older/no-content responses): nothing recorded to reverse.
+                return new ReverseResult(BigDecimal.ZERO, null);
+            }
+            return new ReverseResult(nonNull(body.reversedUsd()), body.balance());
         } catch (RestClientResponseException ex) {
             throw new PaymentException(
                     "prefunding POST /v1/prefunding/" + partnerId + "/reverse failed: "
                             + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             throw new PaymentException(
                     "prefunding POST /v1/prefunding/" + partnerId + "/reverse failed: "
@@ -124,4 +131,7 @@ public class RestPrefundingClient implements PrefundingClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record DeductResponse(BigDecimal deductedUsd, BigDecimal balanceAfter) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record ReverseResponse(String partnerId, BigDecimal reversedUsd, BigDecimal balance) {}
 }

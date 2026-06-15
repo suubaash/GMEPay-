@@ -11,6 +11,8 @@ import com.gme.pay.payment.domain.settlement.SettlementBookingService;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 
 /**
  * Orchestrates the live payment path (API-05 §4.3 / WBS 5.2-T08).
@@ -32,6 +34,23 @@ import java.time.Instant;
  * If the scheme times out, the deduction is left in place (UNCERTAIN state).
  */
 public class PaymentOrchestrator {
+
+    /** KST — the revenue date booked on a capture is the Korea business-calendar date of the commit. */
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+    /**
+     * Sentinel scheme id for revenue capture. The orchestrator carries the scheme CODE (e.g.
+     * "zeropay"), not config-registry's numeric scheme id, so the per-transaction revenue row stores
+     * 0 here. The per-partner revenue aggregate ({@code GET /v1/revenue}) does not key on scheme, so
+     * this does not affect reported figures; a numeric scheme id is a follow-on once the scheme
+     * catalog is numerically keyed.
+     */
+    private static final long REVENUE_SCHEME_ID_UNSET = 0L;
+    /**
+     * Default scheme fee-share fraction recorded as metadata on revenue rows. The fee-share split is
+     * computed elsewhere (revenue-ledger's postFeeShareSplit); this is record metadata only and is
+     * not surfaced by the per-partner aggregate.
+     */
+    private static final BigDecimal DEFAULT_FEE_SHARE_PCT = new BigDecimal("0.70");
 
     private final RateClient rateClient;
     private final PrefundingClient prefundingClient;
@@ -147,11 +166,14 @@ public class PaymentOrchestrator {
             throw ex;
         }
 
-        // Step 6 (pre-commit): per-partner settlement booking. Skipped when collaborators
-        // are not wired (backwards-compat with 5-arg constructor used by older tests).
-        SettlementBooking booking = (settlementBookingService != null)
+        // Step 6 (pre-commit): per-partner settlement booking. Skipped when the collaborator
+        // is not wired (5-arg constructor, older tests) OR no partner code is available —
+        // config-registry resolves the rounding rule by partner CODE, not the numeric
+        // surrogate (PartnerStore identifier contract), so booking without a code would 404.
+        SettlementBooking booking = (settlementBookingService != null
+                        && cmd.partnerCode() != null && !cmd.partnerCode().isBlank())
                 ? settlementBookingService.book(
-                        cmd.partnerId(), quote.collectionAmount(), quote.collectionCurrency())
+                        cmd.partnerCode(), quote.collectionAmount(), quote.collectionCurrency())
                 : null;
 
         // Step 7: Commit APPROVED with rate-lock fields when booking was performed.
@@ -177,6 +199,22 @@ public class PaymentOrchestrator {
         if (booking != null && revenueLedgerClient != null) {
             revenueLedgerClient.postRoundingResidual(
                     txn.txnRef(), booking.residual(), booking.currency());
+        }
+
+        // Step 8b: capture per-transaction revenue (FX margin + service charge) so revenue-ledger's
+        // GET /v1/revenue reports real figures. Non-blocking + post-commit, mirroring step 8. Margins
+        // are 0 for the same-currency short-circuit; nulls are coalesced so the capture stays valid.
+        if (revenueLedgerClient != null) {
+            BigDecimal collMargin = quote.collectionMarginUsd() != null
+                    ? quote.collectionMarginUsd() : BigDecimal.ZERO;
+            BigDecimal payMargin = quote.payoutMarginUsd() != null
+                    ? quote.payoutMarginUsd() : BigDecimal.ZERO;
+            BigDecimal svcCharge = quote.serviceCharge() != null
+                    ? quote.serviceCharge() : BigDecimal.ZERO;
+            LocalDate revenueDate = txn.createdAt().atZone(KST).toLocalDate();
+            revenueLedgerClient.postRevenueCapture(
+                    txn.txnRef(), cmd.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
+                    collMargin, payMargin, svcCharge, quote.collectionCurrency(), DEFAULT_FEE_SHARE_PCT);
         }
 
         return new PaymentResult(
@@ -319,15 +357,22 @@ public class PaymentOrchestrator {
 
         BigDecimal returnedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
-            prefundingClient.reverse(partnerId, txnRef);
-            // The actual amount reversed would come from the ledger; for the result we
-            // return a sentinel — callers that need the exact amount query the ledger.
-            returnedUsd = BigDecimal.ZERO; // placeholder; real impl reads from ledger
+            // Read the ACTUAL reversed USD from prefunding (no longer a hardcoded ZERO).
+            PrefundingClient.ReverseResult reversal = prefundingClient.reverse(partnerId, txnRef);
+            returnedUsd = reversal != null ? reversal.reversedUsd() : null;
         }
 
         transactionClient.commitStatus(txnRef,
                 new TransactionClient.StatusPatch(
                         PaymentStatus.REVERSED, schemeTxnRef, null, returnedUsd, null));
+
+        // Post a structured reversal journal to revenue-ledger (non-blocking) so the cancellation is
+        // booked rather than absorbed as a zero residual. Uses the actually-reversed prefund USD;
+        // LOCAL cancels carry no prefund amount here, so the journal is skipped (a full revenue
+        // reversal would need the original quote amounts — a follow-on).
+        if (revenueLedgerClient != null && returnedUsd != null && returnedUsd.signum() > 0) {
+            revenueLedgerClient.postReversalJournal(txnRef, returnedUsd, "USD");
+        }
 
         return new CancelResult(paymentId, PaymentStatus.CANCELLED, Instant.now(), returnedUsd);
     }
@@ -344,6 +389,12 @@ public class PaymentOrchestrator {
      * @param direction      payment direction
      * @param customerRef    customer reference text
      * @param partnerTxnRef  partner's own transaction reference (must be unique)
+     * @param partnerCode    partner business code (e.g. "GMEREMIT") used to resolve the
+     *                       partner's settlement-rounding rule from config-registry, which is
+     *                       keyed by code, not the numeric surrogate (see PartnerStore). May be
+     *                       {@code null} when unavailable, in which case settlement booking is
+     *                       skipped (the {@code numeric} {@code partnerId} still drives
+     *                       transaction-mgmt + prefunding).
      */
     public record MpmPaymentCommand(
             long partnerId,
@@ -352,7 +403,8 @@ public class PaymentOrchestrator {
             String schemeId,
             String direction,
             String customerRef,
-            String partnerTxnRef
+            String partnerTxnRef,
+            String partnerCode
     ) {}
 
     /** Outcome of a successful MPM payment orchestration. */

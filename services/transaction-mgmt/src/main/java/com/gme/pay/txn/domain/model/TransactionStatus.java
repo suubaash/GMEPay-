@@ -31,11 +31,18 @@ public enum TransactionStatus {
     FAILED,
 
     /** Same-day cancel requested after APPROVED. Terminal. */
-    CANCELLED;
+    CANCELLED,
+
+    /** Reversed after APPROVED (same-day cancel that reached the scheme + reversed prefunding). Terminal. */
+    REVERSED,
+
+    /** Explicit refund issued after APPROVED. Terminal. */
+    REFUNDED;
 
     /** Returns {@code true} for states from which no further transition is allowed. */
     public boolean isTerminal() {
-        return this == APPROVED || this == FAILED || this == CANCELLED;
+        return this == APPROVED || this == FAILED || this == CANCELLED
+                || this == REVERSED || this == REFUNDED;
     }
 
     /** Serialises as the enum constant name (e.g. {@code "APPROVED"}). */

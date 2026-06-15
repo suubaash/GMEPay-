@@ -82,14 +82,18 @@ class RestPrefundingClientTest {
     }
 
     @Test
-    @DisplayName("reverse: POSTs to /reverse and tolerates empty body")
+    @DisplayName("reverse: POSTs to /reverse and returns the actual reversed amount")
     void reverse_postsToReverseEndpoint() {
         server.expect(requestTo("http://prefunding:8080/v1/prefunding/42/reverse"))
                 .andExpect(method(HttpMethod.POST))
-                .andRespond(withSuccess());
+                .andRespond(withSuccess(
+                        "{\"partnerId\":\"42\",\"reversedUsd\":125.50,\"balance\":1088.485}",
+                        MediaType.APPLICATION_JSON));
 
-        client.reverse(42L, "txn_001");
+        PrefundingClient.ReverseResult r = client.reverse(42L, "txn_001");
 
+        assertEquals(0, r.reversedUsd().compareTo(new BigDecimal("125.50")),
+                "client must surface the reversed USD from the response");
         server.verify();
     }
 }

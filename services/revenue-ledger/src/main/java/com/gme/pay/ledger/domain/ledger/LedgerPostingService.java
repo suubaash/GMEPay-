@@ -32,6 +32,7 @@ public class LedgerPostingService {
     private static final String ACC_RECEIVABLE       = "RECEIVABLE_PARTNER";
     private static final String ACC_PAYABLE_SCHEME   = "PAYABLE_SCHEME";
     private static final String ACC_ROUNDING         = "REVENUE_ROUNDING"; // rounding gain/loss vs partner booking
+    private static final String ACC_REVERSAL         = "REVENUE_REVERSAL"; // contra-revenue for cancel/refund reversals
 
     private final JournalStore journalStore;
     private final SchemeFeeSplitCalculator calculator;
@@ -67,6 +68,31 @@ public class LedgerPostingService {
                 new LedgerEntry(ACC_ROUNDING,   amount, currency, EntryType.DEBIT,  reference),
                 new LedgerEntry(ACC_RECEIVABLE, amount, currency, EntryType.CREDIT, reference));
         }
+        return journalStore.save(Journal.post(entries));
+    }
+
+    /**
+     * Post a structured reversal journal when a payment is cancelled/refunded. Contra-books the
+     * revenue/receivable for {@code reference} as a balanced
+     * {@code DEBIT REVENUE_REVERSAL / CREDIT RECEIVABLE_PARTNER} for {@code reversalAmount} — so the
+     * cancellation is recorded in the ledger rather than absorbed as a zero residual. Returns
+     * {@code null} when the amount is zero (nothing to post).
+     *
+     * @param reference      the cancelled transaction reference
+     * @param reversalAmount the amount being reversed (absolute value used)
+     * @param currency       ISO currency code of {@code reversalAmount}
+     */
+    public Journal postReversalJournal(String reference, BigDecimal reversalAmount, String currency) {
+        Objects.requireNonNull(reference, "reference required");
+        Objects.requireNonNull(reversalAmount, "reversalAmount required");
+        Objects.requireNonNull(currency, "currency required");
+        if (reversalAmount.signum() == 0) {
+            return null;
+        }
+        BigDecimal amount = reversalAmount.abs();
+        List<LedgerEntry> entries = List.of(
+                new LedgerEntry(ACC_REVERSAL,   amount, currency, EntryType.DEBIT,  reference),
+                new LedgerEntry(ACC_RECEIVABLE, amount, currency, EntryType.CREDIT, reference));
         return journalStore.save(Journal.post(entries));
     }
 

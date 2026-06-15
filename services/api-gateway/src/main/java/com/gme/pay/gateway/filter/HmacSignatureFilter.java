@@ -15,14 +15,17 @@ import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Set;
 
 /**
  * GlobalFilter — HMAC-SHA256 request signature verification (API-05 §3.2).
@@ -158,9 +161,13 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
 
         ServerHttpRequest request = exchange.getRequest();
         String method        = request.getMethod().name();
-        String pathWithQuery = request.getURI().getRawPath()
-                + (request.getURI().getRawQuery() != null
-                   ? "?" + request.getURI().getRawQuery()
+        // The partner signs the request line it SENT — i.e. the original as-received
+        // URI, before any gateway RewritePath rewrites it for the downstream proxy.
+        // Validating against the post-rewrite path would reject every real partner.
+        URI signedUri        = originalRequestUri(exchange, request);
+        String pathWithQuery = signedUri.getRawPath()
+                + (signedUri.getRawQuery() != null
+                   ? "?" + signedUri.getRawQuery()
                    : "");
 
         // Buffer the body so we can (a) compute the hash and (b) re-expose it downstream.
@@ -197,5 +204,25 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
                     };
                     return chain.filter(exchange.mutate().request(mutatedRequest).build());
                 });
+    }
+
+    /**
+     * Resolve the original, as-received request URI — the one the partner signed —
+     * independent of any gateway {@code RewritePath} that may have already mutated the
+     * request path for the downstream proxy. Spring Cloud Gateway records each pre-rewrite
+     * URL in {@link ServerWebExchangeUtils#GATEWAY_ORIGINAL_REQUEST_URL_ATTR} (an
+     * insertion-ordered set); the first entry is the truly-original URI. If no rewrite has
+     * run yet (this filter ordered ahead of RewritePath), the current request URI already
+     * IS the original, so we fall back to it.
+     */
+    private static URI originalRequestUri(ServerWebExchange exchange, ServerHttpRequest request) {
+        Object attr = exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ORIGINAL_REQUEST_URL_ATTR);
+        if (attr instanceof Set<?> urls && !urls.isEmpty()) {
+            Object first = urls.iterator().next();
+            if (first instanceof URI uri) {
+                return uri;
+            }
+        }
+        return request.getURI();
     }
 }

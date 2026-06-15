@@ -14,6 +14,8 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverterAdapter;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
+import org.springframework.core.annotation.Order;
 import reactor.core.publisher.Mono;
 
 import java.util.Collection;
@@ -37,16 +39,24 @@ import java.util.stream.Stream;
  * / {@code hasRole(...)} expressions work consistently across services. Specifically,
  * Keycloak's realm role {@code OPERATOR} becomes {@code ROLE_OPERATOR}.
  *
- * <p>Authorization rules:
+ * <p>Two ordered {@link SecurityWebFilterChain}s implement the ADR-011 split (WebFlux
+ * evaluates them in {@code @Order} sequence; the first whose {@code securityMatcher}
+ * matches handles the request):
  * <ul>
- *   <li>Health + Prometheus actuator endpoints — anonymous (probes + Prometheus scrape).</li>
- *   <li>Everything under {@code /v1/**} — requires a valid JWT. HMAC-signed partner traffic
- *       does not present a JWT but is short-circuited by {@code HmacSignatureFilter}
- *       BEFORE this filter chain (Spring Cloud Gateway global filters run ahead of the
- *       security filter chain when ordered with {@code Ordered.HIGHEST_PRECEDENCE}).
- *       For routes that do require JWT auth (BFF-originated admin calls), the realm
- *       role mapping above governs access.</li>
- *   <li>Any other path defaults to authenticated.</li>
+ *   <li><b>{@code @Order(0)} partner chain</b> — {@code securityMatcher("/v1/**")},
+ *       {@code permitAll}. The partner API surface is machine traffic authenticated by
+ *       the HMAC-SHA256 {@link com.gme.pay.gateway.filter.HmacSignatureFilter}. That
+ *       filter is a Spring Cloud Gateway {@code GlobalFilter} which runs inside the
+ *       gateway {@code WebHandler} — i.e. AFTER the Spring Security {@code WebFilter}
+ *       chain ({@code WebFilterChainProxy} is registered at order -100). If {@code /v1/**}
+ *       required a JWT here, every JWT-less partner request would be 401'd by this
+ *       WebFilter BEFORE the HMAC GlobalFilter could run. Permitting {@code /v1/**} at
+ *       the security layer delegates partner authentication to the HMAC filter, which
+ *       still rejects missing/invalid signatures with 401 — so this does not weaken
+ *       partner security, it relocates it to the correct layer.</li>
+ *   <li><b>{@code @Order(1)} default chain</b> — health + Prometheus actuator endpoints
+ *       are anonymous; everything else requires a valid Keycloak JWT (realm roles mapped
+ *       to {@code ROLE_*}). This governs human/admin + BFF-originated traffic.</li>
  * </ul>
  *
  * <p>CSRF is disabled because the gateway only sees machine-to-machine traffic plus
@@ -76,18 +86,44 @@ public class SecurityConfig {
     @SuppressWarnings({"FieldCanBeLocal", "unused"})
     private String issuerUri;
 
+    /**
+     * Partner (machine) security chain — ADR-011. Matches the partner API surface
+     * {@code /v1/**} and permits it at the Spring Security layer so authentication is
+     * performed by {@link com.gme.pay.gateway.filter.HmacSignatureFilter} (a Spring Cloud
+     * Gateway {@code GlobalFilter}) inside the gateway {@code WebHandler}.
+     *
+     * <p>{@code @Order(0)} so it is consulted before the default JWT chain. Without this
+     * chain, the default {@code oauth2ResourceServer().jwt()} rule (run by the Spring
+     * Security {@code WebFilter} at order -100) would 401 every JWT-less partner request
+     * BEFORE the HMAC GlobalFilter ever executes — the gateway's {@code GlobalFilter}s
+     * live in a {@code WebHandler} dispatched only after the entire WebFilter chain. The
+     * HMAC filter itself still returns 401 {@code INVALID_API_KEY}/{@code INVALID_SIGNATURE}
+     * for missing/invalid signatures, so {@code permitAll} here delegates — not removes —
+     * partner authentication.
+     */
     @Bean
+    @Order(0)
+    public SecurityWebFilterChain partnerHmacSecurityFilterChain(ServerHttpSecurity http) {
+        http
+                .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/v1/**"))
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                .authorizeExchange(ex -> ex.anyExchange().permitAll());
+        return http.build();
+    }
+
+    /**
+     * Default (human/admin) security chain — ADR-011. Handles everything outside the
+     * partner {@code /v1/**} surface: actuator health + Prometheus scrape are anonymous;
+     * all other paths require a valid Keycloak JWT (realm roles mapped to {@code ROLE_*}).
+     */
+    @Bean
+    @Order(1)
     public SecurityWebFilterChain springSecurityFilterChain(ServerHttpSecurity http) {
         http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .authorizeExchange(ex -> ex
                         // Actuator probes + Prometheus scrape are anonymous.
                         .pathMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
-                        // Partner /v1/** surface: HMAC-signed traffic is admitted by the
-                        // global HmacSignatureFilter (machine auth); JWT-bearing admin
-                        // traffic is admitted here. Either way the request must be
-                        // authenticated before being proxied downstream.
-                        .pathMatchers("/v1/**").authenticated()
                         .anyExchange().authenticated()
                 )
                 .oauth2ResourceServer(rs -> rs

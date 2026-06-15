@@ -61,8 +61,9 @@ class PaymentOrchestratorCpmTest {
         }
 
         @Override
-        public void reverse(long partnerId, String txnRef) {
+        public ReverseResult reverse(long partnerId, String txnRef) {
             callLog.add("PREFUND:REVERSE");
+            return new ReverseResult(new BigDecimal("125.50"), new BigDecimal("900.00"));
         }
     };
 

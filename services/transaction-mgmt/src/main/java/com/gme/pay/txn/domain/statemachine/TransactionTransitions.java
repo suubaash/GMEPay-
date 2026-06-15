@@ -37,10 +37,17 @@ public final class TransactionTransitions {
                 TransactionStatus.CANCELLED         // cancelled while debit in progress
         ));
 
+        // APPROVED: a same-day cancel reverses it; an explicit refund refunds it.
+        m.put(TransactionStatus.APPROVED, EnumSet.of(
+                TransactionStatus.REVERSED,         // same-day cancel (prefunding reversed)
+                TransactionStatus.REFUNDED          // explicit post-approval refund
+        ));
+
         // Terminal states have no outgoing transitions
-        m.put(TransactionStatus.APPROVED,   Collections.emptySet());
         m.put(TransactionStatus.FAILED,     Collections.emptySet());
         m.put(TransactionStatus.CANCELLED,  Collections.emptySet());
+        m.put(TransactionStatus.REVERSED,   Collections.emptySet());
+        m.put(TransactionStatus.REFUNDED,   Collections.emptySet());
 
         ALLOWED = Collections.unmodifiableMap(m);
     }

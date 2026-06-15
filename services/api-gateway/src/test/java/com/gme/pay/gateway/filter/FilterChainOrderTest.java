@@ -50,16 +50,18 @@ class FilterChainOrderTest {
     }
 
     @Test
-    @DisplayName("HmacSignatureFilter runs before IdempotencyKeyFilter")
-    void hmac_before_idempotency() {
-        assertTrue(HmacSignatureFilter.ORDER < IdempotencyKeyFilter.ORDER,
+    @DisplayName("HmacSignatureFilter runs before ReplayProtectionFilter before IdempotencyKeyFilter")
+    void hmac_before_replay_before_idempotency() {
+        assertTrue(HmacSignatureFilter.ORDER < ReplayProtectionFilter.ORDER,
                 "HmacSignatureFilter (" + HmacSignatureFilter.ORDER
-                        + ") must run before IdempotencyKeyFilter ("
-                        + IdempotencyKeyFilter.ORDER + ")");
+                        + ") must run before ReplayProtectionFilter (" + ReplayProtectionFilter.ORDER + ")");
+        assertTrue(ReplayProtectionFilter.ORDER < IdempotencyKeyFilter.ORDER,
+                "ReplayProtectionFilter (" + ReplayProtectionFilter.ORDER
+                        + ") must run before IdempotencyKeyFilter (" + IdempotencyKeyFilter.ORDER + ")");
     }
 
     @Test
-    @DisplayName("All four filter order constants have the expected values")
+    @DisplayName("All filter order constants have the expected values")
     void absoluteOrderValues_matchDocumentation() {
         org.junit.jupiter.api.Assertions.assertAll(
                 () -> org.junit.jupiter.api.Assertions.assertEquals(2, PartnerIpAllowlistFilter.ORDER,
@@ -68,6 +70,8 @@ class FilterChainOrderTest {
                         "MtlsFingerprintFilter must be ORDER 3"),
                 () -> org.junit.jupiter.api.Assertions.assertEquals(4, HmacSignatureFilter.ORDER,
                         "HmacSignatureFilter must be ORDER 4"),
+                () -> org.junit.jupiter.api.Assertions.assertEquals(5, ReplayProtectionFilter.ORDER,
+                        "ReplayProtectionFilter must be ORDER 5"),
                 () -> org.junit.jupiter.api.Assertions.assertEquals(7, IdempotencyKeyFilter.ORDER,
                         "IdempotencyKeyFilter must be ORDER 7")
         );

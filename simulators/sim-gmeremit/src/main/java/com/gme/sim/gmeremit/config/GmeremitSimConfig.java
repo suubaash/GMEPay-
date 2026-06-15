@@ -15,4 +15,18 @@ public class GmeremitSimConfig {
                 .baseUrl(baseUrl)
                 .build();
     }
+
+    /**
+     * Separate client for the scheme simulator's QR-decode endpoint
+     * ({@code POST /v1/scheme/qr/decode}), which lives on the scheme network sim
+     * (sim-scheme :9102), NOT on the payment-executor hub. The wallet's "scan"
+     * preview uses this; payments still go to the hub via {@link #gmepayRestClient}.
+     */
+    @Bean
+    public RestClient schemeRestClient(
+            @Value("${gmepay.sim.gmeremit.scheme-base-url:http://localhost:9102}") String schemeBaseUrl) {
+        return RestClient.builder()
+                .baseUrl(schemeBaseUrl)
+                .build();
+    }
 }

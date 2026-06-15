@@ -17,8 +17,9 @@ import java.time.Instant;
  * REST adapter for rate lookups.
  *
  * <ul>
- *   <li>{@link #loadQuote} — {@code POST /v1/rates} against rate-fx service
- *       ({@code gmepay.rate-fx.base-url}, default {@code http://rate-fx:8080}).
+ *   <li>{@link #loadQuote} — {@code GET /v1/quotes/{quoteId}} against rate-fx
+ *       service ({@code gmepay.rate-fx.base-url}, default
+ *       {@code http://rate-fx:8080}); returns the TTL-locked {@code StoredQuote}.
  *   <li>{@link #fetchLiveRate} — {@code GET /v1/rates?base=&quote=} against
  *       sim-rate-provider ({@code gmepay.sim-rate-provider.base-url},
  *       default {@code http://localhost:9101}).
@@ -55,26 +56,25 @@ public class RestRateClient implements RateClient {
     @Override
     public RateQuoteView loadQuote(String quoteId, long partnerId) {
         try {
-            QuoteLookupRequest req = new QuoteLookupRequest(quoteId, partnerId);
-            RateQuoteResponse body = restClient.post()
-                    .uri("/v1/rates")
-                    .body(req)
+            StoredQuoteResponse body = restClient.get()
+                    .uri("/v1/quotes/{quoteId}", quoteId)
                     .retrieve()
-                    .body(RateQuoteResponse.class);
+                    .body(StoredQuoteResponse.class);
 
             if (body == null) {
                 throw new PaymentException("rate-fx returned empty body for quote " + quoteId);
             }
-            return body.toView();
+            return body.toView(partnerId);
         } catch (RestClientResponseException ex) {
+            // rate-fx returns 409 RATE_QUOTE_EXPIRED for unknown/expired quotes.
             throw new PaymentException(
-                    "rate-fx POST /v1/rates failed for quote " + quoteId + ": "
+                    "rate-fx GET /v1/quotes/" + quoteId + " failed: "
                             + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
         } catch (PaymentException ex) {
             throw ex;
         } catch (RuntimeException ex) {
             throw new PaymentException(
-                    "rate-fx POST /v1/rates failed for quote " + quoteId + ": " + ex.getMessage(), ex);
+                    "rate-fx GET /v1/quotes/" + quoteId + " failed: " + ex.getMessage(), ex);
         }
     }
 
@@ -104,9 +104,6 @@ public class RestRateClient implements RateClient {
         }
     }
 
-    /** Wire format for the quote-lookup request body. */
-    record QuoteLookupRequest(String quoteId, long partnerId) {}
-
     /** Wire format for sim-rate-provider response: {base, quote, rate, asOf, source}. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     record LiveRateResponse(
@@ -121,38 +118,68 @@ public class RestRateClient implements RateClient {
         }
     }
 
-    /** Wire format for the quote-lookup response (mirrors {@link RateQuoteView}). */
+    /**
+     * Wire format for the rate-fx {@code GET /v1/quotes/{quoteId}} response —
+     * mirrors {@code com.gme.pay.ratefx.quote.StoredQuote}. Money/rate fields are
+     * decimal strings (MONEY_CONVENTION.md) and bind cleanly to {@link BigDecimal}.
+     *
+     * <p>{@code StoredQuote} does not carry {@code partnerId}, {@code schemeId},
+     * {@code direction} or a pre-computed {@code serviceCharge}; see {@link #toView}
+     * for how those are reconciled into {@link RateQuoteView}.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record RateQuoteResponse(
+    record StoredQuoteResponse(
             String quoteId,
-            long partnerId,
-            String schemeId,
-            String direction,
-            BigDecimal targetPayout,
+            String collectionCurrency,
+            String settleACurrency,
+            String settleBCurrency,
             String payoutCurrency,
-            BigDecimal collectionUsd,
+            BigDecimal targetPayout,
             BigDecimal payoutUsdCost,
+            BigDecimal collectionUsd,
             BigDecimal collectionMarginUsd,
             BigDecimal payoutMarginUsd,
             BigDecimal sendAmount,
-            BigDecimal serviceCharge,
             BigDecimal collectionAmount,
-            String collectionCurrency,
             BigDecimal offerRateColl,
             BigDecimal crossRate,
-            Instant validUntil,
-            boolean isSameCcyShortCircuit
+            boolean shortCircuit,
+            Instant createdAt,
+            Instant expiresAt
     ) {
-        RateQuoteView toView() {
+        /**
+         * Maps the stored quote into the domain view.
+         *
+         * @param partnerId the authenticated caller's partner ID, carried from the
+         *                  {@code loadQuote} argument (GET /v1/quotes performs no
+         *                  server-side ownership check, so it is not echoed back)
+         */
+        RateQuoteView toView(long partnerId) {
+            // serviceCharge is the collection-side fee = collectionAmount - sendAmount;
+            // StoredQuote does not store it, so derive it when both legs are present.
+            BigDecimal serviceCharge =
+                    (collectionAmount != null && sendAmount != null)
+                            ? collectionAmount.subtract(sendAmount)
+                            : BigDecimal.ZERO;
             return new RateQuoteView(
-                    quoteId, partnerId, schemeId, direction,
-                    targetPayout, payoutCurrency,
-                    collectionUsd, payoutUsdCost,
-                    collectionMarginUsd, payoutMarginUsd,
-                    sendAmount, serviceCharge,
-                    collectionAmount, collectionCurrency,
-                    offerRateColl, crossRate,
-                    validUntil, isSameCcyShortCircuit);
+                    quoteId,
+                    partnerId,
+                    null,             // schemeId — not part of StoredQuote; loadQuote signature does not supply it
+                    null,             // direction — not part of StoredQuote; loadQuote signature does not supply it
+                    targetPayout,
+                    payoutCurrency,
+                    collectionUsd,
+                    payoutUsdCost,
+                    collectionMarginUsd,
+                    payoutMarginUsd,
+                    sendAmount,
+                    serviceCharge,
+                    collectionAmount,
+                    collectionCurrency,
+                    offerRateColl,
+                    crossRate,
+                    expiresAt,        // validUntil <- expiresAt
+                    shortCircuit);    // isSameCcyShortCircuit <- shortCircuit
         }
     }
 }

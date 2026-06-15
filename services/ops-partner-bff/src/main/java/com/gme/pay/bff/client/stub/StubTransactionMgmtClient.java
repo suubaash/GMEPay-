@@ -1,6 +1,7 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.TransactionMgmtClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -14,6 +15,10 @@ import java.util.Objects;
  * Phase-1 in-memory stub of {@link TransactionMgmtClient}.
  */
 @Component
+@ConditionalOnProperty(
+        name = "gmepay.transaction-mgmt.client",
+        havingValue = "stub",
+        matchIfMissing = true)
 public class StubTransactionMgmtClient implements TransactionMgmtClient {
 
     private static final List<TransactionSummary> STORE = List.of(

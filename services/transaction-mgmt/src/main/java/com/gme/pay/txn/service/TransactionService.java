@@ -149,8 +149,10 @@ public class TransactionService {
             case "APPROVED"  -> TransactionStatus.APPROVED;
             case "FAILED"    -> TransactionStatus.FAILED;
             case "CANCELLED" -> TransactionStatus.CANCELLED;
+            case "REVERSED"  -> TransactionStatus.REVERSED;
+            case "REFUNDED"  -> TransactionStatus.REFUNDED;
             case "PENDING"   -> TransactionStatus.PENDING_DEBIT;
-            default          -> null; // UNCERTAIN, REVERSED, REFUNDED — no direct mapping yet
+            default          -> null; // UNCERTAIN — no direct mapping (lock fields applied without a transition)
         };
     }
 

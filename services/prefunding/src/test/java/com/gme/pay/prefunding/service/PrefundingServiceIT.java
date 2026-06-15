@@ -78,4 +78,36 @@ class PrefundingServiceIT {
         assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("1000.00000000")));
         assertEquals(0L, ledger.countByPartnerId(PARTNER));
     }
+
+    @Test
+    @Transactional
+    void reverseRestoresBalanceAndReportsActualReversedAmount() {
+        service.deduct(PARTNER, "txn-R", new BigDecimal("250.00000000"));
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("750.00000000")));
+
+        // reverse returns the ACTUAL reversed USD (not a placeholder zero) and restores the balance.
+        PrefundingService.ReverseResult r = service.reverse(PARTNER, "txn-R");
+        assertEquals(0, r.reversedAmount().compareTo(new BigDecimal("250.00000000")),
+                "reverse must report the originally-deducted amount");
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("1000.00000000")),
+                "balance must be fully restored");
+
+        // A CREDIT entry tagged with the txnRef is the reversal marker.
+        List<LedgerEntryEntity> rows = ledger.findByPartnerIdAndTxnRef(PARTNER, "txn-R");
+        assertEquals(2, rows.size(), "one DEBIT + one CREDIT(reversal) for txn-R");
+
+        // Idempotent: a second reverse is a no-op (reports zero, balance unchanged).
+        PrefundingService.ReverseResult again = service.reverse(PARTNER, "txn-R");
+        assertEquals(0, again.reversedAmount().compareTo(BigDecimal.ZERO),
+                "second reverse must be a no-op");
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("1000.00000000")));
+    }
+
+    @Test
+    @Transactional
+    void reverseUnknownTxnRefIsZeroNoOp() {
+        PrefundingService.ReverseResult r = service.reverse(PARTNER, "never-deducted");
+        assertEquals(0, r.reversedAmount().compareTo(BigDecimal.ZERO));
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("1000.00000000")));
+    }
 }
