@@ -147,7 +147,7 @@ class PaymentOrchestratorTest {
                 42L, "qte_01HX7MNP9AB2CDEF3GH456IJ",
                 "ZPQR00012345678901234567890",
                 "zeropay", "inbound",
-                "customer-001", "PTNR_TXN_001"
+                "customer-001", "PTNR_TXN_001", "PARTNER_42"
         );
     }
 

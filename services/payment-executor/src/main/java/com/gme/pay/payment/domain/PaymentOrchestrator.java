@@ -147,11 +147,14 @@ public class PaymentOrchestrator {
             throw ex;
         }
 
-        // Step 6 (pre-commit): per-partner settlement booking. Skipped when collaborators
-        // are not wired (backwards-compat with 5-arg constructor used by older tests).
-        SettlementBooking booking = (settlementBookingService != null)
+        // Step 6 (pre-commit): per-partner settlement booking. Skipped when the collaborator
+        // is not wired (5-arg constructor, older tests) OR no partner code is available —
+        // config-registry resolves the rounding rule by partner CODE, not the numeric
+        // surrogate (PartnerStore identifier contract), so booking without a code would 404.
+        SettlementBooking booking = (settlementBookingService != null
+                        && cmd.partnerCode() != null && !cmd.partnerCode().isBlank())
                 ? settlementBookingService.book(
-                        cmd.partnerId(), quote.collectionAmount(), quote.collectionCurrency())
+                        cmd.partnerCode(), quote.collectionAmount(), quote.collectionCurrency())
                 : null;
 
         // Step 7: Commit APPROVED with rate-lock fields when booking was performed.
@@ -344,6 +347,12 @@ public class PaymentOrchestrator {
      * @param direction      payment direction
      * @param customerRef    customer reference text
      * @param partnerTxnRef  partner's own transaction reference (must be unique)
+     * @param partnerCode    partner business code (e.g. "GMEREMIT") used to resolve the
+     *                       partner's settlement-rounding rule from config-registry, which is
+     *                       keyed by code, not the numeric surrogate (see PartnerStore). May be
+     *                       {@code null} when unavailable, in which case settlement booking is
+     *                       skipped (the {@code numeric} {@code partnerId} still drives
+     *                       transaction-mgmt + prefunding).
      */
     public record MpmPaymentCommand(
             long partnerId,
@@ -352,7 +361,8 @@ public class PaymentOrchestrator {
             String schemeId,
             String direction,
             String customerRef,
-            String partnerTxnRef
+            String partnerTxnRef,
+            String partnerCode
     ) {}
 
     /** Outcome of a successful MPM payment orchestration. */

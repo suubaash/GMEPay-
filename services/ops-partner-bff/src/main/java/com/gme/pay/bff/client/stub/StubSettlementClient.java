@@ -1,6 +1,7 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.SettlementClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -13,6 +14,10 @@ import java.util.Objects;
  * Phase-1 in-memory stub of {@link SettlementClient}.
  */
 @Component
+@ConditionalOnProperty(
+        name = "gmepay.settlement-reconciliation.client",
+        havingValue = "stub",
+        matchIfMissing = true)
 public class StubSettlementClient implements SettlementClient {
 
     private static final List<SettlementBatchSummary> STORE = List.of(

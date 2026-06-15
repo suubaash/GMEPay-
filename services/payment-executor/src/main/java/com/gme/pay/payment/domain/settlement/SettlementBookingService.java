@@ -31,15 +31,17 @@ public class SettlementBookingService {
      * Books {@code preciseAmount} as the partner's settlement liability under that partner's
      * configured rounding rule.
      *
-     * @param partnerId      the partner whose rounding policy applies
+     * @param partnerCode    the partner business code (e.g. "GMEREMIT") whose rounding policy
+     *                       applies; config-registry is keyed by code, not the numeric surrogate
      * @param preciseAmount  the full-precision amount to book
      * @param currency       the ISO-4217 currency of {@code preciseAmount}
      * @return the booking result (booked, residual, mode, currency)
      */
-    public SettlementBooking book(long partnerId, BigDecimal preciseAmount, String currency) {
+    public SettlementBooking book(String partnerCode, BigDecimal preciseAmount, String currency) {
+        Objects.requireNonNull(partnerCode, "partnerCode");
         Objects.requireNonNull(preciseAmount, "preciseAmount");
         Objects.requireNonNull(currency, "currency");
-        PartnerConfigView cfg = partnerConfigClient.loadPartner(String.valueOf(partnerId));
+        PartnerConfigView cfg = partnerConfigClient.loadPartner(partnerCode);
         BookedAmount booked = SettlementRounding.book(
                 preciseAmount, currency, cfg.settlementRoundingMode());
         return new SettlementBooking(booked.booked(), booked.residual(), booked.mode(), currency);

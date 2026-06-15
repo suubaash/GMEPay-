@@ -19,7 +19,6 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -42,10 +41,9 @@ import java.util.List;
  * deprecated {@link PartnerSummary} alias via {@link PartnerSummary#fromView}.
  * Adding a partner field is now a one-line change in {@code lib-api-contracts}.
  *
- * <p>Scheme list ({@link #listSchemes()}) has no config-registry endpoint yet, so
- * we surface an empty list — the Admin schemes view degrades gracefully. When
- * config-registry exposes {@code GET /v1/schemes}, wire it here without changing
- * the contract.
+ * <p>Scheme list ({@link #listSchemes()}) maps config-registry's
+ * {@code GET /v1/schemes} catalog. If config-registry is unreachable we surface an
+ * empty list so the Admin schemes view degrades gracefully.
  */
 @Component
 @Primary
@@ -169,8 +167,16 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     @Override
     public List<SchemeSummary> listSchemes() {
-        // No config-registry endpoint for schemes yet. Empty list keeps the UI graceful.
-        return Collections.emptyList();
+        try {
+            List<SchemeSummary> response = restClient.get()
+                    .uri("/v1/schemes")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<SchemeSummary>>() {});
+            return response == null ? List.of() : response;
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listSchemes: {}", network.getMessage());
+            return List.of();
+        }
     }
 
     // -------- Slice 1 (1C.2) draft endpoints (ADR-012) -----------------------

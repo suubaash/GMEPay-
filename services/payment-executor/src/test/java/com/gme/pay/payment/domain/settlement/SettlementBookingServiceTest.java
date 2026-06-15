@@ -29,7 +29,7 @@ class SettlementBookingServiceTest {
     void downPartner_booksFloor_positiveResidual() {
         SettlementBookingService svc = new SettlementBookingService(fakeClient("USD", RoundingMode.DOWN));
 
-        SettlementBooking booking = svc.book(7L, new BigDecimal("10500.567"), "USD");
+        SettlementBooking booking = svc.book("7",new BigDecimal("10500.567"), "USD");
 
         assertNotNull(booking);
         assertEquals(0, booking.booked().compareTo(new BigDecimal("10500.56")),
@@ -49,7 +49,7 @@ class SettlementBookingServiceTest {
     void halfUpPartner_roundsHalfUp() {
         SettlementBookingService svc = new SettlementBookingService(fakeClient("USD", RoundingMode.HALF_UP));
 
-        SettlementBooking booking = svc.book(7L, new BigDecimal("10500.565"), "USD");
+        SettlementBooking booking = svc.book("7",new BigDecimal("10500.565"), "USD");
 
         // HALF_UP at 2dp: 10500.565 -> 10500.57
         assertEquals(0, booking.booked().compareTo(new BigDecimal("10500.57")));
@@ -68,7 +68,7 @@ class SettlementBookingServiceTest {
         SettlementBookingService svc = new SettlementBookingService(fakeClient("USD", RoundingMode.DOWN));
         BigDecimal precise = new BigDecimal("10500.567");
 
-        SettlementBooking booking = svc.book(99L, precise, "USD");
+        SettlementBooking booking = svc.book("99", precise, "USD");
 
         BigDecimal reconstructed = booking.booked().add(booking.residual());
         assertEquals(0, reconstructed.compareTo(precise),

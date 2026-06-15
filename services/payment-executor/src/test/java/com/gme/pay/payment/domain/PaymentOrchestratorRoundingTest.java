@@ -129,7 +129,7 @@ class PaymentOrchestratorRoundingTest {
 
         PaymentOrchestrator.MpmPaymentCommand cmd = new PaymentOrchestrator.MpmPaymentCommand(
                 42L, "qte_001", "ZPQR123", "zeropay", "inbound",
-                "cust-1", "PTNR_TXN_001");
+                "cust-1", "PTNR_TXN_001", "PARTNER_X");
 
         // ---- act ----
         PaymentOrchestrator.PaymentResult result = orchestrator.executeMpm(cmd, PartnerType.OVERSEAS);

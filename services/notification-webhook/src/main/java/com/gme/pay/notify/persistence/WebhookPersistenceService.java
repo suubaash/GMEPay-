@@ -138,6 +138,52 @@ public class WebhookPersistenceService {
     }
 
     /**
+     * Advances an existing PENDING row to DELIVERED in place (dispatcher drain path).
+     * Unlike {@link #recordAttempt} this updates the originating row rather than
+     * inserting a new one, so the drain loop does not re-pick the same event.
+     *
+     * @param row     the row that was just delivered (must be persisted)
+     * @param attempt the 1-based attempt number that succeeded
+     */
+    @Transactional
+    public void markDelivered(WebhookDeliveryEntity row, int attempt) {
+        Objects.requireNonNull(row, "row must not be null");
+        Instant now = Instant.now(clock);
+        row.setStatus(STATUS_DELIVERED);
+        row.setAttempt(attempt);
+        row.setLastAttemptedAt(now);
+        row.setDeliveredAt(now);
+        row.setLastError(null);
+        deliveryRepository.save(row);
+    }
+
+    /**
+     * Advances an existing row after a failed attempt (dispatcher drain path):
+     * records the error and either promotes to DLQ (threshold reached) or leaves the
+     * row PENDING for a later retry (gated by {@link RetryPolicy} backoff on
+     * {@code lastAttemptedAt}). Updates the originating row in place.
+     *
+     * @param row     the row whose attempt failed (must be persisted)
+     * @param attempt the 1-based attempt number that just failed
+     * @param error   error detail; may be {@code null}
+     */
+    @Transactional
+    public void markAttemptFailedOrDlq(WebhookDeliveryEntity row, int attempt, String error) {
+        Objects.requireNonNull(row, "row must not be null");
+        Instant now = Instant.now(clock);
+        row.setAttempt(attempt);
+        row.setLastAttemptedAt(now);
+        row.setLastError(error);
+        if (retryPolicy.isDlqThresholdReached(attempt)) {
+            // moveToDlq flips status to DLQ, saves the row, and writes the DLQ entry.
+            moveToDlq(row, error == null ? "max attempts exhausted" : error);
+        } else {
+            row.setStatus(STATUS_PENDING);
+            deliveryRepository.save(row);
+        }
+    }
+
+    /**
      * Records an attempt; if the attempt failed and the retry policy threshold is
      * reached, also moves the row to the DLQ. Convenience entry point for
      * {@code WebhookSender} integration.
