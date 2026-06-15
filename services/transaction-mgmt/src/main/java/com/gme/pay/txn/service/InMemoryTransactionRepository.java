@@ -1,11 +1,19 @@
 package com.gme.pay.txn.service;
 
 import com.gme.pay.txn.domain.model.Transaction;
+import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.persistence.TransactionEntity;
 import com.gme.pay.txn.persistence.TransactionEntityMapper;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Persistence adapter for {@link TransactionRepository}.
@@ -17,6 +25,8 @@ import java.util.Optional;
  *
  * <p>Class name is preserved to avoid renaming existing references; the underlying
  * storage is no longer in-memory.
+ *
+ * <p>V003 adds paged query delegation to Spring Data JPA.
  */
 @Repository
 public class InMemoryTransactionRepository implements TransactionRepository {
@@ -38,5 +48,35 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     @Override
     public Optional<Transaction> findByTxnRef(String txnRef) {
         return jpaRepository.findById(txnRef).map(TransactionEntityMapper::toDomain);
+    }
+
+    @Override
+    public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
+                                           TransactionStatus status, Long partnerId,
+                                           Pageable pageable) {
+        var fromInstant = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        // 'to' is inclusive: advance to start of next day for < comparison
+        var toInstant = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        String statusStr = status != null ? status.name() : null;
+        return jpaRepository
+                .findByFilters(fromInstant, toInstant, statusStr, partnerId, pageable)
+                .map(TransactionEntityMapper::toDomain);
+    }
+
+    /**
+     * Sweepable (non-terminal) statuses that can legally transition to FAILED.
+     * APPROVED/FAILED/CANCELLED are terminal and must never be swept.
+     */
+    private static final List<String> SWEEPABLE_STATUSES = List.of(
+            TransactionStatus.CREATED.name(),
+            TransactionStatus.PENDING_DEBIT.name()
+    );
+
+    @Override
+    public List<Transaction> findExpiredNonTerminal(Instant expiryBefore) {
+        return jpaRepository.findExpiredNonTerminal(expiryBefore, SWEEPABLE_STATUSES)
+                .stream()
+                .map(TransactionEntityMapper::toDomain)
+                .collect(Collectors.toList());
     }
 }

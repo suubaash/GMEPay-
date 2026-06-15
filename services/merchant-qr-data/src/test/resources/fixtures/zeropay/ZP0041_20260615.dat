@@ -1,0 +1,9 @@
+# ZP0041 — Incremental merchant new/change file (fixture)
+# Layout: record_type|merchant_id|name|merchant_type|fee_type|status|payout_currency|scheme_id|city|mcc
+# record_type: MN=new, MC=change, MD=delete
+# TODO(spec): layout is an approximation; validate against official ZeroPay spec
+MN|M0000000010|Gangnam Mart|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5411
+MN|M0000000011|Hongdae Coffee|FOOD_BEVERAGE|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5812
+MC|M0000000012|Itaewon Boutique Updated|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5621
+MD|M0000000013|Closed Shop|RETAIL|DOMESTIC|DEACTIVATED|KRW|ZEROPAY|Busan|5411
+MN|M0000000014|Jeju Resort Shop|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Jeju|5999

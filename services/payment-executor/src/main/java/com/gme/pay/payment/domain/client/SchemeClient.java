@@ -42,8 +42,20 @@ public interface SchemeClient {
             String merchantId,
             BigDecimal payoutAmount,
             String payoutCurrency,
-            String schemeId
-    ) {}
+            String schemeId,
+            /** Raw EMVCo QR payload — required for ZeroPay MPM authorize call. */
+            String qrPayload
+    ) {
+        /**
+         * Backwards-compatible 5-arg factory for callers that do not supply a QR payload
+         * (OVERSEAS path, cancellation path, existing tests).
+         */
+        public static MpmSubmitRequest of(String txnRef, String merchantId,
+                                          BigDecimal payoutAmount, String payoutCurrency,
+                                          String schemeId) {
+            return new MpmSubmitRequest(txnRef, merchantId, payoutAmount, payoutCurrency, schemeId, null);
+        }
+    }
 
     record MpmSubmitResponse(
             String schemeApprovalCode,

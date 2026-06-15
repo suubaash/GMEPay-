@@ -81,10 +81,10 @@ class AdminDashboardControllerTest {
 
         TransactionMgmtClient transactions = new TransactionMgmtClient() {
             private final List<TransactionSummary> txns = List.of(
-                    new TransactionSummary("T-1", "p1", "COMMITTED",
+                    TransactionSummary.of("T-1", "p1", "COMMITTED",
                             new BigDecimal("10.00"), "USD",
                             Instant.parse("2026-06-09T10:00:00Z")),
-                    new TransactionSummary("T-2", "p2", "COMMITTED",
+                    TransactionSummary.of("T-2", "p2", "COMMITTED",
                             new BigDecimal("5000"), "KRW",
                             Instant.parse("2026-06-09T11:00:00Z")));
 

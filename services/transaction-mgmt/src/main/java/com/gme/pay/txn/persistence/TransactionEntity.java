@@ -9,7 +9,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * JPA entity mapped to the {@code transactions} table created by Flyway V001.
+ * JPA entity mapped to the {@code transactions} table created by Flyway V001/V003.
  *
  * <p>This is a persistence-layer adapter type – kept deliberately separate from the
  * domain aggregate {@link com.gme.pay.txn.domain.model.Transaction} so the domain
@@ -18,6 +18,8 @@ import java.time.Instant;
  * <p>Money columns use {@link BigDecimal} (NUMERIC(20,8)) per MONEY_CONVENTION.md.
  * The three rate-lock columns are nullable until commit; mapping them as nullable
  * here lets us persist in-flight (CREATED / PENDING_DEBIT) transactions.
+ *
+ * <p>V003 columns: payment-executor 11-field create path + 5 status-patch lock fields.
  */
 @Entity
 @Table(name = "transactions")
@@ -59,6 +61,59 @@ public class TransactionEntity {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    // --- V003: payment-executor 11-field create path ---
+
+    @Column(name = "partner_id")
+    private Long partnerId;
+
+    @Column(name = "partner_txn_ref", length = 128)
+    private String partnerTxnRef;
+
+    @Column(name = "scheme_id", length = 64)
+    private String schemeId;
+
+    @Column(name = "direction", length = 32)
+    private String direction;
+
+    @Column(name = "payment_mode", length = 32)
+    private String paymentMode;
+
+    @Column(name = "payout_currency", length = 3)
+    private String payoutCurrency;
+
+    @Column(name = "collection_amount", precision = 20, scale = 8)
+    private BigDecimal collectionAmount;
+
+    @Column(name = "collection_currency", length = 3)
+    private String collectionCurrency;
+
+    @Column(name = "merchant_id", length = 128)
+    private String merchantId;
+
+    @Column(name = "quote_id", length = 128)
+    private String quoteId;
+
+    // --- V003: status-patch lock fields ---
+
+    @Column(name = "scheme_txn_ref", length = 128)
+    private String schemeTxnRef;
+
+    @Column(name = "scheme_approval_code", length = 64)
+    private String schemeApprovalCode;
+
+    @Column(name = "prefund_deducted_usd", precision = 20, scale = 8)
+    private BigDecimal prefundDeductedUsd;
+
+    @Column(name = "approved_at")
+    private Instant approvedAt;
+
+    @Column(name = "payment_id", length = 64)
+    private String paymentId;
+
+    /** Reason code for terminal FAILED transitions (e.g. "APPROVAL_TIMEOUT"). Nullable. */
+    @Column(name = "failure_reason", length = 64)
+    private String failureReason;
 
     /** Required no-arg constructor for JPA. */
     public TransactionEntity() {}
@@ -106,4 +161,52 @@ public class TransactionEntity {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public Long getPartnerId() { return partnerId; }
+    public void setPartnerId(Long partnerId) { this.partnerId = partnerId; }
+
+    public String getPartnerTxnRef() { return partnerTxnRef; }
+    public void setPartnerTxnRef(String partnerTxnRef) { this.partnerTxnRef = partnerTxnRef; }
+
+    public String getSchemeId() { return schemeId; }
+    public void setSchemeId(String schemeId) { this.schemeId = schemeId; }
+
+    public String getDirection() { return direction; }
+    public void setDirection(String direction) { this.direction = direction; }
+
+    public String getPaymentMode() { return paymentMode; }
+    public void setPaymentMode(String paymentMode) { this.paymentMode = paymentMode; }
+
+    public String getPayoutCurrency() { return payoutCurrency; }
+    public void setPayoutCurrency(String payoutCurrency) { this.payoutCurrency = payoutCurrency; }
+
+    public BigDecimal getCollectionAmount() { return collectionAmount; }
+    public void setCollectionAmount(BigDecimal collectionAmount) { this.collectionAmount = collectionAmount; }
+
+    public String getCollectionCurrency() { return collectionCurrency; }
+    public void setCollectionCurrency(String collectionCurrency) { this.collectionCurrency = collectionCurrency; }
+
+    public String getMerchantId() { return merchantId; }
+    public void setMerchantId(String merchantId) { this.merchantId = merchantId; }
+
+    public String getQuoteId() { return quoteId; }
+    public void setQuoteId(String quoteId) { this.quoteId = quoteId; }
+
+    public String getSchemeTxnRef() { return schemeTxnRef; }
+    public void setSchemeTxnRef(String schemeTxnRef) { this.schemeTxnRef = schemeTxnRef; }
+
+    public String getSchemeApprovalCode() { return schemeApprovalCode; }
+    public void setSchemeApprovalCode(String schemeApprovalCode) { this.schemeApprovalCode = schemeApprovalCode; }
+
+    public BigDecimal getPrefundDeductedUsd() { return prefundDeductedUsd; }
+    public void setPrefundDeductedUsd(BigDecimal prefundDeductedUsd) { this.prefundDeductedUsd = prefundDeductedUsd; }
+
+    public Instant getApprovedAt() { return approvedAt; }
+    public void setApprovedAt(Instant approvedAt) { this.approvedAt = approvedAt; }
+
+    public String getPaymentId() { return paymentId; }
+    public void setPaymentId(String paymentId) { this.paymentId = paymentId; }
+
+    public String getFailureReason() { return failureReason; }
+    public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
 }

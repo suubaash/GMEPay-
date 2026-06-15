@@ -49,7 +49,7 @@ class RestSchemeClientTest {
                         MediaType.APPLICATION_JSON));
 
         SchemeClient.MpmSubmitResponse resp = client.submitMpm(
-                new SchemeClient.MpmSubmitRequest(
+                SchemeClient.MpmSubmitRequest.of(
                         "txn_001", "M001",
                         new BigDecimal("50000"), "KRW", "zeropay"));
 
@@ -67,7 +67,7 @@ class RestSchemeClientTest {
                         .body("{\"code\":\"ZP_ERR_001\",\"message\":\"Declined by issuer\"}"));
 
         SchemeDeclinedException ex = assertThrows(SchemeDeclinedException.class,
-                () -> client.submitMpm(new SchemeClient.MpmSubmitRequest(
+                () -> client.submitMpm(SchemeClient.MpmSubmitRequest.of(
                         "txn_001", "M001",
                         new BigDecimal("50000"), "KRW", "zeropay")));
 
@@ -82,7 +82,7 @@ class RestSchemeClientTest {
                 .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE).body(""));
 
         assertThrows(SchemeTimeoutException.class,
-                () -> client.submitMpm(new SchemeClient.MpmSubmitRequest(
+                () -> client.submitMpm(SchemeClient.MpmSubmitRequest.of(
                         "txn_001", "M001",
                         new BigDecimal("50000"), "KRW", "zeropay")));
         server.verify();

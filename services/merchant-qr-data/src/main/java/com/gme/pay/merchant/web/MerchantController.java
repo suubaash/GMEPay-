@@ -40,11 +40,15 @@ public class MerchantController {
         MerchantResponse response = new MerchantResponse(
                 merchant.merchantId(),
                 merchant.qrCodeId(),
-                merchant.name(),
+                merchant.name(),          // serialised as "merchantName" — matches RestQrClient
                 merchant.merchantType(),
                 merchant.feeType(),
                 merchant.status(),
-                merchant.active());
+                merchant.active(),
+                merchant.payoutCurrency(),
+                merchant.schemeId(),
+                merchant.city(),
+                merchant.mcc());
         return ResponseEntity.ok(response);
     }
 

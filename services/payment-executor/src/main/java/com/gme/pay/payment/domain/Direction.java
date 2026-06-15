@@ -5,5 +5,6 @@ public enum Direction {
     INBOUND,
     OUTBOUND,
     DOMESTIC,
-    HUB
+    HUB,
+    OVERSEAS
 }

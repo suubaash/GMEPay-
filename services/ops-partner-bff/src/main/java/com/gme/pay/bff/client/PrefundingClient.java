@@ -42,7 +42,7 @@ public interface PrefundingClient {
             pct = legacy.balance().multiply(new BigDecimal("100"))
                     .divide(legacy.lowBalanceThreshold(), 2, RoundingMode.HALF_UP);
         }
-        return new com.gme.pay.contracts.BalanceView(
+        return com.gme.pay.contracts.BalanceView.of(
                 partnerCode, legacy.currency(), legacy.balance(),
                 legacy.lowBalanceThreshold(), pct);
     }

@@ -2,9 +2,12 @@ package com.gme.pay.scheme.zeropay.api;
 
 import com.gme.pay.scheme.zeropay.adapter.SchemeAdapter;
 import com.gme.pay.scheme.zeropay.adapter.model.AdapterHealth;
+import com.gme.pay.scheme.zeropay.adapter.model.CpmAuthRequest;
+import com.gme.pay.scheme.zeropay.adapter.model.CpmAuthResponse;
 import com.gme.pay.scheme.zeropay.adapter.model.MpmSubmitRequest;
 import com.gme.pay.scheme.zeropay.adapter.model.MpmSubmitResponse;
 import com.gme.pay.scheme.zeropay.dto.AdapterHealthResponse;
+import com.gme.pay.scheme.zeropay.dto.CpmSubmitRequestDto;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentRequest;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentResponse;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +16,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
 
 /**
  * Internal REST API exposed by the ZeroPay scheme adapter service.
@@ -43,13 +48,30 @@ public class ZeroPaySchemeController {
                 request.amountKrw(),
                 request.currency(),
                 request.partnerTxnRef(),
-                request.idempotencyKey()
+                request.idempotencyKey(),
+                request.qrPayload()
         );
 
         MpmSubmitResponse domainResponse = schemeAdapter.submitMpm(domainRequest);
 
+        // Parse committedAt string to Instant (may be null for non-sim adapters)
+        Instant approvedAt = null;
+        if (domainResponse.committedAt() != null) {
+            try {
+                approvedAt = Instant.parse(domainResponse.committedAt());
+            } catch (Exception ignored) {
+                approvedAt = Instant.now();
+            }
+        }
+        if (approvedAt == null) {
+            approvedAt = Instant.now();
+        }
+
         SubmitPaymentResponse response = new SubmitPaymentResponse(
-                domainResponse.zeroPayTxnRef(),
+                domainResponse.zeroPayTxnRef(),   // schemeTxnRef
+                domainResponse.authId(),           // schemeApprovalCode
+                approvedAt,                        // approvedAt
+                domainResponse.zeroPayTxnRef(),    // zeroPayTxnRef (legacy)
                 domainResponse.resultCode(),
                 domainResponse.resultMessage(),
                 "00".equals(domainResponse.resultCode())
@@ -57,6 +79,67 @@ public class ZeroPaySchemeController {
 
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Submits a CPM (Consumer-Presented Mode) payment to ZeroPay.
+     *
+     * <p>POST /internal/scheme/zeropay/cpm</p>
+     *
+     * <p>The {@code qrToken} in the request is the CPM token previously issued via
+     * {@code prepareCPM} / sim-scheme {@code /cpm/token}. This endpoint authorises and commits
+     * in one step (same two-step flow as {@link #authoriseCpm}).</p>
+     */
+    @PostMapping("/cpm")
+    public ResponseEntity<SubmitPaymentResponse> submitCpm(
+            @RequestBody CpmSubmitRequestDto req) {
+
+        // Map the wire DTO to the domain request.
+        // qrToken (CPM token) is passed as qrCodeId; payoutAmount is the KRW amount.
+        CpmAuthRequest domainRequest = new CpmAuthRequest(
+                null,              // merchantId not needed — scheme derives from cpmToken
+                req.qrToken(),     // cpmToken passed here as qrCodeId per authoriseCpm contract
+                req.payoutAmount(),
+                req.txnRef(),
+                null
+        );
+
+        CpmAuthResponse domainResponse = schemeAdapter.authoriseCpm(domainRequest);
+
+        // Build the standard SubmitPaymentResponse — field names match RestSchemeClient.SchemeApprovalResponse
+        SubmitPaymentResponse response = new SubmitPaymentResponse(
+                domainResponse.zeroPayTxnRef(),    // schemeTxnRef
+                domainResponse.approvalCode(),      // schemeApprovalCode (authId)
+                Instant.now(),                      // approvedAt (no committedAt from CpmAuthResponse)
+                domainResponse.zeroPayTxnRef(),     // zeroPayTxnRef (legacy)
+                domainResponse.resultCode(),
+                domainResponse.resultMessage(),
+                "00".equals(domainResponse.resultCode())
+        );
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Cancels/refunds a previously committed payment.
+     *
+     * <p>POST /internal/scheme/zeropay/cancel</p>
+     *
+     * <p>The {@code schemeTxnRef} field MUST carry the authorise-level {@code authId}
+     * (stored as {@code schemeApprovalCode} in payment-executor). The sim-scheme
+     * {@code /payments/{authId}/refund} endpoint requires the original authId, not the
+     * commit-level schemeTxnRef.</p>
+     */
+    @PostMapping("/cancel")
+    public ResponseEntity<Void> cancel(@RequestBody CancelRequest req) {
+        schemeAdapter.cancelPayment(req.schemeTxnRef());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Wire DTO for the cancel endpoint.
+     * Field names MUST match {@code RestSchemeClient.SchemeCancelRequest}: {@code schemeTxnRef}, {@code reason}.
+     */
+    record CancelRequest(String schemeTxnRef, String reason) {}
 
     /**
      * Returns the current health of the ZeroPay adapter.

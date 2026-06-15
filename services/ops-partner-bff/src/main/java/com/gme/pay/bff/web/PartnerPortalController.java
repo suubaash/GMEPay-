@@ -10,6 +10,7 @@ import com.gme.pay.bff.web.dto.PartnerOverview;
 import com.gme.pay.bff.web.dto.PartnerProfile;
 import com.gme.pay.bff.web.dto.TransactionDetail;
 import com.gme.pay.bff.web.dto.WebhookConfigView;
+import com.gme.pay.contracts.BalanceView;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -87,7 +88,7 @@ public class PartnerPortalController {
 
     @GetMapping("/{partnerId}/overview")
     public PartnerOverview overview(@PathVariable String partnerId) {
-        PrefundingClient.BalanceView balance = prefunding.getBalance(partnerId);
+        com.gme.pay.contracts.BalanceView balance = prefunding.getAdminBalance(partnerId);
         List<TransactionMgmtClient.TransactionSummary> recent =
                 transactions.recent(partnerId, DEFAULT_PAGE_SIZE);
         List<SettlementClient.SettlementBatchSummary> batches =
@@ -100,6 +101,15 @@ public class PartnerPortalController {
         return new PartnerOverview(partnerId, balance, recent.size(), lastSettlementDate);
     }
 
+    /**
+     * UC-10-02: Transaction History — per-txn: timestamp, QR scheme, KRW amount,
+     * payer-currency amount, applied FX rate, prefunding deducted (USD), status.
+     *
+     * <p>Revenue stripping: the returned {@link TransactionMgmtClient.TransactionSummary}
+     * records contain NO revenue fields (no {@code fxMarginPct}, no {@code gmeRevenue},
+     * no {@code marginRevenueUsd}). Revenue data lives exclusively in the Admin
+     * {@code /v1/admin/revenue/*} surface which this controller does not expose.
+     */
     @GetMapping("/{partnerId}/transactions")
     public List<TransactionMgmtClient.TransactionSummary> transactions(
             @PathVariable String partnerId,
@@ -108,6 +118,16 @@ public class PartnerPortalController {
         return transactions.recent(partnerId, capped);
     }
 
+    /**
+     * UC-10-03: Transaction Detail — txn id, timestamp, merchant info, KRW amount,
+     * payer-ccy amount, applied FX rate + rate timestamp, prefunding deducted, status history.
+     *
+     * <p>Revenue stripping: the returned {@link TransactionDetail} contains NO revenue
+     * fields (no {@code fxMarginPct}, no {@code gmeRevenue}). The BFF's
+     * {@code buildDetail} path does not call {@code RevenueLedgerClient} and the
+     * {@code TransactionDetail} record does not declare those fields.
+     * 404 covers both unknown-txn and wrong-partner to prevent oracle leakage.
+     */
     @GetMapping("/{partnerId}/transactions/{txnId}")
     public TransactionDetail transactionDetail(
             @PathVariable String partnerId,
@@ -122,9 +142,16 @@ public class PartnerPortalController {
         return buildDetail(summary);
     }
 
+    /**
+     * UC-10-01: prefunding balance inquiry.
+     * Returns the canonical {@link BalanceView} which carries the current USD balance,
+     * threshold, pctOfThreshold and (when the prefunding service supports it) the
+     * recent deduction history. Internal revenue fields (FX margin %, GME share) are
+     * NEVER present in this response — they only exist in the Admin revenue endpoints.
+     */
     @GetMapping("/{partnerId}/balance")
-    public PrefundingClient.BalanceView balance(@PathVariable String partnerId) {
-        PrefundingClient.BalanceView view = prefunding.getBalance(partnerId);
+    public BalanceView balance(@PathVariable String partnerId) {
+        BalanceView view = prefunding.getAdminBalance(partnerId);
         if (view == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "no prefunding balance for partner " + partnerId);
@@ -209,7 +236,7 @@ public class PartnerPortalController {
         Instant approvedAt = summary.committedAt() == null
                 ? null
                 : summary.committedAt().minus(2, ChronoUnit.SECONDS);
-        return new TransactionDetail(
+        return TransactionDetail.of(
                 summary,
                 "SCH-" + summary.txnId(),
                 "AP-" + summary.txnId(),

@@ -5,6 +5,7 @@ import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
@@ -36,6 +37,7 @@ public class RestSchemeClient implements SchemeClient {
     private final RestClient restClient;
     private final String schemeId = "zeropay";
 
+    @Autowired
     public RestSchemeClient(
             RestClient.Builder builder,
             @Value("${gmepay.scheme-adapter-zeropay.base-url:http://scheme-adapter-zeropay:8080}") String baseUrl) {
@@ -56,7 +58,8 @@ public class RestSchemeClient implements SchemeClient {
                             request.merchantId(),
                             request.payoutAmount(),
                             request.payoutCurrency(),
-                            request.schemeId()))
+                            request.schemeId(),
+                            request.qrPayload()))
                     .retrieve()
                     .body(SchemeApprovalResponse.class);
 
@@ -167,12 +170,15 @@ public class RestSchemeClient implements SchemeClient {
 
     // ---- wire formats ----
 
+    // Field names MUST match scheme-adapter-zeropay's SubmitPaymentRequest JSON keys
+    // (Jackson binds by name): partnerTxnRef / amountKrw / currency — not txnRef/payout*.
     record SchemeMpmSubmitRequest(
-            String txnRef,
+            String partnerTxnRef,
             String merchantId,
-            BigDecimal payoutAmount,
-            String payoutCurrency,
-            String schemeId
+            BigDecimal amountKrw,
+            String currency,
+            String schemeId,
+            String qrPayload
     ) {}
 
     record SchemeCpmSubmitRequest(

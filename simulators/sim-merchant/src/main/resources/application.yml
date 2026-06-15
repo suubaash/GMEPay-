@@ -1,0 +1,19 @@
+server:
+  port: 9104
+
+spring:
+  application:
+    name: sim-merchant
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+gmepay:
+  sim:
+    merchant:
+      scheme-base-url: http://localhost:9102
+
+logging:
+  level:
+    com.gme.sim: DEBUG

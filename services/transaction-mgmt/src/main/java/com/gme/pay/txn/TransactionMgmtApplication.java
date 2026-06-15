@@ -2,6 +2,7 @@ package com.gme.pay.txn;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Transaction Management microservice.
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * transactional outbox for domain events.
  */
 @SpringBootApplication
+@EnableScheduling
 public class TransactionMgmtApplication {
 
     public static void main(String[] args) {

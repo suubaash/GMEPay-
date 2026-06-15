@@ -1,0 +1,10 @@
+# ZP0051 — Full merchant list (periodic reconciliation fixture)
+# Layout: merchant_id|name|merchant_type|fee_type|status|payout_currency|scheme_id|city|mcc
+# No record_type column — all rows are authoritative merchant records
+# TODO(spec): layout is an approximation; validate against official ZeroPay spec
+M0000000010|Gangnam Mart|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5411
+M0000000011|Hongdae Coffee|FOOD_BEVERAGE|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5812
+M0000000012|Itaewon Boutique|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Seoul|5621
+M0000000014|Jeju Resort Shop|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Jeju|5999
+M0000000020|Busan Harbor Restaurant|FOOD_BEVERAGE|DOMESTIC|ACTIVE|KRW|ZEROPAY|Busan|5812
+M0000000021|Daegu Electronics|RETAIL|DOMESTIC|ACTIVE|KRW|ZEROPAY|Daegu|5734

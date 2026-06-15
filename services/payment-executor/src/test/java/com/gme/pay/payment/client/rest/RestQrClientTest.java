@@ -12,6 +12,7 @@ import org.springframework.web.client.RestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -38,7 +39,7 @@ class RestQrClientTest {
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(
                         "{\"merchantId\":\"M001\",\"merchantName\":\"Coffee Shop\","
-                                + "\"payoutCurrency\":\"KRW\",\"schemeId\":\"zeropay\"}",
+                                + "\"payoutCurrency\":\"KRW\",\"schemeId\":\"zeropay\",\"active\":true}",
                         MediaType.APPLICATION_JSON));
 
         QrClient.MerchantView view = client.resolve("ZPQR0001");
@@ -47,6 +48,7 @@ class RestQrClientTest {
         assertEquals("Coffee Shop", view.merchantName());
         assertEquals("KRW", view.payoutCurrency());
         assertEquals("zeropay", view.schemeId());
+        assertTrue(view.active());
         server.verify();
     }
 

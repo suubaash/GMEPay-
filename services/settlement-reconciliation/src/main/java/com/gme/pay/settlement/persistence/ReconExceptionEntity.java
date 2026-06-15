@@ -1,5 +1,6 @@
 package com.gme.pay.settlement.persistence;
 
+import com.gme.pay.settlement.exception.ExceptionStatus;
 import com.gme.pay.settlement.recon.MatchStatus;
 import com.gme.pay.settlement.recon.ReconLine;
 import jakarta.persistence.Column;
@@ -55,6 +56,31 @@ public class ReconExceptionEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    // --- ops lifecycle fields (added by V005) ---
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "exception_status", length = 16, nullable = false)
+    private ExceptionStatus exceptionStatus = ExceptionStatus.OPEN;
+
+    /** Operator ID (e.g. email) of the ops user who last acted on this exception. */
+    @Column(name = "operator_id", length = 128)
+    private String operatorId;
+
+    /** Free-text resolution note provided by ops. */
+    @Column(name = "resolution_note", columnDefinition = "TEXT")
+    private String resolutionNote;
+
+    /**
+     * Structured action taken at resolution time.
+     * Suggested values: MANUAL_OVERRIDE, RESUBMIT, WAIVED.
+     */
+    @Column(name = "resolution_action", length = 32)
+    private String resolutionAction;
+
+    /** Instant the exception was resolved (set when exceptionStatus -> RESOLVED). */
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
     public ReconExceptionEntity() {
         // JPA no-arg constructor
     }
@@ -73,6 +99,7 @@ public class ReconExceptionEntity {
         this.discrepancyAmount = discrepancyAmount;
         this.matchStatus = matchStatus;
         this.createdAt = createdAt;
+        this.exceptionStatus = ExceptionStatus.OPEN;
     }
 
     /** Build a persistable row from a {@link LineMatcher} result line. */
@@ -154,6 +181,46 @@ public class ReconExceptionEntity {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public ExceptionStatus getExceptionStatus() {
+        return exceptionStatus;
+    }
+
+    public void setExceptionStatus(ExceptionStatus exceptionStatus) {
+        this.exceptionStatus = exceptionStatus;
+    }
+
+    public String getOperatorId() {
+        return operatorId;
+    }
+
+    public void setOperatorId(String operatorId) {
+        this.operatorId = operatorId;
+    }
+
+    public String getResolutionNote() {
+        return resolutionNote;
+    }
+
+    public void setResolutionNote(String resolutionNote) {
+        this.resolutionNote = resolutionNote;
+    }
+
+    public String getResolutionAction() {
+        return resolutionAction;
+    }
+
+    public void setResolutionAction(String resolutionAction) {
+        this.resolutionAction = resolutionAction;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
+    }
+
+    public void setResolvedAt(Instant resolvedAt) {
+        this.resolvedAt = resolvedAt;
     }
 
     @Override

@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
@@ -30,6 +31,7 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestRevenueLedgerClient(@Value("${gmepay.revenue-ledger.base-url:http://revenue-ledger:8080}") String baseUrl) {
         this(RestClient.builder().baseUrl(baseUrl).build());
     }

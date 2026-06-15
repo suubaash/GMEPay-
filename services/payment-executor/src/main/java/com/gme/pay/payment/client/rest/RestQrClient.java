@@ -3,6 +3,7 @@ package com.gme.pay.payment.client.rest;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.QrClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,7 @@ public class RestQrClient implements QrClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestQrClient(
             RestClient.Builder builder,
             @Value("${gmepay.merchant-qr-data.base-url:http://merchant-qr-data:8080}") String baseUrl) {
@@ -45,7 +47,8 @@ public class RestQrClient implements QrClient {
             }
             return new MerchantView(
                     body.merchantId(), body.merchantName(),
-                    body.payoutCurrency(), body.schemeId());
+                    body.payoutCurrency(), body.schemeId(),
+                    body.isActive());
         } catch (RestClientResponseException ex) {
             throw new PaymentException(
                     "merchant-qr-data GET /v1/merchants/" + merchantQr + " failed: "
@@ -63,6 +66,24 @@ public class RestQrClient implements QrClient {
             String merchantId,
             String merchantName,
             String payoutCurrency,
-            String schemeId
-    ) {}
+            String schemeId,
+            /** Canonical "active" flag — true when the merchant account is enabled. */
+            boolean active,
+            /**
+             * Alternative "status" field used by some merchant-qr-data implementations
+             * (e.g. "ACTIVE" / "DEACTIVATED"). Checked as a fallback when {@code active}
+             * is false / absent so that either encoding works (audit B3).
+             */
+            String status
+    ) {
+        /**
+         * Returns {@code true} when this merchant may accept payments.
+         * The field {@code active} is the primary signal; {@code status == "ACTIVE"} is
+         * the fallback for implementations that omit the boolean.
+         */
+        boolean isActive() {
+            if (active) return true;
+            return "ACTIVE".equalsIgnoreCase(status);
+        }
+    }
 }

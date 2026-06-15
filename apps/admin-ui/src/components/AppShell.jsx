@@ -37,6 +37,13 @@ import LightModeIcon from '@mui/icons-material/LightMode';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import HistoryIcon from '@mui/icons-material/History';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import ScienceIcon from '@mui/icons-material/Science';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AssessmentIcon from '@mui/icons-material/Assessment';
+import ManageSearchIcon from '@mui/icons-material/ManageSearch';
+import PolicyIcon from '@mui/icons-material/Policy';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -52,13 +59,20 @@ const navItems = [
   { label: 'Dashboard', href: '/', icon: <DashboardIcon /> },
   { label: 'Partners', href: '/partners', icon: <GroupsIcon /> },
   { label: 'Approvals', href: '/approvals', icon: <HowToVoteIcon /> },
+  { label: 'Compliance', href: '/compliance', icon: <PolicyIcon /> },
   { label: 'Schemes', href: '/schemes', icon: <QrCode2Icon /> },
   { label: 'Transactions', href: '/transactions', icon: <ReceiptLongIcon /> },
+  { label: 'Transaction Search', href: '/transactions/search', icon: <ManageSearchIcon /> },
   { label: 'Settlement', href: '/settlement', icon: <AccountBalanceIcon /> },
+  { label: 'Exceptions', href: '/settlement/exceptions', icon: <ReportProblemOutlinedIcon /> },
   { label: 'Revenue', href: '/revenue', icon: <TrendingUpIcon /> },
+  { label: 'Reports', href: '/reports', icon: <AssessmentIcon /> },
   { label: 'Rates Preview', href: '/rates', icon: <ShowChartIcon /> },
   { label: 'Audit Log', href: '/audit', icon: <HistoryIcon /> },
+  { label: 'Users', href: '/users', icon: <ManageAccountsIcon /> },
+  { label: 'RBAC', href: '/rbac', icon: <AdminPanelSettingsIcon /> },
   { label: 'System Health', href: '/system-health', icon: <MonitorHeartIcon /> },
+  { label: 'Sandbox', href: '/sandbox', icon: <ScienceIcon /> },
 ];
 
 /**

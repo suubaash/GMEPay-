@@ -76,9 +76,13 @@ class StatementControllerTest {
         // 1 header + 5 rows
         org.junit.jupiter.api.Assertions.assertEquals(6, lines.length,
                 "expected 1 header + 5 rows, got: " + body);
+        // UC-10-02 header — no revenue fields
         org.junit.jupiter.api.Assertions.assertEquals(
-                "txnId,partnerId,status,amount,currency,createdAt", lines[0]);
-        org.junit.jupiter.api.Assertions.assertTrue(lines[1].startsWith("TXN-1001,partner_test_001,"));
+                com.gme.pay.bff.client.stub.StubStatementClient.UC10_HEADER, lines[0]);
+        // first data row starts with the UTC ISO timestamp for 2026-06-01
+        org.junit.jupiter.api.Assertions.assertTrue(
+                lines[1].startsWith("2026-06-01T00:00:00Z,zeropay_kr,"),
+                "unexpected first data row: " + lines[1]);
     }
 
     @Test

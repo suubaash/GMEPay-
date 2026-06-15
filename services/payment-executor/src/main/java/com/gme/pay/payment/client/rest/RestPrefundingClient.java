@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.PrefundingClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
@@ -34,6 +35,7 @@ public class RestPrefundingClient implements PrefundingClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestPrefundingClient(
             RestClient.Builder builder,
             @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl) {

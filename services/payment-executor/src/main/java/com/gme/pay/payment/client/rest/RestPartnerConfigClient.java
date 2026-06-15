@@ -3,6 +3,7 @@ package com.gme.pay.payment.client.rest;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.PartnerConfigClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestPartnerConfigClient(
             RestClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {

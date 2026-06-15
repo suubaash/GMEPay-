@@ -1,7 +1,14 @@
 package com.gme.pay.txn.persistence;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import java.time.Instant;
+import java.util.List;
 
 /**
  * Spring Data JPA repository for {@link TransactionEntity} rows.
@@ -11,7 +18,53 @@ import org.springframework.stereotype.Repository;
  * the domain-layer port over the aggregate.  The in-memory adapter
  * {@code InMemoryTransactionRepository} now delegates to this interface so the
  * service layer is unaffected.
+ *
+ * <p>V003 adds a paged query for GET /v1/transactions.
  */
 @Repository
 public interface TransactionRepository extends JpaRepository<TransactionEntity, String> {
+
+    /**
+     * Paged query for GET /v1/transactions with optional filters.
+     * All filter parameters are nullable — pass {@code null} to skip that filter.
+     *
+     * @param fromInstant   lower bound (inclusive) on created_at (null = no lower bound)
+     * @param toInstant     upper bound (exclusive) on created_at (null = no upper bound)
+     * @param status        filter by status name (null = all statuses)
+     * @param partnerId     filter by partner_id (null = all partners)
+     * @param pageable      pagination/sort spec
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE (:fromInstant IS NULL OR t.createdAt >= :fromInstant)
+              AND (:toInstant   IS NULL OR t.createdAt <  :toInstant)
+              AND (:status      IS NULL OR t.status    =  :status)
+              AND (:partnerId   IS NULL OR t.partnerId =  :partnerId)
+            """)
+    Page<TransactionEntity> findByFilters(
+            @Param("fromInstant") Instant fromInstant,
+            @Param("toInstant")   Instant toInstant,
+            @Param("status")      String status,
+            @Param("partnerId")   Long partnerId,
+            Pageable pageable);
+
+    /**
+     * Returns non-terminal transactions whose {@code createdAt} is older than
+     * {@code expiryBefore} and whose status is in the provided set of sweepable statuses.
+     *
+     * <p>Only CREATED and PENDING_DEBIT are sweepable (both can legally transition to FAILED
+     * per {@link com.gme.pay.txn.domain.statemachine.TransactionTransitions}).
+     * Terminal states (APPROVED, FAILED, CANCELLED) are never returned here.
+     *
+     * @param expiryBefore   upper-exclusive bound on createdAt (i.e. now minus timeout)
+     * @param sweepStatuses  set of status names to sweep (e.g. ["CREATED","PENDING_DEBIT"])
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE t.createdAt < :expiryBefore
+              AND t.status IN :sweepStatuses
+            """)
+    List<TransactionEntity> findExpiredNonTerminal(
+            @Param("expiryBefore") Instant expiryBefore,
+            @Param("sweepStatuses") List<String> sweepStatuses);
 }

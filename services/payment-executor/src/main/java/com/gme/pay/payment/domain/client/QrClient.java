@@ -16,5 +16,15 @@ public interface QrClient {
     MerchantView resolve(String merchantQr);
 
     /** Immutable view of a resolved QR merchant. */
-    record MerchantView(String merchantId, String merchantName, String payoutCurrency, String schemeId) {}
+    record MerchantView(String merchantId, String merchantName, String payoutCurrency, String schemeId, boolean active) {
+
+        /**
+         * Backwards-compatible 4-arg factory: treats merchant as active (legacy callers
+         * that do not supply an active/status field).
+         */
+        public static MerchantView of(String merchantId, String merchantName,
+                                      String payoutCurrency, String schemeId) {
+            return new MerchantView(merchantId, merchantName, payoutCurrency, schemeId, true);
+        }
+    }
 }

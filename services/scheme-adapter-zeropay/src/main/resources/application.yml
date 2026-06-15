@@ -23,6 +23,20 @@ adapter:
     sftp-host: ""
     sftp-port: 22
     mai-tag: "29"
+    institution-code: "GME001"
+    # KST batch file scheduler — default OFF so it never fires without explicit opt-in
+    batch-enabled: false
+
+# ZeroPay scheme simulator + local-dir SFTP stub paths
+gmepay:
+  scheme:
+    zeropay:
+      # sim-scheme :9102 base URL; override with GMEPAY_SCHEME_ZEROPAY_BASE_URL in production
+      base-url: http://localhost:9102/v1/scheme
+  batch:
+    # Local-dir SFTP stub paths — override in production with real SFTP config
+    outbound-dir: ${java.io.tmpdir}/gmepay/outbound
+    inbound-dir: ${java.io.tmpdir}/gmepay/inbound
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:

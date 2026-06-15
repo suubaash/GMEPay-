@@ -8,9 +8,14 @@ import java.time.LocalDate;
  * in-memory stub generating a deterministic CSV so the Partner Portal
  * Statement page can offer downloads without booting reporting-compliance.
  *
- * <p>The CSV columns are: {@code txnId, partnerId, status, amount, currency,
- * createdAt}. The first row is the header; subsequent rows are the
- * transactions in the requested date range.
+ * <p>UC-10-02 CSV columns (updated from Phase-1):
+ * {@code timestamp,qrSchemeId,krwAmount,payerCcyAmount,payerCurrency,appliedFxRate,prefundingDeductedUsd,status}.
+ * The first row is the header; subsequent rows are the transactions in the
+ * requested date range ordered by timestamp ascending. Money fields are
+ * decimal strings (never floating-point) per MONEY_CONVENTION.md.
+ *
+ * <p>IMPORTANT: Internal revenue fields (fxMarginPct, gmeRevenue) MUST NOT
+ * appear in this CSV. Revenue data is Admin-only.
  */
 public interface StatementClient {
 

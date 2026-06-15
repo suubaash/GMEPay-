@@ -39,7 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  T09 – Dynamic QR contains tag 01 = "12"
  *  T10 – Unknown merchant → 404
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "gmepay.sim.scheme.profile=KHQR")
 @AutoConfigureMockMvc
 class SchemeControllerTest {
 
