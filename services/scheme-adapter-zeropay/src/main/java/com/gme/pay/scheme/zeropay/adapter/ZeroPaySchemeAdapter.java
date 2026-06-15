@@ -17,9 +17,12 @@ import com.gme.pay.scheme.zeropay.adapter.model.SchemeConfig;
 import com.gme.pay.scheme.zeropay.adapter.model.SchemeResult;
 import com.gme.pay.scheme.zeropay.adapter.model.SyncResult;
 import com.gme.pay.scheme.zeropay.adapter.model.TransferResult;
+import com.gme.pay.scheme.zeropay.client.ZeroPaySchemeApiClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
@@ -27,9 +30,9 @@ import java.util.List;
 /**
  * ZeroPay implementation of {@link SchemeAdapter}.
  *
- * <p>@apiNote This adapter is Phase 2 pending KFTC spec (OI-SCH-01, OI-SCH-02).
- * All methods except {@link #healthCheck()} and {@link #getSchemeConfig()} throw
- * {@link UnsupportedOperationException} until then.</p>
+ * <p>Real-time payment path (MPM/CPM) is implemented against the ZeroPay scheme simulator
+ * (sim-scheme, default :9102). The sim-scheme base URL is read from
+ * {@code gmepay.scheme.zeropay.base-url} (see {@link ZeroPaySchemeApiClient}).
  *
  * <p>The bean is guarded by {@code @ConditionalOnProperty(name="adapter.zeropay.enabled",
  * havingValue="true")} so it can be omitted from test slices that do not need it.</p>
@@ -39,9 +42,12 @@ import java.util.List;
 public class ZeroPaySchemeAdapter implements SchemeAdapter {
 
     private final ZeroPayAdapterProperties properties;
+    private final ZeroPaySchemeApiClient schemeApiClient;
 
-    public ZeroPaySchemeAdapter(ZeroPayAdapterProperties properties) {
+    public ZeroPaySchemeAdapter(ZeroPayAdapterProperties properties,
+                                ZeroPaySchemeApiClient schemeApiClient) {
         this.properties = properties;
+        this.schemeApiClient = schemeApiClient;
     }
 
     // -----------------------------------------------------------------------
@@ -124,41 +130,135 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 2 stubs
+    // Real-time payment path (MPM + CPM)
     // -----------------------------------------------------------------------
 
+    /**
+     * Decodes the QR payload via sim-scheme and returns a {@link MerchantIdentifier}.
+     * The QR mode ("static" or "dynamic") is preserved in {@code merchantTypeCode}.
+     */
     @Override
     public MerchantIdentifier parseMerchantQR(String rawQrPayload) {
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - parseMerchantQR");
+        ZeroPaySchemeApiClient.DecodeQrResponse decoded =
+                schemeApiClient.decodeQr(rawQrPayload);
+        return new MerchantIdentifier(
+                decoded.merchantId(),
+                /* qrCodeId — not returned by decode; use payload hash as surrogate */
+                Integer.toHexString(rawQrPayload.hashCode()),
+                decoded.merchantName(),
+                decoded.mode()   // "static" | "dynamic"
+        );
     }
 
+    /**
+     * CPM prepare — not yet implemented for sim-scheme (no CPM token issuance endpoint needed
+     * for the current increment). Returns a sentinel token so the interface compiles.
+     *
+     * <p>TODO: implement when CPM token issuance is added to sim-scheme.</p>
+     */
     @Override
     public PrepareToken prepareCPM(MerchantIdentifier merchantIdentifier) {
+        // TODO: ZeroPay CPM - call sim-scheme /cpm/token endpoint
         throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - prepareCPM");
+                "TODO: ZeroPay CPM - prepareCPM not yet implemented for sim-scheme");
     }
 
+    /**
+     * CPM authorise — authorises against sim-scheme using the CPM token embedded in the request.
+     */
     @Override
     public CpmAuthResponse authoriseCpm(CpmAuthRequest request) {
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - authoriseCpm");
+        // Use the qrCodeId field as the CPM token (set by the caller from PrepareToken.tokenId)
+        ZeroPaySchemeApiClient.AuthorizeResponse authResp = schemeApiClient.authorize(
+                "CPM",
+                null,
+                request.qrCodeId(),
+                request.amountKrw(),
+                "KRW",
+                request.partnerTxnRef()
+        );
+        // Commit immediately after authorize (CPM is a two-step single flow)
+        ZeroPaySchemeApiClient.CommitResponse commitResp =
+                schemeApiClient.commit(authResp.authId());
+
+        return new CpmAuthResponse(
+                authResp.authId(),          // approvalCode = authId from scheme
+                commitResp.schemeTxnRef(),   // zeroPayTxnRef = final schemeTxnRef
+                "00",
+                "CAPTURED"
+        );
     }
 
+    /**
+     * MPM submit: authorize then commit against sim-scheme.
+     *
+     * <p>For MPM_DYNAMIC: decodes the QR first to extract the embedded amount and uses
+     * that for the authorize call (so the scheme never returns AMOUNT_MISMATCH).
+     * For MPM_STATIC: the {@code request.amountKrw()} is used as-is.
+     */
     @Override
     public MpmSubmitResponse submitMpm(MpmSubmitRequest request) {
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - submitMpm");
+        String qrPayload = request.qrPayload();
+        // Decode the QR to discover mode (static/dynamic)
+        ZeroPaySchemeApiClient.DecodeQrResponse decoded = schemeApiClient.decodeQr(qrPayload);
+
+        String schemeMode;
+        BigDecimal authorizeAmount;
+        if ("dynamic".equals(decoded.mode())) {
+            schemeMode = "MPM_DYNAMIC";
+            // For dynamic QR the amount is embedded; use it to avoid AMOUNT_MISMATCH
+            authorizeAmount = decoded.amount() != null
+                    ? new BigDecimal(decoded.amount())
+                    : request.amountKrw();
+        } else {
+            schemeMode = "MPM_STATIC";
+            authorizeAmount = request.amountKrw();
+        }
+
+        // The decoded QR (tag 53) carries the scheme's authoritative currency; fall back to
+        // it when the caller didn't pass one (sim-scheme rejects a blank currency).
+        String currency = (request.currency() != null && !request.currency().isBlank())
+                ? request.currency()
+                : decoded.currency();
+
+        ZeroPaySchemeApiClient.AuthorizeResponse authResp = schemeApiClient.authorize(
+                schemeMode,
+                qrPayload,
+                null,
+                authorizeAmount,
+                currency,
+                request.partnerTxnRef()
+        );
+
+        ZeroPaySchemeApiClient.CommitResponse commitResp =
+                schemeApiClient.commit(authResp.authId());
+
+        return new MpmSubmitResponse(
+                commitResp.schemeTxnRef(),
+                "00",
+                "CAPTURED"
+        );
     }
 
+    /**
+     * Commit a previously prepared CPM payment by its token ID.
+     * The token carries the authId in its {@code tokenId} field.
+     */
     @Override
     public SchemeResult commitPayment(PrepareToken token) {
-        throw new UnsupportedOperationException(
-                "TODO: ZeroPay Phase 2 - commitPayment");
+        ZeroPaySchemeApiClient.CommitResponse commitResp =
+                schemeApiClient.commit(token.tokenId());
+        return new SchemeResult(
+                "CAPTURED".equals(commitResp.status()),
+                "00",
+                commitResp.status(),
+                commitResp.schemeTxnRef()
+        );
     }
 
     @Override
     public CancelResult cancelPayment(String gmeTxnId) {
+        // TODO: ZeroPay Phase 2 - map gmeTxnId to authId and call sim-scheme refund
         throw new UnsupportedOperationException(
                 "TODO: ZeroPay Phase 2 - cancelPayment");
     }

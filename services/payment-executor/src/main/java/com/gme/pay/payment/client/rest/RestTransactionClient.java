@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.client.TransactionClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -31,6 +32,7 @@ public class RestTransactionClient implements TransactionClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestTransactionClient(
             RestClient.Builder builder,
             @Value("${gmepay.transaction-mgmt.base-url:http://transaction-mgmt:8080}") String baseUrl) {

@@ -53,7 +53,7 @@ class PaymentOrchestratorTest {
 
     private final QrClient fakeQr = qr -> {
         callLog.add("QR:" + qr);
-        return new QrClient.MerchantView("M001", "Test Merchant", "KRW", "zeropay");
+        return QrClient.MerchantView.of("M001", "Test Merchant", "KRW", "zeropay");
     };
 
     private final TransactionClient fakeTxn = new TransactionClient() {

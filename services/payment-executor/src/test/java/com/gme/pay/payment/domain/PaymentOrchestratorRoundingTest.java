@@ -57,7 +57,7 @@ class PaymentOrchestratorRoundingTest {
         // ---- fake 2: qr-service ----
         QrClient fakeQr = qr -> {
             callLog.add("QR");
-            return new QrClient.MerchantView("M001", "Test Merchant", "USD", "zeropay");
+            return QrClient.MerchantView.of("M001", "Test Merchant", "USD", "zeropay");
         };
 
         // ---- fake 3: transaction-mgmt ----

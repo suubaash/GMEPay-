@@ -37,6 +37,7 @@ import LightModeIcon from '@mui/icons-material/LightMode';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import HistoryIcon from '@mui/icons-material/History';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
+import ScienceIcon from '@mui/icons-material/Science';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -59,6 +60,7 @@ const navItems = [
   { label: 'Rates Preview', href: '/rates', icon: <ShowChartIcon /> },
   { label: 'Audit Log', href: '/audit', icon: <HistoryIcon /> },
   { label: 'System Health', href: '/system-health', icon: <MonitorHeartIcon /> },
+  { label: 'Sandbox', href: '/sandbox', icon: <ScienceIcon /> },
 ];
 
 /**

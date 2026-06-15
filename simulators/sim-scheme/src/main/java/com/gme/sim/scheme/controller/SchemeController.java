@@ -16,6 +16,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -34,10 +37,14 @@ public class SchemeController {
 
     private final SchemeConfig schemeConfig;
     private final SchemeStore  store;
+    private final MerchantFeedStore feedStore;
 
-    public SchemeController(SchemeConfig schemeConfig, SchemeStore store) {
+    public SchemeController(SchemeConfig schemeConfig,
+                            SchemeStore store,
+                            MerchantFeedStore feedStore) {
         this.schemeConfig = schemeConfig;
         this.store        = store;
+        this.feedStore    = feedStore;
     }
 
     // -------------------------------------------------------------------------
@@ -48,9 +55,58 @@ public class SchemeController {
     public ResponseEntity<MerchantRecord> registerMerchant(
             @Valid @RequestBody RegisterMerchantRequest req) {
         MerchantRecord record = new MerchantRecord(
-                req.merchantId(), req.name(), req.city(), req.mcc());
+                req.merchantId(), req.name(), req.city(), req.mcc(),
+                req.businessRegNo(),
+                req.subMerchantId(),
+                req.kftcInstitutionCode(),
+                req.settlementBankCode(),
+                req.settlementAccountNo(),
+                req.merchantType(),
+                null  // feeRate is derived by the compact constructor
+        );
         store.saveMerchant(record);
         return ResponseEntity.status(HttpStatus.CREATED).body(record);
+    }
+
+    // -------------------------------------------------------------------------
+    // Store-QR convenience  GET /merchants/{merchantId}/store-qr
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/merchants/{merchantId}/store-qr")
+    public ResponseEntity<?> getStoreQr(@PathVariable String merchantId) {
+        return store.findMerchant(merchantId)
+                .map(m -> {
+                    SchemeProfile profile = schemeConfig.getProfile();
+                    String qrPayload = EmvcoQrEncoder.buildStatic(m, profile);
+                    Map<String, Object> resp = new LinkedHashMap<>();
+                    resp.put("merchantId",   m.merchantId());
+                    resp.put("merchantName", m.name());
+                    resp.put("mode",         "MPM_STATIC");
+                    resp.put("qrPayload",    qrPayload);
+                    resp.put("schemeId",     profile.schemeId);
+                    resp.put("currency",     profile.payoutCurrency);
+                    return ResponseEntity.ok(resp);
+                })
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).<Map<String,Object>>build());
+    }
+
+    // -------------------------------------------------------------------------
+    // Merchant payment-notification feed  GET /merchants/{merchantId}/payments
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/merchants/{merchantId}/payments")
+    public ResponseEntity<?> getMerchantPayments(
+            @PathVariable String merchantId,
+            @RequestParam(name = "since", defaultValue = "0") long since) {
+        // Always return 200 (even if no events); merchantId existence not enforced here
+        List<PaymentFeedEvent> events = feedStore.since(merchantId, since);
+        long latestSeq = feedStore.latestSeq(merchantId);
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("merchantId", merchantId);
+        resp.put("events",     events);
+        resp.put("latestSeq",  latestSeq);
+        return ResponseEntity.ok(resp);
     }
 
     // -------------------------------------------------------------------------
@@ -217,6 +273,10 @@ public class SchemeController {
                 req.payerRef(), schemeRef, now);
         store.savePayment(payment);
 
+        // Append APPROVED event to merchant feed
+        feedStore.append(merchantId, authId, null, "APPROVED",
+                req.amount(), req.currency(), req.payerRef(), ISO_KST.format(now));
+
         return ResponseEntity.ok(new AuthorizeResponse(
                 authId, "APPROVED", schemeRef, merchantId,
                 req.amount(), req.currency(), ISO_KST.format(now)));
@@ -238,6 +298,12 @@ public class SchemeController {
             String schemeTxnRef = "TXN-" +
                     UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
             payment.capture(schemeTxnRef, now);
+
+            // Append CAPTURED event to merchant feed
+            feedStore.append(payment.getMerchantId(), authId, schemeTxnRef, "CAPTURED",
+                    payment.getAmount(), payment.getCurrency(), payment.getPayerRef(),
+                    ISO_KST.format(now));
+
             return ResponseEntity.ok(new CommitResponse(
                     authId, "CAPTURED", schemeTxnRef, ISO_KST.format(now)));
         } catch (IllegalStateException e) {
@@ -261,7 +327,14 @@ public class SchemeController {
         try {
             String refundId = "RFD-" +
                     UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
-            payment.refund(refundId, Instant.now());
+            Instant now = Instant.now();
+            payment.refund(refundId, now);
+
+            // Append REFUNDED event to merchant feed
+            feedStore.append(payment.getMerchantId(), authId, payment.getSchemeTxnRef(),
+                    "REFUNDED", payment.getAmount(), payment.getCurrency(),
+                    payment.getPayerRef(), ISO_KST.format(now));
+
             return ResponseEntity.ok(new RefundResponse(refundId, "REFUNDED"));
         } catch (IllegalStateException e) {
             return errorResponse(HttpStatus.CONFLICT, "ILLEGAL_TRANSITION", e.getMessage());

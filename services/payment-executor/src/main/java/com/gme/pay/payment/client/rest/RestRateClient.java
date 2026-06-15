@@ -3,6 +3,7 @@ package com.gme.pay.payment.client.rest;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.RateClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ public class RestRateClient implements RateClient {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestRateClient(
             RestClient.Builder builder,
             @Value("${gmepay.rate-fx.base-url:http://rate-fx:8080}") String baseUrl) {

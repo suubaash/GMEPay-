@@ -24,6 +24,14 @@ adapter:
     sftp-port: 22
     mai-tag: "29"
 
+# ZeroPay scheme simulator (sim-scheme :9102) base URL.
+# Override with GMEPAY_SCHEME_ZEROPAY_BASE_URL in production.
+# If unset, the default in ZeroPaySchemeApiClient (http://localhost:9102/v1/scheme) applies.
+gmepay:
+  scheme:
+    zeropay:
+      base-url: http://localhost:9102/v1/scheme
+
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:
   api-docs:

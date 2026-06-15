@@ -121,7 +121,7 @@ public class PaymentOrchestrator {
         SchemeClient.MpmSubmitResponse schemeResponse;
         try {
             schemeResponse = schemeClient.submitMpm(
-                    new SchemeClient.MpmSubmitRequest(
+                    SchemeClient.MpmSubmitRequest.of(
                             txn.txnRef(),
                             merchant.merchantId(),
                             quote.targetPayout(),

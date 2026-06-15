@@ -43,7 +43,8 @@ public class ZeroPaySchemeController {
                 request.amountKrw(),
                 request.currency(),
                 request.partnerTxnRef(),
-                request.idempotencyKey()
+                request.idempotencyKey(),
+                request.qrPayload()
         );
 
         MpmSubmitResponse domainResponse = schemeAdapter.submitMpm(domainRequest);
