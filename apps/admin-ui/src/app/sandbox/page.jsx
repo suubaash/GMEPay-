@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Box, Tab, Tabs, Typography, Alert } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import ServiceTrace from '@/components/ServiceTrace';
 
 const SIM_MERCHANT_URL =
   process.env.NEXT_PUBLIC_SIM_MERCHANT_URL ?? 'http://localhost:9104';
@@ -106,6 +107,12 @@ export default function SandboxPage() {
               aria-controls={`sandbox-tabpanel-${i}`}
             />
           ))}
+          <Tab
+            key="service-trace"
+            label="Service Trace"
+            id={`sandbox-tab-${TABS.length}`}
+            aria-controls={`sandbox-tabpanel-${TABS.length}`}
+          />
         </Tabs>
       </Box>
 
@@ -136,6 +143,10 @@ export default function SandboxPage() {
           />
         </TabPanel>
       ))}
+
+      <TabPanel key="service-trace" value={tab} index={TABS.length}>
+        <ServiceTrace />
+      </TabPanel>
     </Box>
   );
 }
