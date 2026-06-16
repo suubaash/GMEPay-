@@ -199,7 +199,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 {...register('licenseType')}
                 error={!!errors.licenseType}
                 helperText={errors.licenseType?.message ?? 'e.g. Money Transfer Operator, PSP'}
-                inputProps={{ 'aria-label': 'licenseType' }}
+                inputProps={{ maxLength: 50, 'aria-label': 'licenseType' }}
               />
             </Grid>
             <Grid item xs={12} md={6}>
@@ -210,7 +210,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 {...register('licenseNumber')}
                 error={!!errors.licenseNumber}
                 helperText={errors.licenseNumber?.message ?? 'Regulator-issued reference number'}
-                inputProps={{ 'aria-label': 'licenseNumber' }}
+                inputProps={{ maxLength: 50, 'aria-label': 'licenseNumber' }}
               />
             </Grid>
             <Grid item xs={12} md={6}>

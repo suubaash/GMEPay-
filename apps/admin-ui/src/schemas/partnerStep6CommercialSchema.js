@@ -138,7 +138,12 @@ const feeTierSchema = yup.object({
 
 /** Sub-schema for the fee schedule section. */
 export const feeScheduleSchema = yup.object({
-  scheme:      yup.string().trim().required('Scheme is required'),
+  scheme:      yup
+    .string()
+    .trim()
+    .required('Scheme is required')
+    .max(40, 'Scheme ID max 40 characters')
+    .matches(/^[a-zA-Z0-9_-]+$/, 'Scheme ID may contain only letters, digits, hyphen and underscore'),
   direction:   yup
     .string()
     .oneOf(DIRECTIONS, 'Select a direction')
@@ -205,6 +210,7 @@ export const contractSchema = yup.object({
     .number()
     .integer('Must be a whole number')
     .min(0, 'Cannot be negative')
+    .max(3650, 'Notice period cannot exceed 3650 days (~10 years)')
     .required('Notice period is required')
     .typeError('Notice period must be a number'),
   refundChargebackPolicy: yup
@@ -213,6 +219,7 @@ export const contractSchema = yup.object({
     .required('Refund/chargeback policy is required'),
   terminationReason: yup
     .string()
+    .max(200, 'Termination reason must be 200 characters or fewer')
     .nullable()
     .default(null)
     .transform((v) => (v === '' ? null : v)),

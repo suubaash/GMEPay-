@@ -247,7 +247,7 @@ function SearchForm({ onSearch, loading }) {
                 label="Amount min"
                 value={form.amountMin}
                 onChange={set('amountMin')}
-                inputProps={{ 'aria-label': 'Amount min' }}
+                inputProps={{ inputMode: 'decimal', pattern: '^\\d+(\\.\\d{1,2})?$', min: 0, 'aria-label': 'Amount min' }}
                 helperText="KRW string"
               />
             </Grid>
@@ -258,7 +258,7 @@ function SearchForm({ onSearch, loading }) {
                 label="Amount max"
                 value={form.amountMax}
                 onChange={set('amountMax')}
-                inputProps={{ 'aria-label': 'Amount max' }}
+                inputProps={{ inputMode: 'decimal', pattern: '^\\d+(\\.\\d{1,2})?$', min: 0, 'aria-label': 'Amount max' }}
                 helperText="KRW string"
               />
             </Grid>

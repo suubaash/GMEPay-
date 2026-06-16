@@ -99,6 +99,7 @@ const partnerStep5Schema = yup.object({
   topUpReferencePattern: yup
     .string()
     .trim()
+    .max(60, 'Pattern must be 60 characters or fewer')
     .required('Top-up reference pattern is required')
     .test(
       'contains-partner-code-placeholder',
