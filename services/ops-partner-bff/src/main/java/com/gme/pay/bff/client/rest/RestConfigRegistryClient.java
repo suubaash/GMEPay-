@@ -56,8 +56,14 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     @Autowired
     public RestConfigRegistryClient(
+            RestClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+        // Build from the Spring-autoconfigured RestClient.Builder (not the static
+        // RestClient.builder()) so the RestClientCustomizer in ClientBeans applies —
+        // it swaps the request factory to JdkClientHttpRequestFactory, which supports
+        // the PATCH verb the partner draft-save flow (patchDraftStep1..8) depends on.
+        // The default HttpURLConnection-backed factory throws ProtocolException on PATCH.
+        this(builder.baseUrl(baseUrl).build());
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */
