@@ -48,6 +48,7 @@ export const FIXTURE_ROLES = [
       'txn.refund',
       'txn.view',
       'rbac.manage',
+      'inspector.view',
     ],
   },
   {
@@ -89,6 +90,12 @@ export const FIXTURE_ROLES = [
 ];
 
 export const FIXTURE_PERMISSIONS = [
+  {
+    permission: 'inspector.view',
+    resource: 'inspector',
+    action: 'view',
+    description: 'View the live request/response inspector overlay (developer/ops tool).',
+  },
   {
     permission: 'partner.activate',
     resource: 'partner',

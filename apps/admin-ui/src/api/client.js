@@ -14,6 +14,7 @@
  * are documented inline via JSDoc.
  */
 import { TOKEN_KEY } from './auth';
+import { startRequest, endRequest } from './requestLog';
 
 /**
  * @typedef {Object} ApiErrorShape
@@ -94,11 +95,20 @@ async function multipartRequest(path, formData) {
 }
 
 async function _doFetch(url, init) {
+  // Record into requestLog so the role-gated RequestInspector overlay can show
+  // the live request/response (see ./requestLog.js + components/RequestInspector).
+  const startedAt = Date.now();
+  const logId = startRequest({
+    method: (init && init.method) || 'GET',
+    url,
+    reqBody: init && init.body,
+  });
   let res;
   try {
     res = await fetch(url, init);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    endRequest(logId, { status: 0, error: msg || 'network error', durationMs: Date.now() - startedAt });
     throw new ApiError(0, url, msg || 'network error');
   }
   if (!res.ok) {
@@ -127,12 +137,16 @@ async function _doFetch(url, init) {
         /* leave as raw text */
       }
     }
+    endRequest(logId, { status: res.status, resBody: text, error: message, durationMs: Date.now() - startedAt });
     throw new ApiError(res.status, url, message);
   }
   if (res.status === 204) {
+    endRequest(logId, { status: 204, resBody: undefined, durationMs: Date.now() - startedAt });
     return undefined;
   }
-  return await res.json();
+  const json = await res.json();
+  endRequest(logId, { status: res.status, resBody: json, durationMs: Date.now() - startedAt });
+  return json;
 }
 
 /**

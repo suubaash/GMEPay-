@@ -21,6 +21,7 @@ import {
   Typography,
   alpha,
 } from '@mui/material';
+import RequestInspector from './RequestInspector';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import GroupsIcon from '@mui/icons-material/Groups';
 import HowToVoteIcon from '@mui/icons-material/HowToVote';
@@ -357,6 +358,7 @@ export default function AppShell({ children }) {
           </Box>
         </Container>
       </Box>
+      <RequestInspector />
     </Box>
   );
 }
