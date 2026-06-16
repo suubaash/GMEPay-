@@ -3,6 +3,7 @@ package com.gme.pay.auth.client;
 import com.gme.pay.auth.domain.PartnerCredentialPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatusCode;
@@ -39,6 +40,7 @@ public class RestPartnerCredentialClient implements PartnerCredentialPort {
 
     private final RestClient restClient;
 
+    @Autowired
     public RestPartnerCredentialClient(
             @Value("${gme.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
         this(RestClient.builder().baseUrl(baseUrl).build());
