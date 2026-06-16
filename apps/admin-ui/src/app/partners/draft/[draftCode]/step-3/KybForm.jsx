@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
+import { DATE_FLOOR, yearsFromTodayISO } from '@/components/DateField';
 import {
   Alert,
   Box,
@@ -233,7 +234,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 error={!!errors.licenseExpiry}
                 helperText={errors.licenseExpiry?.message ?? 'YYYY-MM-DD'}
                 InputLabelProps={{ shrink: true }}
-                inputProps={{ 'aria-label': 'licenseExpiry' }}
+                inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(30), 'aria-label': 'licenseExpiry' }}
               />
             </Grid>
           </Grid>
@@ -357,7 +358,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 error={!!errors.nextReviewDate}
                 helperText={errors.nextReviewDate?.message ?? 'Scheduled next KYB review date'}
                 InputLabelProps={{ shrink: true }}
-                inputProps={{ 'aria-label': 'nextReviewDate' }}
+                inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(10), 'aria-label': 'nextReviewDate' }}
               />
             </Grid>
           </Grid>

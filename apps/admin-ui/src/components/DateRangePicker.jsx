@@ -1,6 +1,7 @@
 'use client';
 
-import { Box, TextField } from '@mui/material';
+import { Box } from '@mui/material';
+import DateField, { DATE_FLOOR, todayISO } from './DateField';
 
 /**
  * DateRangePicker — two `<TextField type="date">` fields wired together.
@@ -25,27 +26,30 @@ export default function DateRangePicker({
   max,
   disabled,
 }) {
+  // Range pickers cover historical data: floor at DATE_FLOOR, cap at today unless
+  // a caller passes a wider ceiling, and bind the two fields so from <= to.
+  const ceiling = max || todayISO();
   return (
     <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-      <TextField
-        type="date"
+      <DateField
         label={fromLabel}
         size="small"
         value={from}
         disabled={disabled}
         onChange={(e) => onChange({ from: e.target.value, to })}
-        InputLabelProps={{ shrink: true }}
-        inputProps={{ max, 'aria-label': fromLabel }}
+        min={DATE_FLOOR}
+        max={to || ceiling}
+        inputProps={{ 'aria-label': fromLabel }}
       />
-      <TextField
-        type="date"
+      <DateField
         label={toLabel}
         size="small"
         value={to}
         disabled={disabled}
         onChange={(e) => onChange({ from, to: e.target.value })}
-        InputLabelProps={{ shrink: true }}
-        inputProps={{ max, min: from || undefined, 'aria-label': toLabel }}
+        min={from || DATE_FLOOR}
+        max={ceiling}
+        inputProps={{ 'aria-label': toLabel }}
       />
     </Box>
   );

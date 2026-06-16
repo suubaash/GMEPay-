@@ -18,6 +18,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useAppDispatch, useAppSelector } from '@/store';
+import DateField, { DATE_FLOOR, yearsFromTodayISO } from './DateField';
 import { fetchDocuments, uploadDocument } from '@/store/documentsSlice';
 import { adminApi } from '@/api/client';
 
@@ -334,13 +335,13 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
       )}
 
       {needsExpiry && (
-        <TextField
+        <DateField
           label="Expiry date (YYYY-MM-DD)"
-          type="date"
           size="small"
           value={expiryDate}
           onChange={(e) => setExpiryDate(e.target.value)}
-          InputLabelProps={{ shrink: true }}
+          min={DATE_FLOOR}
+          max={yearsFromTodayISO(30)}
           sx={{ mb: 1, width: 200 }}
           inputProps={{ 'aria-label': `expiry-date-${docType}` }}
         />

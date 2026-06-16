@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Controller, useFieldArray } from 'react-hook-form';
+import DateField, { yearsFromTodayISO } from '@/components/DateField';
 import {
   Alert,
   Box,
@@ -204,16 +205,15 @@ function CorridorDialog({ open, onClose, onSave, initial, title }) {
           </Grid>
 
           {/* Go-live date */}
-          <TextField
+          <DateField
             label="Go-live date"
-            type="date"
             fullWidth
             size="small"
             value={form.goLiveDate}
             onChange={(e) => set('goLiveDate', e.target.value)}
             error={!!errors.goLiveDate}
             helperText={errors.goLiveDate ?? 'Date the corridor goes live (YYYY-MM-DD)'}
-            InputLabelProps={{ shrink: true }}
+            max={yearsFromTodayISO(5)}
             inputProps={{ 'aria-label': 'corridor-go-live-date' }}
           />
 

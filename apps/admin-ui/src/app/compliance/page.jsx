@@ -25,6 +25,7 @@ import {
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import DateField, { DATE_FLOOR, todayISO } from '@/components/DateField';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAppDispatch, useAppSelector } from '@/store';
 import {
@@ -379,21 +380,23 @@ export default function CompliancePage() {
               sx={{ minWidth: 200 }}
               inputProps={{ 'aria-label': 'Filter audit log by aggregate' }}
             />
-            <TextField
+            <DateField
               size="small"
-              label="From (ISO date)"
+              label="From"
               value={auditFrom}
               onChange={(e) => dispatch(setAuditFrom(e.target.value))}
-              placeholder="2024-01-01"
+              min={DATE_FLOOR}
+              max={auditTo || todayISO()}
               sx={{ minWidth: 160 }}
               inputProps={{ 'aria-label': 'Filter audit log from date' }}
             />
-            <TextField
+            <DateField
               size="small"
-              label="To (ISO date)"
+              label="To"
               value={auditTo}
               onChange={(e) => dispatch(setAuditTo(e.target.value))}
-              placeholder="2024-12-31"
+              min={auditFrom || DATE_FLOOR}
+              max={todayISO()}
               sx={{ minWidth: 160 }}
               inputProps={{ 'aria-label': 'Filter audit log to date' }}
             />
