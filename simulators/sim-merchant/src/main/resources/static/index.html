@@ -366,6 +366,72 @@ header h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: .5px; }
 .status-approved { background: #e8f5e9; color: #2e7d32; }
 .status-captured { background: #e3f2fd; color: #1565c0; }
 .status-refunded { background: #fff3e0; color: #e65100; }
+
+/* =========================================================
+   ZeroPay 전문 / wire view
+   ========================================================= */
+.hint { font-size: .8rem; color: #777; margin-bottom: 12px; }
+.zp-block {
+    border: 1px solid #e3e8f0;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 14px;
+}
+.zp-head {
+    font-weight: 700;
+    font-size: .9rem;
+    color: #0057b7;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.zp-pill {
+    background: #0057b7;
+    color: #fff;
+    font-size: .68rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: .3px;
+}
+.zp-qr { display: flex; justify-content: center; padding: 8px; }
+.zp-qr svg { max-width: 220px; height: auto; }
+.zp-fields { font-size: .78rem; margin-top: 6px; }
+.kv { display: flex; gap: 8px; padding: 2px 0; }
+.kv .k { color: #888; min-width: 130px; }
+.kv .v { font-family: monospace; color: #222; word-break: break-all; }
+.wire-meta { font-size: .78rem; color: #444; margin: 6px 0; line-height: 1.5; }
+.wire-table { width: 100%; border-collapse: collapse; font-size: .74rem; margin-top: 6px; }
+.wire-table th, .wire-table td {
+    border-bottom: 1px solid #eee;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+}
+.wire-table th {
+    color: #888;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    font-size: .66rem;
+}
+.wire-table td.num { font-family: monospace; color: #0057b7; text-align: right; }
+.wire-table td.val { font-family: monospace; color: #1a1a2e; word-break: break-all; }
+.wire-hex {
+    font-family: monospace;
+    font-size: .66rem;
+    color: #555;
+    background: #f7f9fc;
+    border: 1px solid #eef;
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 8px;
+    max-height: 160px;
+    overflow: auto;
+    word-break: break-all;
+    line-height: 1.5;
+}
 </style>
 </head>
 <body>
@@ -384,6 +450,7 @@ header h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: .5px; }
             <button class="tab-btn active" data-view="view-register">1 · Register / Pick Shop</button>
             <button class="tab-btn" data-view="view-counter">2 · Counter QR</button>
             <button class="tab-btn" data-view="view-pos">3 · POS / Charge</button>
+            <button class="tab-btn" data-view="view-jeonmun">4 · ZeroPay 전문</button>
         </div>
 
         <!-- ---- View 1: Register / pick shop ---- -->
@@ -496,6 +563,66 @@ header h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: .5px; }
             </div>
 
             <div id="pos-status" class="status-msg status-info">Select a shop in View 1 then enter amount.</div>
+        </div>
+
+        <!-- ---- View 4: ZeroPay 전문 / wire ---- -->
+        <div class="card view" id="view-jeonmun">
+            <div class="form-section-title">ZeroPay 전문 (KFTC wire) — spec-faithful QR + jeonmun</div>
+            <p class="hint">Select a shop in View 1. These views build the EMVCo QR and the KFTC
+                전문 (jeonmun) locally in the terminal — no sim-scheme needed. GMEPay+ is a
+                해외페이 (overseas) 결제사업자, so the 결제요청 전문 uses the overseas prepaid branch.</p>
+
+            <!-- Static store QR (QR구분 1) -->
+            <div class="zp-block">
+                <div class="zp-head"><span class="zp-pill">QR구분 1</span> 고정형 · Static store QR</div>
+                <button class="btn btn-primary btn-sm" id="zp-static-btn">Build static QR</button>
+                <div id="zp-static-out" class="zp-out" style="display:none">
+                    <div class="zp-qr" id="zp-static-qr"></div>
+                    <div class="zp-fields" id="zp-static-fields"></div>
+                </div>
+            </div>
+
+            <!-- Dynamic charge (QR구분 2) + 420000 -->
+            <div class="zp-block">
+                <div class="zp-head"><span class="zp-pill">QR구분 2 · 420000</span>
+                    변동형 · Dynamic charge → 결제요청 전문</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Amount (₩)</label>
+                        <input id="zp-dyn-amount" type="number" min="1" step="1" placeholder="12500">
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="zp-dyn-btn"
+                            style="align-self:flex-end">Build charge + 전문</button>
+                </div>
+                <div id="zp-dyn-out" class="zp-out" style="display:none">
+                    <div class="zp-qr" id="zp-dyn-qr"></div>
+                    <div class="zp-fields" id="zp-dyn-fields"></div>
+                    <div id="zp-dyn-wire"></div>
+                </div>
+            </div>
+
+            <!-- Static result registration (500000) -->
+            <div class="zp-block">
+                <div class="zp-head"><span class="zp-pill">500000</span>
+                    고정형 결제결과등록 · Static result registration</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Paid amount (₩)</label>
+                        <input id="zp-res-amount" type="number" min="1" step="1" placeholder="5000">
+                    </div>
+                    <div class="form-group">
+                        <label>Approval no (optional)</label>
+                        <input id="zp-res-approval" type="text" placeholder="auto">
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="zp-res-btn"
+                            style="align-self:flex-end">Register result + 전문</button>
+                </div>
+                <div id="zp-res-out" class="zp-out" style="display:none">
+                    <div id="zp-res-wire"></div>
+                </div>
+            </div>
+
+            <div id="jeonmun-status" class="status-msg status-info">Select a shop, then build a QR or 전문.</div>
         </div>
     </div>
 
