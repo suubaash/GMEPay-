@@ -79,6 +79,10 @@ export function WebhookSubscriptionSection({ draft, partnerCode }) {
       snackbar.error('Webhook URL is required.');
       return;
     }
+    if (!/^https:\/\/.+/i.test(trimmedUrl)) {
+      snackbar.error('Webhook URL must be an https:// URL (the webhook sender rejects non-https).');
+      return;
+    }
     try {
       await dispatch(
         patchStep8WebhookSubscription({

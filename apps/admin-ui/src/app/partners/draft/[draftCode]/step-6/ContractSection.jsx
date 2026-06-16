@@ -17,6 +17,7 @@ import {
   Typography,
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import { DATE_FLOOR, yearsFromTodayISO } from '@/components/DateField';
 import {
   REFUND_CHARGEBACK_POLICIES,
   REFUND_CHARGEBACK_POLICY_LABELS,
@@ -66,7 +67,7 @@ export default function ContractSection({ control, register, errors }) {
                 errors?.effectiveFrom?.message ??
                 'Date the commercial terms take effect (YYYY-MM-DD)'
               }
-              inputProps={{ 'aria-label': 'contract.effectiveFrom' }}
+              inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(10), 'aria-label': 'contract.effectiveFrom' }}
             />
           </Grid>
 
@@ -82,7 +83,7 @@ export default function ContractSection({ control, register, errors }) {
                 errors?.effectiveTo?.message ??
                 'Leave blank for open-ended contracts'
               }
-              inputProps={{ 'aria-label': 'contract.effectiveTo' }}
+              inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(20), 'aria-label': 'contract.effectiveTo' }}
             />
           </Grid>
         </Grid>

@@ -18,6 +18,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useAppDispatch, useAppSelector } from '@/store';
+import DateField, { DATE_FLOOR, yearsFromTodayISO } from './DateField';
 import { fetchDocuments, uploadDocument } from '@/store/documentsSlice';
 import { adminApi } from '@/api/client';
 
@@ -285,6 +286,19 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
     async (file) => {
       if (!file) return;
       setLocalError(null);
+      const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+      if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) {
+        setLocalError('Unsupported file type. Allowed: PDF, PNG, JPG.');
+        return;
+      }
+      if (file.size === 0) {
+        setLocalError('File is empty.');
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setLocalError('File is too large (max 25 MB).');
+        return;
+      }
       const fd = new FormData();
       fd.append('file', file);
       fd.append('docType', docType);
@@ -334,13 +348,13 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
       )}
 
       {needsExpiry && (
-        <TextField
+        <DateField
           label="Expiry date (YYYY-MM-DD)"
-          type="date"
           size="small"
           value={expiryDate}
           onChange={(e) => setExpiryDate(e.target.value)}
-          InputLabelProps={{ shrink: true }}
+          min={DATE_FLOOR}
+          max={yearsFromTodayISO(30)}
           sx={{ mb: 1, width: 200 }}
           inputProps={{ 'aria-label': `expiry-date-${docType}` }}
         />
@@ -396,6 +410,7 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
             ref={fileInputRef}
             type="file"
             hidden
+            accept=".pdf,.png,.jpg,.jpeg"
             onChange={handleFileChange}
             aria-label={`file-input-${docType}`}
             data-testid={`file-input-${docType}`}

@@ -32,6 +32,7 @@ import ErrorAlert from '@/components/ErrorAlert';
 import EmptyState from '@/components/EmptyState';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import { TXN_STATES } from '@/api/constants';
+import DateField, { todayISO } from '@/components/DateField';
 
 /**
  * Transactions search page.
@@ -157,26 +158,25 @@ export default function TransactionsPage() {
               </FormControl>
             </Grid>
             <Grid size={{ xs: 6, sm: 3, md: 2 }}>
-              <TextField
+              <DateField
                 label="From"
-                type="date"
                 size="small"
                 fullWidth
-                InputLabelProps={{ shrink: true }}
                 value={form.fromDate}
                 onChange={(e) => setForm((f) => ({ ...f, fromDate: e.target.value }))}
+                max={form.toDate || todayISO()}
                 inputProps={{ 'aria-label': 'From date' }}
               />
             </Grid>
             <Grid size={{ xs: 6, sm: 3, md: 2 }}>
-              <TextField
+              <DateField
                 label="To"
-                type="date"
                 size="small"
                 fullWidth
-                InputLabelProps={{ shrink: true }}
                 value={form.toDate}
                 onChange={(e) => setForm((f) => ({ ...f, toDate: e.target.value }))}
+                min={form.fromDate || undefined}
+                max={todayISO()}
                 inputProps={{ 'aria-label': 'To date' }}
               />
             </Grid>

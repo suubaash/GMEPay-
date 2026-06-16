@@ -64,6 +64,9 @@ export default function InviteUserDialog({ open, saving, onSubmit, onCancel }) {
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setEmailError('Enter a valid email address');
       valid = false;
+    } else if (email.trim().length > 254) {
+      setEmailError('Email must be 254 characters or fewer');
+      valid = false;
     } else {
       setEmailError('');
     }
@@ -105,7 +108,7 @@ export default function InviteUserDialog({ open, saving, onSubmit, onCancel }) {
           fullWidth
           margin="normal"
           autoFocus
-          inputProps={{ 'aria-label': 'Email address' }}
+          inputProps={{ maxLength: 254, 'aria-label': 'Email address' }}
         />
 
         <FormControl

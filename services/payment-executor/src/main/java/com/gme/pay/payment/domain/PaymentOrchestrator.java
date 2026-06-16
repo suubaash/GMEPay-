@@ -140,12 +140,13 @@ public class PaymentOrchestrator {
         SchemeClient.MpmSubmitResponse schemeResponse;
         try {
             schemeResponse = schemeClient.submitMpm(
-                    SchemeClient.MpmSubmitRequest.of(
+                    new SchemeClient.MpmSubmitRequest(
                             txn.txnRef(),
                             merchant.merchantId(),
                             quote.targetPayout(),
                             quote.payoutCurrency(),
-                            cmd.schemeId()
+                            cmd.schemeId(),
+                            cmd.merchantQr()   // thread the scanned EMVCo QR through to the scheme authorize
                     )
             );
         } catch (SchemeDeclinedException ex) {

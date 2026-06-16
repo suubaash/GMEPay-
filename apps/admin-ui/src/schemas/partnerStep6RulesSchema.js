@@ -67,6 +67,15 @@ export function marginFractionField(label) {
         const n = parseFloat(v.trim());
         return Number.isFinite(n) && n >= 0;
       },
+    )
+    .test(
+      'is-at-most-one',
+      `${label} must not exceed 1.0 (100%)`,
+      (v) => {
+        if (typeof v !== 'string') return false;
+        const n = parseFloat(v.trim());
+        return Number.isFinite(n) && n <= 1;
+      },
     );
 }
 
@@ -75,7 +84,7 @@ export function marginFractionField(label) {
  * Accepts any decimal >= 0 with up to 4 dp; the field is optional (nullable).
  */
 export function serviceChargeField() {
-  const DECIMAL_RE = /^\d+(\.\d{1,4})?$/;
+  const DECIMAL_RE = /^\d{1,7}(\.\d{1,4})?$/; // <=7 integer digits (paired with the <=1,000,000 cap below)
   return yup
     .string()
     .trim()
@@ -83,10 +92,11 @@ export function serviceChargeField() {
     .default('0.0000')
     .test(
       'is-decimal-string-or-empty',
-      'Service charge must be a valid decimal (e.g. "1.5000")',
+      'Service charge must be a non-negative decimal up to 1,000,000 (max 4 dp)',
       (v) => {
         if (v == null || v === '') return true;
-        return DECIMAL_RE.test(v.trim()) && parseFloat(v.trim()) >= 0;
+        const n = parseFloat(v.trim());
+        return DECIMAL_RE.test(v.trim()) && n >= 0 && n <= 1000000;
       },
     );
 }

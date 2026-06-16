@@ -8,8 +8,10 @@ import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
 import com.gme.pay.payment.domain.settlement.SettlementBookingService;
+import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 
 /**
  * Wires the {@link PaymentOrchestrator} together with the REST client adapters.
@@ -25,6 +27,23 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 public class ClientBeans {
+
+    /**
+     * Switches the autoconfigured {@link org.springframework.web.client.RestClient.Builder} from the
+     * default {@code SimpleClientHttpRequestFactory} (JDK {@code HttpURLConnection}) to
+     * {@link JdkClientHttpRequestFactory} (backed by {@code java.net.http.HttpClient}).
+     *
+     * <p>Rationale: {@code HttpURLConnection} rejects the {@code PATCH} verb with
+     * {@code ProtocolException: Invalid HTTP method: PATCH}, which broke
+     * {@code RestTransactionClient.commitStatus} ({@code PATCH /v1/transactions/{ref}/status}) on the
+     * live orchestration path — the scheme would capture but the local status commit would fail. The
+     * JDK {@code HttpClient} supports arbitrary methods including PATCH. Applies to every adapter that
+     * autowires the shared builder (transaction/rate/qr/scheme clients).
+     */
+    @Bean
+    public RestClientCustomizer patchCapableRequestFactoryCustomizer() {
+        return builder -> builder.requestFactory(new JdkClientHttpRequestFactory());
+    }
 
     /**
      * Constructs the {@link PaymentOrchestrator} using the {@code @Primary} REST adapters

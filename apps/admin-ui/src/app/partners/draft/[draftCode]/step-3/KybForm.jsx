@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
+import { DATE_FLOOR, yearsFromTodayISO } from '@/components/DateField';
 import {
   Alert,
   Box,
@@ -198,7 +199,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 {...register('licenseType')}
                 error={!!errors.licenseType}
                 helperText={errors.licenseType?.message ?? 'e.g. Money Transfer Operator, PSP'}
-                inputProps={{ 'aria-label': 'licenseType' }}
+                inputProps={{ maxLength: 50, 'aria-label': 'licenseType' }}
               />
             </Grid>
             <Grid item xs={12} md={6}>
@@ -209,7 +210,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 {...register('licenseNumber')}
                 error={!!errors.licenseNumber}
                 helperText={errors.licenseNumber?.message ?? 'Regulator-issued reference number'}
-                inputProps={{ 'aria-label': 'licenseNumber' }}
+                inputProps={{ maxLength: 50, 'aria-label': 'licenseNumber' }}
               />
             </Grid>
             <Grid item xs={12} md={6}>
@@ -233,7 +234,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 error={!!errors.licenseExpiry}
                 helperText={errors.licenseExpiry?.message ?? 'YYYY-MM-DD'}
                 InputLabelProps={{ shrink: true }}
-                inputProps={{ 'aria-label': 'licenseExpiry' }}
+                inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(30), 'aria-label': 'licenseExpiry' }}
               />
             </Grid>
           </Grid>
@@ -357,7 +358,7 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
                 error={!!errors.nextReviewDate}
                 helperText={errors.nextReviewDate?.message ?? 'Scheduled next KYB review date'}
                 InputLabelProps={{ shrink: true }}
-                inputProps={{ 'aria-label': 'nextReviewDate' }}
+                inputProps={{ min: DATE_FLOOR, max: yearsFromTodayISO(10), 'aria-label': 'nextReviewDate' }}
               />
             </Grid>
           </Grid>

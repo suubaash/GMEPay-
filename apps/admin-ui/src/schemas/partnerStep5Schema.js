@@ -49,7 +49,7 @@ export const FUNDING_MODEL_LABELS = {
  * @returns {yup.StringSchema}
  */
 function decimalStringField(label, mode = 'gte0') {
-  const DECIMAL_RE = /^\d+(\.\d+)?$/;
+  const DECIMAL_RE = /^\d{1,15}(\.\d{1,4})?$/; // NUMERIC(19,4): <=15 integer digits, <=4 dp
   return yup
     .string()
     .trim()
@@ -99,6 +99,7 @@ const partnerStep5Schema = yup.object({
   topUpReferencePattern: yup
     .string()
     .trim()
+    .max(60, 'Pattern must be 60 characters or fewer')
     .required('Top-up reference pattern is required')
     .test(
       'contains-partner-code-placeholder',

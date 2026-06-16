@@ -6,8 +6,8 @@ import {
   MenuItem,
   Select,
   Stack,
-  TextField,
 } from '@mui/material';
+import DateField, { DATE_FLOOR, todayISO } from '@/components/DateField';
 
 /**
  * Report-type taxonomy.
@@ -74,23 +74,23 @@ export default function ReportTypeFilter({ type, from, to, onChange }) {
         </Select>
       </FormControl>
 
-      <TextField
+      <DateField
         label="From"
-        type="date"
         size="small"
         value={from}
         onChange={(e) => onChange({ from: e.target.value })}
-        InputLabelProps={{ shrink: true }}
+        min={DATE_FLOOR}
+        max={to || todayISO()}
         inputProps={{ 'data-testid': 'report-from-input' }}
       />
 
-      <TextField
+      <DateField
         label="To"
-        type="date"
         size="small"
         value={to}
         onChange={(e) => onChange({ to: e.target.value })}
-        InputLabelProps={{ shrink: true }}
+        min={from || DATE_FLOOR}
+        max={todayISO()}
         inputProps={{ 'data-testid': 'report-to-input' }}
       />
     </Stack>

@@ -28,6 +28,7 @@ import { useRouter } from 'next/navigation';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { fetchTxnSearch, exportTxnCsv, setFilters } from '@/store/txnSearchSlice';
 import ErrorAlert from '@/components/ErrorAlert';
+import DateField, { todayISO } from '@/components/DateField';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import EmptyState from '@/components/EmptyState';
 import StatusChip from '@/components/StatusChip';
@@ -216,27 +217,26 @@ function SearchForm({ onSearch, loading }) {
               </TextField>
             </Grid>
             <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-              <TextField
+              <DateField
                 fullWidth
                 size="small"
-                type="date"
                 label="Date from"
                 value={form.from}
                 onChange={set('from')}
-                InputLabelProps={{ shrink: true }}
+                max={form.to || todayISO()}
                 inputProps={{ 'aria-label': 'Date from' }}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-              <TextField
+              <DateField
                 fullWidth
                 size="small"
-                type="date"
                 label="Date to"
                 value={form.to}
                 onChange={set('to')}
-                InputLabelProps={{ shrink: true }}
-                inputProps={{ min: form.from || undefined, 'aria-label': 'Date to' }}
+                min={form.from || undefined}
+                max={todayISO()}
+                inputProps={{ 'aria-label': 'Date to' }}
               />
             </Grid>
 
@@ -247,7 +247,7 @@ function SearchForm({ onSearch, loading }) {
                 label="Amount min"
                 value={form.amountMin}
                 onChange={set('amountMin')}
-                inputProps={{ 'aria-label': 'Amount min' }}
+                inputProps={{ inputMode: 'decimal', pattern: '^\\d+(\\.\\d{1,2})?$', min: 0, 'aria-label': 'Amount min' }}
                 helperText="KRW string"
               />
             </Grid>
@@ -258,7 +258,7 @@ function SearchForm({ onSearch, loading }) {
                 label="Amount max"
                 value={form.amountMax}
                 onChange={set('amountMax')}
-                inputProps={{ 'aria-label': 'Amount max' }}
+                inputProps={{ inputMode: 'decimal', pattern: '^\\d+(\\.\\d{1,2})?$', min: 0, 'aria-label': 'Amount max' }}
                 helperText="KRW string"
               />
             </Grid>

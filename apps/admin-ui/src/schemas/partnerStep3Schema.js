@@ -68,13 +68,13 @@ const partnerStep3Schema = yup.object({
     .string()
     .trim()
     .required('License type is required')
-    .max(100, 'License type must be 100 characters or fewer'),
+    .max(50, 'License type must be 50 characters or fewer'),
 
   licenseNumber: yup
     .string()
     .trim()
     .required('License number is required')
-    .max(100, 'License number must be 100 characters or fewer'),
+    .max(50, 'License number must be 50 characters or fewer'),
 
   licenseAuthority: yup
     .string()

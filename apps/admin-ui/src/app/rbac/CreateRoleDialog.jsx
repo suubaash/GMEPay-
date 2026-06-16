@@ -64,6 +64,10 @@ export default function CreateRoleDialog({
       setNameError('Use only uppercase letters, digits and underscores (e.g. AUDIT_READ).');
       return false;
     }
+    if (trimmed.length > 64) {
+      setNameError('Role name must be 64 characters or fewer.');
+      return false;
+    }
     return true;
   };
 
@@ -106,7 +110,7 @@ export default function CreateRoleDialog({
           fullWidth
           required
           autoFocus
-          inputProps={{ 'aria-label': 'Role name' }}
+          inputProps={{ maxLength: 64, 'aria-label': 'Role name' }}
           sx={{ mb: 3 }}
         />
 
