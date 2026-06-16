@@ -29,6 +29,13 @@ import { useSnackbar } from '@/components/SnackbarProvider';
 /** Maximum CIDR entries per environment. */
 const MAX_CIDRS = 10;
 
+/** True for an IPv4 address / IPv4 CIDR (e.g. 203.0.113.0/24) or a basic IPv6 / IPv6 CIDR. */
+function isValidCidrOrIp(value) {
+  const ipv4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\/(?:3[0-2]|[12]?\d))?$/;
+  const ipv6 = /^[0-9a-fA-F:]+(?:\/(?:12[0-8]|1[01]\d|\d?\d))?$/;
+  return ipv4.test(value) || (value.includes(':') && ipv6.test(value));
+}
+
 /**
  * IpAllowlistSection — manage per-environment IP CIDR allowlist entries.
  *
@@ -55,6 +62,10 @@ export function IpAllowlistSection({ partnerCode }) {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
     if (atCap) return;
+    if (!isValidCidrOrIp(trimmed)) {
+      snackbar.error(`"${trimmed}" is not a valid IP or CIDR (e.g. 203.0.113.0/24).`);
+      return;
+    }
     if (cidrs.includes(trimmed)) {
       snackbar.warning(`${trimmed} is already in the list.`);
       return;

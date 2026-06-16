@@ -113,6 +113,16 @@ export function RegulatorySection({ draft, partnerCode }) {
       return;
     }
 
+    const trUrl = travelRuleEndpointUrl.trim();
+    if (trUrl && !/^https:\/\/.+/i.test(trUrl)) {
+      snackbar.error('Travel Rule endpoint URL must be an https:// URL.');
+      return;
+    }
+    if (travelRuleThresholdKrw.trim() && !/^\d+(\.\d{1,4})?$/.test(travelRuleThresholdKrw.trim())) {
+      snackbar.error('Travel Rule threshold (KRW) must be a non-negative number (max 4 dp).');
+      return;
+    }
+
     const body = {
       bok: {
         txnCode: txnCode.trim() || null,

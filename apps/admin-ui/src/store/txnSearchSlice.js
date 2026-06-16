@@ -1,7 +1,7 @@
 'use client';
 
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
-import { searchTransactions, exportTransactionsCsv, FIXTURE_PAGE } from '@/api/txnSearchApi';
+import { searchTransactions, exportTransactionsCsv } from '@/api/txnSearchApi';
 
 /**
  * txnSearchSlice — backs the Transaction Search page (/transactions/search).
@@ -53,9 +53,9 @@ export const fetchTxnSearch = createAsyncThunk(
     try {
       return await searchTransactions(params);
     } catch (e) {
-      // Fixture fallback so the page is always demoable.
-      console.warn('[txnSearchSlice] backend unavailable — using fixture data:', e.message);
-      return FIXTURE_PAGE;
+      // Surface the real failure to ErrorAlert. (Was masked with FIXTURE_PAGE,
+      // which rendered fabricated demo rows for a rejected/failed query.)
+      return rejectWithValue(e?.message ?? 'Transaction search failed');
     }
   },
 );
@@ -114,7 +114,8 @@ const txnSearchSlice = createSlice({
       })
       .addCase(fetchTxnSearch.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.error?.message ?? 'Failed to load transactions';
+        state.items = [];
+        state.error = action.payload ?? action.error?.message ?? 'Failed to load transactions';
       })
       // ---- exportTxnCsv ----
       .addCase(exportTxnCsv.pending, (state) => {

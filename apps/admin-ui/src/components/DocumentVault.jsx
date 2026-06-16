@@ -286,6 +286,19 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
     async (file) => {
       if (!file) return;
       setLocalError(null);
+      const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+      if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) {
+        setLocalError('Unsupported file type. Allowed: PDF, PNG, JPG.');
+        return;
+      }
+      if (file.size === 0) {
+        setLocalError('File is empty.');
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setLocalError('File is too large (max 25 MB).');
+        return;
+      }
       const fd = new FormData();
       fd.append('file', file);
       fd.append('docType', docType);
@@ -397,6 +410,7 @@ function UploadArea({ partnerCode, docType, uploading, onUploaded }) {
             ref={fileInputRef}
             type="file"
             hidden
+            accept=".pdf,.png,.jpg,.jpeg"
             onChange={handleFileChange}
             aria-label={`file-input-${docType}`}
             data-testid={`file-input-${docType}`}
