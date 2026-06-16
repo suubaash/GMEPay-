@@ -42,6 +42,14 @@ public class InMemoryMerchantRepository implements MerchantRepository {
         seed(new Merchant("M0000000004", "QR00000000000000004D", "Closed Corner Store",
                 "RETAIL", "DOMESTIC", "DEACTIVATED", false,
                 "KRW", "ZEROPAY", "Seoul", "5411"));
+
+        // Sim-scheme-aligned fixture (ZP-M001): keyed by an actual ZeroPay EMVCo static QR payload so
+        // the full MPM path validates end-to-end — the same scanned QR resolves here AND decodes at
+        // sim-scheme's /qr/decode. The trailing CRC (tag 63) keeps this payload permanently valid.
+        seed(new Merchant("M0000000001",
+                "00020101021129260011com.zeropay0107ZP-M0015204581253034105802KR5918Seoul Noodle House6005Seoul63040B08",
+                "Seoul Noodle House", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5812"));
     }
 
     private void seed(Merchant merchant) {
