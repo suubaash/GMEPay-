@@ -209,6 +209,110 @@ function copyPosPayload() {
 }
 
 // ---------------------------------------------------------------------------
+// View 4 — ZeroPay 전문 (jeonmun) / spec-faithful wire
+// ---------------------------------------------------------------------------
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function zpErr(res) {
+    const b = res.body;
+    if (res.status === 404) return 'No shop selected / shop not registered in this terminal.';
+    return 'Error ' + res.status + ': ' + (b && (b.message || JSON.stringify(b)));
+}
+
+function renderQrFields(containerId, qr) {
+    const kv = (k, v) => (v == null || v === '')
+        ? '' : `<div class="kv"><span class="k">${k}</span><span class="v">${escapeHtml(v)}</span></div>`;
+    document.getElementById(containerId).innerHTML =
+        kv('mode', qr.mode) +
+        kv('QR구분 (division)', qr.qrDivision) +
+        kv('등록기관ID (registrar)', qr.registrarId) +
+        kv('가맹점ID (merchant)', qr.merchantId) +
+        kv('거래일련번호 (serial)', qr.qrSerial) +
+        kv('체크문자 (check)', qr.checkChar) +
+        kv('통화 (currency)', (qr.currencyAlpha || '') + ' / ' + (qr.currencyNumeric || '')) +
+        kv('금액 (amount)', qr.amount == null ? '' : ('₩' + Number(qr.amount).toLocaleString()));
+}
+
+function renderWire(containerId, wire) {
+    const rows = (wire.fields || []).map(f => `
+        <tr>
+          <td class="num">${f.no}</td>
+          <td>${escapeHtml(f.name)}</td>
+          <td>${escapeHtml(f.key)}</td>
+          <td>${f.type}</td>
+          <td class="num">${f.offset}</td>
+          <td class="num">${f.length}</td>
+          <td class="val">${escapeHtml(f.value)}</td>
+        </tr>`).join('');
+    document.getElementById(containerId).innerHTML = `
+        <div class="wire-meta">
+          <b>${escapeHtml(wire.protocol)}</b><br>
+          거래구분 ${wire.txnDivision} · 전문구분 ${wire.messageType} · ${escapeHtml(wire.description)}<br>
+          ${wire.lengthBytes} bytes · ${wire.charset}
+        </div>
+        <table class="wire-table">
+          <thead><tr>
+            <th>No</th><th>필드</th><th>key</th><th>type</th><th>off</th><th>len</th><th>value</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="wire-hex" title="raw ${wire.charset} frame, hex">${wire.hex}</div>`;
+}
+
+async function zpStatic() {
+    if (!currentShop) { setStatus('jeonmun-status', 'Select a shop first (View 1).', 'error'); return; }
+    setStatus('jeonmun-status', 'Building static QR...', 'info');
+    const res = await api('/v1/merchant/zeropay/' + currentShop.merchantId + '/static-qr');
+    if (!res.ok) { setStatus('jeonmun-status', zpErr(res), 'error'); return; }
+    document.getElementById('zp-static-out').style.display = '';
+    renderQr(res.body.qrPayload, 'zp-static-qr');
+    renderQrFields('zp-static-fields', res.body);
+    setStatus('jeonmun-status', 'Static QR (QR구분 1) built.', 'ok');
+}
+
+async function zpDynamic() {
+    if (!currentShop) { setStatus('jeonmun-status', 'Select a shop first (View 1).', 'error'); return; }
+    const amt = document.getElementById('zp-dyn-amount').value.trim();
+    if (!amt || isNaN(amt) || Number(amt) <= 0) {
+        setStatus('jeonmun-status', 'Enter a valid amount.', 'error'); return;
+    }
+    setStatus('jeonmun-status', 'Building dynamic charge + 420000 전문...', 'info');
+    const res = await api('/v1/merchant/zeropay/' + currentShop.merchantId + '/dynamic-qr', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: amt }),
+    });
+    if (!res.ok) { setStatus('jeonmun-status', zpErr(res), 'error'); return; }
+    document.getElementById('zp-dyn-out').style.display = '';
+    renderQr(res.body.qr.qrPayload, 'zp-dyn-qr');
+    renderQrFields('zp-dyn-fields', res.body.qr);
+    renderWire('zp-dyn-wire', res.body.wire);
+    setStatus('jeonmun-status', 'Dynamic charge QR (QR구분 2) + 420000 전문 built.', 'ok');
+}
+
+async function zpResult() {
+    if (!currentShop) { setStatus('jeonmun-status', 'Select a shop first (View 1).', 'error'); return; }
+    const amt = document.getElementById('zp-res-amount').value.trim();
+    if (!amt || isNaN(amt) || Number(amt) <= 0) {
+        setStatus('jeonmun-status', 'Enter a valid amount.', 'error'); return;
+    }
+    const approval = document.getElementById('zp-res-approval').value.trim();
+    const body = { amount: amt };
+    if (approval) body.approvalNo = approval;
+    setStatus('jeonmun-status', 'Building 500000 결제결과등록 전문...', 'info');
+    const res = await api('/v1/merchant/zeropay/' + currentShop.merchantId + '/static-result', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) { setStatus('jeonmun-status', zpErr(res), 'error'); return; }
+    document.getElementById('zp-res-out').style.display = '';
+    renderWire('zp-res-wire', res.body);
+    setStatus('jeonmun-status', 'Static-result 500000 전문 built.', 'ok');
+}
+
+// ---------------------------------------------------------------------------
 // Payment feed polling
 // ---------------------------------------------------------------------------
 function startPolling() {
@@ -299,6 +403,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // POS view
     document.getElementById('pos-form').addEventListener('submit', chargeAmount);
     document.getElementById('btn-copy-pos').addEventListener('click', copyPosPayload);
+
+    // ZeroPay 전문 view
+    document.getElementById('zp-static-btn').addEventListener('click', zpStatic);
+    document.getElementById('zp-dyn-btn').addEventListener('click', zpDynamic);
+    document.getElementById('zp-res-btn').addEventListener('click', zpResult);
 
     // Feed
     document.getElementById('btn-clear-feed').addEventListener('click', clearFeed);
