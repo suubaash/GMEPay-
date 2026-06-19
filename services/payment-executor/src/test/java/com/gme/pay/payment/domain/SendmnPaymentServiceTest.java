@@ -192,6 +192,39 @@ class SendmnPaymentServiceTest {
     }
 
     // =========================================================================
+    // Live USD/KRW prefunding conversion (replaces the hardcoded 1350)
+    // =========================================================================
+
+    @Test
+    @DisplayName("prefunding USD conversion uses the LIVE USD/KRW rate (10500 / 1380)")
+    void sendmn_prefunding_usesLiveUsdKrwRate() {
+        when(rateClient.fetchLiveRate("USD", "KRW")).thenReturn(
+                new RateClient.LiveRate("USD", "KRW", new BigDecimal("1380"), Instant.now(), "sim"));
+
+        service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-fx1", PARTNER_ID);
+
+        ArgumentCaptor<BigDecimal> usdCaptor = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(prefundingClient).deduct(eq(PARTNER_ID), anyString(), usdCaptor.capture());
+        // chargedKrw = 10500; chargedUsd = 10500 / 1380 = 7.60869565 (8dp HALF_UP) — the live rate, not 1350
+        assertEquals(0, usdCaptor.getValue().compareTo(new BigDecimal("7.60869565")),
+                "prefunding USD must use the live 1380 rate, not the 1350 fallback");
+    }
+
+    @Test
+    @DisplayName("prefunding USD conversion falls back to 1350 when the live USD/KRW rate is unavailable")
+    void sendmn_prefunding_fallsBackWhenRateUnavailable() {
+        when(rateClient.fetchLiveRate("USD", "KRW")).thenThrow(new RuntimeException("rate provider down"));
+
+        service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-fx2", PARTNER_ID);
+
+        ArgumentCaptor<BigDecimal> usdCaptor = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(prefundingClient).deduct(eq(PARTNER_ID), anyString(), usdCaptor.capture());
+        // chargedUsd = 10500 / 1350 = 7.77777778 (8dp HALF_UP) — graceful fallback
+        assertEquals(0, usdCaptor.getValue().compareTo(new BigDecimal("7.77777778")),
+                "prefunding USD must fall back to the 1350 constant");
+    }
+
+    // =========================================================================
     // Test 4: Revenue-ledger invoked for FX margin + fee
     // =========================================================================
 

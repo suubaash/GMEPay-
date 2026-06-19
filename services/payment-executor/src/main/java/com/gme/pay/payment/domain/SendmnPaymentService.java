@@ -35,9 +35,9 @@ import java.util.UUID;
  *       {@code offerRate = midRate * (1 - margin)} — partner gets fewer MNT per KRW.
  *       MNT payout = {@code amountKrw * offerRate}, rounded HALF_UP to 0 decimal places.
  *   <li>Fixed service fee: ₩500. chargedKrw = amountKrw + 500.
- *   <li>Compute USD equivalent for prefunding: {@code chargedKrw / usdKrwMidRate}.
- *       Because we don't have a live USD/KRW rate from the sim we use a hardcoded
- *       conservative rate of 1350 KRW/USD for the prefunding check only.
+ *   <li>Compute USD equivalent for prefunding: {@code chargedKrw / krwPerUsd}, where the
+ *       USD/KRW rate is fetched LIVE from sim-rate-provider; if that fetch fails we fall back
+ *       to the conservative {@link #KRW_PER_USD} constant so the prefunding check still proceeds.
  *   <li>Deduct prefunding (USD). If insufficient → return DECLINED, no scheme call.
  *   <li>Submit MPM to ZeroPay (same as domestic path, currency = "KRW").
  *   <li>On scheme decline → reverse prefunding.
@@ -59,7 +59,7 @@ public class SendmnPaymentService {
     /** Fixed service fee in KRW. */
     static final BigDecimal FEE_KRW = new BigDecimal("500");
 
-    /** Conservative KRW/USD rate used only for USD-denominated prefunding deduction. */
+    /** Fallback KRW/USD rate for the prefunding deduction when the live USD/KRW rate is unavailable. */
     static final BigDecimal KRW_PER_USD = new BigDecimal("1350");
 
     private static final String SCHEME_ID = "zeropay";
@@ -180,8 +180,10 @@ public class SendmnPaymentService {
         // Step 5: Fixed service fee
         BigDecimal chargedKrw = amountKrw.add(FEE_KRW);
 
-        // Step 6: Compute USD equivalent of chargedKrw for prefunding deduction
-        BigDecimal chargedUsd = chargedKrw.divide(KRW_PER_USD, 8, RoundingMode.HALF_UP);
+        // Step 6: Compute USD equivalent of chargedKrw for prefunding deduction, using the LIVE
+        // USD/KRW rate (falls back to KRW_PER_USD if the rate provider is unavailable).
+        BigDecimal krwPerUsd = fetchKrwPerUsd();
+        BigDecimal chargedUsd = chargedKrw.divide(krwPerUsd, 8, RoundingMode.HALF_UP);
 
         // Step 7: Prefunding deduct
         String partnerTxnRef = "SENDMN-" + UUID.randomUUID();
@@ -284,6 +286,25 @@ public class SendmnPaymentService {
                 offerRate.setScale(6, RoundingMode.HALF_UP),
                 payAmountMnt
         );
+    }
+
+    /**
+     * Live USD/KRW rate from sim-rate-provider for the prefunding (USD) deduction. Falls back to the
+     * conservative {@link #KRW_PER_USD} constant when the rate provider is unreachable or returns a
+     * non-positive rate, so the SENDMN path degrades gracefully instead of failing the payment.
+     */
+    private BigDecimal fetchKrwPerUsd() {
+        try {
+            RateClient.LiveRate r = rateClient.fetchLiveRate("USD", "KRW");
+            if (r != null && r.rate() != null && r.rate().signum() > 0) {
+                return r.rate();
+            }
+            log.warn("SENDMN live USD/KRW rate empty — falling back to {} KRW/USD", KRW_PER_USD);
+        } catch (RuntimeException ex) {
+            log.warn("SENDMN live USD/KRW rate unavailable ({}) — falling back to {} KRW/USD",
+                    ex.getMessage(), KRW_PER_USD);
+        }
+        return KRW_PER_USD;
     }
 
     private void persistAttempt(String partnerTxnRef, String merchantId, BigDecimal amountKrw,
