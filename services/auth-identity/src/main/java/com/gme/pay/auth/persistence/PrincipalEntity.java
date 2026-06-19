@@ -58,6 +58,14 @@ public class PrincipalEntity {
     @Column(name = "status", length = 16, nullable = false)
     private Status status;
 
+    /** Contact email (RBAC user attribute, V003). */
+    @Column(name = "email", length = 255)
+    private String email;
+
+    /** Last successful login (V003); maintained by the auth flow. */
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -119,6 +127,22 @@ public class PrincipalEntity {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public Instant getLastLoginAt() {
+        return lastLoginAt;
+    }
+
+    public void setLastLoginAt(Instant lastLoginAt) {
+        this.lastLoginAt = lastLoginAt;
     }
 
     public Set<RoleEntity> getRoles() {
