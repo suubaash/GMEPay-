@@ -373,6 +373,11 @@ services:
       # auth-identity reads gme.config-registry.base-url (NOT gmepay.*) — see
       # RestPartnerCredentialClient. Env name fixed accordingly.
       GME_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      # RBAC enforcement + claim-provenance verification (#90). auth-identity owns the RBAC admin
+      # API (@RequiresPermission rbac.manage), the prime self-grant target — so it must trust
+      # X-Gme-* only with a valid gateway signature. Secret MUST match api-gateway's stamp secret.
+      GMEPAY_RBAC_ENABLED: "true"
+      GMEPAY_RBAC_VERIFY_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
     depends_on:
       postgres-authid: { condition: service_healthy }
       config-registry: { condition: service_healthy }
@@ -485,8 +490,14 @@ services:
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
-      # Inert until spring-kafka lands on the module classpath (17.4-G0x).
+      # Activates the @KafkaListener on gmepay.payment.approved (WebhookKafkaConsumerConfig).
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Turn on the dispatcher drain loop so enqueued PENDING rows are actually delivered.
+      GMEPAY_WEBHOOK_DISPATCHER_ENABLED: "true"
+      # Dev/sandbox stand-in for the Vault-backed signing secret (audit P1). Overridable via the
+      # environment (CI sets a throwaway value); the literal default is a clearly non-prod marker.
+      # NOT a real credential — must be replaced by a Vault-backed resolver before LIVE traffic.
+      GMEPAY_WEBHOOK_SIGNING_SECRET: ${GMEPAY_WEBHOOK_SIGNING_SECRET:-dev-webhook-secret-not-for-prod}
     depends_on:
       postgres-notify: { condition: service_healthy }
       kafka: { condition: service_healthy }
@@ -583,6 +594,12 @@ services:
       # this host override the indicator probes localhost and health goes DOWN.
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      # RBAC claim stamping + provenance signing (#90). The gateway is the SOLE holder of the
+      # signing secret, so only it can produce a valid X-Gme-Sig; downstream services verify it
+      # and refuse any claim bundle that arrives unsigned (a direct-to-service spoof). The literal
+      # default is a clearly non-prod marker — replace with a Vault-backed secret before LIVE.
+      GMEPAY_RBAC_STAMP_ENABLED: "true"
+      GMEPAY_RBAC_STAMP_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
       # Route targets read by GatewayRoutingConfig (gmepay.<svc>.base-url).
       GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080

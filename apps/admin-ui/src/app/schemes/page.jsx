@@ -24,10 +24,12 @@ import { listSchemes } from '@/store/schemesSlice';
  *
  * Each row is a SchemeSummary:
  *   { schemeId, name, country, currency, mode, status }
- * `status` is a string ("ACTIVE" / "INACTIVE") — color-coded inline.
+ * `status` from config-registry's catalog is "ACTIVE" | "PLANNED"
+ * ("INACTIVE" kept for back-compat) — color-coded inline.
  */
 function statusColor(status) {
   if (status === 'ACTIVE') return 'success';
+  if (status === 'PLANNED') return 'warning';
   if (status === 'INACTIVE') return 'default';
   return 'default';
 }

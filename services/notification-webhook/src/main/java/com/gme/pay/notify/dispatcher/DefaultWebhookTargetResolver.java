@@ -78,7 +78,13 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
         return Optional.of(new ResolvedTarget(url, configuredSecret));
     }
 
-    /** Reads a numeric {@code partnerId} from the event payload; null if absent/non-numeric. */
+    /**
+     * Reads a numeric {@code partnerId} from the event payload; null if absent/non-numeric.
+     *
+     * <p>Accepts both shapes the platform emits: a flat top-level {@code partnerId} (direct
+     * KafkaEventPublisher publish), and the canonical outbox envelope where the event's own fields
+     * are nested under {@code payload} ({@code {eventType,aggregateId,occurredAt,payload:{partnerId}}}).
+     */
     private Long extractPartnerId(String payload) {
         if (payload == null || payload.isBlank()) {
             return null;
@@ -86,6 +92,9 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
         try {
             JsonNode root = objectMapper.readTree(payload);
             JsonNode node = root.get("partnerId");
+            if (node == null || node.isNull()) {
+                node = root.path("payload").get("partnerId"); // outbox envelope nests event fields
+            }
             if (node == null || node.isNull()) {
                 return null;
             }

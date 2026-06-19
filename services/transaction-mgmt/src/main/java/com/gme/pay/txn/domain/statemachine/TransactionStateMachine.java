@@ -5,6 +5,7 @@ import com.gme.pay.events.EventPublisher;
 import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.outbox.OutboxAppender;
+import com.gme.pay.txn.outbox.PaymentApprovedEvent;
 import com.gme.pay.txn.outbox.TransactionStatusChangedEvent;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -63,6 +64,19 @@ public class TransactionStateMachine {
         // Publish domain event to the outbox (same logical transaction in callers).
         DomainEvent event = new TransactionStatusChangedEvent(txn.txnRef(), from, to);
         eventPublisher.publish(event);
+
+        // On APPROVED, also append the partner-facing payment.approved event so notification-webhook
+        // can deliver a webhook. Appended after the status-changed event so outbox row ordering is
+        // stable; goes to a different topic (gmepay.payment.approved) for a different consumer.
+        //
+        // Guard on partnerId: the webhook target is resolved by partner id, so an event with a null
+        // partnerId (legacy 5-field transactions predating the V003 contract) would enqueue a
+        // delivery row the dispatcher can never resolve — a permanently-stuck PENDING row. Such
+        // transactions cannot notify a partner anyway, so we skip the event for them.
+        if (to == TransactionStatus.APPROVED && txn.partnerId() != null) {
+            eventPublisher.publish(new PaymentApprovedEvent(
+                    txn.txnRef(), txn.partnerId(), txn.partnerTxnRef(), to));
+        }
 
         return txn;
     }

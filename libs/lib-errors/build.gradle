@@ -1,12 +1,15 @@
 // lib-errors: canonical error codes + API error envelope shared by all services.
 //
-// It ALSO carries the optional GMEPay+ transparency tracer (com.gme.pay.trace.*): a
-// Spring Boot auto-configuration that, when gmepay.trace.enabled=true, makes the service
-// self-report inbound/outbound HTTP + Kafka + scheduler activity to the trace-console
-// /ingest endpoint. It rides along here (rather than in a new module) because every
-// service already depends on lib-errors, so all services get it with no settings.gradle
-// change. All Spring deps are compileOnly + the auto-config is OFF by default, so plain
-// (non-web, non-kafka) consumers and the default runtime are completely unaffected.
+// It ALSO carries two optional, opt-in, compileOnly Spring Boot auto-configurations that
+// ride along here (rather than in new modules) because every service already depends on
+// lib-errors — so all services get them with no settings.gradle change, and both are OFF
+// by default so plain (non-web) consumers and the default runtime are unaffected:
+//   • com.gme.pay.trace.*  — transparency tracer (gmepay.trace.enabled)
+//   • com.gme.pay.rbac.*   — cross-service RBAC enforcement (gmepay.rbac.enabled): a
+//        header-driven @RequiresPermission HandlerInterceptor with AUDIT|ENFORCE modes,
+//        so permission checks are enforced at the API level in every service uniformly.
+// All Spring deps below are compileOnly (web services already bring them via
+// spring-boot-starter-web / spring-kafka).
 plugins {
     id 'java-library'
 }
@@ -19,9 +22,11 @@ dependencies {
     compileOnly 'org.springframework.boot:spring-boot'
     compileOnly 'org.springframework:spring-context'
     compileOnly 'org.springframework:spring-web'
+    compileOnly 'org.springframework:spring-webmvc'   // RBAC HandlerInterceptor + WebMvcConfigurer
     compileOnly 'org.springframework:spring-webflux'
     compileOnly 'io.projectreactor:reactor-core'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
+    compileOnly 'org.slf4j:slf4j-api'                 // RBAC default decision listener logging
     compileOnly 'org.springframework.kafka:spring-kafka'
     compileOnly 'org.apache.kafka:kafka-clients'
 

@@ -59,12 +59,15 @@ class TransactionStateMachineTest {
     }
 
     @Test
-    @DisplayName("CREATED → APPROVED succeeds (LOCAL direct-commit path)")
+    @DisplayName("CREATED → APPROVED on a legacy (null partnerId) txn emits only TransactionStatusChanged")
     void createdToApproved() {
-        Transaction txn = newTransaction();
+        Transaction txn = newTransaction(); // legacy 5-arg ctor → partnerId == null
         stateMachine.transition(txn, TransactionStatus.APPROVED);
         assertEquals(TransactionStatus.APPROVED, txn.status());
+        // No payment.approved: it is guarded out for null-partnerId txns (would be undeliverable).
         assertEquals(1, publishedEvents.size());
+        assertEquals("TransactionStatusChanged", publishedEvents.get(0).eventType());
+        assertTrue(publishedEvents.stream().noneMatch(e -> "payment.approved".equals(e.eventType())));
     }
 
     @Test
@@ -90,6 +93,7 @@ class TransactionStateMachineTest {
         stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
         stateMachine.transition(txn, TransactionStatus.APPROVED);
         assertEquals(TransactionStatus.APPROVED, txn.status());
+        // Legacy txn (null partnerId): PENDING_DEBIT + APPROVED status-changed only, no payment.approved = 2
         assertEquals(2, publishedEvents.size());
     }
 
@@ -190,6 +194,24 @@ class TransactionStateMachineTest {
 
         assertEquals(eventCountBeforeAttempt, publishedEvents.size(),
                 "No new event should be published for a blocked transition");
+    }
+
+    @Test
+    @DisplayName("payment.approved event carries partnerId + partnerTxnRef for webhook resolution")
+    void approvedEmitsPaymentApprovedWithPartnerId() {
+        Transaction txn = new Transaction(
+                700L, "PARTNER-TXN-9", "zeropay", "OUT", "MPM",
+                new BigDecimal("130000"), "KRW", new BigDecimal("100.00"), "USD", "M-1", "Q-1");
+        stateMachine.transition(txn, TransactionStatus.APPROVED);
+
+        com.gme.pay.txn.outbox.PaymentApprovedEvent approved = publishedEvents.stream()
+                .filter(e -> e instanceof com.gme.pay.txn.outbox.PaymentApprovedEvent)
+                .map(e -> (com.gme.pay.txn.outbox.PaymentApprovedEvent) e)
+                .findFirst().orElseThrow();
+        assertEquals(700L, approved.partnerId());
+        assertEquals("PARTNER-TXN-9", approved.partnerTxnRef());
+        assertEquals(txn.txnRef(), approved.aggregateId());
+        assertEquals("payment.approved", approved.eventType());
     }
 
     @Test
