@@ -15,6 +15,11 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Outbound settlement.completed event transport (Kafka when spring.kafka.bootstrap-servers is set,
+    // LoggingEventPublisher fallback otherwise — see com.gme.pay.settlement.outbox.OutboxConfig).
+    implementation project(':libs:lib-events-kafka')
+    // PartnerView DTO for the config-registry partner-config client (per-partner rounding mode).
+    implementation project(':libs:lib-api-contracts')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 
