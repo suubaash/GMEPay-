@@ -63,6 +63,7 @@ const initialState = {
   // Audit log
   auditPage: [],
   auditMeta: { page: 0, size: 20, total: 0 },
+  auditChainValid: true,
   auditLoading: false,
   auditError: null,
 
@@ -246,6 +247,8 @@ const complianceSlice = createSlice({
           size: payload.size ?? 20,
           total: payload.total ?? 0,
         };
+        // #78: tamper-evidence signal from the hash-chained trail (ADR-007).
+        state.auditChainValid = payload.chainValid !== false;
       })
       .addCase(fetchAuditLog.rejected, (state, action) => {
         state.auditLoading = false;

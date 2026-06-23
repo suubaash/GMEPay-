@@ -250,14 +250,44 @@ export async function getPartnerKyb(partnerCode) {
 }
 
 /**
- * GET /v1/admin/audit?aggregate={code}&from={ISO}&to={ISO}&page={n}&size={n}
- * Falls back to FIXTURE_AUDIT_PAGE when absent.
+ * The partner's REAL audit trail (#78): GET /v1/admin/audit-trail?aggregateType=partner
+ * &aggregateId={code}&page&size — the SHA-256 hash-chained per-aggregate trail (ADR-007),
+ * not the old operator-action log. The response
+ * {@code { entries:[{recordedAt, actorId, eventType, beforeJson, afterJson}], chainValid,
+ * page, size, total }} is mapped to the page's {@code AuditEntry} row shape; {@code chainValid}
+ * is surfaced so the operator sees a tamper-evidence signal.
+ *
+ * <p>The trail is strictly per-aggregate, so without a selected partner there is nothing to
+ * query — an empty page is returned rather than 400-ing the required-param endpoint. The
+ * server-side trail is full-history paged; client {@code from}/{@code to} are not applied.
+ * Falls back to FIXTURE_AUDIT_PAGE only when the endpoint is absent (404 / network).
+ *
  * @param {{ aggregate?: string, from?: string, to?: string, page?: number, size?: number }} filters
- * @returns {Promise<Page<AuditEntry>>}
+ * @returns {Promise<Page<AuditEntry> & { chainValid: boolean }>}
  */
 export async function getAuditLog(filters = {}) {
+  const { aggregate, page = 0, size = 20 } = filters;
+  if (!aggregate) {
+    return { content: [], page, size, total: 0, chainValid: true };
+  }
   try {
-    return await request(`/v1/admin/audit${qs(filters)}`);
+    const trail = await request(
+      `/v1/admin/audit-trail${qs({ aggregateType: 'partner', aggregateId: aggregate, page, size })}`,
+    );
+    const entries = Array.isArray(trail?.entries) ? trail.entries : [];
+    return {
+      content: entries.map((e, i) => ({
+        id: `${aggregate}:${trail?.page ?? page}:${i}`,
+        event: e.eventType,
+        aggregate,
+        actor: e.actorId,
+        at: e.recordedAt,
+      })),
+      page: trail?.page ?? page,
+      size: trail?.size ?? size,
+      total: trail?.total ?? entries.length,
+      chainValid: trail?.chainValid !== false,
+    };
   } catch (e) {
     if (e.status === 404 || e.status === 0 || !e.status) {
       return FIXTURE_AUDIT_PAGE;
