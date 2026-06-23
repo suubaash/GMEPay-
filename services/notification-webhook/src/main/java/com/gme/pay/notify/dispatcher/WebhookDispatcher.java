@@ -10,7 +10,9 @@ import com.gme.pay.notify.persistence.WebhookDeliveryRepository;
 import com.gme.pay.notify.persistence.WebhookPersistenceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -52,19 +54,23 @@ public class WebhookDispatcher {
     private final WebhookTargetResolver targetResolver;
     private final RetryPolicy retryPolicy;
     private final Clock clock;
+    /** Max PENDING rows pulled per drain (#92 — bound the fetch). */
+    private final int batchSize;
 
     public WebhookDispatcher(WebhookSender sender,
                              WebhookDeliveryRepository deliveryRepository,
                              WebhookPersistenceService persistence,
                              WebhookTargetResolver targetResolver,
                              RetryPolicy retryPolicy,
-                             Clock clock) {
+                             Clock clock,
+                             @Value("${gmepay.webhook.dispatcher.batch-size:200}") int batchSize) {
         this.sender = Objects.requireNonNull(sender);
         this.deliveryRepository = Objects.requireNonNull(deliveryRepository);
         this.persistence = Objects.requireNonNull(persistence);
         this.targetResolver = Objects.requireNonNull(targetResolver);
         this.retryPolicy = Objects.requireNonNull(retryPolicy);
         this.clock = Objects.requireNonNull(clock);
+        this.batchSize = batchSize > 0 ? batchSize : 200;
     }
 
     /**
@@ -76,8 +82,8 @@ public class WebhookDispatcher {
             fixedDelayString = "${gmepay.webhook.dispatcher.interval-ms:30000}",
             initialDelayString = "${gmepay.webhook.dispatcher.initial-delay-ms:5000}")
     public void drainPending() {
-        List<WebhookDeliveryEntity> pending =
-                deliveryRepository.findByStatus(WebhookPersistenceService.STATUS_PENDING);
+        List<WebhookDeliveryEntity> pending = deliveryRepository.findByStatusOrderByCreatedAtAsc(
+                WebhookPersistenceService.STATUS_PENDING, PageRequest.of(0, batchSize));
         if (pending.isEmpty()) {
             return;
         }
@@ -115,8 +121,13 @@ public class WebhookDispatcher {
 
         Optional<ResolvedTarget> target = targetResolver.resolve(row);
         if (target.isEmpty()) {
-            // Resolver already logged why; leave PENDING so delivery resumes later.
-            return false;
+            // #92: count an unresolved target as a failed attempt so a permanently
+            // unresolvable row (no endpoint / secret) DLQs after the retry ceiling instead
+            // of being re-picked every drain forever. A transient unresolve still resolves
+            // within the backoff window; the resolver already logged the specific reason.
+            int attempt = row.getAttempt() + 1;
+            persistence.markAttemptFailedOrDlq(row, attempt, "target unresolved (no endpoint or signing secret)");
+            return true;
         }
 
         int attempt = row.getAttempt() + 1;
