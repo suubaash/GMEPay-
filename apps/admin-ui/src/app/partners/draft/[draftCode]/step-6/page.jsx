@@ -26,6 +26,7 @@ import LimitsSection from './LimitsSection';
 import ContractSection from './ContractSection';
 import CurrencySplitSection from './CurrencySplitSection';
 import RulesEditor from './RulesEditor';
+import CommissionShareSection from './CommissionShareSection';
 
 /**
  * Deep-link route: /partners/draft/{partnerCode}/step-6
@@ -318,12 +319,13 @@ export function Step6CommercialForm({ draft, partnerCode, onSaved }) {
   const busy   = saving || isSubmitting;
 
   return (
-    <Box
-      component="form"
-      onSubmit={handleSubmit(onSubmit)}
-      noValidate
-      aria-label="step-6-commercial-form"
-    >
+    <Stack spacing={4} aria-label="step-6-commercial-page">
+      <Box
+        component="form"
+        onSubmit={handleSubmit(onSubmit)}
+        noValidate
+        aria-label="step-6-commercial-form"
+      >
       <Stack spacing={4}>
         {/* Header */}
         <Box>
@@ -415,6 +417,13 @@ export function Step6CommercialForm({ draft, partnerCode, onSaved }) {
           </Button>
         </Box>
       </Stack>
-    </Box>
+      </Box>
+
+      <Divider />
+
+      {/* ── Commission Sharing (V031) — standalone save, decoupled from the
+          composite step-6 submit (mirrors the dedicated PUT sub-resource). ── */}
+      <CommissionShareSection partnerCode={partnerCode} />
+    </Stack>
   );
 }

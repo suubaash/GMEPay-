@@ -17,6 +17,7 @@ import com.gme.pay.registry.cache.CacheConfig;
 import com.gme.pay.registry.commercial.CommercialTermsService;
 import com.gme.pay.registry.commercial.ContractService;
 import com.gme.pay.registry.commercial.FeeScheduleService;
+import com.gme.pay.registry.commercial.PartnerCommissionShareService;
 import com.gme.pay.registry.commercial.FxConfigService;
 import com.gme.pay.registry.commercial.LimitsService;
 import com.gme.pay.registry.partner.PartnerStore;
@@ -51,7 +52,8 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({PartnerCommercialTermsControllerTest.TestConfig.class, CommercialTermsService.class,
         FeeScheduleService.class, FxConfigService.class, LimitsService.class,
-        ContractService.class, AuditLogService.class, PartnerStore.class, CacheConfig.class})
+        ContractService.class, PartnerCommissionShareService.class, AuditLogService.class,
+        PartnerStore.class, CacheConfig.class})
 class PartnerCommercialTermsControllerTest {
 
     @Autowired
@@ -68,6 +70,9 @@ class PartnerCommercialTermsControllerTest {
 
     @Autowired
     private ContractService contractService;
+
+    @Autowired
+    private PartnerCommissionShareService commissionShareService;
 
     @Autowired
     private PartnerStore partnerStore;
@@ -94,7 +99,8 @@ class PartnerCommercialTermsControllerTest {
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         mvc = standaloneSetup(new PartnerCommercialTermsController(commercialTermsService,
-                feeScheduleService, fxConfigService, limitsService, contractService))
+                feeScheduleService, fxConfigService, limitsService, contractService,
+                commissionShareService))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }

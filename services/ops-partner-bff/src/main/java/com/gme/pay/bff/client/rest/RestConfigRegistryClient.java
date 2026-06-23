@@ -516,6 +516,88 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    // -------- V031 configurable commission sharing -----------------------------
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCommissionShareView> listPartnerCommissionShares(
+            String partnerCode) {
+        try {
+            List<com.gme.pay.contracts.PartnerCommissionShareView> shares = restClient.get()
+                    .uri("/v1/partners/{partnerCode}/commission-shares", partnerCode)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCommissionShareView>>() {});
+            return shares == null ? List.of() : shares;
+        } catch (ResourceAccessException network) {
+            // Reads degrade to an empty list on transport failure (interface
+            // contract), same as the other list passthroughs.
+            log.warn("config-registry unreachable on listPartnerCommissionShares: {}",
+                    network.getMessage());
+            return List.of();
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.PartnerCommissionShareView> replacePartnerCommissionShares(
+            String partnerCode, List<com.gme.pay.contracts.PartnerCommissionShareCommand> shares) {
+        try {
+            List<com.gme.pay.contracts.PartnerCommissionShareView> saved = restClient.put()
+                    .uri("/v1/partners/{partnerCode}/commission-shares", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(shares == null ? List.of() : shares)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.PartnerCommissionShareView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Upstream 400 (bad direction / share out of [0,1] / duplicate pair) →
+            // 404 (unknown partner) pass through with the message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.SchemeCommissionShareView> listSchemeCommissionShares(
+            String schemeId) {
+        try {
+            List<com.gme.pay.contracts.SchemeCommissionShareView> shares = restClient.get()
+                    .uri("/v1/schemes/{schemeId}/commission-shares", schemeId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.SchemeCommissionShareView>>() {});
+            return shares == null ? List.of() : shares;
+        } catch (ResourceAccessException network) {
+            // Reads degrade to an empty list on transport failure (interface
+            // contract), same as the other list passthroughs.
+            log.warn("config-registry unreachable on listSchemeCommissionShares: {}",
+                    network.getMessage());
+            return List.of();
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public List<com.gme.pay.contracts.SchemeCommissionShareView> replaceSchemeCommissionShares(
+            String schemeId, List<com.gme.pay.contracts.SchemeCommissionShareCommand> shares) {
+        try {
+            List<com.gme.pay.contracts.SchemeCommissionShareView> saved = restClient.put()
+                    .uri("/v1/schemes/{schemeId}/commission-shares", schemeId)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(shares == null ? List.of() : shares)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<
+                            List<com.gme.pay.contracts.SchemeCommissionShareView>>() {});
+            return saved == null ? List.of() : saved;
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Upstream 400 (bad direction / gmeShare out of (0,1] / van over
+            // NUMERIC(7,4) / duplicate direction) → 404 (unknown scheme) pass through.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
     @Override
     public com.gme.pay.contracts.FxConfigView getFxConfig(String partnerCode) {
         try {

@@ -7,11 +7,14 @@ import com.gme.pay.contracts.ContractView;
 import com.gme.pay.contracts.FeeScheduleView;
 import com.gme.pay.contracts.FxConfigView;
 import com.gme.pay.contracts.LimitsView;
+import com.gme.pay.contracts.PartnerCommissionShareCommand;
+import com.gme.pay.contracts.PartnerCommissionShareView;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -98,5 +101,32 @@ public class PartnerCommercialTermsController {
     @GetMapping("/partners/{partnerCode}/contract")
     public ContractView getContract(@PathVariable String partnerCode) {
         return configRegistry.getContract(partnerCode);
+    }
+
+    /**
+     * The CURRENT partner-side commission shares for {@code partnerCode} — the
+     * configurable GME↔partner split of GME's commission (V031). Mirrors
+     * {@code GET /v1/partners/{partnerCode}/commission-shares}. Empty list when
+     * none configured; 404 only for an unknown code.
+     */
+    @GetMapping("/partners/{partnerCode}/commission-shares")
+    public List<PartnerCommissionShareView> getCommissionShares(@PathVariable String partnerCode) {
+        return configRegistry.listPartnerCommissionShares(partnerCode);
+    }
+
+    /**
+     * Bulk-replace the partner-side commission shares (one row per
+     * {@code (schemeId, direction)}; empty list clears). Mirrors
+     * {@code PUT /v1/partners/{partnerCode}/commission-shares}; upstream 400
+     * (validation) / 404 (unknown partner) pass through with their messages.
+     */
+    @PutMapping("/partners/{partnerCode}/commission-shares")
+    public List<PartnerCommissionShareView> replaceCommissionShares(
+            @PathVariable String partnerCode,
+            @RequestBody List<PartnerCommissionShareCommand> shares) {
+        if (shares == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.replacePartnerCommissionShares(partnerCode, shares);
     }
 }

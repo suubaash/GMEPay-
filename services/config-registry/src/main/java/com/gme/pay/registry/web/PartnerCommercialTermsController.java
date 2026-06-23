@@ -6,15 +6,19 @@ import com.gme.pay.contracts.FeeScheduleView;
 import com.gme.pay.contracts.FxConfigView;
 import com.gme.pay.contracts.LimitsView;
 import com.gme.pay.contracts.PartnerCommand;
+import com.gme.pay.contracts.PartnerCommissionShareCommand;
+import com.gme.pay.contracts.PartnerCommissionShareView;
 import com.gme.pay.registry.commercial.CommercialTermsService;
 import com.gme.pay.registry.commercial.ContractService;
 import com.gme.pay.registry.commercial.FeeScheduleService;
 import com.gme.pay.registry.commercial.FxConfigService;
 import com.gme.pay.registry.commercial.LimitsService;
+import com.gme.pay.registry.commercial.PartnerCommissionShareService;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,17 +45,20 @@ public class PartnerCommercialTermsController {
     private final FxConfigService fxConfigService;
     private final LimitsService limitsService;
     private final ContractService contractService;
+    private final PartnerCommissionShareService commissionShareService;
 
     public PartnerCommercialTermsController(CommercialTermsService commercialTermsService,
                                             FeeScheduleService feeScheduleService,
                                             FxConfigService fxConfigService,
                                             LimitsService limitsService,
-                                            ContractService contractService) {
+                                            ContractService contractService,
+                                            PartnerCommissionShareService commissionShareService) {
         this.commercialTermsService = commercialTermsService;
         this.feeScheduleService = feeScheduleService;
         this.fxConfigService = fxConfigService;
         this.limitsService = limitsService;
         this.contractService = contractService;
+        this.commissionShareService = commissionShareService;
     }
 
     /**
@@ -114,5 +121,31 @@ public class PartnerCommercialTermsController {
     @GetMapping("/{id}/contract")
     public ContractView getContract(@PathVariable String id) {
         return contractService.currentContract(id);
+    }
+
+    /**
+     * The CURRENT commission-share set for {@code id} (the partner business
+     * code) — the configurable GME ↔ partner split of GME's commission (V031).
+     * Returns an empty list when the partner has no commission rows yet; 404
+     * only when the partner code itself is unknown.
+     */
+    @GetMapping("/{id}/commission-shares")
+    public List<PartnerCommissionShareView> getCommissionShares(@PathVariable String id) {
+        return commissionShareService.currentCommissionShares(id);
+    }
+
+    /**
+     * Bulk-replace the partner's commission-share set (one row per
+     * {@code (schemeId, direction)}; empty list clears). Unlike the step-6 fee
+     * schedule this is allowed in any lifecycle state — commission terms are
+     * renegotiated over a partner's life. 404 unknown partner; 400 on
+     * validation failure (bad direction / share out of [0,1] / duplicate pair).
+     */
+    @PutMapping("/{id}/commission-shares")
+    public List<PartnerCommissionShareView> replaceCommissionShares(
+            @PathVariable String id,
+            @RequestBody List<PartnerCommissionShareCommand> shares,
+            @RequestHeader(value = "X-Actor", required = false) String actor) {
+        return commissionShareService.replaceCommissionShares(id, shares, actor);
     }
 }

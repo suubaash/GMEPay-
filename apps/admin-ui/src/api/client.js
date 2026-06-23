@@ -536,6 +536,55 @@ export const adminApi = {
       { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
     ),
 
+  // ---------- Commission sharing (V031 — configurable, no fixed 70/30) -------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/commission-shares
+   * -> PartnerCommissionShareView[]
+   *   { id, schemeId|null, direction|null, partnerSharePct (decimal string),
+   *     validFrom, validTo|null, recordedAt }
+   * partnerSharePct is the partner's fraction of GME's commission ([0,1]).
+   * Empty array when none configured; an unknown partner surfaces a 404.
+   */
+  getPartnerCommissionShares: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/commission-shares`,
+    ),
+
+  /**
+   * PUT /v1/admin/partners/{partnerCode}/commission-shares
+   * body: PartnerCommissionShareCommand[] { schemeId|null, direction|null, partnerSharePct }
+   * -> fresh PartnerCommissionShareView[] (bulk replace; empty array clears).
+   * 400 on validation failure (share out of [0,1] / bad direction / dup pair).
+   */
+  savePartnerCommissionShares: (partnerCode, shares) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/commission-shares`,
+      { method: 'PUT', body: JSON.stringify(shares ?? []) },
+    ),
+
+  /**
+   * GET /v1/admin/schemes/{schemeId}/commission-shares
+   * -> SchemeCommissionShareView[]
+   *   { id, schemeId, direction|null, gmeSharePct, vanFeePct (decimal strings),
+   *     validFrom, validTo|null, recordedAt }
+   * gmeSharePct is GME's fraction of the net merchant fee ((0,1]); the scheme
+   * keeps the remainder. Empty array when none; unknown scheme -> 404.
+   */
+  getSchemeCommissionShares: (schemeId) =>
+    request(`/v1/admin/schemes/${encodeURIComponent(schemeId)}/commission-shares`),
+
+  /**
+   * PUT /v1/admin/schemes/{schemeId}/commission-shares
+   * body: SchemeCommissionShareCommand[] { direction|null, gmeSharePct, vanFeePct }
+   * -> fresh SchemeCommissionShareView[] (bulk replace; empty array clears).
+   * 400 on validation failure (gmeShare out of (0,1] / van over range / dup dir).
+   */
+  saveSchemeCommissionShares: (schemeId, shares) =>
+    request(
+      `/v1/admin/schemes/${encodeURIComponent(schemeId)}/commission-shares`,
+      { method: 'PUT', body: JSON.stringify(shares ?? []) },
+    ),
+
   // ---------- Step-7: Schemes & Corridors (Slice 7) ----------
   /**
    * GET /v1/admin/partners/draft/{partnerCode}/step-7/schemes

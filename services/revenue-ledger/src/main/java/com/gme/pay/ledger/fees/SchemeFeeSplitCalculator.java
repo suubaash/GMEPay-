@@ -60,10 +60,19 @@ public class SchemeFeeSplitCalculator {
         if (merchantFeeRate == null || merchantFeeRate.compareTo(BigDecimal.ZERO) < 0) {
             throw new IllegalArgumentException("merchantFeeRate must be >= 0");
         }
+        // A fee RATE is a fraction of the payout; > 1 (100%) is nonsensical and risks
+        // longValueExact() overflow on large payouts. Reject it as bad config, not as a crash.
+        if (merchantFeeRate.compareTo(BigDecimal.ONE) > 0) {
+            throw new IllegalArgumentException("merchantFeeRate must be <= 1, got: " + merchantFeeRate);
+        }
         if (vanFeeRate == null || vanFeeRate.compareTo(BigDecimal.ZERO) < 0) {
             throw new IllegalArgumentException("vanFeeRate must be >= 0");
         }
-        if (vanFeeRate.compareTo(merchantFeeRate) >= 0 && merchantFeeRate.compareTo(BigDecimal.ZERO) > 0) {
+        // van must be strictly less than merchant WHENEVER van is positive — this also
+        // covers merchantFeeRate == 0 with van > 0, which would otherwise drive net negative
+        // (the old "&& merchant > 0" clause silently let that through). van == 0 with
+        // merchant == 0 (a genuine zero-fee transaction) stays allowed.
+        if (vanFeeRate.signum() > 0 && vanFeeRate.compareTo(merchantFeeRate) >= 0) {
             throw new IllegalArgumentException(
                     "vanFeeRate must be < merchantFeeRate, got van=" + vanFeeRate + " merchant=" + merchantFeeRate);
         }

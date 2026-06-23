@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Box,
+  Button,
   Chip,
   Paper,
   Table,
@@ -13,11 +14,13 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
+import PercentIcon from '@mui/icons-material/Percent';
 import ErrorAlert from '@/components/ErrorAlert';
 import EmptyState from '@/components/EmptyState';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { listSchemes } from '@/store/schemesSlice';
+import SchemeCommissionDialog from './SchemeCommissionDialog';
 
 /**
  * QR scheme list page — GET /v1/admin/schemes.
@@ -37,6 +40,9 @@ function statusColor(status) {
 export default function SchemesPage() {
   const dispatch = useAppDispatch();
   const { items, loading, error } = useAppSelector((s) => s.schemes);
+
+  /** Scheme currently open in the commission-share editor (null = closed). */
+  const [commissionScheme, setCommissionScheme] = useState(null);
 
   const reload = useCallback(() => {
     dispatch(listSchemes());
@@ -76,6 +82,7 @@ export default function SchemesPage() {
                 <TableCell>Currency</TableCell>
                 <TableCell>Mode</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell align="right">Commission</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -93,12 +100,32 @@ export default function SchemesPage() {
                       color={statusColor(s.status)}
                     />
                   </TableCell>
+                  <TableCell align="right">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<PercentIcon />}
+                      onClick={() => setCommissionScheme(s.schemeId)}
+                      aria-label={`edit-commission-${s.schemeId}`}
+                    >
+                      Commission sharing
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </TableContainer>
       )}
+
+      {/* key by scheme so the editor remounts with fresh form state per row —
+          no stale cross-scheme bleed while the next scheme's GET resolves. */}
+      <SchemeCommissionDialog
+        key={commissionScheme ?? 'closed'}
+        open={!!commissionScheme}
+        schemeId={commissionScheme}
+        onClose={() => setCommissionScheme(null)}
+      />
     </Box>
   );
 }

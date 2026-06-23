@@ -450,6 +450,52 @@ public interface ConfigRegistryClient {
                 "getContract is not implemented by " + getClass().getName());
     }
 
+    // -------- V031 configurable commission sharing (two-sided, no fixed 70/30) ----
+    //
+    // Reads degrade to an empty list (a partner/scheme with no commission rows);
+    // writes throw so a missing override is loud. Both real implementations
+    // (rest + stub) override all four.
+
+    /**
+     * The CURRENT partner-side commission shares (GME↔partner split of GME's
+     * commission). Routes to {@code GET /v1/partners/{partnerCode}/commission-shares}.
+     */
+    default List<com.gme.pay.contracts.PartnerCommissionShareView> listPartnerCommissionShares(
+            String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * Bulk-replace the partner-side commission shares. Routes to
+     * {@code PUT /v1/partners/{partnerCode}/commission-shares}; upstream 400/404
+     * surface as a {@code ResponseStatusException} from the rest/stub impls.
+     */
+    default List<com.gme.pay.contracts.PartnerCommissionShareView> replacePartnerCommissionShares(
+            String partnerCode, List<com.gme.pay.contracts.PartnerCommissionShareCommand> shares) {
+        throw new UnsupportedOperationException(
+                "replacePartnerCommissionShares is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT scheme-side commission shares (GME↔scheme split of the net
+     * merchant fee). Routes to {@code GET /v1/schemes/{schemeId}/commission-shares}.
+     */
+    default List<com.gme.pay.contracts.SchemeCommissionShareView> listSchemeCommissionShares(
+            String schemeId) {
+        return List.of();
+    }
+
+    /**
+     * Bulk-replace the scheme-side commission shares. Routes to
+     * {@code PUT /v1/schemes/{schemeId}/commission-shares}; upstream 400/404
+     * surface as a {@code ResponseStatusException} from the rest/stub impls.
+     */
+    default List<com.gme.pay.contracts.SchemeCommissionShareView> replaceSchemeCommissionShares(
+            String schemeId, List<com.gme.pay.contracts.SchemeCommissionShareCommand> shares) {
+        throw new UnsupportedOperationException(
+                "replaceSchemeCommissionShares is not implemented by " + getClass().getName());
+    }
+
     /**
      * @deprecated Slice 1 DTO collapse — bind to {@link PartnerView} from
      * {@code lib-api-contracts} instead. Retained as an Expand-phase alias
