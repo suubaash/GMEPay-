@@ -152,18 +152,14 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
     }
 
     private static TransactionRecord toTransactionRecord(TransactionResponse r) {
-        BigDecimal targetPayoutKrw = r.targetPayout() != null
-                ? new BigDecimal(r.targetPayout())
-                : BigDecimal.ZERO;
+        BigDecimal targetPayoutKrw = parseDecimalOrZero(r.targetPayout(), "targetPayout", r.txnRef());
 
         // settlementType: derive from sendCcy; KRW domestic = NET ('N'), else GROSS ('G')
         char settlementType = "KRW".equalsIgnoreCase(r.sendCcy()) ? 'N' : 'G';
 
         // merchantFeeRate: the rate snapshotted on the txn at creation (V005); null on
         // legacy/pre-resolution rows → 0 (NET calc then yields a zero fee for that row).
-        BigDecimal merchantFeeRate = r.merchantFeeRate() != null
-                ? new BigDecimal(r.merchantFeeRate())
-                : BigDecimal.ZERO;
+        BigDecimal merchantFeeRate = parseDecimalOrZero(r.merchantFeeRate(), "merchantFeeRate", r.txnRef());
 
         return new TransactionRecord(
                 null,                           // id — not available in REST response
@@ -177,6 +173,24 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
                 null,                           // completedAt — createdAt is ISO instant string; parse if needed
                 null                            // settlementBatchId — not available via REST
         );
+    }
+
+    /**
+     * Parse a decimal money/rate string defensively: null/blank → ZERO; a malformed value →
+     * ZERO (logged), NEVER throws. A single bad row must not raise NumberFormatException inside
+     * the page loop, where the surrounding catch would {@code break} and silently TRUNCATE the
+     * whole settlement batch (adversarial-review finding).
+     */
+    private static BigDecimal parseDecimalOrZero(String value, String field, String txnRef) {
+        if (value == null || value.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return new BigDecimal(value.trim());
+        } catch (NumberFormatException e) {
+            log.warn("Unparseable {} '{}' on txn {} — treating as 0", field, value, txnRef);
+            return BigDecimal.ZERO;
+        }
     }
 
     // ---------------------------------------------------------------------------------

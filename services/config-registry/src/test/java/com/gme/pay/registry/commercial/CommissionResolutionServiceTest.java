@@ -68,6 +68,19 @@ class CommissionResolutionServiceTest {
     }
 
     @Test
+    void schemeSide_caseInsensitiveSchemeCode() {
+        // Rows store canonical "ZEROPAY"; the payment path supplies raw "zeropay".
+        // The scheme side must still resolve (else the consumer snapshots no share).
+        Long pid = seedPartner("P_CASE");
+        scheme("ZEROPAY", null, "0.7000", "0.0000");
+        partner(pid, null, null, "0.2000");
+        EffectiveCommissionView v = service.resolve("zeropay", "P_CASE", "OUTBOUND");
+        assertThat(v.gmeSharePct()).isEqualByComparingTo("0.7000");
+        assertThat(v.partnerSharePct()).isEqualByComparingTo("0.2000");
+        assertThat(v.resolved()).isTrue();
+    }
+
+    @Test
     void schemeSide_exactDirectionBeatsWildcard() {
         Long pid = seedPartner("P_SCHEME");
         scheme("ZEROPAY", "INBOUND", "0.7000", "0.0008");

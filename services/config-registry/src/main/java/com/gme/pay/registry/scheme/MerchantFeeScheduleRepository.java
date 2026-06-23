@@ -16,11 +16,14 @@ public interface MerchantFeeScheduleRepository
 
     /**
      * The CURRENT merchant-fee rows for the given scheme code, in id (insertion)
-     * order. Served by {@code idx_merchant_fee_schedule_current}.
+     * order. Case-INSENSITIVE on the scheme code: rows are stored canonical
+     * (uppercase, via the catalog) but the live payment path supplies the raw
+     * request code (e.g. {@code "zeropay"}); a case-sensitive match would make
+     * {@code resolveRate} silently never resolve (adversarial-review HIGH).
      */
     @Query("""
             select m from MerchantFeeScheduleEntity m
-            where m.schemeId = :schemeId
+            where upper(m.schemeId) = upper(:schemeId)
               and m.supersededAt is null
             order by m.id
             """)

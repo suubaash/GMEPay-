@@ -23,9 +23,13 @@ public interface SchemeCommissionShareRepository
      * The CURRENT commission-share rows for the given scheme code, in id
      * (insertion) order. Served by {@code idx_scheme_commission_share_current}.
      */
+    // Case-INSENSITIVE on the scheme code: rows are stored canonical (uppercase,
+    // via the catalog) but the commission resolver / payment path supplies the raw
+    // request code (e.g. "zeropay"); a case-sensitive match would make the scheme
+    // side of CommissionResolutionService silently never resolve.
     @Query("""
             select s from SchemeCommissionShareEntity s
-            where s.schemeId = :schemeId
+            where upper(s.schemeId) = upper(:schemeId)
               and s.supersededAt is null
             order by s.id
             """)

@@ -75,6 +75,17 @@ class MerchantFeeScheduleServiceTest {
     }
 
     @Test
+    void resolveRate_isCaseInsensitiveOnScheme() {
+        // Rows store the canonical catalog spelling ("ZEROPAY"); the live payment path
+        // supplies the raw request code ("zeropay"). resolveRate MUST still resolve, else
+        // the whole merchant-fee feature is a silent no-op (adversarial-review HIGH).
+        service.replaceMerchantFees("ZEROPAY", List.of(fee("RETAIL", "0.0080")), "a");
+        assertThat(service.resolveRate("zeropay", "RETAIL")).contains(new BigDecimal("0.0080"));
+        assertThat(service.resolveRate("ZeRoPaY", "RETAIL")).contains(new BigDecimal("0.0080"));
+        assertThat(service.currentMerchantFees("zeropay")).hasSize(1);
+    }
+
+    @Test
     void resolveRate_exactTypeBeatsDefault() {
         service.replaceMerchantFees("ZEROPAY",
                 List.of(fee("RETAIL", "0.0080"), fee(null, "0.0150")), "a");
