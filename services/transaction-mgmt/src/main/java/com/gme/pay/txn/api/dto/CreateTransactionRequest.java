@@ -21,6 +21,9 @@ import java.math.BigDecimal;
  *   <li>{@code collectionCurrency} – String: ISO-4217 collection currency (e.g. "USD")</li>
  *   <li>{@code merchantId}         – String: scheme merchant terminal identifier (nullable)</li>
  *   <li>{@code quoteId}            – String: rate-quote reference (nullable)</li>
+ *   <li>{@code merchantFeeRate}    – BigDecimal: gross merchant fee rate resolved at
+ *       creation (e.g. 0.0080 = 0.80%), snapshotted onto the txn (nullable — null leaves
+ *       the snapshot empty and settlement treats it as 0)</li>
  * </ul>
  */
 public record CreateTransactionRequest(
@@ -34,5 +37,6 @@ public record CreateTransactionRequest(
         BigDecimal collectionAmount,
         String collectionCurrency,
         String merchantId,
-        String quoteId
+        String quoteId,
+        BigDecimal merchantFeeRate
 ) {}

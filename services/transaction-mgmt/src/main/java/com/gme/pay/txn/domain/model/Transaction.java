@@ -64,6 +64,10 @@ public class Transaction {
     // OI-01: reason code set when a transaction enters FAILED (e.g. "APPROVAL_TIMEOUT").
     private String failureReason;
 
+    // V005: gross merchant fee rate snapshot (config-registry merchant_fee_schedule, V032),
+    // captured at creation — the rate that applied then. Nullable on legacy / pre-resolution rows.
+    private BigDecimal merchantFeeRate;
+
     /**
      * Creates a new transaction in {@link TransactionStatus#CREATED} state
      * using the legacy 5-field signature (kept for backward compat with unit tests).
@@ -394,6 +398,16 @@ public class Transaction {
     }
 
     /**
+     * Snapshots the gross merchant fee rate resolved at creation (V005). Set on the create
+     * path and on rehydration from the DB. The rate is immutable for the life of the txn (the
+     * rate that applied at creation), so settlement always reads a stable value. Does NOT bump
+     * {@code updatedAt} — it is a creation-time snapshot, also replayed during rehydration.
+     */
+    public void applyMerchantFeeRate(BigDecimal merchantFeeRate) {
+        this.merchantFeeRate = merchantFeeRate;
+    }
+
+    /**
      * Applies the status-patch lock fields from the PATCH /v1/transactions/{ref}/status
      * endpoint. These fields are set once when the payment-executor commits the scheme result.
      */
@@ -446,4 +460,5 @@ public class Transaction {
     public BigDecimal prefundDeductedUsd() { return prefundDeductedUsd; }
     public Instant approvedAt()          { return approvedAt; }
     public String failureReason()        { return failureReason; }
+    public BigDecimal merchantFeeRate()  { return merchantFeeRate; }
 }

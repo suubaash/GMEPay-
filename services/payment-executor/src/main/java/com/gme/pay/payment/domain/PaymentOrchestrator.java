@@ -1,5 +1,6 @@
 package com.gme.pay.payment.domain;
 
+import com.gme.pay.payment.domain.client.PartnerConfigClient;
 import com.gme.pay.payment.domain.client.PrefundingClient;
 import com.gme.pay.payment.domain.client.QrClient;
 import com.gme.pay.payment.domain.client.RateClient;
@@ -59,6 +60,8 @@ public class PaymentOrchestrator {
     private final TransactionClient transactionClient;
     private final SettlementBookingService settlementBookingService;
     private final RevenueLedgerClient revenueLedgerClient;
+    /** Optional (V032): resolves the gross merchant fee rate at creation; null = resolution skipped. */
+    private final PartnerConfigClient partnerConfigClient;
 
     /**
      * Backwards-compatible 5-arg constructor used by existing wiring/tests that do not exercise
@@ -87,6 +90,25 @@ public class PaymentOrchestrator {
             TransactionClient transactionClient,
             SettlementBookingService settlementBookingService,
             RevenueLedgerClient revenueLedgerClient) {
+        this(rateClient, prefundingClient, qrClient, schemeClient, transactionClient,
+                settlementBookingService, revenueLedgerClient, null);
+    }
+
+    /**
+     * Full-arg constructor (V032) adding the optional {@link PartnerConfigClient} used to resolve
+     * the gross merchant fee rate at creation and snapshot it onto the transaction. When null
+     * (legacy wiring / tests) the resolution is skipped and the snapshot is left empty — settlement
+     * then treats the rate as 0, exactly as before.
+     */
+    public PaymentOrchestrator(
+            RateClient rateClient,
+            PrefundingClient prefundingClient,
+            QrClient qrClient,
+            SchemeClient schemeClient,
+            TransactionClient transactionClient,
+            SettlementBookingService settlementBookingService,
+            RevenueLedgerClient revenueLedgerClient,
+            PartnerConfigClient partnerConfigClient) {
         this.rateClient = rateClient;
         this.prefundingClient = prefundingClient;
         this.qrClient = qrClient;
@@ -94,6 +116,19 @@ public class PaymentOrchestrator {
         this.transactionClient = transactionClient;
         this.settlementBookingService = settlementBookingService;
         this.revenueLedgerClient = revenueLedgerClient;
+        this.partnerConfigClient = partnerConfigClient;
+    }
+
+    /**
+     * Resolves the gross merchant fee rate to snapshot onto a new transaction (V032). Null-safe and
+     * non-fatal: returns null when no client is wired or nothing resolves, so settlement treats the
+     * fee as 0 and a config hiccup never fails a payment.
+     */
+    private java.math.BigDecimal resolveMerchantFeeRate(String schemeId, String merchantType) {
+        if (partnerConfigClient == null) {
+            return null;
+        }
+        return partnerConfigClient.resolveMerchantFeeRate(schemeId, merchantType).orElse(null);
     }
 
     /**
@@ -124,7 +159,9 @@ public class PaymentOrchestrator {
                         quote.collectionAmount(),
                         quote.collectionCurrency(),
                         merchant.merchantId(),
-                        cmd.quoteId()
+                        cmd.quoteId(),
+                        // V032: snapshot the gross merchant fee rate for this merchant's type.
+                        resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType())
                 )
         );
 
@@ -263,7 +300,9 @@ public class PaymentOrchestrator {
                         cmd.collectionAmount(),
                         cmd.collectionCurrency(),
                         cmd.merchantId(),
-                        null  // no quoteId for CPM
+                        null,  // no quoteId for CPM
+                        // V032: no merchant lookup on the CPM path → resolve the scheme default rate.
+                        resolveMerchantFeeRate(cmd.schemeId(), null)
                 )
         );
 

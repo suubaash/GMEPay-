@@ -62,6 +62,39 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
         }
     }
 
+    @Override
+    public java.util.Optional<java.math.BigDecimal> resolveMerchantFeeRate(
+            String schemeId, String merchantType) {
+        if (schemeId == null || schemeId.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            MerchantFeeEffectiveResponse body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/v1/schemes/{schemeId}/merchant-fees/effective");
+                        if (merchantType != null && !merchantType.isBlank()) {
+                            uriBuilder.queryParam("merchantType", merchantType);
+                        }
+                        return uriBuilder.build(schemeId);
+                    })
+                    .retrieve()
+                    .body(MerchantFeeEffectiveResponse.class);
+            if (body == null || !body.resolved()
+                    || body.merchantFeePct() == null || body.merchantFeePct().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new java.math.BigDecimal(body.merchantFeePct()));
+        } catch (RuntimeException ex) {
+            // Non-fatal: a merchant-fee resolution failure must NEVER fail a payment.
+            // Leave the snapshot null; settlement treats it as 0 (today's behaviour).
+            return java.util.Optional.empty();
+        }
+    }
+
+    /** Wire format for {@code GET /v1/schemes/{id}/merchant-fees/effective}. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record MerchantFeeEffectiveResponse(String merchantFeePct, boolean resolved) {}
+
     /** Wire format for {@code GET /v1/partners/{id}}. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     record PartnerConfigResponse(

@@ -15,16 +15,20 @@ public interface QrClient {
      */
     MerchantView resolve(String merchantQr);
 
-    /** Immutable view of a resolved QR merchant. */
-    record MerchantView(String merchantId, String merchantName, String payoutCurrency, String schemeId, boolean active) {
+    /**
+     * Immutable view of a resolved QR merchant. {@code merchantType} (V032) drives the
+     * gross-merchant-fee lookup; nullable (merchant-qr-data may not classify a row).
+     */
+    record MerchantView(String merchantId, String merchantName, String payoutCurrency,
+                        String schemeId, String merchantType, boolean active) {
 
         /**
-         * Backwards-compatible 4-arg factory: treats merchant as active (legacy callers
-         * that do not supply an active/status field).
+         * Backwards-compatible 4-arg factory: active, no merchant-type classification
+         * (legacy callers / tests).
          */
         public static MerchantView of(String merchantId, String merchantName,
                                       String payoutCurrency, String schemeId) {
-            return new MerchantView(merchantId, merchantName, payoutCurrency, schemeId, true);
+            return new MerchantView(merchantId, merchantName, payoutCurrency, schemeId, null, true);
         }
     }
 }

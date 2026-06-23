@@ -52,7 +52,7 @@ class RestTransactionClientTest {
                         42L, "PTNR_TXN_001", "zeropay", "inbound", "MPM",
                         new BigDecimal("50000"), "KRW",
                         new BigDecimal("37.365197"), "USD",
-                        "M001", "qte_1"));
+                        "M001", "qte_1", new BigDecimal("0.0080")));
 
         assertEquals("txn_001", result.txnRef());
         assertEquals("pay_001", result.paymentId());
@@ -70,7 +70,7 @@ class RestTransactionClientTest {
                         42L, "PTNR_TXN_001", "zeropay", "inbound", "MPM",
                         new BigDecimal("50000"), "KRW",
                         new BigDecimal("37.365197"), "USD",
-                        "M001", "qte_1")));
+                        "M001", "qte_1", new BigDecimal("0.0080"))));
         server.verify();
     }
 

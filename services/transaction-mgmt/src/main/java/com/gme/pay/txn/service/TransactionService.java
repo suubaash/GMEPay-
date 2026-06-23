@@ -83,7 +83,8 @@ public class TransactionService {
                                                   BigDecimal collectionAmount,
                                                   String collectionCurrency,
                                                   String merchantId,
-                                                  String quoteId) {
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -94,6 +95,8 @@ public class TransactionService {
                 partnerId, partnerTxnRef, schemeId, direction, paymentMode,
                 targetPayout, payoutCurrency, collectionAmount, collectionCurrency,
                 merchantId, quoteId);
+        // V005: snapshot the gross merchant fee rate the caller resolved at creation.
+        txn.applyMerchantFeeRate(merchantFeeRate);
         return repository.save(txn);
     }
 

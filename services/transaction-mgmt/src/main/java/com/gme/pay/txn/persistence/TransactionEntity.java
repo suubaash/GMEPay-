@@ -91,6 +91,10 @@ public class TransactionEntity {
     @Column(name = "merchant_id", length = 128)
     private String merchantId;
 
+    /** V005: gross merchant fee rate snapshotted at creation (NUMERIC(7,4), e.g. 0.0080 = 0.80%). */
+    @Column(name = "merchant_fee_rate", precision = 7, scale = 4)
+    private BigDecimal merchantFeeRate;
+
     @Column(name = "quote_id", length = 128)
     private String quoteId;
 
@@ -188,6 +192,8 @@ public class TransactionEntity {
 
     public String getMerchantId() { return merchantId; }
     public void setMerchantId(String merchantId) { this.merchantId = merchantId; }
+    public BigDecimal getMerchantFeeRate() { return merchantFeeRate; }
+    public void setMerchantFeeRate(BigDecimal merchantFeeRate) { this.merchantFeeRate = merchantFeeRate; }
 
     public String getQuoteId() { return quoteId; }
     public void setQuoteId(String quoteId) { this.quoteId = quoteId; }

@@ -48,6 +48,7 @@ public class RestQrClient implements QrClient {
             return new MerchantView(
                     body.merchantId(), body.merchantName(),
                     body.payoutCurrency(), body.schemeId(),
+                    body.merchantType(),
                     body.isActive());
         } catch (RestClientResponseException ex) {
             throw new PaymentException(
@@ -67,6 +68,8 @@ public class RestQrClient implements QrClient {
             String merchantName,
             String payoutCurrency,
             String schemeId,
+            /** Merchant category (V032 fee-rate classification); nullable. */
+            String merchantType,
             /** Canonical "active" flag — true when the merchant account is enabled. */
             boolean active,
             /**

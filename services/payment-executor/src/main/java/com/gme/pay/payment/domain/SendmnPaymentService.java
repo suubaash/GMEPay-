@@ -145,7 +145,7 @@ public class SendmnPaymentService {
                 log.warn("SENDMN merchant-qr-data unreachable (lenient) — proceeding: {}",
                         ex.getMessage());
                 merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "MNT",
-                        SCHEME_ID, true);
+                        SCHEME_ID, null, true);
             } else {
                 throw ex;
             }
@@ -235,7 +235,8 @@ public class SendmnPaymentService {
                         new TransactionClient.CreateRequest(
                                 partnerId, partnerTxnRef, SCHEME_ID, "OVERSEAS", "MPM",
                                 payAmountMnt, "MNT", amountKrw, "KRW",
-                                merchant.merchantId(), null));
+                                merchant.merchantId(), null,
+                                null));  // SENDMN wallet uses its own fee model, not the rate-based merchant fee
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(

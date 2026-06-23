@@ -40,7 +40,9 @@ public interface TransactionClient {
             BigDecimal collectionAmount,
             String collectionCurrency,
             String merchantId,
-            String quoteId
+            String quoteId,
+            /** V032/V005: gross merchant fee rate resolved at creation; nullable. */
+            BigDecimal merchantFeeRate
     ) {}
 
     record CreateResult(String txnRef, String paymentId, Instant createdAt) {}

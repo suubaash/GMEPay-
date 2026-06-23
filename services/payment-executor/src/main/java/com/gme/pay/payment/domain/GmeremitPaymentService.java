@@ -124,7 +124,7 @@ public class GmeremitPaymentService {
             if (lenientMerchantValidation) {
                 log.warn("merchant-qr-data unreachable (lenient mode) — proceeding with unknown merchant: {}", ex.getMessage());
                 // Synthesise a placeholder merchant so the payment can proceed
-                merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "KRW", SCHEME_ID, true);
+                merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "KRW", SCHEME_ID, null, true);
             } else {
                 throw ex;
             }
@@ -167,7 +167,8 @@ public class GmeremitPaymentService {
                         new TransactionClient.CreateRequest(
                                 0L, partnerTxnRef, SCHEME_ID, "DOMESTIC", "MPM",
                                 amountKrw, "KRW", amountKrw, "KRW",
-                                merchant.merchantId(), null));
+                                merchant.merchantId(), null,
+                                null));  // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(

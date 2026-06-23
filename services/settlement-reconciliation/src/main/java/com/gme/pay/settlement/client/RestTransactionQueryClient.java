@@ -159,6 +159,12 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
         // settlementType: derive from sendCcy; KRW domestic = NET ('N'), else GROSS ('G')
         char settlementType = "KRW".equalsIgnoreCase(r.sendCcy()) ? 'N' : 'G';
 
+        // merchantFeeRate: the rate snapshotted on the txn at creation (V005); null on
+        // legacy/pre-resolution rows → 0 (NET calc then yields a zero fee for that row).
+        BigDecimal merchantFeeRate = r.merchantFeeRate() != null
+                ? new BigDecimal(r.merchantFeeRate())
+                : BigDecimal.ZERO;
+
         return new TransactionRecord(
                 null,                           // id — not available in REST response
                 r.txnRef(),                     // txnRef
@@ -166,7 +172,7 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
                 r.merchantId(),                 // merchantId  ← ReconDiffEngine key
                 targetPayoutKrw,                // targetPayoutKrw  ← ReconDiffEngine amount
                 settlementType,                 // settlementType
-                BigDecimal.ZERO,                // merchantFeeRate — not in response; engine uses 0 for GROSS
+                merchantFeeRate,                // merchantFeeRate — V005 snapshot from transaction
                 r.status(),                     // status
                 null,                           // completedAt — createdAt is ISO instant string; parse if needed
                 null                            // settlementBatchId — not available via REST
@@ -215,6 +221,7 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
             String rateTimestamp,
             String prefundingDeductedUsd,
             String merchantId,
-            String merchantName
+            String merchantName,
+            String merchantFeeRate
     ) {}
 }

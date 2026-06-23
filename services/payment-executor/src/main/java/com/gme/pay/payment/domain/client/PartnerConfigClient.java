@@ -22,6 +22,24 @@ public interface PartnerConfigClient {
     PartnerConfigView loadPartner(String partnerId);
 
     /**
+     * Resolves the effective GROSS merchant fee rate for a (scheme, merchantType) from
+     * config-registry's {@code merchant_fee_schedule} (V032) — exact type beats the scheme
+     * default. The payment path snapshots the result onto the transaction at creation.
+     *
+     * <p><b>Non-fatal:</b> returns {@link java.util.Optional#empty()} when no row applies OR
+     * config-registry is unreachable — the caller leaves the snapshot null and settlement
+     * treats it as 0 (today's behaviour). NEVER fails a payment. The default no-ops to empty
+     * so stub/test implementations need not override it.
+     *
+     * @param schemeId     the scheme code (e.g. {@code "zeropay_kr"})
+     * @param merchantType the merchant category, or {@code null} to match only the scheme default
+     */
+    default java.util.Optional<java.math.BigDecimal> resolveMerchantFeeRate(
+            String schemeId, String merchantType) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Immutable view of a partner's configuration as published by config-registry.
      *
      * <p>{@code settlementRoundingMode} is mapped from the JSON string

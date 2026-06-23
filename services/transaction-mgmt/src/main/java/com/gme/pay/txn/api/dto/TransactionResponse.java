@@ -77,7 +77,9 @@ public record TransactionResponse(
         /** Merchant terminal/store id from the QR scheme. */
         String merchantId,
         /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
-        String merchantName
+        String merchantName,
+        /** V005: gross merchant fee rate snapshotted at creation ("0.0080" = 0.80%); null when unset. */
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal merchantFeeRate
 ) {
     /**
      * One entry in the status transition history.
@@ -125,7 +127,8 @@ public record TransactionResponse(
                 txn.prefundDeductedUsd(),   // prefundingDeductedUsd
                 null,               // statusHistory — TODO: wire status-history tracking
                 txn.merchantId(),   // merchantId — from V003
-                null                // merchantName — TODO: from scheme-adapter
+                null,               // merchantName — TODO: from scheme-adapter
+                txn.merchantFeeRate()   // merchantFeeRate — V005 snapshot
         );
     }
 }
