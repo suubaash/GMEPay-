@@ -37,22 +37,28 @@ import com.gme.pay.scheme.zeropay.batch.ZpSettlementRequestRecord;
 import com.gme.pay.scheme.zeropay.batch.ZpSettlementResultParser;
 import com.gme.pay.scheme.zeropay.batch.ZpSettlementResultRecord;
 import com.gme.pay.scheme.zeropay.client.ZeroPaySchemeApiClient;
+import com.gme.pay.scheme.zeropay.jeonmun.ZeroPayMpm420000;
 import com.gme.pay.scheme.zeropay.sftp.SftpTransport;
 import com.gme.pay.scheme.zeropay.sftp.SftpTransportException;
+import com.gme.pay.scheme.zeropay.transport.ZeroPayTcpTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * ZeroPay implementation of {@link SchemeAdapter}.
@@ -70,11 +76,16 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(ZeroPaySchemeAdapter.class);
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+    /** Rolling 8-digit message trace number (전문 field 10) for the TCP path. */
+    private static final AtomicLong TRACE_SEQ = new AtomicLong(0);
 
     private final ZeroPayAdapterProperties properties;
     private final ZeroPaySchemeApiClient schemeApiClient;
     private final SftpTransport sftpTransport;
     private final ZpBatchDataPort batchDataPort;
+    /** Lazily built when {@code adapter.zeropay.transport=TCP}; null on the default REST/sim path. */
+    private volatile ZeroPayTcpTransport tcpTransport;
 
     public ZeroPaySchemeAdapter(ZeroPayAdapterProperties properties,
                                 ZeroPaySchemeApiClient schemeApiClient,
@@ -246,6 +257,11 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
      */
     @Override
     public MpmSubmitResponse submitMpm(MpmSubmitRequest request) {
+        // Step 8: when configured for the real ZeroPay 전문/TCP relay, frame + send the 0200
+        // payment 전문 over a socket instead of the REST sim. Config-only switch; same contract.
+        if ("TCP".equalsIgnoreCase(properties.getTransport())) {
+            return submitMpmViaTcp(request);
+        }
         String qrPayload = request.qrPayload();
         // Decode the QR to discover mode (static/dynamic)
         ZeroPaySchemeApiClient.DecodeQrResponse decoded = schemeApiClient.decodeQr(qrPayload);
@@ -288,6 +304,65 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
                 authResp.authId(),
                 commitResp.committedAt()
         );
+    }
+
+    /**
+     * MPM submit over the real ZeroPay 전문/TCP transport (Step 8). Encodes the 0200 변동형 MPM
+     * (420000) payment 전문 from the request, exchanges it over the socket, and maps the decoded
+     * 0210 response to {@link MpmSubmitResponse}. A transport failure propagates (never silently
+     * treated as approval); a decoded decline returns a non-CAPTURED status.
+     *
+     * <p>Spec caveat: the QR-detail fields (registrar id / serial / check char, 전문 fields 35-37)
+     * are populated from the parsed ZeroPay QR at real-KFTC integration — the same caveat the codec
+     * carries for the 응답코드 table. The transport, framing, amount/merchant/fee fields are wired.
+     */
+    private MpmSubmitResponse submitMpmViaTcp(MpmSubmitRequest request) {
+        String txnUniqueNo = request.partnerTxnRef() != null && request.partnerTxnRef().length() > 13
+                ? request.partnerTxnRef().substring(0, 13)
+                : request.partnerTxnRef();
+        long amountKrw = request.amountKrw() == null
+                ? 0L
+                : request.amountKrw().setScale(0, RoundingMode.HALF_UP).longValueExact();
+        LocalDateTime now = LocalDateTime.now(KST);
+        String traceNo = String.format("%08d", Math.floorMod(TRACE_SEQ.incrementAndGet(), 100_000_000L));
+
+        ZeroPayMpm420000.PaymentRequest payment = new ZeroPayMpm420000.PaymentRequest(
+                txnUniqueNo, properties.getRequestingOrg(),
+                amountKrw, 0L,
+                "",   // qr_registrar_id  (field 35) — parsed from the QR at real integration
+                "",   // qr_serial        (field 36)
+                "",   // qr_check_char    (field 37)
+                request.merchantId(), "",
+                true, traceNo,
+                now.toLocalDate(), now);
+
+        ZeroPayMpm420000.Response resp = tcpTransport().submitMpm(payment);
+        log.info("ZeroPay 전문 submit txnUniqueNo={} responseCode={} approved={} merchantFeeKrw={}",
+                resp.txnUniqueNo(), resp.responseCode(), resp.approved(), resp.merchantFeeKrw());
+
+        return new MpmSubmitResponse(
+                resp.txnUniqueNo() == null ? txnUniqueNo : resp.txnUniqueNo().trim(),
+                resp.approved() ? "00" : resp.responseCode(),
+                resp.approved() ? "CAPTURED" : "DECLINED",
+                txnUniqueNo,
+                Instant.now().toString());
+    }
+
+    /** Lazily build (and cache) the 전문/TCP transport from config — only on the TCP path. */
+    private ZeroPayTcpTransport tcpTransport() {
+        ZeroPayTcpTransport t = tcpTransport;
+        if (t == null) {
+            synchronized (this) {
+                t = tcpTransport;
+                if (t == null) {
+                    t = new ZeroPayTcpTransport(
+                            properties.getTcpHost(), properties.getTcpPort(),
+                            properties.getTcpConnectTimeoutMs(), properties.getTcpReadTimeoutMs());
+                    tcpTransport = t;
+                }
+            }
+        }
+        return t;
     }
 
     /**
