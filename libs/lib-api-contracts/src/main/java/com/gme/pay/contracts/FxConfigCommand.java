@@ -27,5 +27,16 @@ import java.math.BigDecimal;
 public record FxConfigCommand(
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal marginBps,
         String referenceRateSource,
-        Integer quoteHoldSeconds) {
+        Integer quoteHoldSeconds,
+        Boolean disclosedPartnerMargin) {
+
+    /**
+     * Back-compat constructor for the original three fields — {@code disclosedPartnerMargin}
+     * (Step 10, OPTIONAL transparency flag: is the partner's FX margin disclosed?) defaults to
+     * {@code null}, treated as {@code false}. Keeps existing callers/tests compiling during the
+     * Expand-phase rollout; non-blocking and recorded for reporting only.
+     */
+    public FxConfigCommand(BigDecimal marginBps, String referenceRateSource, Integer quoteHoldSeconds) {
+        this(marginBps, referenceRateSource, quoteHoldSeconds, null);
+    }
 }

@@ -70,7 +70,9 @@ final class CommercialJson {
         sb.append("\"referenceRateSource\":")
                 .append(jsonString(e.getReferenceRateSource())).append(',');
         sb.append("\"quoteHoldSeconds\":")
-                .append(e.getQuoteHoldSeconds() == null ? "null" : e.getQuoteHoldSeconds());
+                .append(e.getQuoteHoldSeconds() == null ? "null" : e.getQuoteHoldSeconds()).append(',');
+        sb.append("\"disclosedPartnerMargin\":")
+                .append(Boolean.TRUE.equals(e.getDisclosedPartnerMargin()));
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
