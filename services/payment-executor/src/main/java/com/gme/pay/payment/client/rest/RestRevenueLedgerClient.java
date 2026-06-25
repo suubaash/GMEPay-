@@ -32,6 +32,7 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
     private static final String PATH = "/v1/journals/rounding-residual";
     private static final String CAPTURE_PATH = "/v1/revenue/capture";
     private static final String REVERSAL_PATH = "/v1/journals/reversal";
+    private static final String COMMISSION_SPLIT_PATH = "/v1/revenue/commission-split";
 
     private final RestClient restClient;
 
@@ -102,6 +103,37 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
             // do NOT propagate — capture is best-effort, retriable offline
         } catch (Exception ex) {
             log.warn("revenue-ledger capture post failed ref={}: {}", txnRef, ex.toString());
+        }
+    }
+
+    @Override
+    public void postCommissionSplit(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
+                                    long payoutAmountKrw, BigDecimal merchantFeeRate,
+                                    BigDecimal vanFeeRate, BigDecimal gmeSharePct,
+                                    BigDecimal partnerSharePct) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("txnRef", txnRef);
+        body.put("partnerId", partnerId);
+        body.put("schemeId", schemeId);
+        body.put("revenueDate", revenueDate == null ? null : revenueDate.toString());
+        body.put("payoutAmountKrw", payoutAmountKrw);
+        body.put("merchantFeeRate", merchantFeeRate);
+        body.put("vanFeeRate", vanFeeRate);
+        body.put("gmeSharePct", gmeSharePct);
+        body.put("partnerSharePct", partnerSharePct);
+        try {
+            restClient.post()
+                    .uri(COMMISSION_SPLIT_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (HttpServerErrorException ex) {
+            log.error("revenue-ledger 5xx posting commission split ref={} {}: {}",
+                    txnRef, ex.getStatusCode(), ex.toString());
+            // do NOT propagate — the payment already committed; the split is retriable offline
+        } catch (Exception ex) {
+            log.warn("revenue-ledger commission-split post failed ref={}: {}", txnRef, ex.toString());
         }
     }
 

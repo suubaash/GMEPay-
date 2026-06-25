@@ -365,7 +365,8 @@ class PaymentOrchestratorTest {
                 a.txnRef(), a.paymentId(), cmd.schemeId(), cmd.merchantQr(),
                 m.merchantId(), m.merchantName(), q.targetPayout(), q.payoutCurrency(),
                 q.collectionAmount(), q.collectionCurrency(), a.reservedUsd(), q.offerRateColl(),
-                q.collectionMarginUsd(), q.payoutMarginUsd(), q.serviceCharge(), a.createdAt());
+                q.collectionMarginUsd(), q.payoutMarginUsd(), q.serviceCharge(),
+                cmd.direction(), a.merchantFeeRate(), a.createdAt());
     }
 
     @Test
@@ -446,6 +447,95 @@ class PaymentOrchestratorTest {
 
         assertEquals(0, auth.reservedUsd().compareTo(new BigDecimal("37.365197")),
                 "MNT service fee (0.70) must convert to 0.35 USD and fold into the hold");
+    }
+
+    // ======================================================================
+    // Step 7 (task #102): confirm threads the commission split into revenue posting —
+    // resolves the configurable two-sided shares + posts the snapshotted inputs.
+    // ======================================================================
+
+    @Test
+    @DisplayName("Step 7: confirm posts the commission split with resolved shares + snapshotted merchant fee")
+    void confirm_postsCommissionSplit() {
+        java.util.concurrent.atomic.AtomicReference<Long> capPayoutKrw =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> capMerchantFee =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> capVan =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> capGme =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> capPartner =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        com.gme.pay.payment.domain.client.RevenueLedgerClient recordingLedger =
+                new com.gme.pay.payment.domain.client.RevenueLedgerClient() {
+            @Override
+            public void postRoundingResidual(String reference, BigDecimal residual, String currency) { }
+            @Override
+            public void postCommissionSplit(String txnRef, long partnerId, long schemeId,
+                    java.time.LocalDate revenueDate, long payoutAmountKrw, BigDecimal merchantFeeRate,
+                    BigDecimal vanFeeRate, BigDecimal gmeSharePct, BigDecimal partnerSharePct) {
+                callLog.add("LEDGER:COMMISSION_SPLIT");
+                capPayoutKrw.set(payoutAmountKrw);
+                capMerchantFee.set(merchantFeeRate);
+                capVan.set(vanFeeRate);
+                capGme.set(gmeSharePct);
+                capPartner.set(partnerSharePct);
+            }
+        };
+
+        com.gme.pay.payment.domain.client.PartnerConfigClient fakePartnerConfig =
+                new com.gme.pay.payment.domain.client.PartnerConfigClient() {
+            @Override
+            public PartnerConfigView loadPartner(String id) {
+                return new PartnerConfigView(id, "OVERSEAS", "USD", java.math.RoundingMode.HALF_UP);
+            }
+            @Override
+            public java.util.Optional<BigDecimal> resolveMerchantFeeRate(String schemeId, String merchantType) {
+                return java.util.Optional.of(new BigDecimal("0.0080")); // snapshotted at authorize
+            }
+            @Override
+            public java.util.Optional<CommissionSplitConfig> resolveCommissionSplit(
+                    String schemeId, String partnerCode, String direction) {
+                return java.util.Optional.of(new CommissionSplitConfig(
+                        new BigDecimal("0.70"), new BigDecimal("0.0008"), new BigDecimal("0.30")));
+            }
+        };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, twoPhasePrefunding(), fakeQr, fakeScheme, fakeTxn,
+                null, recordingLedger, fakePartnerConfig);
+
+        PaymentOrchestrator.AuthorizeResult auth =
+                orchestrator.authorizeMpm(sampleCommand, PartnerType.OVERSEAS);
+        PaymentResult result = orchestrator.confirmMpm(ctxFrom(auth, sampleCommand));
+
+        assertEquals(PaymentStatus.APPROVED, result.status());
+        assertPresent("LEDGER:COMMISSION_SPLIT");
+        // Quote payout is 50,000 KRW; merchant fee snapshotted at authorize; shares from config.
+        assertEquals(50000L, capPayoutKrw.get(), "payout KRW from the quote targetPayout");
+        assertEquals(0, capMerchantFee.get().compareTo(new BigDecimal("0.0080")),
+                "merchant fee snapshotted at authorize is replayed at confirm");
+        assertEquals(0, capVan.get().compareTo(new BigDecimal("0.0008")));
+        assertEquals(0, capGme.get().compareTo(new BigDecimal("0.70")));
+        assertEquals(0, capPartner.get().compareTo(new BigDecimal("0.30")));
+    }
+
+    @Test
+    @DisplayName("Step 7: no merchant fee snapshotted → commission split is skipped (non-fatal)")
+    void confirm_skipsCommissionSplit_whenNoMerchantFee() {
+        // Default fakeRate/5-arg-style wiring: partnerConfigClient null → merchantFeeRate null.
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, twoPhasePrefunding(), fakeQr, fakeScheme, fakeTxn);
+
+        PaymentOrchestrator.AuthorizeResult auth =
+                orchestrator.authorizeMpm(sampleCommand, PartnerType.OVERSEAS);
+        PaymentResult result = orchestrator.confirmMpm(ctxFrom(auth, sampleCommand));
+
+        assertEquals(PaymentStatus.APPROVED, result.status());
+        assertAbsent("LEDGER:COMMISSION_SPLIT",
+                "split must be skipped when no merchant fee was snapshotted");
     }
 
     @Test

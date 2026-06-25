@@ -204,13 +204,16 @@ public class PaymentOrchestrator {
         // Step 2: resolve merchant.
         QrClient.MerchantView merchant = qrClient.resolve(cmd.merchantQr());
 
-        // Step 3: create the PENDING transaction (snapshot the merchant fee rate).
+        // Step 3: create the PENDING transaction (snapshot the merchant fee rate). The rate is also
+        // carried on AuthorizeResult so it is persisted on the authorization and replayed at confirm
+        // for the commission split (Step 7) — snapshot-at-authorize, not re-resolved at confirm.
+        BigDecimal merchantFeeRate = resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType());
         TransactionClient.CreateResult txn = transactionClient.createPending(
                 new TransactionClient.CreateRequest(
                         cmd.partnerId(), cmd.partnerTxnRef(), cmd.schemeId(), cmd.direction(),
                         PaymentMode.MPM.name(), quote.targetPayout(), quote.payoutCurrency(),
                         quote.collectionAmount(), quote.collectionCurrency(), merchant.merchantId(),
-                        cmd.quoteId(), resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType())));
+                        cmd.quoteId(), merchantFeeRate));
 
         // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
         // SETTLEMENT_FLOW_SPEC §D10/§7.4: the hold must equal payout-cost + FX-margin +
@@ -247,7 +250,7 @@ public class PaymentOrchestrator {
         }
 
         return new AuthorizeResult(txn.txnRef(), txn.paymentId(), txn.createdAt(),
-                merchant, quote, reservedUsd);
+                merchant, quote, reservedUsd, merchantFeeRate);
     }
 
     /**
@@ -311,6 +314,7 @@ public class PaymentOrchestrator {
             revenueLedgerClient.postRevenueCapture(
                     ctx.txnRef(), ctx.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
                     collMargin, payMargin, svcCharge, ctx.collectionCurrency(), DEFAULT_FEE_SHARE_PCT);
+            postCommissionSplit(ctx, revenueDate);
         }
 
         return new PaymentResult(
@@ -319,6 +323,33 @@ public class PaymentOrchestrator {
                 ctx.offerRate(), ctx.collectionAmount(), ctx.collectionCurrency(),
                 ctx.serviceCharge(), ctx.collectionCurrency(), capturedUsd, ctx.partnerTxnRef(),
                 ctx.createdAt(), schemeResponse.approvedAt());
+    }
+
+    /**
+     * Step 7 (SETTLEMENT_FLOW_SPEC §7 / task #102): compute + post the two-sided commission split for
+     * the KRW scheme leg. The {@code CommissionSplitCalculator} runs in revenue-ledger; here we resolve
+     * the configurable shares (V031) from config-registry and hand revenue-ledger the inputs.
+     *
+     * <p>Non-fatal — the payment has already committed, so the client logs and retries offline, never
+     * throws. No-op unless the payout is KRW (the merchant fee ZeroPay returns + splits is KRW), a
+     * merchant-fee rate was snapshotted at authorize, and config-registry resolves BOTH commission
+     * shares (an unconfigured partner/scheme simply skips the split).
+     */
+    private void postCommissionSplit(ConfirmContext ctx, LocalDate revenueDate) {
+        if (partnerConfigClient == null
+                || !"KRW".equalsIgnoreCase(ctx.payoutCurrency())
+                || ctx.merchantFeeRate() == null || ctx.merchantFeeRate().signum() <= 0
+                || ctx.targetPayout() == null || ctx.targetPayout().signum() <= 0) {
+            return;
+        }
+        partnerConfigClient.resolveCommissionSplit(ctx.schemeId(), ctx.partnerCode(), ctx.direction())
+                .ifPresent(cfg -> {
+                    long payoutKrw = ctx.targetPayout().setScale(0, RoundingMode.FLOOR).longValueExact();
+                    revenueLedgerClient.postCommissionSplit(
+                            ctx.txnRef(), ctx.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
+                            payoutKrw, ctx.merchantFeeRate(), cfg.vanFeePct(),
+                            cfg.gmeSharePct(), cfg.partnerSharePct());
+                });
     }
 
     /**
@@ -361,7 +392,8 @@ public class PaymentOrchestrator {
     /** What {@link #authorizeMpm} produces — persisted by the controller, replayed into confirm. */
     public record AuthorizeResult(
             String txnRef, String paymentId, Instant createdAt,
-            QrClient.MerchantView merchant, RateClient.RateQuoteView quote, BigDecimal reservedUsd) {}
+            QrClient.MerchantView merchant, RateClient.RateQuoteView quote, BigDecimal reservedUsd,
+            BigDecimal merchantFeeRate) {}
 
     /** Frozen context replayed into {@link #confirmMpm} (rebuilt from the persisted authorization). */
     public record ConfirmContext(
@@ -372,6 +404,7 @@ public class PaymentOrchestrator {
             BigDecimal collectionAmount, String collectionCurrency,
             BigDecimal reservedUsd, BigDecimal offerRate,
             BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd, BigDecimal serviceCharge,
+            String direction, BigDecimal merchantFeeRate,
             Instant createdAt) {}
 
     /**

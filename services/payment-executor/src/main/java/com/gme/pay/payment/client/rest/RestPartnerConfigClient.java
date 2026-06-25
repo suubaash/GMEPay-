@@ -91,9 +91,50 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
         }
     }
 
+    @Override
+    public java.util.Optional<PartnerConfigClient.CommissionSplitConfig> resolveCommissionSplit(
+            String schemeId, String partnerCode, String direction) {
+        if (schemeId == null || schemeId.isBlank() || partnerCode == null || partnerCode.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            EffectiveCommissionResponse body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/v1/commission/effective")
+                                .queryParam("schemeId", schemeId)
+                                .queryParam("partnerCode", partnerCode);
+                        if (direction != null && !direction.isBlank()) {
+                            uriBuilder.queryParam("direction", direction);
+                        }
+                        return uriBuilder.build();
+                    })
+                    .retrieve()
+                    .body(EffectiveCommissionResponse.class);
+            // Only usable when BOTH sides resolved AND all three fractions are present.
+            if (body == null || !body.resolved()
+                    || body.gmeSharePct() == null || body.gmeSharePct().isBlank()
+                    || body.vanFeePct() == null || body.vanFeePct().isBlank()
+                    || body.partnerSharePct() == null || body.partnerSharePct().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new PartnerConfigClient.CommissionSplitConfig(
+                    new java.math.BigDecimal(body.gmeSharePct()),
+                    new java.math.BigDecimal(body.vanFeePct()),
+                    new java.math.BigDecimal(body.partnerSharePct())));
+        } catch (RuntimeException ex) {
+            // Non-fatal: a commission-resolution failure must NEVER fail a payment — skip the split.
+            return java.util.Optional.empty();
+        }
+    }
+
     /** Wire format for {@code GET /v1/schemes/{id}/merchant-fees/effective}. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MerchantFeeEffectiveResponse(String merchantFeePct, boolean resolved) {}
+
+    /** Wire format for {@code GET /v1/commission/effective} (config-registry EffectiveCommissionView). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EffectiveCommissionResponse(
+            String gmeSharePct, String vanFeePct, String partnerSharePct, boolean resolved) {}
 
     /** Wire format for {@code GET /v1/partners/{id}}. */
     @JsonIgnoreProperties(ignoreUnknown = true)

@@ -173,7 +173,8 @@ class PaymentOrchestratorRoundingTest {
                 auth.txnRef(), auth.paymentId(), cmd.schemeId(), cmd.merchantQr(),
                 m2.merchantId(), m2.merchantName(), q2.targetPayout(), q2.payoutCurrency(),
                 q2.collectionAmount(), q2.collectionCurrency(), auth.reservedUsd(), q2.offerRateColl(),
-                q2.collectionMarginUsd(), q2.payoutMarginUsd(), q2.serviceCharge(), auth.createdAt());
+                q2.collectionMarginUsd(), q2.payoutMarginUsd(), q2.serviceCharge(),
+                cmd.direction(), auth.merchantFeeRate(), auth.createdAt());
         PaymentOrchestrator.PaymentResult result = orchestrator.confirmMpm(ctx);
 
         // ---- assert: result reached APPROVED ----

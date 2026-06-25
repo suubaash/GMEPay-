@@ -217,6 +217,7 @@ public class PaymentController {
         e.setCollectionMarginUsd(q.collectionMarginUsd());
         e.setPayoutMarginUsd(q.payoutMarginUsd());
         e.setServiceCharge(q.serviceCharge());
+        e.setMerchantFeeRate(auth.merchantFeeRate());
         e.setReservedUsd(auth.reservedUsd());
         e.setTxnRef(auth.txnRef());
         e.setPaymentId(auth.paymentId());
@@ -233,7 +234,8 @@ public class PaymentController {
                 a.getTxnRef(), a.getPaymentId(), a.getSchemeId(), a.getMerchantQr(),
                 a.getMerchantId(), a.getMerchantName(), a.getTargetPayout(), a.getPayoutCurrency(),
                 a.getCollectionAmount(), a.getCollectionCurrency(), a.getReservedUsd(), null,
-                a.getCollectionMarginUsd(), a.getPayoutMarginUsd(), a.getServiceCharge(), a.getCreatedAt());
+                a.getCollectionMarginUsd(), a.getPayoutMarginUsd(), a.getServiceCharge(),
+                a.getDirection(), a.getMerchantFeeRate(), a.getCreatedAt());
     }
 
     private static AuthorizeResponse toAuthorizeResponse(PaymentAuthorizationEntity e) {
