@@ -240,6 +240,52 @@ class PaymentOrchestratorTest {
     }
 
     // ======================================================================
+    // Step 9: refund — full reversal of an APPROVED txn at the locked rate → REFUNDED
+    // ======================================================================
+
+    @Test
+    @DisplayName("OVERSEAS refund: reverses the locked-rate prefund USD, posts a reversal journal, commits REFUNDED")
+    void overseas_refund_reversesAtLockedRateAndCommitsRefunded() {
+        java.util.concurrent.atomic.AtomicReference<String> revRef = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<BigDecimal> revAmt = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<PaymentStatus> committed = new java.util.concurrent.atomic.AtomicReference<>();
+
+        com.gme.pay.payment.domain.client.RevenueLedgerClient recordingLedger =
+                new com.gme.pay.payment.domain.client.RevenueLedgerClient() {
+                    @Override
+                    public void postRoundingResidual(String reference, BigDecimal residual, String currency) { }
+                    @Override
+                    public void postReversalJournal(String reference, BigDecimal reversalAmount, String currency) {
+                        revRef.set(reference);
+                        revAmt.set(reversalAmount);
+                    }
+                };
+        TransactionClient capturingTxn = new TransactionClient() {
+            @Override
+            public CreateResult createPending(CreateRequest req) {
+                return new CreateResult("txn_1", "pay_1", Instant.now());
+            }
+            @Override
+            public void commitStatus(String txnRef, StatusPatch patch) {
+                committed.set(patch.newStatus());
+            }
+        };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, fakePrefunding, fakeQr, fakeScheme, capturingTxn, null, recordingLedger);
+
+        PaymentOrchestrator.RefundResult result = orchestrator.refundPayment(
+                "pay_1", "ZP_TXN_1", PartnerType.OVERSEAS, 42L, "txn_1", "PARTNER_INITIATED");
+
+        assertEquals(PaymentStatus.REFUNDED, result.status());
+        assertEquals(0, result.prefundReturnedUsd().compareTo(new BigDecimal("125.50")),
+                "refund credits the locked-rate prefund USD back");
+        assertEquals(PaymentStatus.REFUNDED, committed.get(), "txn committed REFUNDED (not REVERSED)");
+        assertEquals("txn_1", revRef.get(), "reversal journal keyed by txnRef");
+        assertEquals(0, revAmt.get().compareTo(new BigDecimal("125.50")));
+    }
+
+    // ======================================================================
     // Test 6: Partner amount agreement — a collection_amount that disagrees with
     // the locked quote is rejected BEFORE any side effect (no txn, no deduct, no scheme).
     // ======================================================================

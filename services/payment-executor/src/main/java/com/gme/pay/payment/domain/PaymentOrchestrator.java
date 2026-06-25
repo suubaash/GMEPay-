@@ -438,14 +438,33 @@ public class PaymentOrchestrator {
                 )
         );
 
-        // Step 2: Prefunding deduction for OVERSEAS partners
-        PrefundingClient.DeductionResult deduction = null;
+        // Step 2: RESERVE the partner float (hold, NOT debit) for OVERSEAS. CPM is synchronous
+        // (the customer is present), but it rides the same money-safety spine as MPM (Step 4): the
+        // float is only held until the scheme confirms the charge, never debited before the
+        // irreversible submit. A failed reserve compensates the orphan PENDING txn.
+        BigDecimal reservedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
-            deduction = prefundingClient.deduct(
-                    cmd.partnerId(), txn.txnRef(), cmd.collectionUsd());
+            try {
+                PrefundingClient.ReservationResult res =
+                        prefundingClient.reserve(cmd.partnerId(), txn.txnRef(), cmd.collectionUsd());
+                reservedUsd = res.reservedUsd();
+            } catch (RuntimeException ex) {
+                safeFailTxn(txn.txnRef());
+                throw ex;
+            }
         }
 
-        // Step 3: Submit CPM to scheme (authorize + commit in one scheme-adapter call)
+        // Step 3 (gate): scheme balance-check before charging the customer — a short scheme float
+        // declines HERE, voiding the authorization (release the hold + fail the orphan txn).
+        SchemeClient.BalanceCheckResult schemeBalance =
+                schemeClient.checkBalance(cmd.schemeId(), cmd.payoutAmount(), cmd.payoutCurrency());
+        if (!schemeBalance.allowed()) {
+            voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
+            throw new SchemeBalanceUnavailableException(
+                    cmd.schemeId(), cmd.payoutAmount(), cmd.payoutCurrency());
+        }
+
+        // Step 4: submit CPM to the scheme — the irreversible charge, the LAST step before capture.
         SchemeClient.CpmSubmitResponse schemeResponse;
         try {
             schemeResponse = schemeClient.submitCpm(
@@ -458,35 +477,37 @@ public class PaymentOrchestrator {
                     )
             );
         } catch (SchemeDeclinedException ex) {
+            // Decline: RELEASE the hold (never captured), fail the txn.
             if (partnerType == PartnerType.OVERSEAS) {
-                prefundingClient.reverse(cmd.partnerId(), txn.txnRef());
+                prefundingClient.release(cmd.partnerId(), txn.txnRef());
             }
             transactionClient.commitStatus(txn.txnRef(),
                     new TransactionClient.StatusPatch(
                             PaymentStatus.FAILED, null, null, null, null));
             throw ex;
         } catch (SchemeTimeoutException ex) {
+            // Outcome unknown: leave the hold in place, mark UNCERTAIN for reconciliation.
             transactionClient.commitStatus(txn.txnRef(),
                     new TransactionClient.StatusPatch(
-                            PaymentStatus.UNCERTAIN, null, null,
-                            deduction != null ? deduction.deductedUsd() : null, null));
+                            PaymentStatus.UNCERTAIN, null, null, reservedUsd, null));
             throw ex;
         }
 
-        // Step 4: Commit APPROVED
-        BigDecimal deductedUsd = deduction != null ? deduction.deductedUsd() : null;
+        // Step 5: success — CAPTURE the held float (OVERSEAS) + commit APPROVED.
+        BigDecimal capturedUsd = null;
+        if (partnerType == PartnerType.OVERSEAS) {
+            PrefundingClient.CaptureResult cap = prefundingClient.capture(cmd.partnerId(), txn.txnRef());
+            capturedUsd = cap.capturedUsd();
+        }
         transactionClient.commitStatus(txn.txnRef(),
                 new TransactionClient.StatusPatch(
                         PaymentStatus.APPROVED,
                         schemeResponse.schemeTxnRef(),
                         schemeResponse.schemeApprovalCode(),
-                        deductedUsd,
+                        capturedUsd,
                         schemeResponse.approvedAt()
                 )
         );
-
-        // Step 5: Post rounding residual (non-blocking) — CPM does not have FX rounding
-        // by design; skip unless a settlement booking was made.
 
         return new PaymentResult(
                 txn.paymentId(),
@@ -501,7 +522,7 @@ public class PaymentOrchestrator {
                 cmd.collectionCurrency(),
                 null,               // no service charge at orchestrator level
                 cmd.collectionCurrency(),
-                deductedUsd,
+                capturedUsd,
                 cmd.partnerTxnRef(),
                 txn.createdAt(),
                 schemeResponse.approvedAt()
@@ -547,6 +568,45 @@ public class PaymentOrchestrator {
         }
 
         return new CancelResult(paymentId, PaymentStatus.CANCELLED, Instant.now(), returnedUsd);
+    }
+
+    /**
+     * Refunds an APPROVED payment — a FULL reversal at the ORIGINAL locked rate
+     * (SETTLEMENT_FLOW_SPEC: "refund = full reversal at the original locked rate"). Distinct from
+     * {@link #cancelPayment} (a same-day void → REVERSED): a refund reverses an already-captured txn
+     * and moves it to REFUNDED. The reversed prefund USD is exactly the amount captured at the locked
+     * rate, so reversing it IS the locked-rate reversal; a structured reversal journal books it on
+     * revenue-ledger so the refund is accounted rather than absorbed as a zero residual.
+     *
+     * <p>Non-fatal revenue posting (like cancel): the scheme refund + float reversal + status are the
+     * authoritative steps; a revenue-ledger hiccup is logged + retried offline, never thrown.
+     */
+    public RefundResult refundPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason) {
+
+        // Scheme-side refund (ZeroPay: the 결제취소/refund path). Same call the cancel uses.
+        schemeClient.cancelPayment(schemeTxnRef, reason);
+
+        BigDecimal returnedUsd = null;
+        if (partnerType == PartnerType.OVERSEAS) {
+            // Credit the partner float back by the captured (locked-rate) USD.
+            PrefundingClient.ReverseResult reversal = prefundingClient.reverse(partnerId, txnRef);
+            returnedUsd = reversal != null ? reversal.reversedUsd() : null;
+        }
+
+        transactionClient.commitStatus(txnRef,
+                new TransactionClient.StatusPatch(
+                        PaymentStatus.REFUNDED, schemeTxnRef, null, returnedUsd, null));
+
+        if (revenueLedgerClient != null && returnedUsd != null && returnedUsd.signum() > 0) {
+            revenueLedgerClient.postReversalJournal(txnRef, returnedUsd, "USD");
+        }
+
+        return new RefundResult(paymentId, PaymentStatus.REFUNDED, Instant.now(), returnedUsd);
     }
 
     // ---- value objects ----
@@ -640,6 +700,14 @@ public class PaymentOrchestrator {
             String paymentId,
             PaymentStatus status,
             Instant cancelledAt,
+            BigDecimal prefundReturnedUsd
+    ) {}
+
+    /** Outcome of a successful refund (full reversal of an APPROVED txn at the locked rate). */
+    public record RefundResult(
+            String paymentId,
+            PaymentStatus status,
+            Instant refundedAt,
             BigDecimal prefundReturnedUsd
     ) {}
 }

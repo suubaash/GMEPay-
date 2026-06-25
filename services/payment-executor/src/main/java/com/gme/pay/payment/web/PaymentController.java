@@ -20,6 +20,7 @@ import com.gme.pay.payment.web.dto.CancelPaymentRequest;
 import com.gme.pay.payment.web.dto.CancelPaymentResponse;
 import com.gme.pay.payment.web.dto.CpmGenerateRequest;
 import com.gme.pay.payment.web.dto.CpmGenerateResponse;
+import com.gme.pay.payment.web.dto.RefundPaymentResponse;
 import com.gme.pay.payment.web.dto.MpmPaymentRequest;
 import com.gme.pay.payment.web.dto.MpmPaymentResponse;
 import org.slf4j.Logger;
@@ -320,6 +321,37 @@ public class PaymentController {
                 result.paymentId(),
                 "cancelled",
                 result.cancelledAt(),
+                result.prefundReturnedUsd()
+        ));
+    }
+
+    /**
+     * POST /v1/payments/{id}/refund — refund an APPROVED payment (full reversal at the original
+     * locked rate, SETTLEMENT_FLOW_SPEC). Distinct from /cancel (a same-day void): a refund reverses
+     * an already-settled txn → REFUNDED. For OVERSEAS partners the captured prefund USD is credited
+     * back; a reversal journal is booked on revenue-ledger.
+     */
+    @PostMapping("/{id}/refund")
+    public ResponseEntity<RefundPaymentResponse> refundPayment(
+            @PathVariable("id") String paymentId,
+            @RequestBody(required = false) CancelPaymentRequest req,
+            @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
+            @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader,
+            @RequestHeader(value = "X-Txn-Ref", required = false) String txnRef,
+            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef) {
+
+        PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
+        String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_INITIATED";
+        String resolvedTxnRef = txnRef != null ? txnRef : paymentId;
+        String resolvedSchemeTxnRef = schemeTxnRef != null ? schemeTxnRef : paymentId;
+
+        PaymentOrchestrator.RefundResult result = orchestrator.refundPayment(
+                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
+
+        return ResponseEntity.ok(new RefundPaymentResponse(
+                result.paymentId(),
+                "refunded",
+                result.refundedAt(),
                 result.prefundReturnedUsd()
         ));
     }
