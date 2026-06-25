@@ -36,6 +36,17 @@ public interface ConfigRegistryClient {
     List<PartnerSummary> listPartners();
 
     /**
+     * Lists every known partner as the canonical {@link PartnerView} (carries the partner name +
+     * lifecycle status), as opposed to {@link #listPartners()} which down-maps to the legacy four-field
+     * {@link PartnerSummary}. Maps config-registry's {@code GET /v1/partners}. Used by the compliance
+     * overview, which needs the {@code legalName*} + {@code status} that {@link PartnerSummary} drops.
+     */
+    default List<PartnerView> listPartnerViews() {
+        throw new UnsupportedOperationException(
+                "listPartnerViews is not implemented by " + getClass().getName());
+    }
+
+    /**
      * Creates a new partner from the Admin UI partner form. Production
      * implementation POSTs to {@code /v1/partners}; Phase-1 stub appends to an
      * in-memory map.

@@ -91,6 +91,12 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     }
 
     @Override
+    public synchronized List<PartnerView> listPartnerViews() {
+        // The stub's canonical partner views live in the draft store (name + lifecycle status).
+        return List.copyOf(draftStore.values());
+    }
+
+    @Override
     public synchronized PartnerSummary createPartner(PartnerCreateRequest request) {
         RoundingMode mode = parseMode(request.settlementRoundingMode());
         PartnerSummary created = new PartnerSummary(
@@ -954,6 +960,8 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                     request.fxConfig().referenceRateSource(),
                     request.fxConfig().quoteHoldSeconds() == null
                             ? 300 : request.fxConfig().quoteHoldSeconds(),
+                    request.fxConfig().disclosedPartnerMargin() != null
+                            && request.fxConfig().disclosedPartnerMargin(),  // Step 10
                     priorFx == null ? now : priorFx.validFrom(),
                     null,
                     now);

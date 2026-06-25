@@ -109,6 +109,20 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     }
 
     @Override
+    public List<PartnerView> listPartnerViews() {
+        try {
+            List<PartnerView> response = restClient.get()
+                    .uri("/v1/partners")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<PartnerView>>() {});
+            return response == null ? List.of() : response;
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on listPartnerViews: {}", network.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
     public PartnerSummary createPartner(PartnerCreateRequest request) {
         // Adapt the BFF's deprecated four-field request to the canonical
         // PartnerCommand.CreateDraft surface config-registry's POST now accepts.
