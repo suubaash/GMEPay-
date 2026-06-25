@@ -40,6 +40,20 @@ public class SettlementLineEntity {
     @Column(name = "matched", nullable = false)
     private boolean matched;
 
+    // ----- Outbound booking snapshot (V006) -----
+
+    @Column(name = "booked_settlement_amount", precision = 20, scale = 4)
+    private BigDecimal bookedSettlementAmount;
+
+    @Column(name = "rounding_residual", precision = 20, scale = 8)
+    private BigDecimal roundingResidual;
+
+    @Column(name = "settlement_rounding_mode", length = 16)
+    private String settlementRoundingMode;
+
+    @Column(name = "settlement_type", length = 1)
+    private String settlementType;           // 'N' | 'G'
+
     public SettlementLineEntity() {
         // JPA no-arg constructor
     }
@@ -55,6 +69,18 @@ public class SettlementLineEntity {
         this.currency = currency;
         this.matched = matched;
     }
+
+    public BigDecimal getBookedSettlementAmount() { return bookedSettlementAmount; }
+    public void setBookedSettlementAmount(BigDecimal bookedSettlementAmount) { this.bookedSettlementAmount = bookedSettlementAmount; }
+
+    public BigDecimal getRoundingResidual() { return roundingResidual; }
+    public void setRoundingResidual(BigDecimal roundingResidual) { this.roundingResidual = roundingResidual; }
+
+    public String getSettlementRoundingMode() { return settlementRoundingMode; }
+    public void setSettlementRoundingMode(String settlementRoundingMode) { this.settlementRoundingMode = settlementRoundingMode; }
+
+    public String getSettlementType() { return settlementType; }
+    public void setSettlementType(String settlementType) { this.settlementType = settlementType; }
 
     public Long getId() {
         return id;

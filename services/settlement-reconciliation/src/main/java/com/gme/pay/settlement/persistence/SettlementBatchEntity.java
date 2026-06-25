@@ -52,6 +52,47 @@ public class SettlementBatchEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    // ----- Outbound settlement-file lifecycle (V006) -----
+
+    @Column(name = "file_type", length = 8)
+    private String fileType;                 // 'ZP0061' | 'ZP0063' | 'ZP0065' | 'ZP0066'
+
+    @Column(name = "direction", length = 16)
+    private String direction;                // 'GME_TO_ZP'
+
+    @Column(name = "settlement_window", length = 16)
+    private String settlementWindow;         // 'MORNING' | 'AFTERNOON' | 'DETAIL'
+
+    @Column(name = "settlement_type", length = 1)
+    private String settlementType;           // 'N' | 'G' | null (mixed multi-merchant batch)
+
+    @Column(name = "net_settlement_amount", precision = 20, scale = 4)
+    private BigDecimal netSettlementAmount;
+
+    @Column(name = "merchant_fee_total", precision = 20, scale = 4)
+    private BigDecimal merchantFeeTotal;
+
+    @Column(name = "rounding_residual", precision = 20, scale = 8)
+    private BigDecimal roundingResidual;     // Addendum-001 residual (full precision)
+
+    @Column(name = "settlement_rounding_mode", length = 16)
+    private String settlementRoundingMode;
+
+    @Column(name = "settle_currency", length = 3)
+    private String settleCurrency;
+
+    @Column(name = "file_checksum", length = 64)
+    private String fileChecksum;             // SHA-256 hex
+
+    @Column(name = "record_count")
+    private Integer recordCount;
+
+    @Column(name = "transmitted_at")
+    private Instant transmittedAt;           // set by the SFTP task (later)
+
+    @Column(name = "error_detail", length = 1024)
+    private String errorDetail;
+
     public SettlementBatchEntity() {
         // JPA no-arg constructor
     }
@@ -136,6 +177,45 @@ public class SettlementBatchEntity {
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
     }
+
+    public String getFileType() { return fileType; }
+    public void setFileType(String fileType) { this.fileType = fileType; }
+
+    public String getDirection() { return direction; }
+    public void setDirection(String direction) { this.direction = direction; }
+
+    public String getSettlementWindow() { return settlementWindow; }
+    public void setSettlementWindow(String settlementWindow) { this.settlementWindow = settlementWindow; }
+
+    public String getSettlementType() { return settlementType; }
+    public void setSettlementType(String settlementType) { this.settlementType = settlementType; }
+
+    public BigDecimal getNetSettlementAmount() { return netSettlementAmount; }
+    public void setNetSettlementAmount(BigDecimal netSettlementAmount) { this.netSettlementAmount = netSettlementAmount; }
+
+    public BigDecimal getMerchantFeeTotal() { return merchantFeeTotal; }
+    public void setMerchantFeeTotal(BigDecimal merchantFeeTotal) { this.merchantFeeTotal = merchantFeeTotal; }
+
+    public BigDecimal getRoundingResidual() { return roundingResidual; }
+    public void setRoundingResidual(BigDecimal roundingResidual) { this.roundingResidual = roundingResidual; }
+
+    public String getSettlementRoundingMode() { return settlementRoundingMode; }
+    public void setSettlementRoundingMode(String settlementRoundingMode) { this.settlementRoundingMode = settlementRoundingMode; }
+
+    public String getSettleCurrency() { return settleCurrency; }
+    public void setSettleCurrency(String settleCurrency) { this.settleCurrency = settleCurrency; }
+
+    public String getFileChecksum() { return fileChecksum; }
+    public void setFileChecksum(String fileChecksum) { this.fileChecksum = fileChecksum; }
+
+    public Integer getRecordCount() { return recordCount; }
+    public void setRecordCount(Integer recordCount) { this.recordCount = recordCount; }
+
+    public Instant getTransmittedAt() { return transmittedAt; }
+    public void setTransmittedAt(Instant transmittedAt) { this.transmittedAt = transmittedAt; }
+
+    public String getErrorDetail() { return errorDetail; }
+    public void setErrorDetail(String errorDetail) { this.errorDetail = errorDetail; }
 
     @Override
     public boolean equals(Object o) {

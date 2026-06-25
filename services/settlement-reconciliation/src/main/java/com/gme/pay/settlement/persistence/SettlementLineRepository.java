@@ -15,4 +15,7 @@ public interface SettlementLineRepository extends JpaRepository<SettlementLineEn
     List<SettlementLineEntity> findByBatchId(String batchId);
 
     List<SettlementLineEntity> findByBatchIdAndMatched(String batchId, boolean matched);
+
+    /** Remove a batch's lines so an outbound generation re-run (PENDING/ERROR batch) is clean. */
+    void deleteByBatchId(String batchId);
 }
