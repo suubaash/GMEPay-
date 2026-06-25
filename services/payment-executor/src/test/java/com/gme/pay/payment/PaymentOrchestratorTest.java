@@ -394,6 +394,60 @@ class PaymentOrchestratorTest {
                 indexOf("SCHEME:SUBMIT"), indexOf("PREFUND:CAPTURE"));
     }
 
+    // ======================================================================
+    // Step 6 (SETTLEMENT_FLOW_SPEC §D10/§7.4): the float hold must include the
+    // service fee, so the partner-float debit reconciles with the partner's
+    // agreed collectionAmount (and the settlement booking). Previously the hold
+    // was collectionUsd alone — the service fee was dropped from float accounting.
+    // ======================================================================
+
+    @Test
+    @DisplayName("Step 6: authorize folds the service fee into the float hold (= agreed collectionAmount in USD)")
+    void authorize_foldsServiceFeeIntoFloatHold() {
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, twoPhasePrefunding(), fakeQr, fakeScheme, fakeTxn);
+
+        PaymentOrchestrator.AuthorizeResult auth =
+                orchestrator.authorizeMpm(sampleCommand, PartnerType.OVERSEAS);
+
+        // Quote: collectionUsd=37.015197, serviceCharge=0.35 (collection ccy == USD,
+        // sendAmount=37.015197) => serviceFeeUsd=0.35, hold=37.365197 = the agreed
+        // collectionAmount. Pre-fix the hold was 37.015197 (fee dropped).
+        assertEquals(0, auth.reservedUsd().compareTo(new BigDecimal("37.365197")),
+                "float hold must equal collectionUsd + serviceFeeUsd (the agreed collectionAmount in USD)");
+    }
+
+    @Test
+    @DisplayName("Step 6: service fee in a non-USD collection currency is converted to USD for the float hold")
+    void authorize_foldsServiceFee_convertsCollectionCcyToUsd() {
+        // A quote where the collection currency is MNT: 1 USD = 2 MNT (offerRateColl=2).
+        // collectionUsd=37.015197 USD, sendAmount=74.030394 MNT, serviceCharge=0.70 MNT,
+        // collectionAmount=74.730394 MNT. serviceFeeUsd = 0.70 * 37.015197/74.030394 = 0.35,
+        // so the USD hold is 37.365197 — the service fee correctly converted from MNT.
+        RateClient mntRate = (quoteId, partnerId) -> new RateClient.RateQuoteView(
+                quoteId, partnerId, "zeropay", "inbound",
+                new BigDecimal("50000"), "KRW",
+                new BigDecimal("37.015197"), new BigDecimal("35.562589"),
+                new BigDecimal("0.925380"), new BigDecimal("0.370152"),
+                new BigDecimal("74.030394"), new BigDecimal("0.70"),
+                new BigDecimal("74.730394"), "MNT",
+                new BigDecimal("2.00"), new BigDecimal("1351.00"),
+                Instant.now().plusSeconds(300), false);
+        MpmPaymentCommand mntCmd = new MpmPaymentCommand(
+                42L, "qte_01HX7MNP9AB2CDEF3GH456IJ", "ZPQR00012345678901234567890",
+                "zeropay", "inbound", "customer-001", "PTNR_TXN_001", "PARTNER_42",
+                new BigDecimal("74.730394"), "MNT");
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                mntRate, twoPhasePrefunding(), fakeQr, fakeScheme, fakeTxn);
+
+        PaymentOrchestrator.AuthorizeResult auth =
+                orchestrator.authorizeMpm(mntCmd, PartnerType.OVERSEAS);
+
+        assertEquals(0, auth.reservedUsd().compareTo(new BigDecimal("37.365197")),
+                "MNT service fee (0.70) must convert to 0.35 USD and fold into the hold");
+    }
+
     @Test
     @DisplayName("Two-phase confirm decline: hold RELEASED (not captured), txn FAILED")
     void twoPhase_confirmDecline_releasesHold() {

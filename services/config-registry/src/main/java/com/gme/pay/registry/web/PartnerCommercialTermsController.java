@@ -14,7 +14,9 @@ import com.gme.pay.registry.commercial.FeeScheduleService;
 import com.gme.pay.registry.commercial.FxConfigService;
 import com.gme.pay.registry.commercial.LimitsService;
 import com.gme.pay.registry.commercial.PartnerCommissionShareService;
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -94,6 +97,32 @@ public class PartnerCommercialTermsController {
     @GetMapping("/{id}/fee-schedules")
     public List<FeeScheduleView> getFeeSchedules(@PathVariable String id) {
         return feeScheduleService.currentFeeSchedules(id);
+    }
+
+    /**
+     * Resolve the effective GME→partner service fee (USD) for a
+     * ({@code schemeId}, {@code direction}, {@code amountUsd}) —
+     * SETTLEMENT_FLOW_SPEC §7.4 "wire partner_fee_schedule into pricing". The
+     * read-time analogue of {@code GET /v1/schemes/{schemeId}/merchant-fees/effective}:
+     * the quote-issuer (and the admin "effective fee" preview) call this to turn the
+     * stored fee schedule (fixed + bps + tiers, most-specific match) into a single USD
+     * amount. Lenient — {@code resolved=false} + empty fee when no row applies.
+     */
+    @GetMapping("/{id}/fee-schedules/effective")
+    public Map<String, Object> effectiveFee(
+            @PathVariable String id,
+            @RequestParam(required = false) String schemeId,
+            @RequestParam(required = false) String direction,
+            @RequestParam(required = false) BigDecimal amountUsd) {
+        BigDecimal fee = feeScheduleService.resolveServiceFee(id, schemeId, direction, amountUsd)
+                .orElse(null);
+        return Map.of(
+                "partnerCode", id,
+                "schemeId", schemeId == null ? "" : schemeId,
+                "direction", direction == null ? "" : direction,
+                "amountUsd", amountUsd == null ? "" : amountUsd.toPlainString(),
+                "serviceFeeUsd", fee == null ? "" : fee.toPlainString(),
+                "resolved", fee != null);
     }
 
     /**

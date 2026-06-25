@@ -273,6 +273,55 @@ class FeeScheduleServiceTest {
         assertThat(service.currentFeeSchedules("FEE_LIVE")).hasSize(1);
     }
 
+    // ---- Step 6: resolveServiceFee (wire partner_fee_schedule into pricing) ----
+
+    @Test
+    void resolveServiceFee_fixedPlusBps_andTierOverride() {
+        seedPartner("FEE_RESOLVE");
+        // zeropay_kr OUTBOUND: fixed 1.50 USD + 25 bps flat, with a tier: ≥10,000 → 20 bps.
+        service.replaceDraftFeeSchedules("FEE_RESOLVE",
+                List.of(fee("zeropay_kr", "OUTBOUND", "1.50", "25",
+                        List.of(new FeeTier(new BigDecimal("10000"), new BigDecimal("20"))))),
+                "maker_kim");
+
+        // Below the tier band (volume 1,000): flat 25 bps → 1.50 + 1000*25/10000 = 1.50 + 2.50 = 4.00
+        assertThat(service.resolveServiceFee("FEE_RESOLVE", "zeropay_kr", "OUTBOUND", new BigDecimal("1000"))
+                .orElseThrow()).isEqualByComparingTo(new BigDecimal("4.0000"));
+
+        // At/above the band (volume 20,000): 20 bps override → 1.50 + 20000*20/10000 = 1.50 + 40.00 = 41.50
+        assertThat(service.resolveServiceFee("FEE_RESOLVE", "zeropay_kr", "OUTBOUND", new BigDecimal("20000"))
+                .orElseThrow()).isEqualByComparingTo(new BigDecimal("41.5000"));
+    }
+
+    @Test
+    void resolveServiceFee_mostSpecificMatchWins_overWildcards() {
+        seedPartner("FEE_MATCH");
+        service.replaceDraftFeeSchedules("FEE_MATCH",
+                List.of(fee(null, null, "0.10", "5", null),                 // partner-wide wildcard
+                        fee("zeropay_kr", "OUTBOUND", "1.00", "10", null)),  // exact scheme+direction
+                "maker_kim");
+
+        // Exact (scheme+direction) beats the wildcard: 1.00 + 1000*10/10000 = 1.00 + 1.00 = 2.00
+        assertThat(service.resolveServiceFee("FEE_MATCH", "zeropay_kr", "OUTBOUND", new BigDecimal("1000"))
+                .orElseThrow()).isEqualByComparingTo(new BigDecimal("2.0000"));
+
+        // A different scheme falls back to the wildcard: 0.10 + 1000*5/10000 = 0.10 + 0.50 = 0.60
+        assertThat(service.resolveServiceFee("FEE_MATCH", "other_scheme", "INBOUND", new BigDecimal("1000"))
+                .orElseThrow()).isEqualByComparingTo(new BigDecimal("0.6000"));
+    }
+
+    @Test
+    void resolveServiceFee_lenientEmpty_whenNoPartnerOrNoMatch() {
+        // Unknown partner → empty (caller defaults, never fails).
+        assertThat(service.resolveServiceFee("FEE_GHOST", "zeropay_kr", "OUTBOUND", BigDecimal.TEN))
+                .isEmpty();
+
+        // Known partner but no fee rows configured → empty.
+        seedPartner("FEE_NONE");
+        assertThat(service.resolveServiceFee("FEE_NONE", "zeropay_kr", "OUTBOUND", BigDecimal.TEN))
+                .isEmpty();
+    }
+
     @Test
     void audit_oneEventPerReplace_withCanonicalBeforeAfterSnapshots() {
         seedPartner("FEE_AUDIT");

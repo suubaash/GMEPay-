@@ -11,6 +11,7 @@ import com.gme.pay.payment.domain.settlement.SettlementBooking;
 import com.gme.pay.payment.domain.settlement.SettlementBookingService;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -156,6 +157,32 @@ public class PaymentOrchestrator {
         }
     }
 
+    /**
+     * The service fee component of a quote expressed in USD (the partner's prefund float currency),
+     * so it can be folded into the float hold alongside {@code collectionUsd} (SETTLEMENT_FLOW_SPEC
+     * §D10/§7.4).
+     *
+     * <p>{@code quote.serviceCharge()} is in the COLLECTION currency (it is derived as
+     * {@code collectionAmount − sendAmount}, both collection-ccy). We convert it to USD with the
+     * quote's own USD-per-collection-ccy ratio {@code collectionUsd / sendAmount} — using the quote's
+     * own numbers (not an external rate) guarantees the resulting hold equals the USD equivalent of
+     * the partner-agreed {@code collectionAmount}, so the float debit, the settlement booking, and
+     * the partner's agreement all reconcile to the same fee.
+     *
+     * <p>Returns ZERO when there is no fee, no send base, or a same-currency short-circuit — in
+     * which case the hold stays exactly {@code collectionUsd} (the prior behaviour).
+     */
+    private static BigDecimal serviceFeeUsd(RateClient.RateQuoteView quote) {
+        BigDecimal svc = quote.serviceCharge();
+        BigDecimal send = quote.sendAmount();
+        BigDecimal collUsd = quote.collectionUsd();
+        if (svc == null || svc.signum() == 0 || send == null || send.signum() <= 0 || collUsd == null) {
+            return BigDecimal.ZERO;
+        }
+        // serviceCharge(collection-ccy) × (collectionUsd / sendAmount) = serviceCharge in USD.
+        return svc.multiply(collUsd).divide(send, 8, RoundingMode.HALF_UP);
+    }
+
     // ======================================================================
     // Two-phase MPM (SETTLEMENT_FLOW_SPEC §4/§7.1): authorize → (partner charges
     // the customer) → confirm. The irreversible scheme submit happens ONLY in
@@ -186,12 +213,19 @@ public class PaymentOrchestrator {
                         cmd.quoteId(), resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType())));
 
         // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
+        // SETTLEMENT_FLOW_SPEC §D10/§7.4: the hold must equal payout-cost + FX-margin +
+        // service-fee, i.e. the USD equivalent of the FULL amount the partner agreed to
+        // (collectionAmount), NOT just the pool (collectionUsd). Reserving the pool alone
+        // left the service fee in a ledger void — captured nowhere, yet booked on the
+        // settlement leg and posted to revenue. Folding it in makes the float debit
+        // reconcile with the agreed collectionAmount and the settlement booking.
+        BigDecimal holdUsd = quote.collectionUsd().add(serviceFeeUsd(quote));
         BigDecimal reservedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
             try {
                 // InsufficientPrefundingException propagates; no scheme call has happened.
                 PrefundingClient.ReservationResult res =
-                        prefundingClient.reserve(cmd.partnerId(), txn.txnRef(), quote.collectionUsd());
+                        prefundingClient.reserve(cmd.partnerId(), txn.txnRef(), holdUsd);
                 reservedUsd = res.reservedUsd();
             } catch (RuntimeException ex) {
                 // Compensate the just-created PENDING txn so a failed reserve never orphans it.
