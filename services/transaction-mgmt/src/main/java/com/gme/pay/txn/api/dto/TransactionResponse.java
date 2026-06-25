@@ -79,7 +79,14 @@ public record TransactionResponse(
         /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
         String merchantName,
         /** V005: gross merchant fee rate snapshotted at creation ("0.0080" = 0.80%); null when unset. */
-        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal merchantFeeRate
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal merchantFeeRate,
+        /**
+         * Scheme approval timestamp — set when the txn transitions to APPROVED (see {@code StatusPatchRequest}).
+         * Null on transactions that never reached APPROVED. settlement-reconciliation uses this to enforce
+         * the per-window cutoff (morning vs afternoon), so a txn approved after the morning cutoff rolls
+         * into the afternoon batch rather than being mis-settled in the morning file.
+         */
+        Instant approvedAt
 ) {
     /**
      * One entry in the status transition history.
@@ -128,7 +135,8 @@ public record TransactionResponse(
                 null,               // statusHistory — TODO: wire status-history tracking
                 txn.merchantId(),   // merchantId — from V003
                 null,               // merchantName — TODO: from scheme-adapter
-                txn.merchantFeeRate()   // merchantFeeRate — V005 snapshot
+                txn.merchantFeeRate(),  // merchantFeeRate — V005 snapshot
+                txn.approvedAt()        // approvedAt — drives settlement window cutoff
         );
     }
 }

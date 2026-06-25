@@ -38,6 +38,13 @@ gmepay:
       # Cron expressions in UTC (KST = UTC+9). Overridable per environment.
       morning-cron: "5 5 1 * * *"    # 10:05 KST
       afternoon-cron: "5 5 10 * * *"  # 19:05 KST
+    generation:
+      # Gate: set to true in production only. Default false prevents accidental file generation in dev/test.
+      enabled: false
+      # Outbound generation crons, expressed in KST (the scheduler sets zone=Asia/Seoul). Overridable.
+      morning-cron: "0 0 5 * * *"     # ZP0061 morning request, 05:00 KST
+      afternoon-cron: "0 0 14 * * *"  # ZP0063 afternoon request, 14:00 KST
+      detail-cron: "0 0 22 * * *"     # ZP0065 + ZP0066 detail files, 22:00 KST
   clients:
     transaction-mgmt:
       base-url: ${TRANSACTION_MGMT_URL:http://transaction-mgmt:8082}

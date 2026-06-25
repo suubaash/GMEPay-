@@ -15,6 +15,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -90,6 +92,18 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
     }
 
     /**
+     * Fetch all REFUNDED transactions for the given settlement date, by iterating pages from
+     * {@code GET /v1/transactions?from=...&to=...&status=REFUNDED}. Same field mapping and same
+     * per-(creation-)date scope as {@link #findUnbatchedApproved}; the settlement engine deducts
+     * these from the merchant's net and reports them as refund_count/refund_amount in the file.
+     */
+    @Override
+    public List<TransactionRecord> findUnbatchedRefunded(LocalDate settlementDate) {
+        log.debug("Fetching unbatched REFUNDED transactions for date={}", settlementDate);
+        return fetchAllPages(settlementDate, settlementDate, "REFUNDED");
+    }
+
+    /**
      * Fetch transactions by batchId is not directly supported by the canonical
      * GET /v1/transactions endpoint (no batchId filter exists in the contract).
      * Returns an empty list; callers that need batch-level queries must use an
@@ -161,6 +175,11 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
         // legacy/pre-resolution rows → 0 (NET calc then yields a zero fee for that row).
         BigDecimal merchantFeeRate = parseDecimalOrZero(r.merchantFeeRate(), "merchantFeeRate", r.txnRef());
 
+        // completedAt drives the settlement window cutoff. Use the scheme approval timestamp
+        // (approvedAt) — the moment the txn became settle-able — not createdAt. Null when unparseable
+        // or not yet approved → the batch fails OPEN (no cutoff drop) for that row.
+        OffsetDateTime completedAt = parseInstantOrNull(r.approvedAt(), r.txnRef());
+
         return new TransactionRecord(
                 null,                           // id — not available in REST response
                 r.txnRef(),                     // txnRef
@@ -170,9 +189,27 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
                 settlementType,                 // settlementType
                 merchantFeeRate,                // merchantFeeRate — V005 snapshot from transaction
                 r.status(),                     // status
-                null,                           // completedAt — createdAt is ISO instant string; parse if needed
+                completedAt,                    // completedAt ← approvedAt (window-cutoff timestamp)
                 null                            // settlementBatchId — not available via REST
         );
+    }
+
+    /**
+     * Parse an ISO-8601 instant string (e.g. {@code "2026-06-26T04:15:00Z"}, as Jackson serialises a
+     * Java {@link java.time.Instant}) to an {@link OffsetDateTime}. null/blank → null (fail OPEN: the
+     * window cutoff then does not drop the row); malformed → null (logged), NEVER throws — a single
+     * bad timestamp must not break the page loop and silently truncate the batch.
+     */
+    private static OffsetDateTime parseInstantOrNull(String value, String txnRef) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            log.warn("Unparseable approvedAt '{}' on txn {} — window cutoff skipped for this row", value, txnRef);
+            return null;
+        }
     }
 
     /**
@@ -236,6 +273,7 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
             String prefundingDeductedUsd,
             String merchantId,
             String merchantName,
-            String merchantFeeRate
+            String merchantFeeRate,
+            String approvedAt
     ) {}
 }

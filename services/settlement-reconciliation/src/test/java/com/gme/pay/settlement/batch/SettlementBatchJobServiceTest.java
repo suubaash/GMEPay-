@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -23,6 +24,7 @@ import com.gme.pay.settlement.port.TransactionQueryPort;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -42,8 +44,12 @@ class SettlementBatchJobServiceTest {
     private final SettlementLineRepository lineRepo = mock(SettlementLineRepository.class);
     private final EventPublisher outbox = mock(EventPublisher.class);
     private final SettlementBatchFactory factory = new SettlementBatchFactory(batchRepo);
+    // Existing tests run with the window cutoff DISABLED ("","") so the now()-stamped fixtures are never
+    // dropped; the cutoff and refund-clawback behaviours get their own job instances below.
     private final SettlementBatchJobService job = new SettlementBatchJobService(
-            txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox);
+            txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, "", "");
+
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
     private static TransactionRecord net(String ref, String merchant, long payout, String feeRate) {
         return new TransactionRecord(1L, ref, "ZP-" + ref, merchant, BigDecimal.valueOf(payout),
@@ -53,6 +59,23 @@ class SettlementBatchJobServiceTest {
     private static TransactionRecord gross(String ref, String merchant, long payout) {
         return new TransactionRecord(2L, ref, "ZP-" + ref, merchant, BigDecimal.valueOf(payout),
                 'G', BigDecimal.ZERO, "APPROVED", OffsetDateTime.now(), null);
+    }
+
+    /** A NET approved txn stamped with a specific scheme-approval time (for window-cutoff tests). */
+    private static TransactionRecord netApprovedAt(String ref, String merchant, long payout,
+                                                   String feeRate, OffsetDateTime approvedAt) {
+        return new TransactionRecord(1L, ref, "ZP-" + ref, merchant, BigDecimal.valueOf(payout),
+                'N', new BigDecimal(feeRate), "APPROVED", approvedAt, null);
+    }
+
+    /** A REFUNDED txn (the original payment's payout being clawed back). */
+    private static TransactionRecord refund(String ref, String merchant, long payout, char type) {
+        return new TransactionRecord(3L, ref, "ZP-" + ref, merchant, BigDecimal.valueOf(payout),
+                type, BigDecimal.ZERO, "REFUNDED", OffsetDateTime.now(), null);
+    }
+
+    private static OffsetDateTime kstToday(int hour, int minute) {
+        return LocalDate.now(KST).atTime(hour, minute).atZone(KST).toOffsetDateTime();
     }
 
     @Test
@@ -118,5 +141,84 @@ class SettlementBatchJobServiceTest {
         assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("29900")),
                 "9900 (NET, fee 100) + 20000 (GROSS)");
         verify(lineRepo, times(2)).save(any());
+    }
+
+    @Test
+    @DisplayName("window cutoff: a txn approved after the morning cutoff is left for the afternoon batch")
+    void windowCutoffExcludesLateApprovals() {
+        SettlementBatchJobService cutoffJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, "04:30", "13:30");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(
+                netApprovedAt("EARLY", "M001", 10000, "0", kstToday(3, 0)),    // 03:00 ≤ 04:30 → included
+                netApprovedAt("LATE", "M002", 50000, "0", kstToday(10, 0))));   // 10:00 > 04:30 → excluded
+
+        SettlementBatchEntity batch = job0463(cutoffJob);
+
+        assertEquals(1, batch.getRecordCount(), "only the pre-cutoff txn is in the morning file");
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("10000")),
+                "net = the single pre-cutoff txn (fee rate 0)");
+        verify(lineRepo, times(1)).save(any());
+    }
+
+    // tiny helper so the cutoff test reads cleanly (MORNING window exercises the 04:30 cutoff).
+    private static SettlementBatchEntity job0463(SettlementBatchJobService j) {
+        return j.runWindow("ZP0061", "MORNING");
+    }
+
+    @Test
+    @DisplayName("refund clawback: a prior-settled refund nets out (net = gross − fee − refund) and is reported")
+    void refundClawbackNetsPriorSettledRefund() {
+        SettlementBatchJobService refundJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(
+                net("T1", "M001", 35000, "0.008")));   // fee 280
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of(
+                refund("R1", "M001", 5000, 'N')));
+        // R1's original payment was settled in a prior batch and not yet clawed back → eligible.
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("R1"), any())).thenReturn(true);
+        when(lineRepo.existsByTxnRefAndAmountLessThan(eq("R1"), any())).thenReturn(false);
+
+        SettlementBatchEntity batch = refundJob.runWindow("ZP0061", "MORNING");
+
+        // net = 35000 − 280 (fee) − 5000 (refund) = 29720; gross = net + fee + refund stays balanced.
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("29720")),
+                "net = gross 35000 − fee 280 − refund 5000");
+        assertEquals(0, batch.getMerchantFeeTotal().compareTo(new BigDecimal("280")),
+                "merchant_fee_total = fee only (refund is its own file field)");
+        verify(lineRepo, times(2)).save(any());   // 1 payment line + 1 negative refund clawback line
+    }
+
+    @Test
+    @DisplayName("refund clawback: a same-day approve→refund (never settled) is NOT clawed back")
+    void refundNotClawedWhenNeverSettled() {
+        SettlementBatchJobService refundJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(
+                net("T1", "M001", 35000, "0.008")));   // fee 280 → net 34720
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of(
+                refund("R2", "M001", 5000, 'N')));
+        // R2 has no prior settled payment line → never paid out → must NOT be clawed back.
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("R2"), any())).thenReturn(false);
+
+        SettlementBatchEntity batch = refundJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("34720")),
+                "net = gross 35000 − fee 280; the never-settled refund nets to zero (no clawback)");
+        verify(lineRepo, times(1)).save(any());   // only the payment line; no clawback line
     }
 }
