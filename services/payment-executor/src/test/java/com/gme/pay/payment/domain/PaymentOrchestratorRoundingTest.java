@@ -89,6 +89,16 @@ class PaymentOrchestratorRoundingTest {
                 callLog.add("PREFUND:REVERSE");
                 return new ReverseResult(BigDecimal.ZERO, BigDecimal.ZERO);
             }
+            @Override
+            public ReservationResult reserve(long partnerId, String txnRef, BigDecimal amountUsd) {
+                callLog.add("PREFUND:RESERVE");
+                return new ReservationResult(amountUsd, new BigDecimal("962.985"), new BigDecimal("1000"));
+            }
+            @Override
+            public CaptureResult capture(long partnerId, String txnRef) {
+                callLog.add("PREFUND:CAPTURE");
+                return new CaptureResult(new BigDecimal("37.015197"), new BigDecimal("962.985"));
+            }
         };
 
         // ---- fake 5: scheme ----
@@ -151,10 +161,20 @@ class PaymentOrchestratorRoundingTest {
 
         PaymentOrchestrator.MpmPaymentCommand cmd = new PaymentOrchestrator.MpmPaymentCommand(
                 42L, "qte_001", "ZPQR123", "zeropay", "inbound",
-                "cust-1", "PTNR_TXN_001", "PARTNER_X");
+                "cust-1", "PTNR_TXN_001", "PARTNER_X",
+                preciseCollection, "USD");   // matches the fake quote's collection amount/currency
 
-        // ---- act ----
-        PaymentOrchestrator.PaymentResult result = orchestrator.executeMpm(cmd, PartnerType.OVERSEAS);
+        // ---- act: two-phase (authorize reserves; confirm submits + captures + books) ----
+        PaymentOrchestrator.AuthorizeResult auth = orchestrator.authorizeMpm(cmd, PartnerType.OVERSEAS);
+        var q2 = auth.quote();
+        var m2 = auth.merchant();
+        PaymentOrchestrator.ConfirmContext ctx = new PaymentOrchestrator.ConfirmContext(
+                cmd.partnerId(), PartnerType.OVERSEAS, cmd.partnerCode(), cmd.partnerTxnRef(),
+                auth.txnRef(), auth.paymentId(), cmd.schemeId(), cmd.merchantQr(),
+                m2.merchantId(), m2.merchantName(), q2.targetPayout(), q2.payoutCurrency(),
+                q2.collectionAmount(), q2.collectionCurrency(), auth.reservedUsd(), q2.offerRateColl(),
+                q2.collectionMarginUsd(), q2.payoutMarginUsd(), q2.serviceCharge(), auth.createdAt());
+        PaymentOrchestrator.PaymentResult result = orchestrator.confirmMpm(ctx);
 
         // ---- assert: result reached APPROVED ----
         assertEquals(PaymentStatus.APPROVED, result.status());

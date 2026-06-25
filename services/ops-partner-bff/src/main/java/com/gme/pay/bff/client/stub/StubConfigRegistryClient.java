@@ -152,6 +152,42 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     }
 
     @Override
+    public synchronized PartnerView patchDraftStep6CurrencySplit(
+            String partnerCode, PartnerCommand.UpdateStep6CurrencySplit request) {
+        PartnerView prior = draftStore.get(partnerCode);
+        if (prior == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        // Mirror config-registry's updateCurrencySplit: set the split explicitly
+        // (this is the originate path), carry everything else forward unchanged.
+        PartnerView merged = new PartnerView(
+                prior.id(),
+                prior.partnerCode(),
+                prior.type(),
+                prior.settlementCurrency(),
+                prior.settlementRoundingMode(),
+                request.collectionCcy(),
+                request.settleACcy(),
+                prior.legalNameLocal(),
+                prior.legalNameRomanized(),
+                prior.taxId(),
+                prior.taxIdType(),
+                prior.countryOfIncorporation(),
+                prior.legalForm(),
+                prior.registeredAddress(),
+                prior.operatingAddress(),
+                prior.lei(),
+                prior.status(),
+                prior.validFrom(),
+                prior.validTo(),
+                Instant.now());
+        draftStore.put(partnerCode, merged);
+        return merged;
+    }
+
+    @Override
     public synchronized PartnerView getDraft(String partnerCode) {
         return draftStore.get(partnerCode);
     }

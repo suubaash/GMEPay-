@@ -3,6 +3,8 @@ package com.gme.pay.payment.web;
 import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
+import com.gme.pay.payment.domain.QuoteAmountMismatchException;
+import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import org.springframework.http.HttpStatus;
@@ -20,6 +22,20 @@ public class PaymentExceptionHandler {
     public ResponseEntity<ApiError> handleInsufficientPrefunding(InsufficientPrefundingException ex) {
         return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                 .body(ApiError.of(ErrorCode.INSUFFICIENT_PREFUNDING,
+                        ex.getMessage(), newRequestId()));
+    }
+
+    @ExceptionHandler(QuoteAmountMismatchException.class)
+    public ResponseEntity<ApiError> handleQuoteAmountMismatch(QuoteAmountMismatchException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of(ErrorCode.QUOTE_AMOUNT_MISMATCH,
+                        ex.getMessage(), newRequestId()));
+    }
+
+    @ExceptionHandler(SchemeBalanceUnavailableException.class)
+    public ResponseEntity<ApiError> handleSchemeBalanceUnavailable(SchemeBalanceUnavailableException ex) {
+        return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
+                .body(ApiError.of(ErrorCode.SCHEME_BALANCE_INSUFFICIENT,
                         ex.getMessage(), newRequestId()));
     }
 

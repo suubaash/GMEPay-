@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useAppDispatch, useAppSelector } from '@/store';
+import { adminApi } from '@/api/client';
 import { fetchCommercial, patchDraftStep6Commercial } from '@/store/commercialTermsSlice';
 import { fetchRules, patchRules } from '@/store/rulesSlice';
 import { listSchemes } from '@/store/schemesSlice';
@@ -299,6 +300,21 @@ export function Step6CommercialForm({ draft, partnerCode, onSaved }) {
       const message = e?.message ?? (typeof e === 'string' ? e : 'unknown error');
       snackbar.error(`Commercial terms save failed: ${message}`);
       return;
+    }
+
+    // --- 6A.2 currency split: persist the GME ↔ partner settlement-currency
+    // pair onto the partner root. This is the ONLY path that originates a real
+    // collection_ccy / settle_a_ccy split (the four-field create/step-1 path
+    // carries no split fields). Non-fatal: commercial terms already committed,
+    // so a split failure surfaces a warning but still advances the wizard.
+    try {
+      await adminApi.patchDraftStep6CurrencySplit(partnerCode, {
+        collectionCcy: (values.currencySplit?.collectionCcy ?? '').trim(),
+        settleACcy:    (values.currencySplit?.settleACcy    ?? '').trim(),
+      });
+    } catch (e) {
+      const message = e?.message ?? (typeof e === 'string' ? e : 'unknown error');
+      snackbar.error(`Currency split save failed: ${message}`);
     }
 
     // Save rules (6A.2) — non-fatal if the 6A.1 endpoint hasn't landed yet

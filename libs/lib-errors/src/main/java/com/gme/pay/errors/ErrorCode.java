@@ -16,9 +16,23 @@ public enum ErrorCode {
      */
     IMMUTABLE_AFTER_ACTIVATION(400, false),
     RATE_QUOTE_EXPIRED(409, false),
+    /**
+     * The settlement amount/currency the partner asserts in the payment request
+     * ({@code collection_amount}/{@code collection_currency}) does not match the locked
+     * rate quote. The payment is rejected before any side effect (no transaction record,
+     * no prefunding deduction, no scheme submission). Non-retryable: the partner must
+     * re-quote or resend the amount it actually agreed to.
+     */
+    QUOTE_AMOUNT_MISMATCH(422, false),
     MIN_MARGIN_VIOLATION(422, false),
     POOL_IDENTITY_VIOLATION(500, false),
     INSUFFICIENT_PREFUNDING(402, false),
+    /**
+     * The scheme reports GME's prepaid balance with it (+ any per-scheme credit) is insufficient to
+     * fund the merchant payout. Raised during AUTHORIZE (before the customer is charged) so a short
+     * GME→scheme float declines cleanly. Non-retryable until GME tops up its scheme float.
+     */
+    SCHEME_BALANCE_INSUFFICIENT(402, false),
     PARTNER_B_QUOTE_DEVIATION(422, false),
     PARTNER_B_QUOTE_UNAVAILABLE(503, true),
     MERCHANT_NOT_FOUND(404, false),

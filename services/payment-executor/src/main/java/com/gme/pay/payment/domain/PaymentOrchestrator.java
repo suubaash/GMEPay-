@@ -16,23 +16,21 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 
 /**
- * Orchestrates the live payment path (API-05 §4.3 / WBS 5.2-T08).
+ * Orchestrates the live payment path (API-05 §4.3 / SETTLEMENT_FLOW_SPEC §4/§7.1).
  *
- * <p>Call sequence (strict):
+ * <p>MPM is a strict TWO-PHASE flow — the irreversible scheme submit is the LAST step and happens
+ * ONLY in confirm, after the partner has charged the customer (the non-negotiable):
  * <ol>
- *   <li>Load and validate rate quote (RateClient)
- *   <li>Resolve merchant QR (QrClient)
- *   <li>Create PENDING transaction record (TransactionClient)
- *   <li>For OVERSEAS partners: deduct prefunding (PrefundingClient) — MUST precede scheme call
- *   <li>Submit to scheme (SchemeClient)
- *   <li>Book per-partner settlement liability (SettlementBookingService) — see MONEY_CONVENTION.md
- *   <li>Commit APPROVED status with rate-lock fields (TransactionClient)
- *   <li>Post rounding residual to revenue-ledger (RevenueLedgerClient) — non-blocking
+ *   <li><b>authorize</b> ({@link #authorizeMpm}): load+agreement-check the quote, resolve the
+ *       merchant, create the PENDING txn, RESERVE (hold, not debit) the partner float, then
+ *       balance-check the scheme. No scheme submit. Declines release the hold + fail the txn.
+ *   <li><b>confirm</b> ({@link #confirmMpm}): submit to the scheme; ONLY on success CAPTURE the
+ *       held float + book settlement + commit APPROVED + post revenue. Decline → release + FAILED;
+ *       timeout → UNCERTAIN (hold retained for reconciliation).
  * </ol>
  *
- * <p>If prefunding deduction fails, the scheme is NEVER called.
- * If the scheme declines, a previously deducted prefunding amount is immediately reversed.
- * If the scheme times out, the deduction is left in place (UNCERTAIN state).
+ * <p>The legacy single-shot deduct-before-submit MPM path was retired (Step 4); CPM still uses the
+ * single-shot {@link #executeCpm} until its two-phase rebuild.
  */
 public class PaymentOrchestrator {
 
@@ -132,148 +130,215 @@ public class PaymentOrchestrator {
     }
 
     /**
-     * Executes a Fixed MPM payment end-to-end.
+     * Verifies the partner-asserted settlement amount/currency against the locked quote — this is
+     * the partner's binding agreement to what we will bill and settle. Exact value match
+     * (scale-insensitive {@code compareTo}) plus case-insensitive currency match. The partner must
+     * echo the quote's {@code collection_amount}/{@code collection_currency} verbatim.
      *
-     * @param cmd           the payment command from the REST layer
-     * @param partnerType   whether the partner is OVERSEAS (prefunding) or LOCAL
-     * @return the orchestration result to be mapped to the HTTP response
+     * <p>Skipped only when the caller asserts no amount ({@code null}); the REST path always
+     * supplies it (a required, validated request field), so the production path is always guarded.
+     *
+     * @throws QuoteAmountMismatchException when the asserted amount/currency disagrees with the quote
      */
-    public PaymentResult executeMpm(MpmPaymentCommand cmd, PartnerType partnerType) {
+    private void assertQuoteAgreement(BigDecimal requestedAmount, String requestedCurrency,
+                                      RateClient.RateQuoteView quote) {
+        if (requestedAmount == null) {
+            return;
+        }
+        boolean amountMatches = quote.collectionAmount() != null
+                && requestedAmount.compareTo(quote.collectionAmount()) == 0;
+        boolean currencyMatches = requestedCurrency != null
+                && requestedCurrency.equalsIgnoreCase(quote.collectionCurrency());
+        if (!amountMatches || !currencyMatches) {
+            throw new QuoteAmountMismatchException(
+                    requestedAmount, requestedCurrency,
+                    quote.collectionAmount(), quote.collectionCurrency());
+        }
+    }
 
-        // Step 1: Load and validate rate quote
+    // ======================================================================
+    // Two-phase MPM (SETTLEMENT_FLOW_SPEC §4/§7.1): authorize → (partner charges
+    // the customer) → confirm. The irreversible scheme submit happens ONLY in
+    // confirm, after the partner has confirmed the customer wallet charge — the
+    // non-negotiable. authorizeMpm reserves the float; confirmMpm captures it.
+    // ======================================================================
+
+    /**
+     * Phase 1 — authorize. Loads + agreement-checks the quote, resolves the merchant, creates the
+     * PENDING transaction, and RESERVES (holds, does not debit) the partner float for OVERSEAS
+     * partners. Nothing irreversible happens here: no scheme call. The returned context is persisted
+     * by the controller and replayed into {@link #confirmMpm}.
+     */
+    public AuthorizeResult authorizeMpm(MpmPaymentCommand cmd, PartnerType partnerType) {
+        // Step 1 + 1b: load + enforce the partner's agreement to the settlement amount.
         RateClient.RateQuoteView quote = rateClient.loadQuote(cmd.quoteId(), cmd.partnerId());
+        assertQuoteAgreement(cmd.collectionAmount(), cmd.collectionCurrency(), quote);
 
-        // Step 2: Resolve merchant
+        // Step 2: resolve merchant.
         QrClient.MerchantView merchant = qrClient.resolve(cmd.merchantQr());
 
-        // Step 3: Create PENDING transaction
+        // Step 3: create the PENDING transaction (snapshot the merchant fee rate).
         TransactionClient.CreateResult txn = transactionClient.createPending(
                 new TransactionClient.CreateRequest(
-                        cmd.partnerId(),
-                        cmd.partnerTxnRef(),
-                        cmd.schemeId(),
-                        cmd.direction(),
-                        PaymentMode.MPM.name(),
-                        quote.targetPayout(),
-                        quote.payoutCurrency(),
-                        quote.collectionAmount(),
-                        quote.collectionCurrency(),
-                        merchant.merchantId(),
-                        cmd.quoteId(),
-                        // V032: snapshot the gross merchant fee rate for this merchant's type.
-                        resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType())
-                )
-        );
+                        cmd.partnerId(), cmd.partnerTxnRef(), cmd.schemeId(), cmd.direction(),
+                        PaymentMode.MPM.name(), quote.targetPayout(), quote.payoutCurrency(),
+                        quote.collectionAmount(), quote.collectionCurrency(), merchant.merchantId(),
+                        cmd.quoteId(), resolveMerchantFeeRate(cmd.schemeId(), merchant.merchantType())));
 
-        // Step 4: Prefunding deduction for OVERSEAS partners (MUST happen before scheme call)
-        PrefundingClient.DeductionResult deduction = null;
+        // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
+        BigDecimal reservedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
-            // InsufficientPrefundingException propagates; scheme is never reached
-            deduction = prefundingClient.deduct(
-                    cmd.partnerId(), txn.txnRef(), quote.collectionUsd());
+            try {
+                // InsufficientPrefundingException propagates; no scheme call has happened.
+                PrefundingClient.ReservationResult res =
+                        prefundingClient.reserve(cmd.partnerId(), txn.txnRef(), quote.collectionUsd());
+                reservedUsd = res.reservedUsd();
+            } catch (RuntimeException ex) {
+                // Compensate the just-created PENDING txn so a failed reserve never orphans it.
+                safeFailTxn(txn.txnRef());
+                throw ex;
+            }
         }
 
-        // Step 5: Submit to scheme
+        // Step 5 (authorize gate 2): scheme balance-check — does GME hold enough prepaid balance WITH
+        // the scheme to fund the payout? A short scheme float declines HERE, before the customer is
+        // charged (minimises scheme-outage-after-charge at confirm). On decline, void this
+        // authorization (release the partner hold + fail the orphan txn) and stop.
+        SchemeClient.BalanceCheckResult schemeBalance =
+                schemeClient.checkBalance(cmd.schemeId(), quote.targetPayout(), quote.payoutCurrency());
+        if (!schemeBalance.allowed()) {
+            voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
+            throw new SchemeBalanceUnavailableException(
+                    cmd.schemeId(), quote.targetPayout(), quote.payoutCurrency());
+        }
+
+        return new AuthorizeResult(txn.txnRef(), txn.paymentId(), txn.createdAt(),
+                merchant, quote, reservedUsd);
+    }
+
+    /**
+     * Phase 2 — confirm. Submits to the scheme (the irreversible "pay the merchant" step) and, ONLY
+     * on success, CAPTURES the previously-reserved float and commits APPROVED. On a synchronous
+     * decline the hold is released and the txn is FAILED; on a scheme timeout the hold is left in
+     * place and the txn is UNCERTAIN for reconciliation (Step 3 adds the auto-refund path).
+     */
+    public PaymentResult confirmMpm(ConfirmContext ctx) {
         SchemeClient.MpmSubmitResponse schemeResponse;
         try {
             schemeResponse = schemeClient.submitMpm(
                     new SchemeClient.MpmSubmitRequest(
-                            txn.txnRef(),
-                            merchant.merchantId(),
-                            quote.targetPayout(),
-                            quote.payoutCurrency(),
-                            cmd.schemeId(),
-                            cmd.merchantQr()   // thread the scanned EMVCo QR through to the scheme authorize
-                    )
-            );
+                            ctx.txnRef(), ctx.merchantId(), ctx.targetPayout(),
+                            ctx.payoutCurrency(), ctx.schemeId(), ctx.merchantQr()));
         } catch (SchemeDeclinedException ex) {
-            // Reverse deduction immediately on synchronous decline
-            if (partnerType == PartnerType.OVERSEAS) {
-                prefundingClient.reverse(cmd.partnerId(), txn.txnRef());
+            if (ctx.partnerType() == PartnerType.OVERSEAS) {
+                prefundingClient.release(ctx.partnerId(), ctx.txnRef());
             }
-            transactionClient.commitStatus(txn.txnRef(),
-                    new TransactionClient.StatusPatch(
-                            PaymentStatus.FAILED, null, null, null, null));
+            transactionClient.commitStatus(ctx.txnRef(),
+                    new TransactionClient.StatusPatch(PaymentStatus.FAILED, null, null, null, null));
             throw ex;
         } catch (SchemeTimeoutException ex) {
-            // Leave deduction in place; mark UNCERTAIN for batch reconciliation
-            transactionClient.commitStatus(txn.txnRef(),
+            // Customer already charged, scheme outcome unknown: leave the hold, mark UNCERTAIN.
+            transactionClient.commitStatus(ctx.txnRef(),
                     new TransactionClient.StatusPatch(
-                            PaymentStatus.UNCERTAIN, null, null,
-                            deduction != null ? deduction.deductedUsd() : null, null));
+                            PaymentStatus.UNCERTAIN, null, null, ctx.reservedUsd(), null));
             throw ex;
         }
 
-        // Step 6 (pre-commit): per-partner settlement booking. Skipped when the collaborator
-        // is not wired (5-arg constructor, older tests) OR no partner code is available —
-        // config-registry resolves the rounding rule by partner CODE, not the numeric
-        // surrogate (PartnerStore identifier contract), so booking without a code would 404.
-        SettlementBooking booking = (settlementBookingService != null
-                        && cmd.partnerCode() != null && !cmd.partnerCode().isBlank())
-                ? settlementBookingService.book(
-                        cmd.partnerCode(), quote.collectionAmount(), quote.collectionCurrency())
-                : null;
+        // Success: capture the held float (OVERSEAS), book settlement, commit APPROVED, post revenue.
+        BigDecimal capturedUsd = null;
+        if (ctx.partnerType() == PartnerType.OVERSEAS) {
+            PrefundingClient.CaptureResult cap = prefundingClient.capture(ctx.partnerId(), ctx.txnRef());
+            capturedUsd = cap.capturedUsd();
+        }
 
-        // Step 7: Commit APPROVED with rate-lock fields when booking was performed.
-        BigDecimal deductedUsd = deduction != null ? deduction.deductedUsd() : null;
+        SettlementBooking booking = (settlementBookingService != null
+                        && ctx.partnerCode() != null && !ctx.partnerCode().isBlank())
+                ? settlementBookingService.book(
+                        ctx.partnerCode(), ctx.collectionAmount(), ctx.collectionCurrency())
+                : null;
         BigDecimal bookedAmount = booking != null ? booking.booked() : null;
         String roundingModeName = booking != null ? booking.mode().name() : null;
         BigDecimal residual = booking != null ? booking.residual() : null;
-        transactionClient.commitStatus(txn.txnRef(),
+
+        transactionClient.commitStatus(ctx.txnRef(),
                 new TransactionClient.StatusPatch(
-                        PaymentStatus.APPROVED,
-                        schemeResponse.schemeTxnRef(),
-                        schemeResponse.schemeApprovalCode(),
-                        deductedUsd,
-                        schemeResponse.approvedAt(),
-                        bookedAmount,
-                        roundingModeName,
-                        residual
-                )
-        );
+                        PaymentStatus.APPROVED, schemeResponse.schemeTxnRef(),
+                        schemeResponse.schemeApprovalCode(), capturedUsd, schemeResponse.approvedAt(),
+                        bookedAmount, roundingModeName, residual));
 
-        // Step 8: Post rounding residual to revenue-ledger AFTER commit. The client is
-        // non-throwing per its contract (failures are logged for offline retry).
         if (booking != null && revenueLedgerClient != null) {
-            revenueLedgerClient.postRoundingResidual(
-                    txn.txnRef(), booking.residual(), booking.currency());
+            revenueLedgerClient.postRoundingResidual(ctx.txnRef(), booking.residual(), booking.currency());
         }
-
-        // Step 8b: capture per-transaction revenue (FX margin + service charge) so revenue-ledger's
-        // GET /v1/revenue reports real figures. Non-blocking + post-commit, mirroring step 8. Margins
-        // are 0 for the same-currency short-circuit; nulls are coalesced so the capture stays valid.
         if (revenueLedgerClient != null) {
-            BigDecimal collMargin = quote.collectionMarginUsd() != null
-                    ? quote.collectionMarginUsd() : BigDecimal.ZERO;
-            BigDecimal payMargin = quote.payoutMarginUsd() != null
-                    ? quote.payoutMarginUsd() : BigDecimal.ZERO;
-            BigDecimal svcCharge = quote.serviceCharge() != null
-                    ? quote.serviceCharge() : BigDecimal.ZERO;
-            LocalDate revenueDate = txn.createdAt().atZone(KST).toLocalDate();
+            BigDecimal collMargin = ctx.collectionMarginUsd() != null ? ctx.collectionMarginUsd() : BigDecimal.ZERO;
+            BigDecimal payMargin = ctx.payoutMarginUsd() != null ? ctx.payoutMarginUsd() : BigDecimal.ZERO;
+            BigDecimal svcCharge = ctx.serviceCharge() != null ? ctx.serviceCharge() : BigDecimal.ZERO;
+            LocalDate revenueDate = ctx.createdAt().atZone(KST).toLocalDate();
             revenueLedgerClient.postRevenueCapture(
-                    txn.txnRef(), cmd.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
-                    collMargin, payMargin, svcCharge, quote.collectionCurrency(), DEFAULT_FEE_SHARE_PCT);
+                    ctx.txnRef(), ctx.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
+                    collMargin, payMargin, svcCharge, ctx.collectionCurrency(), DEFAULT_FEE_SHARE_PCT);
         }
 
         return new PaymentResult(
-                txn.paymentId(),
-                PaymentStatus.APPROVED,
-                schemeResponse.schemeTxnRef(),
-                merchant.merchantName(),
-                merchant.merchantId(),
-                quote.targetPayout(),
-                quote.payoutCurrency(),
-                quote.offerRateColl(),
-                quote.collectionAmount(),
-                quote.collectionCurrency(),
-                quote.serviceCharge(),
-                quote.collectionCurrency(),
-                deductedUsd,
-                cmd.partnerTxnRef(),
-                txn.createdAt(),
-                schemeResponse.approvedAt()
-        );
+                ctx.paymentId(), PaymentStatus.APPROVED, schemeResponse.schemeTxnRef(),
+                ctx.merchantName(), ctx.merchantId(), ctx.targetPayout(), ctx.payoutCurrency(),
+                ctx.offerRate(), ctx.collectionAmount(), ctx.collectionCurrency(),
+                ctx.serviceCharge(), ctx.collectionCurrency(), capturedUsd, ctx.partnerTxnRef(),
+                ctx.createdAt(), schemeResponse.approvedAt());
     }
+
+    /**
+     * Releases a held float reservation when an authorization expires or is abandoned (no confirm).
+     * OVERSEAS only — LOCAL partners hold no float. Idempotent (the prefunding release is a no-op if
+     * the hold was already captured/released).
+     */
+    public void releaseHold(long partnerId, String txnRef, PartnerType partnerType) {
+        if (partnerType == PartnerType.OVERSEAS) {
+            prefundingClient.release(partnerId, txnRef);
+        }
+    }
+
+    /**
+     * Abandons an authorization that never confirmed (expired, or a concurrent-duplicate loser):
+     * releases the held float (OVERSEAS) and moves the orphan PENDING transaction to FAILED so it
+     * cannot linger. Best-effort and idempotent — release/commit are no-ops if already done.
+     */
+    public void voidAuthorization(long partnerId, String txnRef, PartnerType partnerType) {
+        if (partnerType == PartnerType.OVERSEAS) {
+            try {
+                prefundingClient.release(partnerId, txnRef);
+            } catch (RuntimeException ignore) {
+                // best-effort; the reservation sweeper / recon will close it otherwise
+            }
+        }
+        safeFailTxn(txnRef);
+    }
+
+    /** Best-effort: move a transaction to FAILED, swallowing errors (used for compensation). */
+    private void safeFailTxn(String txnRef) {
+        try {
+            transactionClient.commitStatus(txnRef,
+                    new TransactionClient.StatusPatch(PaymentStatus.FAILED, null, null, null, null));
+        } catch (RuntimeException ignore) {
+            // best-effort compensation
+        }
+    }
+
+    /** What {@link #authorizeMpm} produces — persisted by the controller, replayed into confirm. */
+    public record AuthorizeResult(
+            String txnRef, String paymentId, Instant createdAt,
+            QrClient.MerchantView merchant, RateClient.RateQuoteView quote, BigDecimal reservedUsd) {}
+
+    /** Frozen context replayed into {@link #confirmMpm} (rebuilt from the persisted authorization). */
+    public record ConfirmContext(
+            long partnerId, PartnerType partnerType, String partnerCode, String partnerTxnRef,
+            String txnRef, String paymentId, String schemeId, String merchantQr,
+            String merchantId, String merchantName,
+            BigDecimal targetPayout, String payoutCurrency,
+            BigDecimal collectionAmount, String collectionCurrency,
+            BigDecimal reservedUsd, BigDecimal offerRate,
+            BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd, BigDecimal serviceCharge,
+            Instant createdAt) {}
 
     /**
      * Executes a CPM (Consumer-Presented Mode) payment end-to-end.
@@ -435,6 +500,13 @@ public class PaymentOrchestrator {
      *                       {@code null} when unavailable, in which case settlement booking is
      *                       skipped (the {@code numeric} {@code partnerId} still drives
      *                       transaction-mgmt + prefunding).
+     * @param collectionAmount   the settlement amount the partner asserts it is charging the
+     *                       customer. Verified against the locked quote before execution (see
+     *                       {@link #assertQuoteAgreement}). {@code null} means the caller asserts
+     *                       no amount and the check is skipped — only internal/test callers do
+     *                       this; the REST path always supplies it (a required, validated field).
+     * @param collectionCurrency ISO currency the partner asserts for {@code collectionAmount};
+     *                       must match the quote's collection currency (case-insensitive).
      */
     public record MpmPaymentCommand(
             long partnerId,
@@ -444,7 +516,9 @@ public class PaymentOrchestrator {
             String direction,
             String customerRef,
             String partnerTxnRef,
-            String partnerCode
+            String partnerCode,
+            BigDecimal collectionAmount,
+            String collectionCurrency
     ) {}
 
     /** Outcome of a successful MPM payment orchestration. */

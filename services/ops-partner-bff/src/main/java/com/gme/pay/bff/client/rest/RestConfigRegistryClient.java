@@ -501,6 +501,24 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     }
 
     @Override
+    public com.gme.pay.contracts.PartnerView patchDraftStep6CurrencySplit(
+            String partnerCode,
+            com.gme.pay.contracts.PartnerCommand.UpdateStep6CurrencySplit request) {
+        try {
+            return restClient.patch()
+                    .uri("/v1/partners/draft/{partnerCode}/step-6-currency-split", partnerCode)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.PartnerView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // Surface upstream 4xx (malformed ISO-4217 → 400, unknown draft → 404,
+            // split frozen post-activation → 409) to the Admin UI, message preserved.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
     public List<com.gme.pay.contracts.FeeScheduleView> getFeeSchedules(String partnerCode) {
         try {
             List<com.gme.pay.contracts.FeeScheduleView> fees = restClient.get()

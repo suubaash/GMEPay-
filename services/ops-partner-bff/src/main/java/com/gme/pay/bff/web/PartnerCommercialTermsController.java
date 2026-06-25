@@ -2,6 +2,7 @@ package com.gme.pay.bff.web;
 
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.web.dto.DraftPartnerStep6CommercialRequest;
+import com.gme.pay.bff.web.dto.DraftPartnerStep6CurrencySplitRequest;
 import com.gme.pay.contracts.CommercialTermsView;
 import com.gme.pay.contracts.ContractView;
 import com.gme.pay.contracts.FeeScheduleView;
@@ -9,6 +10,7 @@ import com.gme.pay.contracts.FxConfigView;
 import com.gme.pay.contracts.LimitsView;
 import com.gme.pay.contracts.PartnerCommissionShareCommand;
 import com.gme.pay.contracts.PartnerCommissionShareView;
+import com.gme.pay.contracts.PartnerView;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -61,6 +63,27 @@ public class PartnerCommercialTermsController {
         }
         return configRegistry.patchDraftStep6Commercial(
                 partnerCode, body.toUpdateStep6Commercial());
+    }
+
+    /**
+     * Set the step-6 currency split (collection_ccy + settle_a_ccy) on a draft —
+     * the per-partner GME ↔ partner settlement-currency pair
+     * (SETTLEMENT_FLOW_SPEC §6.1). Mirrors
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-6-currency-split} on
+     * config-registry, which performs the SCD-6 paired write (the ONLY path that
+     * ORIGINATES a real split) and returns the fresh split-aware
+     * {@link PartnerView}. Upstream 400 (malformed ISO-4217) / 404 (unknown
+     * draft) / 409 (split frozen post-activation) pass through.
+     */
+    @PatchMapping("/partners/draft/{partnerCode}/step-6-currency-split")
+    public PartnerView patchDraftStep6CurrencySplit(
+            @PathVariable String partnerCode,
+            @RequestBody DraftPartnerStep6CurrencySplitRequest body) {
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.patchDraftStep6CurrencySplit(
+                partnerCode, body.toUpdateStep6CurrencySplit());
     }
 
     /**

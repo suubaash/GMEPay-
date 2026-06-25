@@ -1,15 +1,21 @@
 package com.gme.pay.payment.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gme.pay.payment.domain.PartnerType;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.CancelResult;
 import com.gme.pay.payment.domain.PaymentOrchestrator.CpmPaymentCommand;
+import com.gme.pay.payment.domain.PaymentOrchestrator.AuthorizeResult;
+import com.gme.pay.payment.domain.PaymentOrchestrator.ConfirmContext;
 import com.gme.pay.payment.domain.PaymentOrchestrator.MpmPaymentCommand;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
+import com.gme.pay.payment.domain.SchemeDeclinedException;
+import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.PartnerConfigClient;
-import com.gme.pay.payment.persistence.IdempotencyRecordEntity;
-import com.gme.pay.payment.persistence.IdempotencyRecordRepository;
+import com.gme.pay.payment.persistence.PaymentAuthorizationEntity;
+import com.gme.pay.payment.persistence.PaymentAuthorizationRepository;
+import com.gme.pay.payment.service.PaymentAuthorizationService;
+import org.springframework.dao.DataIntegrityViolationException;
 import com.gme.pay.payment.web.dto.CancelPaymentRequest;
 import com.gme.pay.payment.web.dto.CancelPaymentResponse;
 import com.gme.pay.payment.web.dto.CpmGenerateRequest;
@@ -28,106 +34,213 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * REST controller exposing the Payment Executor API surface (API-05).
  *
  * <p>Endpoints:
  * <ul>
- *   <li>POST /v1/payments          — Fixed MPM payment execution
- *   <li>POST /v1/payments/cpm/generate — CPM QR token generation
- *   <li>POST /v1/payments/{id}/cancel  — Same-day cancellation
+ *   <li>POST /v1/payments/authorize        — MPM two-phase phase 1 (reserve; no scheme call)
+ *   <li>POST /v1/payments/{authId}/confirm — MPM two-phase phase 2 (submit + capture)
+ *   <li>POST /v1/payments/cpm/generate     — CPM QR token generation
+ *   <li>POST /v1/payments/{id}/cancel      — Same-day cancellation
  * </ul>
+ *
+ * <p>The legacy single-shot {@code POST /v1/payments} (deduct-before-submit) was retired in Step 4;
+ * MPM is now exclusively the two-phase authorize/confirm flow.
  */
 @RestController
 @RequestMapping("/v1/payments")
 public class PaymentController {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
-    private static final long IDEMPOTENCY_RETENTION_HOURS = 24L;
+    /** How long a partner has to charge the customer + confirm before the authorization expires. */
+    private static final long AUTHORIZATION_TTL_MINUTES = 15L;
 
     private final PaymentOrchestrator orchestrator;
     private final PartnerConfigClient partnerConfigClient;
-    private final IdempotencyRecordRepository idempotencyRepository;
-    private final ObjectMapper objectMapper;
+    private final PaymentAuthorizationRepository authorizationRepository;
+    private final PaymentAuthorizationService authorizationService;
 
     /**
      * Constructor injection. {@code partnerConfigClient} resolves the partner type from
-     * config-registry (replacing the old X-Partner-Type header stub); the idempotency
-     * repository + object mapper back the {@code Idempotency-Key} replay on POST /v1/payments.
+     * config-registry; the authorization repository + service back the two-phase authorize/confirm
+     * state machine.
      */
     public PaymentController(PaymentOrchestrator orchestrator,
                              PartnerConfigClient partnerConfigClient,
-                             IdempotencyRecordRepository idempotencyRepository,
-                             ObjectMapper objectMapper) {
+                             PaymentAuthorizationRepository authorizationRepository,
+                             PaymentAuthorizationService authorizationService) {
         this.orchestrator = orchestrator;
         this.partnerConfigClient = partnerConfigClient;
-        this.idempotencyRepository = idempotencyRepository;
-        this.objectMapper = objectMapper;
+        this.authorizationRepository = authorizationRepository;
+        this.authorizationService = authorizationService;
     }
 
     /**
-     * POST /v1/payments — execute a Fixed MPM payment.
+     * POST /v1/payments/authorize — Phase 1 of the two-phase MPM flow (SETTLEMENT_FLOW_SPEC §4/§7.1).
      *
-     * <p>Idempotency (API-05 §3.4): when an {@code Idempotency-Key} header is present, a
-     * retried request for the same (partner, key) replays the recorded response instead of
-     * re-executing the payment.
+     * <p>Validates + agreement-checks the quote, resolves the merchant, creates the PENDING txn, and
+     * RESERVES (holds) the partner float. NOTHING irreversible happens — no scheme call. Returns an
+     * {@code authId} plus the settlement amount the partner must charge the customer. The partner then
+     * charges the customer's wallet and calls {@code POST /v1/payments/{authId}/confirm}.
      *
-     * <p>Partner type is resolved from config-registry by the partner code ({@code X-Partner-Code}
-     * header — the gateway sets it from the authenticated partner). When no code is supplied or
-     * config-registry cannot resolve it, we fall back to the {@code X-Partner-Type} header so
-     * dev/test callers keep working. The numeric {@code X-Partner-Id} continues to drive
-     * transaction-mgmt + prefunding.
+     * <p>Idempotent per (partner, partner_txn_ref): a repeat authorize replays the existing one.
      */
-    @PostMapping
-    public ResponseEntity<MpmPaymentResponse> executeMpmPayment(
+    @PostMapping("/authorize")
+    public ResponseEntity<AuthorizeResponse> authorizePayment(
             @RequestBody MpmPaymentRequest req,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Code", required = false) String partnerCode,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader) {
 
         req.validate();
 
-        // Idempotency replay: a recorded outcome for (partner, key) is returned verbatim.
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            Optional<IdempotencyRecordEntity> existing =
-                    idempotencyRepository.findByPartnerIdAndIdempotencyKey(partnerId, idempotencyKey);
-            if (existing.isPresent() && existing.get().getResponseBody() != null) {
-                log.info("idempotent replay for partner={} key={}", partnerId, idempotencyKey);
-                return ResponseEntity.status(HttpStatus.CREATED)
-                        .body(readSnapshot(existing.get().getResponseBody()));
-            }
+        Optional<PaymentAuthorizationEntity> existing =
+                authorizationRepository.findByPartnerIdAndPartnerTxnRef(partnerId, req.partnerTxnRef());
+        if (existing.isPresent()) {
+            log.info("idempotent authorize replay for partner={} txnRef={}", partnerId, req.partnerTxnRef());
+            return ResponseEntity.status(HttpStatus.CREATED).body(toAuthorizeResponse(existing.get()));
         }
 
         PartnerType partnerType = resolvePartnerType(partnerCode, partnerTypeHeader);
-
         MpmPaymentCommand cmd = new MpmPaymentCommand(
-                partnerId,
-                req.quoteId(),
-                req.merchantQr(),
-                req.schemeId(),
-                req.direction(),
-                req.customerRef(),
-                req.partnerTxnRef(),
-                partnerCode
-        );
+                partnerId, req.quoteId(), req.merchantQr(), req.schemeId(), req.direction(),
+                req.customerRef(), req.partnerTxnRef(), partnerCode,
+                new BigDecimal(req.collectionAmount()), req.collectionCurrency());
 
-        PaymentResult result = orchestrator.executeMpm(cmd, partnerType);
-        MpmPaymentResponse response = toResponse(result);
+        AuthorizeResult auth = orchestrator.authorizeMpm(cmd, partnerType);
+        try {
+            PaymentAuthorizationEntity entity = persistAuthorization(cmd, partnerType, partnerCode, auth);
+            return ResponseEntity.status(HttpStatus.CREATED).body(toAuthorizeResponse(entity));
+        } catch (DataIntegrityViolationException dup) {
+            // Concurrent duplicate authorize for the same (partner, partner_txn_ref): the unique index
+            // rejected THIS loser's row. Compensate the side effects we just ran (release the hold +
+            // fail the orphan txn) so nothing leaks, then replay the winner's authorization.
+            log.warn("duplicate authorize partner={} txnRef={}; compensating loser + replaying winner",
+                    partnerId, req.partnerTxnRef());
+            orchestrator.voidAuthorization(partnerId, auth.txnRef(), partnerType);
+            return authorizationRepository.findByPartnerIdAndPartnerTxnRef(partnerId, req.partnerTxnRef())
+                    .map(e -> ResponseEntity.status(HttpStatus.CREATED).body(toAuthorizeResponse(e)))
+                    .orElseThrow(() -> dup);
+        }
+    }
 
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            recordIdempotencyOutcome(partnerId, idempotencyKey, req, result, response);
+    /**
+     * POST /v1/payments/{authId}/confirm — Phase 2. The partner calls this AFTER it has charged the
+     * customer's wallet, passing the {@code wallet_charge_ref}. Only now does GME submit to the scheme
+     * (the irreversible step) and capture the held float. Honours the non-negotiable: the scheme is
+     * never hit before the customer-charge confirmation.
+     */
+    @PostMapping("/{authId}/confirm")
+    public ResponseEntity<MpmPaymentResponse> confirmPayment(
+            @PathVariable("authId") String authId,
+            @RequestBody(required = false) ConfirmPaymentRequest req) {
+
+        PaymentAuthorizationEntity auth = authorizationRepository.findById(authId)
+                .orElseThrow(() -> new IllegalArgumentException("unknown authorization: " + authId));
+        PartnerType partnerType = PartnerType.valueOf(auth.getPartnerType().toUpperCase());
+        String walletChargeRef = req != null ? req.walletChargeRef() : null;
+
+        // CLAIM the authorization atomically (AUTHORIZED -> CONFIRMING). Exactly one caller wins the
+        // conditional UPDATE; this is what makes the irreversible scheme submit happen AT MOST ONCE
+        // under concurrent or retried confirms. A loser (already confirming/confirmed/expired) is
+        // rejected here, before any scheme call.
+        if (!authorizationService.compareAndSetStatus(authId,
+                PaymentAuthorizationEntity.STATUS_AUTHORIZED,
+                PaymentAuthorizationEntity.STATUS_CONFIRMING)) {
+            throw new IllegalArgumentException("authorization " + authId
+                    + " is not claimable (already confirmed, expired, or in flight)");
         }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        // We now exclusively own this authorization. Handle an expired window under our claim:
+        // void it (release the hold + fail the orphan txn) and stop.
+        if (auth.isExpired(Instant.now())) {
+            orchestrator.voidAuthorization(auth.getPartnerId(), auth.getTxnRef(), partnerType);
+            authorizationService.markOutcome(authId,
+                    PaymentAuthorizationEntity.STATUS_EXPIRED, walletChargeRef, null);
+            throw new IllegalArgumentException("authorization " + authId + " has expired");
+        }
+
+        ConfirmContext ctx = toConfirmContext(auth, partnerType);
+        try {
+            PaymentResult result = orchestrator.confirmMpm(ctx);
+            authorizationService.markOutcome(authId,
+                    PaymentAuthorizationEntity.STATUS_CONFIRMED, walletChargeRef, Instant.now());
+            return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(result));
+        } catch (SchemeDeclinedException ex) {
+            // Scheme declined (no payment); confirmMpm already released the hold + FAILED the txn.
+            authorizationService.markOutcome(authId,
+                    PaymentAuthorizationEntity.STATUS_FAILED, walletChargeRef, null);
+            throw ex;
+        } catch (SchemeTimeoutException ex) {
+            // Outcome unknown. Do NOT revert to AUTHORIZED — a retry must never re-submit to the
+            // scheme. Park as UNCERTAIN for reconciliation (Step 3 resolves: confirm-capture if the
+            // payment landed, else auto-refund the customer + release the hold).
+            authorizationService.markOutcome(authId,
+                    PaymentAuthorizationEntity.STATUS_UNCERTAIN, walletChargeRef, null);
+            throw ex;
+        }
+        // Any OTHER failure after a successful submit leaves the auth in CONFIRMING (merchant paid,
+        // capture/commit still pending) for the reconciler — it never reverts to AUTHORIZED, so the
+        // /confirm gate will reject a naive retry rather than double-submitting.
+    }
+
+    // ---- two-phase helpers ----
+
+    private PaymentAuthorizationEntity persistAuthorization(MpmPaymentCommand cmd, PartnerType partnerType,
+                                                            String partnerCode, AuthorizeResult auth) {
+        var q = auth.quote();
+        var m = auth.merchant();
+        PaymentAuthorizationEntity e = new PaymentAuthorizationEntity();
+        e.setAuthId("AUTH-" + UUID.randomUUID());
+        e.setPartnerId(cmd.partnerId());
+        e.setPartnerCode(partnerCode);
+        e.setPartnerType(partnerType.name());
+        e.setPartnerTxnRef(cmd.partnerTxnRef());
+        e.setQuoteId(cmd.quoteId());
+        e.setSchemeId(cmd.schemeId());
+        e.setDirection(cmd.direction());
+        e.setMerchantQr(cmd.merchantQr());
+        e.setCustomerRef(cmd.customerRef());
+        e.setMerchantId(m.merchantId());
+        e.setMerchantName(m.merchantName());
+        e.setTargetPayout(q.targetPayout());
+        e.setPayoutCurrency(q.payoutCurrency());
+        e.setCollectionAmount(q.collectionAmount());
+        e.setCollectionCurrency(q.collectionCurrency());
+        e.setCollectionUsd(q.collectionUsd());
+        e.setCollectionMarginUsd(q.collectionMarginUsd());
+        e.setPayoutMarginUsd(q.payoutMarginUsd());
+        e.setServiceCharge(q.serviceCharge());
+        e.setReservedUsd(auth.reservedUsd());
+        e.setTxnRef(auth.txnRef());
+        e.setPaymentId(auth.paymentId());
+        e.setStatus(PaymentAuthorizationEntity.STATUS_AUTHORIZED);
+        Instant now = Instant.now();
+        e.setCreatedAt(now);
+        e.setExpiresAt(now.plus(AUTHORIZATION_TTL_MINUTES, ChronoUnit.MINUTES));
+        return authorizationRepository.save(e);
+    }
+
+    private static ConfirmContext toConfirmContext(PaymentAuthorizationEntity a, PartnerType partnerType) {
+        return new ConfirmContext(
+                a.getPartnerId(), partnerType, a.getPartnerCode(), a.getPartnerTxnRef(),
+                a.getTxnRef(), a.getPaymentId(), a.getSchemeId(), a.getMerchantQr(),
+                a.getMerchantId(), a.getMerchantName(), a.getTargetPayout(), a.getPayoutCurrency(),
+                a.getCollectionAmount(), a.getCollectionCurrency(), a.getReservedUsd(), null,
+                a.getCollectionMarginUsd(), a.getPayoutMarginUsd(), a.getServiceCharge(), a.getCreatedAt());
+    }
+
+    private static AuthorizeResponse toAuthorizeResponse(PaymentAuthorizationEntity e) {
+        return new AuthorizeResponse(
+                e.getAuthId(), e.getPaymentId(), e.getStatus().toLowerCase(),
+                e.getCollectionAmount(), e.getCollectionCurrency(),
+                e.getTargetPayout(), e.getPayoutCurrency(), e.getExpiresAt());
     }
 
     /**
@@ -231,47 +344,6 @@ public class PaymentController {
         return PartnerType.valueOf(headerFallback.toUpperCase());
     }
 
-    // ---- idempotency ----
-
-    private void recordIdempotencyOutcome(long partnerId, String idempotencyKey,
-                                          MpmPaymentRequest req, PaymentResult result,
-                                          MpmPaymentResponse response) {
-        try {
-            String requestHash = sha256Hex(objectMapper.writeValueAsString(req));
-            IdempotencyRecordEntity record = idempotencyRepository
-                    .findByPartnerIdAndIdempotencyKey(partnerId, idempotencyKey)
-                    .orElseGet(() -> new IdempotencyRecordEntity(
-                            partnerId, idempotencyKey, requestHash, Instant.now()));
-            record.setTxnRef(result.paymentId());
-            record.recordOutcome(result.status(), objectMapper.writeValueAsString(response));
-            record.setExpiresAt(Instant.now().plus(IDEMPOTENCY_RETENTION_HOURS, ChronoUnit.HOURS));
-            idempotencyRepository.save(record);
-        } catch (Exception e) {
-            // The payment already executed; a failure to persist the replay snapshot must not
-            // fail the response. The DB unique constraint still guards against double-execution
-            // on a genuinely concurrent retry.
-            log.warn("failed to record idempotency outcome for partner={} key={}: {}",
-                    partnerId, idempotencyKey, e.getMessage());
-        }
-    }
-
-    private MpmPaymentResponse readSnapshot(String body) {
-        try {
-            return objectMapper.readValue(body, MpmPaymentResponse.class);
-        } catch (Exception e) {
-            throw new IllegalStateException("corrupt idempotency response snapshot", e);
-        }
-    }
-
-    private static String sha256Hex(String input) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
-    }
-
     // ---- mapping ----
 
     private static MpmPaymentResponse toResponse(PaymentResult r) {
@@ -294,4 +366,20 @@ public class PaymentController {
                 r.approvedAt()
         );
     }
+
+    // ---- two-phase DTOs ----
+
+    /** Response to POST /authorize: the auth handle + the settlement amount the partner must charge. */
+    public record AuthorizeResponse(
+            @JsonProperty("auth_id") String authId,
+            @JsonProperty("payment_id") String paymentId,
+            @JsonProperty("status") String status,
+            @JsonProperty("collection_amount") BigDecimal collectionAmount,
+            @JsonProperty("collection_currency") String collectionCurrency,
+            @JsonProperty("target_payout") BigDecimal targetPayout,
+            @JsonProperty("payout_currency") String payoutCurrency,
+            @JsonProperty("expires_at") Instant expiresAt) {}
+
+    /** Request body for POST /{authId}/confirm: the partner's customer-wallet-charge reference. */
+    public record ConfirmPaymentRequest(@JsonProperty("wallet_charge_ref") String walletChargeRef) {}
 }

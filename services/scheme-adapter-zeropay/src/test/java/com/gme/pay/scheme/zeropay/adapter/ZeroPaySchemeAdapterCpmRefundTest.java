@@ -81,8 +81,9 @@ class ZeroPaySchemeAdapterCpmRefundTest {
         assertEquals("CPM-TOKEN-AABB1122", token.tokenId());
         assertEquals("M001", token.merchantId());
         assertNotNull(token.expiresAt());
-        // expiresAt should be parsed from the ISO string
-        assertTrue(token.expiresAt().isAfter(Instant.now().minusSeconds(10)));
+        // expiresAt should be parsed from the ISO string (date-robust: assert the exact parsed
+        // instant, not relative to Instant.now() — the latter rots once the clock passes the date).
+        assertEquals(Instant.parse("2026-06-15T05:05:00Z"), token.expiresAt());
         verify(schemeApiClient).fetchCpmToken("M001", "WALLET");
     }
 

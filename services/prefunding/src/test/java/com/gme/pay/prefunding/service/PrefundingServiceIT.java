@@ -105,6 +105,48 @@ class PrefundingServiceIT {
 
     @Test
     @Transactional
+    void creditLimitExtendsAvailableForReservations() {
+        // balance 1000 + credit limit 500 => available 1500.
+        service.setCreditLimit(PARTNER, new BigDecimal("500.00000000"));
+
+        // Reserve 1400 (> balance, < balance + credit) succeeds; available drops to 100.
+        PrefundingService.ReserveResult r =
+                service.reserve(PARTNER, "txn-C1", new BigDecimal("1400.00000000"));
+        assertEquals(0, r.reservedAmount().compareTo(new BigDecimal("1400.00000000")));
+        assertEquals(0, r.available().compareTo(new BigDecimal("100.00000000")));
+
+        // A further reserve beyond the remaining 100 is declined.
+        ApiException ex = assertThrows(ApiException.class,
+                () -> service.reserve(PARTNER, "txn-C2", new BigDecimal("200.00000000")));
+        assertEquals(ErrorCode.INSUFFICIENT_PREFUNDING, ex.errorCode());
+
+        // Capture converts the hold to a real debit, drawing into the credit line (balance < 0).
+        PrefundingService.CaptureResult cap = service.capture(PARTNER, "txn-C1");
+        assertEquals(0, cap.capturedAmount().compareTo(new BigDecimal("1400.00000000")));
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("-400.00000000")),
+                "capture beyond balance draws into the credit line");
+    }
+
+    @Test
+    @Transactional
+    void reserveThenReleaseRestoresAvailableWithoutDebit() {
+        PrefundingService.ReserveResult r =
+                service.reserve(PARTNER, "txn-D", new BigDecimal("300.00000000"));
+        assertEquals(0, r.available().compareTo(new BigDecimal("700.00000000")));
+
+        // Release the hold: balance unchanged, the held amount frees up again.
+        PrefundingService.ReleaseResult rel = service.release(PARTNER, "txn-D");
+        assertEquals(0, rel.releasedAmount().compareTo(new BigDecimal("300.00000000")));
+        assertEquals(0, service.getBalance(PARTNER).compareTo(new BigDecimal("1000.00000000")));
+
+        // A fresh reserve for the full balance now succeeds (the prior hold was released).
+        PrefundingService.ReserveResult r2 =
+                service.reserve(PARTNER, "txn-D2", new BigDecimal("1000.00000000"));
+        assertEquals(0, r2.available().compareTo(BigDecimal.ZERO));
+    }
+
+    @Test
+    @Transactional
     void reverseUnknownTxnRefIsZeroNoOp() {
         PrefundingService.ReverseResult r = service.reverse(PARTNER, "never-deducted");
         assertEquals(0, r.reversedAmount().compareTo(BigDecimal.ZERO));

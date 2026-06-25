@@ -409,6 +409,23 @@ public interface ConfigRegistryClient {
     }
 
     /**
+     * Set the step-6 currency split (collection_ccy + settle_a_ccy) on a draft —
+     * the per-partner GME ↔ partner settlement-currency pair
+     * (SETTLEMENT_FLOW_SPEC §6.1). Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-6-currency-split};
+     * config-registry performs the SCD-6 paired write (the ONLY path that can
+     * ORIGINATE a real split — the four-field create/step-1 path carries no
+     * split fields) and returns the fresh split-aware {@link PartnerView}.
+     * Upstream 400 (malformed ISO-4217) / 404 (unknown draft) / 409 (split
+     * frozen post-activation) pass through with their messages preserved.
+     */
+    default PartnerView patchDraftStep6CurrencySplit(
+            String partnerCode, PartnerCommand.UpdateStep6CurrencySplit request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep6CurrencySplit is not implemented by " + getClass().getName());
+    }
+
+    /**
      * The CURRENT fee-schedule set for a partner. Routes to
      * {@code GET /v1/partners/{partnerCode}/fee-schedules}. A partner with no
      * fee rows yields an empty list; an unknown partner surfaces upstream's

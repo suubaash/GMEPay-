@@ -131,6 +131,29 @@ public class RestSchemeClient implements SchemeClient {
         }
     }
 
+    @Override
+    public BalanceCheckResult checkBalance(String schemeId, BigDecimal amount, String currency) {
+        try {
+            SchemeBalanceResponse body = restClient.post()
+                    .uri("/internal/scheme/zeropay/balance-check")
+                    .body(new SchemeBalanceRequest(schemeId, amount, currency))
+                    .retrieve()
+                    .body(SchemeBalanceResponse.class);
+            if (body == null) {
+                throw new PaymentException("scheme-adapter returned empty balance-check response");
+            }
+            return new BalanceCheckResult(body.allowed(), body.available());
+        } catch (RestClientResponseException ex) {
+            throw mapSchemeFailure(ex);
+        } catch (ResourceAccessException ex) {
+            throw new SchemeTimeoutException(schemeId);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException("scheme-adapter balance-check failed: " + ex.getMessage(), ex);
+        }
+    }
+
     /** Maps a non-2xx scheme response onto the right domain exception. */
     private RuntimeException mapSchemeFailure(RestClientResponseException ex) {
         HttpStatusCode status = ex.getStatusCode();
@@ -190,6 +213,11 @@ public class RestSchemeClient implements SchemeClient {
     ) {}
 
     record SchemeCancelRequest(String schemeTxnRef, String reason) {}
+
+    record SchemeBalanceRequest(String schemeId, BigDecimal amountKrw, String currency) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record SchemeBalanceResponse(boolean allowed, BigDecimal available) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record SchemeApprovalResponse(

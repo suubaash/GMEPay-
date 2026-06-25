@@ -484,6 +484,29 @@ export const adminApi = {
       { method: 'PATCH', body: JSON.stringify(body ?? {}) },
     ),
 
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-currency-split
+   * body: { collectionCcy, settleACcy }
+   * -> PartnerView (fresh, split-aware) with refreshed bitemporal stamps.
+   *
+   * The per-partner GME ↔ partner settlement-currency split (collection_ccy =
+   * what GME collects from the partner's prefund; settle_a_ccy = the currency
+   * GME books the partner-liability leg in — SETTLEMENT_FLOW_SPEC §6.1). This
+   * is the ONLY write path that originates a real split; the four-field
+   * create/step-1 path carries no split fields. Both are ISO-4217 alpha-3
+   * codes; config-registry validates the shape and returns 409 if the partner
+   * is already live (the split is frozen post-activation), 404 for an unknown
+   * draft, 400 for a malformed code.
+   *
+   * @param {string} partnerCode
+   * @param {{collectionCcy: string, settleACcy: string}} body
+   */
+  patchDraftStep6CurrencySplit: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-currency-split`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
   // ---------- Pricing rules (Slice 6A.1 backend) ----------------------------
   /**
    * GET /v1/admin/partners/{partnerCode}/rules

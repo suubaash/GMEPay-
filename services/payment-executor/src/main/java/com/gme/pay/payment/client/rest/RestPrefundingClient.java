@@ -103,6 +103,86 @@ public class RestPrefundingClient implements PrefundingClient {
         }
     }
 
+    @Override
+    public ReservationResult reserve(long partnerId, String txnRef, BigDecimal amountUsd) {
+        try {
+            ReserveResponse body = restClient.post()
+                    .uri("/v1/prefunding/{partner}/reserve", partnerId)
+                    .body(new ReserveRequest(txnRef, amountUsd))
+                    .retrieve()
+                    .body(ReserveResponse.class);
+            if (body == null) {
+                throw new PaymentException("prefunding returned empty body for reserve " + txnRef);
+            }
+            return new ReservationResult(nonNull(body.reservedUsd()), body.available(), body.balance());
+        } catch (RestClientResponseException ex) {
+            HttpStatusCode status = ex.getStatusCode();
+            if (status.value() == HttpStatus.PAYMENT_REQUIRED.value()) {
+                throw new InsufficientPrefundingException(
+                        nonNull(parseAvailable(ex)), nonNull(amountUsd));
+            }
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/reserve failed: "
+                            + status + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/reserve failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public CaptureResult capture(long partnerId, String txnRef) {
+        try {
+            CaptureResponse body = restClient.post()
+                    .uri("/v1/prefunding/{partner}/capture", partnerId)
+                    .body(new ReserveRequest(txnRef, null))
+                    .retrieve()
+                    .body(CaptureResponse.class);
+            if (body == null) {
+                throw new PaymentException("prefunding returned empty body for capture " + txnRef);
+            }
+            return new CaptureResult(nonNull(body.capturedUsd()), body.balance());
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/capture failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/capture failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public ReleaseResult release(long partnerId, String txnRef) {
+        try {
+            ReleaseResponse body = restClient.post()
+                    .uri("/v1/prefunding/{partner}/release", partnerId)
+                    .body(new ReserveRequest(txnRef, null))
+                    .retrieve()
+                    .body(ReleaseResponse.class);
+            if (body == null) {
+                return new ReleaseResult(BigDecimal.ZERO, null);
+            }
+            return new ReleaseResult(nonNull(body.releasedUsd()), body.balance());
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/release failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/release failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
     private static BigDecimal parseAvailable(RestClientResponseException ex) {
         // best-effort extraction; if absent we fall through to ZERO
         try {
@@ -129,9 +209,21 @@ public class RestPrefundingClient implements PrefundingClient {
 
     record ReverseRequest(String txnRef) {}
 
+    record ReserveRequest(String txnRef, BigDecimal amount) {}
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     record DeductResponse(BigDecimal deductedUsd, BigDecimal balanceAfter) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ReverseResponse(String partnerId, BigDecimal reversedUsd, BigDecimal balance) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record ReserveResponse(String partnerId, BigDecimal reservedUsd, BigDecimal available,
+                           BigDecimal balance) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record CaptureResponse(String partnerId, BigDecimal capturedUsd, BigDecimal balance) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record ReleaseResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance) {}
 }

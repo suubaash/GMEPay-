@@ -15,8 +15,10 @@ import com.gme.pay.registry.persistence.PartnerRepository;
 import jakarta.persistence.EntityManager;
 import java.lang.reflect.Field;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -114,5 +116,91 @@ class PartnerStoreTest {
         ResponseStatusException ex =
                 assertThrows(ResponseStatusException.class, () -> store.get("NOPE"));
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
+    }
+
+    // ---- Step 5: writable currency split (collection_ccy / settle_a_ccy) ----
+
+    /**
+     * Wire {@code saveAndFlush} to capture the freshly-INSERTED current row (the half
+     * of the SCD-6 paired write whose superseded_at is still null) and re-point
+     * {@code findCurrentByPartnerCode} at it, so a subsequent store read/write sees the
+     * new generation. Returns the holder for the captured insert.
+     */
+    private AtomicReference<PartnerEntity> wireInsertCapture() {
+        AtomicReference<PartnerEntity> inserted = new AtomicReference<>();
+        when(repository.saveAndFlush(any(PartnerEntity.class))).thenAnswer(inv -> {
+            PartnerEntity saved = inv.getArgument(0);
+            if (saved.getSupersededAt() == null) {
+                inserted.set(saved);
+                when(repository.findCurrentByPartnerCode(saved.getPartnerCode()))
+                        .thenReturn(Optional.of(saved));
+            }
+            return saved;
+        });
+        return inserted;
+    }
+
+    @Test
+    void updateCurrencySplitOriginatesARealSplit() {
+        AtomicReference<PartnerEntity> inserted = wireInsertCapture();
+
+        store.updateCurrencySplit("GMEREMIT", "MNT", "USD");
+
+        PartnerEntity row = inserted.get();
+        assertNotNull(row, "a fresh current row must have been inserted");
+        // The content change: the operator-set split landed on the new row.
+        assertEquals("MNT", row.getCollectionCcy());
+        assertEquals("USD", row.getSettleACcy());
+        // ...and the four-field identity is carried forward unchanged.
+        assertEquals("KRW", row.getSettlementCurrency());
+        assertEquals(PartnerType.LOCAL, row.getType());
+        assertNotNull(row.getId(), "the new current row must carry a fresh surrogate id");
+    }
+
+    @Test
+    void realSplitSurvivesASubsequentFourFieldSave() {
+        // First write a real split; wireInsertCapture re-points the finder at the new row.
+        wireInsertCapture();
+        store.updateCurrencySplit("GMEREMIT", "MNT", "USD");
+
+        // Now a plain four-field save (e.g. an unrelated step-1 edit) must NOT erase it —
+        // PartnerStore.save carries a "real" prior split forward.
+        AtomicReference<PartnerEntity> afterSave = new AtomicReference<>();
+        when(repository.saveAndFlush(any(PartnerEntity.class))).thenAnswer(inv -> {
+            PartnerEntity saved = inv.getArgument(0);
+            if (saved.getSupersededAt() == null) {
+                afterSave.set(saved);
+                when(repository.findCurrentByPartnerCode(saved.getPartnerCode()))
+                        .thenReturn(Optional.of(saved));
+            }
+            return saved;
+        });
+
+        store.save(Partner.of("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP));
+
+        assertEquals("MNT", afterSave.get().getCollectionCcy(),
+                "a four-field save must carry the real split forward, not erase it");
+        assertEquals("USD", afterSave.get().getSettleACcy());
+    }
+
+    @Test
+    void updateCurrencySplitUnknownPartnerThrows404() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> store.updateCurrencySplit("NOPE", "MNT", "USD"));
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
+    }
+
+    @Test
+    void updateCurrencySplitBlockedAfterActivation() {
+        // A live partner (go_live_at stamped) — the split is identity-critical (ADR-011)
+        // and frozen, so the write is rejected (409) before any row is touched.
+        PartnerEntity live = new PartnerEntity("LIVECO", PartnerType.OVERSEAS, "USD", RoundingMode.HALF_UP);
+        live.setId(9L);
+        live.setGoLiveAt(Instant.parse("2026-01-01T00:00:00Z"));
+        when(repository.findCurrentByPartnerCode("LIVECO")).thenReturn(Optional.of(live));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> store.updateCurrencySplit("LIVECO", "MNT", "USD"));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatusCode());
     }
 }

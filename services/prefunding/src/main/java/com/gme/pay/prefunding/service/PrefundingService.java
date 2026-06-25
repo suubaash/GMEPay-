@@ -29,6 +29,9 @@ public class PrefundingService {
 
     static final String ENTRY_DEBIT = "DEBIT";
     static final String ENTRY_CREDIT = "CREDIT";
+    static final String ENTRY_RESERVE = "RESERVE";
+    static final String ENTRY_CAPTURE = "CAPTURE";
+    static final String ENTRY_RELEASE = "RELEASE";
 
     private final PartnerBalanceRepository balances;
     private final LedgerEntryRepository ledger;
@@ -135,6 +138,123 @@ public class PrefundingService {
 
     private static PrefundingAccount toDomain(PartnerBalanceEntity row) {
         return new PrefundingAccount(row.getPartnerId(), row.getCurrency(),
-                row.getBalance(), row.getLowBalanceThreshold());
+                row.getBalance(), row.getReserved(), row.getCreditLimit(),
+                row.getLowBalanceThreshold());
     }
+
+    // ---- reservation ledger (two-phase authorize/confirm, SETTLEMENT_FLOW_SPEC §7.1) ----
+
+    /**
+     * Place a hold for {@code amount} against the partner's available funds (authorize phase).
+     * available = balance + credit_limit - reserved. Throws INSUFFICIENT_PREFUNDING if it would
+     * exceed available. Idempotent by {@code txnRef}: a repeat reserve for a txnRef that still has an
+     * active hold is a no-op that reports the existing reservation.
+     */
+    @Transactional
+    public ReserveResult reserve(String partnerId, String txnRef, BigDecimal amount) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        BigDecimal active = activeReservation(partnerId, txnRef);
+        if (active.signum() > 0) {
+            // already reserved for this txnRef — idempotent no-op
+            PrefundingAccount existing = toDomain(row);
+            return new ReserveResult(active, existing.available(), row.getBalance());
+        }
+        PrefundingAccount account = toDomain(row);
+        account.reserve(amount); // throws INSUFFICIENT_PREFUNDING if available < amount
+        Instant now = Instant.now();
+        row.setReserved(account.reserved());
+        row.setUpdatedAt(now);
+        balances.save(row);
+        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RESERVE, amount,
+                row.getCurrency(), now));
+        return new ReserveResult(amount, account.available(), row.getBalance());
+    }
+
+    /**
+     * Convert the active hold for {@code txnRef} into a real debit (confirm phase): reduce balance
+     * and reserved by the held amount, append a CAPTURE entry. Idempotent: if there is no active hold
+     * (already captured or released) it is a no-op reporting zero captured.
+     */
+    @Transactional
+    public CaptureResult capture(String partnerId, String txnRef) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        BigDecimal amount = activeReservation(partnerId, txnRef);
+        if (amount.signum() == 0) {
+            return new CaptureResult(BigDecimal.ZERO, row.getBalance());
+        }
+        BigDecimal previousBalance = row.getBalance();
+        PrefundingAccount account = toDomain(row);
+        account.capture(amount);
+        Instant now = Instant.now();
+        row.setBalance(account.balance());
+        row.setReserved(account.reserved());
+        row.setUpdatedAt(now);
+        PartnerBalanceEntity saved = balances.save(row);
+        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CAPTURE, amount,
+                row.getCurrency(), now));
+        tierAlerts.afterBalanceChange(saved, previousBalance);
+        return new CaptureResult(amount, account.balance());
+    }
+
+    /**
+     * Release the active hold for {@code txnRef} without debiting (expiry / decline). Idempotent:
+     * no active hold ⇒ no-op reporting zero released.
+     */
+    @Transactional
+    public ReleaseResult release(String partnerId, String txnRef) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        BigDecimal amount = activeReservation(partnerId, txnRef);
+        if (amount.signum() == 0) {
+            return new ReleaseResult(BigDecimal.ZERO, row.getBalance());
+        }
+        PrefundingAccount account = toDomain(row);
+        account.release(amount);
+        Instant now = Instant.now();
+        row.setReserved(account.reserved());
+        row.setUpdatedAt(now);
+        balances.save(row);
+        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RELEASE, amount,
+                row.getCurrency(), now));
+        return new ReleaseResult(amount, row.getBalance());
+    }
+
+    /**
+     * Sets the partner's credit headroom — the per-partner {@code credit_limit_usd} configured in
+     * config-registry, pushed here so the authorize gate can compute available = balance +
+     * credit_limit - reserved without a hot-path cross-service call. Returns the new available.
+     */
+    @Transactional
+    public CreditLimitResult setCreditLimit(String partnerId, BigDecimal creditLimit) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        row.setCreditLimit(creditLimit == null ? BigDecimal.ZERO : creditLimit);
+        row.setUpdatedAt(Instant.now());
+        balances.save(row);
+        PrefundingAccount account = toDomain(row);
+        return new CreditLimitResult(row.getCreditLimit(), account.available(), row.getBalance());
+    }
+
+    /** Outcome of setting the credit limit: the new limit, available funds, and balance. */
+    public record CreditLimitResult(BigDecimal creditLimit, BigDecimal available, BigDecimal balance) {}
+
+    /** Net active hold for a (partner, txnRef) = sum RESERVE - sum CAPTURE - sum RELEASE. */
+    private BigDecimal activeReservation(String partnerId, String txnRef) {
+        BigDecimal net = BigDecimal.ZERO;
+        for (LedgerEntryEntity e : ledger.findByPartnerIdAndTxnRef(partnerId, txnRef)) {
+            switch (e.getEntryType()) {
+                case ENTRY_RESERVE -> net = net.add(e.getAmount());
+                case ENTRY_CAPTURE, ENTRY_RELEASE -> net = net.subtract(e.getAmount());
+                default -> { /* DEBIT/CREDIT are not reservations */ }
+            }
+        }
+        return net;
+    }
+
+    /** Outcome of a reserve: the amount held, the resulting available funds, and the balance. */
+    public record ReserveResult(BigDecimal reservedAmount, BigDecimal available, BigDecimal balance) {}
+
+    /** Outcome of a capture: the amount captured (debited) and the balance after. */
+    public record CaptureResult(BigDecimal capturedAmount, BigDecimal balanceAfter) {}
+
+    /** Outcome of a release: the amount released and the (unchanged) balance. */
+    public record ReleaseResult(BigDecimal releasedAmount, BigDecimal balance) {}
 }
