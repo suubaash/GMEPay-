@@ -108,6 +108,13 @@ public class GatewayRoutingConfig {
                         .filters(f -> f.rewritePath(REWRITE_REGEX, REWRITE_REPLACEMENT))
                         .uri(rateFxUri))
 
+                // ----- rate-fx quotes : POST /v1/quotes/** (partner-priced issue) + GET retrieve -----
+                .route("rate-fx-quotes", r -> r
+                        .path("/v1/quotes/**")
+                        .and().method(HttpMethod.POST, HttpMethod.GET)
+                        .filters(f -> f.rewritePath(REWRITE_REGEX, REWRITE_REPLACEMENT))
+                        .uri(rateFxUri))
+
                 // ----- prefunding : GET + POST /v1/prefunding/** -----
                 .route("prefunding", r -> r
                         .path("/v1/prefunding/**")

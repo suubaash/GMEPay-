@@ -73,6 +73,7 @@ class GatewayRouteTableTest {
     private static final Set<String> EXPECTED_ROUTE_IDS = Set.of(
             "payment-executor",
             "rate-fx",
+            "rate-fx-quotes",
             "prefunding",
             "smart-router",
             "merchant-qr-data",
