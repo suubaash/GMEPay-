@@ -69,7 +69,9 @@ class PostgresMigrationRoundTripIT {
                 "SELECT version, checksum, success FROM flyway_schema_history "
                         + "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-        assertEquals(2, history.size(), "expected V001 and V002 to be applied");
+        // V001/V002 are the foundational migrations; later slices add more (V003..V006+), so assert
+        // the first two are present in order rather than an exact total (which rots every migration).
+        assertTrue(history.size() >= 2, "expected at least V001 and V002 to be applied");
         assertEquals(1L, Long.parseLong((String) history.get(0).get("version")));
         assertEquals(2L, Long.parseLong((String) history.get(1).get("version")));
         for (Map<String, Object> row : history) {

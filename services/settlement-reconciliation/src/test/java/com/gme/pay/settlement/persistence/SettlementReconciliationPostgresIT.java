@@ -90,9 +90,11 @@ class SettlementReconciliationPostgresIT {
                 "SELECT version, checksum, success FROM flyway_schema_history "
                         + "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-        assertThat(history).hasSize(3);
+        // V001..V003 are foundational; later slices add more, so assert the first three are present
+        // in order rather than an exact total (which rots every time a migration is added).
+        assertThat(history).hasSizeGreaterThanOrEqualTo(3);
         assertThat(history).extracting(row -> row.get("version"))
-                .containsExactly("001", "002", "003");
+                .startsWith("001", "002", "003");
         assertThat(history).allSatisfy(row -> {
             assertThat((Boolean) row.get("success")).isTrue();
             assertThat(row.get("checksum")).isNotNull();

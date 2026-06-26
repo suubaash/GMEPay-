@@ -108,7 +108,9 @@ class JournalPersistencePostgresIT {
         List<Map<String, Object>> applied = jdbcTemplate.queryForList(
                 "SELECT version, checksum, success FROM flyway_schema_history "
                         + "WHERE version IS NOT NULL ORDER BY installed_rank");
-        assertEquals(3, applied.size(), "expected exactly V001, V002 and V003");
+        // V001..V003 are foundational; later slices add more, so assert the first three are present
+        // in order rather than an exact total (which rots every time a migration is added).
+        assertTrue(applied.size() >= 3, "expected at least V001, V002 and V003");
         assertEquals("001", applied.get(0).get("version"));
         assertEquals("002", applied.get(1).get("version"));
         assertEquals("003", applied.get(2).get("version"));
