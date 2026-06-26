@@ -1,2 +1,3 @@
 com.gme.pay.trace.TraceAutoConfiguration
 com.gme.pay.rbac.RbacAutoConfiguration
+com.gme.pay.internalauth.InternalAuthAutoConfiguration

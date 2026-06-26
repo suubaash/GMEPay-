@@ -291,6 +291,9 @@ services:
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
+      # Shared internal-auth token (#90) config-registry presents to auth-identity's internal-only
+      # /internal/auth/keys (API-key issuance) — matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET.
+      GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
     depends_on:
       postgres-config: { condition: service_healthy }
     healthcheck: *tcp-health
@@ -378,6 +381,13 @@ services:
       # X-Gme-* only with a valid gateway signature. Secret MUST match api-gateway's stamp secret.
       GMEPAY_RBAC_ENABLED: "true"
       GMEPAY_RBAC_VERIFY_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
+      # Service-to-service internal-auth gate (#90). auth-identity's /v1/rbac/** (incl. the unannotated
+      # /resolve), /v1/approvals/** (unannotated approve/reject that trust raw X-Gme-* headers), and
+      # /internal/** (API-key issuance + HMAC verify) are internal-only and reached off-gateway, so they
+      # must require the shared X-Gme-Internal token the gateway resolver + ops BFF + config-registry
+      # hold. Distinct from the RBAC stamp/verify secret above.
+      GMEPAY_INTERNAL_AUTH_ENABLED: "true"
+      GMEPAY_INTERNAL_AUTH_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
     depends_on:
       postgres-authid: { condition: service_healthy }
       config-registry: { condition: service_healthy }
@@ -573,6 +583,9 @@ services:
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      # Shared internal-auth token (#90) the BFF presents to auth-identity's internal-only
+      # /v1/rbac/** + /v1/approvals/** (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
+      GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
     depends_on:
       config-registry: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
@@ -600,6 +613,9 @@ services:
       # default is a clearly non-prod marker — replace with a Vault-backed secret before LIVE.
       GMEPAY_RBAC_STAMP_ENABLED: "true"
       GMEPAY_RBAC_STAMP_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
+      # Shared internal-auth token (#90) the RBAC claim resolver presents to auth-identity's
+      # internal-only /v1/rbac/resolve (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
+      GMEPAY_INTERNAL_AUTH_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
       # Route targets read by GatewayRoutingConfig (gmepay.<svc>.base-url).
       GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080

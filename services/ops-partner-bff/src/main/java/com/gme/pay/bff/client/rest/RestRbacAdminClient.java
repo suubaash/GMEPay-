@@ -38,8 +38,23 @@ public class RestRbacAdminClient implements RbacAdminClient {
     @Autowired
     public RestRbacAdminClient(
             RestClient.Builder builder,
-            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl) {
-        this(builder.baseUrl(baseUrl).build());
+            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl,
+            @Value("${gmepay.auth-identity.internal-secret:}") String internalSecret) {
+        this(buildClient(builder, baseUrl, internalSecret));
+    }
+
+    /**
+     * auth-identity's {@code /v1/rbac/**} is an internal-only surface; when it enforces the
+     * service-to-service internal-auth gate (#90), the ops BFF is a trusted caller and must present
+     * the shared {@code X-Gme-Internal} token on every call. Blank secret = local dev (gate off).
+     */
+    private static RestClient buildClient(RestClient.Builder builder, String baseUrl, String internalSecret) {
+        builder.baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            builder.defaultHeader(
+                    com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        }
+        return builder.build();
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

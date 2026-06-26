@@ -1,5 +1,6 @@
 package com.gme.pay.gateway.filter;
 
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -34,8 +35,17 @@ public class WebClientRbacClaimResolver implements RbacClaimResolver {
 
     public WebClientRbacClaimResolver(
             WebClient.Builder builder,
-            @Value("${gme.auth-identity.base-url:http://auth-identity:8080}") String baseUrl) {
-        this.client = builder.baseUrl(baseUrl).build();
+            @Value("${gme.auth-identity.base-url:http://auth-identity:8080}") String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        // /v1/rbac/resolve is an internal-only endpoint on auth-identity (it is never reached through
+        // this gateway's strip/stamp filter and is called BEFORE claims are stamped, so it cannot carry
+        // a signed X-Gme-* bundle). When auth-identity enforces the service-to-service internal-auth gate
+        // (#90), the gateway is a trusted caller and presents the shared secret; blank = local dev (off).
+        WebClient.Builder b = builder.baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        }
+        this.client = b.build();
     }
 
     @Override

@@ -26,8 +26,17 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Approval-workflow API. The approver's identity + effective permissions are read from the
- * edge-stamped {@link RbacHeaders} (the platform's gateway-authenticates / services-trust model) —
- * never from the request body, so an approver cannot self-assert their authority.
+ * {@link RbacHeaders} (never from the request body, so an approver cannot self-assert their authority
+ * in the payload).
+ *
+ * <p><b>Perimeter (#90).</b> auth-identity is NOT fronted by the api-gateway (the ops BFF calls these
+ * routes server-to-server), so nothing strips/signs these headers at an edge. The gate that stops a
+ * direct network attacker from forging {@code X-Gme-Permissions: approval.approve} is the
+ * service-to-service internal-auth filter ({@code gmepay.internal-auth}): only the ops BFF / gateway
+ * hold the shared {@code X-Gme-Internal} token. The forwarded approver permissions are therefore only
+ * as trustworthy as the BFF's own (upstream) operator-authority enforcement — which is still being
+ * wired (gated on the operator-auth story); until then this gate ensures only trusted internal callers
+ * reach the endpoint, not that the named approver truly holds the permission.
  *
  * <ul>
  *   <li>{@code POST /v1/approvals} — open a request (auto-approved if below the tier threshold)</li>

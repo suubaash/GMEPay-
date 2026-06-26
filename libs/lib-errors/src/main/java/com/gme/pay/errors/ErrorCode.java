@@ -52,6 +52,14 @@ public enum ErrorCode {
     NO_SCHEME_FOR_LOCATION(404, false),
     SCHEME_UNAVAILABLE(503, true),
     IDEMPOTENCY_CONFLICT(409, false),
+    /**
+     * The caller is not authenticated for the requested operation. Currently raised by the
+     * service-to-service internal-auth gate ({@code gmepay.internal-auth}) when a request reaches an
+     * internal-only endpoint (e.g. auth-identity's {@code /v1/rbac/**}, {@code /v1/approvals/**})
+     * without the shared {@code X-Gme-Internal} token only trusted in-cluster callers (the gateway
+     * resolver, the ops BFF) possess. Non-retryable: the caller is not a trusted internal service.
+     */
+    UNAUTHORIZED(401, false),
     INTERNAL_ERROR(500, true);
 
     private final int httpStatus;
