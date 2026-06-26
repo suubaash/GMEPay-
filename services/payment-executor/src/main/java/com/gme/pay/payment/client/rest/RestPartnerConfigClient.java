@@ -127,9 +127,44 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
         }
     }
 
+    @Override
+    public java.util.Optional<PartnerConfigClient.TxnLimits> resolveLimits(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            LimitsResponse body = restClient.get()
+                    .uri("/v1/partners/{id}/limits", partnerCode)
+                    .retrieve()
+                    .body(LimitsResponse.class);
+            if (body == null) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new PartnerConfigClient.TxnLimits(
+                    parseMoney(body.perTxnMinUsd()), parseMoney(body.perTxnMaxUsd()),
+                    parseMoney(body.dailyCapUsd()), parseMoney(body.monthlyCapUsd()),
+                    parseMoney(body.annualCapUsd()), body.licenseType(), body.dailyTxnCountLimit()));
+        } catch (RuntimeException ex) {
+            // Fail-soft: 404 (no limits row) or unreachable → unconstrained (fail-open), per the
+            // null-cap contract. NEVER fails a payment on a config-registry blip.
+            return java.util.Optional.empty();
+        }
+    }
+
+    /** Parse a decimal-string money field; null/blank → null (= cap not configured). */
+    private static java.math.BigDecimal parseMoney(String v) {
+        return (v == null || v.isBlank()) ? null : new java.math.BigDecimal(v);
+    }
+
     /** Wire format for {@code GET /v1/schemes/{id}/merchant-fees/effective}. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     record MerchantFeeEffectiveResponse(String merchantFeePct, boolean resolved) {}
+
+    /** Wire format for {@code GET /v1/partners/{id}/limits} (config-registry LimitsView; money as decimal strings). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record LimitsResponse(
+            String perTxnMinUsd, String perTxnMaxUsd, String dailyCapUsd,
+            String monthlyCapUsd, String annualCapUsd, String licenseType, Integer dailyTxnCountLimit) {}
 
     /** Wire format for {@code GET /v1/commission/effective} (config-registry EffectiveCommissionView). */
     @JsonIgnoreProperties(ignoreUnknown = true)

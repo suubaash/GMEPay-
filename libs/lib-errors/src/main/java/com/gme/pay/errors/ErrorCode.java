@@ -33,6 +33,19 @@ public enum ErrorCode {
      * GME→scheme float declines cleanly. Non-retryable until GME tops up its scheme float.
      */
     SCHEME_BALANCE_INSUFFICIENT(402, false),
+    /**
+     * The transaction breaches a configured per-partner limit (per-transaction min/max, or — once
+     * cumulative tracking lands — a daily/monthly/annual cap). Raised during AUTHORIZE, before any
+     * side effect, so an over-limit remittance is declined cleanly. Non-retryable (the amount must
+     * change). Covers the statutory 소액해외송금업 per-transaction ceiling.
+     */
+    TRANSACTION_LIMIT_EXCEEDED(422, false),
+    /**
+     * The transaction would push the partner's CUMULATIVE volume over a configured rolling cap
+     * (daily / monthly / annual USD — V020). Raised during AUTHORIZE under the per-partner row lock
+     * (race-free), before the irreversible scheme submit. Non-retryable until the period rolls over.
+     */
+    CUMULATIVE_LIMIT_EXCEEDED(422, false),
     PARTNER_B_QUOTE_DEVIATION(422, false),
     PARTNER_B_QUOTE_UNAVAILABLE(503, true),
     MERCHANT_NOT_FOUND(404, false),

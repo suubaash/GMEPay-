@@ -87,7 +87,9 @@ final class CommercialJson {
         sb.append("\"dailyCapUsd\":").append(money(e.getDailyCapUsd())).append(',');
         sb.append("\"monthlyCapUsd\":").append(money(e.getMonthlyCapUsd())).append(',');
         sb.append("\"annualCapUsd\":").append(money(e.getAnnualCapUsd())).append(',');
-        sb.append("\"licenseType\":").append(jsonString(e.getLicenseType()));
+        sb.append("\"licenseType\":").append(jsonString(e.getLicenseType())).append(',');
+        sb.append("\"dailyTxnCountLimit\":")
+                .append(e.getDailyTxnCountLimit() == null ? "null" : e.getDailyTxnCountLimit());
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

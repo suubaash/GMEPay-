@@ -1,9 +1,12 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.PrefundingClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -32,6 +35,8 @@ import java.math.BigDecimal;
 @Component
 @Primary
 public class RestPrefundingClient implements PrefundingClient {
+
+    private static final Logger log = LoggerFactory.getLogger(RestPrefundingClient.class);
 
     private final RestClient restClient;
 
@@ -183,6 +188,51 @@ public class RestPrefundingClient implements PrefundingClient {
         }
     }
 
+    @Override
+    public void chargeCumulative(long partnerId, String txnRef, BigDecimal amountUsd,
+                                 BigDecimal dailyCapUsd, BigDecimal monthlyCapUsd, BigDecimal annualCapUsd,
+                                 Integer dailyTxnCountLimit) {
+        try {
+            restClient.post()
+                    .uri("/v1/prefunding/{partner}/cumulative-charge", partnerId)
+                    .body(new CumulativeChargeRequest(txnRef, amountUsd, dailyCapUsd, monthlyCapUsd,
+                            annualCapUsd, dailyTxnCountLimit))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException ex) {
+            String body = ex.getResponseBodyAsString();
+            if (body != null && body.contains("CUMULATIVE_LIMIT_EXCEEDED")) {
+                throw new CumulativeLimitExceededException(
+                        "partner " + partnerId + " txn " + txnRef + " breaches a cumulative cap: " + body);
+            }
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/cumulative-charge failed: "
+                            + ex.getStatusCode() + " " + body, ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /v1/prefunding/" + partnerId + "/cumulative-charge failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public void reverseCumulative(long partnerId, String txnRef) {
+        try {
+            restClient.post()
+                    .uri("/v1/prefunding/{partner}/cumulative-reverse", partnerId)
+                    .body(new ReverseRequest(txnRef))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RuntimeException ex) {
+            // Best-effort compensation: a failed reverse leaves cap consumed (fail-safe, over-restrictive,
+            // not over-permissive). NEVER mask the original failure that triggered the reverse.
+            log.warn("prefunding cumulative-reverse failed for partner {} txn {}: {}",
+                    partnerId, txnRef, ex.getMessage());
+        }
+    }
+
     private static BigDecimal parseAvailable(RestClientResponseException ex) {
         // best-effort extraction; if absent we fall through to ZERO
         try {
@@ -210,6 +260,10 @@ public class RestPrefundingClient implements PrefundingClient {
     record ReverseRequest(String txnRef) {}
 
     record ReserveRequest(String txnRef, BigDecimal amount) {}
+
+    record CumulativeChargeRequest(String txnRef, BigDecimal amountUsd,
+                                   BigDecimal dailyCapUsd, BigDecimal monthlyCapUsd, BigDecimal annualCapUsd,
+                                   Integer dailyTxnCountLimit) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record DeductResponse(BigDecimal deductedUsd, BigDecimal balanceAfter) {}

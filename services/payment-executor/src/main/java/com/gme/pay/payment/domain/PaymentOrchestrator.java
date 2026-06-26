@@ -131,6 +131,25 @@ public class PaymentOrchestrator {
     }
 
     /**
+     * Resolve the partner's configured transaction limits (per-txn + cumulative caps), or {@code null}
+     * when no {@link PartnerConfigClient} is wired or none are configured/resolvable. Fail-soft: a
+     * config-registry blip yields {@code null} (unconstrained) — never fails a payment. The per-txn cap is
+     * enforced via {@link TransactionLimitPolicy} at Step 1c; the cumulative caps feed the Step-4 charge.
+     */
+    private PartnerConfigClient.TxnLimits resolveLimits(String partnerCode) {
+        return partnerConfigClient == null
+                ? null
+                : partnerConfigClient.resolveLimits(partnerCode).orElse(null);
+    }
+
+    /** True when any cumulative amount cap OR the daily transaction-count velocity cap is configured. */
+    private static boolean hasCumulativeCap(PartnerConfigClient.TxnLimits limits) {
+        return limits != null
+                && (limits.dailyCapUsd() != null || limits.monthlyCapUsd() != null
+                || limits.annualCapUsd() != null || limits.dailyTxnCountLimit() != null);
+    }
+
+    /**
      * Verifies the partner-asserted settlement amount/currency against the locked quote — this is
      * the partner's binding agreement to what we will bill and settle. Exact value match
      * (scale-insensitive {@code compareTo}) plus case-insensitive currency match. The partner must
@@ -201,6 +220,15 @@ public class PaymentOrchestrator {
         RateClient.RateQuoteView quote = rateClient.loadQuote(cmd.quoteId(), cmd.partnerId());
         assertQuoteAgreement(cmd.collectionAmount(), cmd.collectionCurrency(), quote);
 
+        // Step 1c (authorize gate 0 — AML/regulatory): resolve the partner's limits ONCE (keyed by partner
+        // CODE, like commission-split), then enforce the per-transaction USD cap (the statutory 소액해외송금업
+        // ceiling among them) on the USD value of the agreed collection amount, BEFORE any side effect. The
+        // CUMULATIVE daily/monthly/annual cap is charged after the float hold (Step 4) so it rides the
+        // OVERSEAS path + prefunding's atomic per-partner lock.
+        BigDecimal holdUsd = quote.collectionUsd().add(serviceFeeUsd(quote));
+        PartnerConfigClient.TxnLimits limits = resolveLimits(cmd.partnerCode());
+        TransactionLimitPolicy.enforcePerTransaction(cmd.partnerCode(), holdUsd, limits);
+
         // Step 2: resolve merchant.
         QrClient.MerchantView merchant = qrClient.resolve(cmd.merchantQr());
 
@@ -222,7 +250,6 @@ public class PaymentOrchestrator {
         // left the service fee in a ledger void — captured nowhere, yet booked on the
         // settlement leg and posted to revenue. Folding it in makes the float debit
         // reconcile with the agreed collectionAmount and the settlement booking.
-        BigDecimal holdUsd = quote.collectionUsd().add(serviceFeeUsd(quote));
         BigDecimal reservedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
             try {
@@ -234,6 +261,20 @@ public class PaymentOrchestrator {
                 // Compensate the just-created PENDING txn so a failed reserve never orphans it.
                 safeFailTxn(txn.txnRef());
                 throw ex;
+            }
+            // Authorize gate 0b (AML cumulative): now that the hold is placed, charge the partner's
+            // daily/monthly/annual usage (race-free under prefunding's per-partner lock). On breach — or any
+            // error — void the authorization (release the hold + fail the orphan txn) and propagate; the
+            // reverseCumulative inside voidAuthorization is a no-op here since nothing was charged.
+            if (hasCumulativeCap(limits)) {
+                try {
+                    prefundingClient.chargeCumulative(cmd.partnerId(), txn.txnRef(), holdUsd,
+                            limits.dailyCapUsd(), limits.monthlyCapUsd(), limits.annualCapUsd(),
+                            limits.dailyTxnCountLimit());
+                } catch (RuntimeException ex) {
+                    voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
+                    throw ex;
+                }
             }
         }
 
@@ -269,6 +310,8 @@ public class PaymentOrchestrator {
         } catch (SchemeDeclinedException ex) {
             if (ctx.partnerType() == PartnerType.OVERSEAS) {
                 prefundingClient.release(ctx.partnerId(), ctx.txnRef());
+                // Return the cumulative cap the authorize charged — this txn will not complete (no-op if uncharged).
+                prefundingClient.reverseCumulative(ctx.partnerId(), ctx.txnRef());
             }
             transactionClient.commitStatus(ctx.txnRef(),
                     new TransactionClient.StatusPatch(PaymentStatus.FAILED, null, null, null, null));
@@ -360,6 +403,7 @@ public class PaymentOrchestrator {
     public void releaseHold(long partnerId, String txnRef, PartnerType partnerType) {
         if (partnerType == PartnerType.OVERSEAS) {
             prefundingClient.release(partnerId, txnRef);
+            prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap for an abandoned authorize
         }
     }
 
@@ -372,6 +416,7 @@ public class PaymentOrchestrator {
         if (partnerType == PartnerType.OVERSEAS) {
             try {
                 prefundingClient.release(partnerId, txnRef);
+                prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap (no-op if uncharged)
             } catch (RuntimeException ignore) {
                 // best-effort; the reservation sweeper / recon will close it otherwise
             }
@@ -418,6 +463,10 @@ public class PaymentOrchestrator {
      * @return the orchestration result
      */
     public PaymentResult executeCpm(CpmPaymentCommand cmd, PartnerType partnerType) {
+
+        // NOTE: the per-transaction limit gate (see authorizeMpm) is NOT applied here yet — CpmPaymentCommand
+        // carries only the numeric partnerId, and config-registry's limits endpoint keys by partner CODE.
+        // Threading partnerCode into the CPM command (+ controller) is the follow-up that enables it.
 
         // Step 1: Create PENDING transaction record
         TransactionClient.CreateResult txn = transactionClient.createPending(

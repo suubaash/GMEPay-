@@ -96,6 +96,31 @@ public class PrefundingController {
         return new CreditLimitResponse(partnerId, r.creditLimit(), r.available(), r.balance());
     }
 
+    /**
+     * AML cumulative cap (authorize phase): charge {@code amountUsd} toward the partner's daily/monthly/
+     * annual usage, rejecting with 422 CUMULATIVE_LIMIT_EXCEEDED if any non-null cap would be breached.
+     * Race-free (per-partner row lock). Idempotent by txnRef.
+     */
+    @PostMapping("/{partnerId}/cumulative-charge")
+    public CumulativeChargeResponse cumulativeCharge(@PathVariable String partnerId,
+                                                     @RequestBody CumulativeChargeRequest req) {
+        PrefundingService.CumulativeChargeResult r = service.chargeCumulative(
+                partnerId, req.txnRef(), req.amountUsd(), req.dailyCapUsd(), req.monthlyCapUsd(),
+                req.annualCapUsd(), req.dailyTxnCountLimit());
+        return new CumulativeChargeResponse(partnerId, r.dailyUsage(), r.monthlyUsage(), r.annualUsage());
+    }
+
+    /**
+     * Reverse a cumulative charge for {@code txnRef} (void / decline / expiry) so a held-but-not-confirmed
+     * authorize does not permanently consume cap. Idempotent: nothing charged / already reversed ⇒ 0.
+     */
+    @PostMapping("/{partnerId}/cumulative-reverse")
+    public CumulativeReverseResponse cumulativeReverse(@PathVariable String partnerId,
+                                                       @RequestBody ReverseRequest req) {
+        PrefundingService.CumulativeReverseResult r = service.reverseCumulative(partnerId, req.txnRef());
+        return new CumulativeReverseResponse(partnerId, r.reversedAmount());
+    }
+
     public record DeductRequest(String txnRef, BigDecimal amount) { }
 
     public record CreditLimitRequest(BigDecimal creditLimit) { }
@@ -119,4 +144,13 @@ public class PrefundingController {
     public record CaptureResponse(String partnerId, BigDecimal capturedUsd, BigDecimal balance) { }
 
     public record ReleaseResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance) { }
+
+    public record CumulativeChargeRequest(String txnRef, BigDecimal amountUsd,
+                                          BigDecimal dailyCapUsd, BigDecimal monthlyCapUsd,
+                                          BigDecimal annualCapUsd, Integer dailyTxnCountLimit) { }
+
+    public record CumulativeChargeResponse(String partnerId, BigDecimal dailyUsageUsd,
+                                           BigDecimal monthlyUsageUsd, BigDecimal annualUsageUsd) { }
+
+    public record CumulativeReverseResponse(String partnerId, BigDecimal reversedUsd) { }
 }

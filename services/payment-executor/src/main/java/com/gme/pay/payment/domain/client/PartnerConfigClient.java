@@ -70,6 +70,45 @@ public interface PartnerConfigClient {
     }
 
     /**
+     * Resolves a partner's configured transaction limits from config-registry's
+     * {@code GET /v1/partners/{code}/limits} (V020 partner_limits). The authorize path enforces the
+     * per-transaction min/max as a pre-side-effect gate (the statutory 소액해외송금업 ceiling among them).
+     *
+     * <p><b>Fail-soft:</b> returns {@link java.util.Optional#empty()} when no limits row exists (404)
+     * OR config-registry is unreachable — the gate then treats the partner as unconstrained (fail-open),
+     * matching the {@code null cap = not configured} contract. A breach during a config outage is the
+     * documented risk window; a strict fail-closed mode is a follow-up. The default no-ops to empty so
+     * stub/test implementations need not override it.
+     *
+     * @param partnerCode the partner business code
+     */
+    default java.util.Optional<TxnLimits> resolveLimits(String partnerCode) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * A partner's transaction limits in major USD units (V020). Any field {@code null} = that cap is
+     * not configured (unconstrained). Only the per-transaction min/max are enforced today; the rolling
+     * caps are carried for the (stateful) daily/monthly/annual follow-up.
+     */
+    record TxnLimits(
+            java.math.BigDecimal perTxnMinUsd,
+            java.math.BigDecimal perTxnMaxUsd,
+            java.math.BigDecimal dailyCapUsd,
+            java.math.BigDecimal monthlyCapUsd,
+            java.math.BigDecimal annualCapUsd,
+            String licenseType,
+            Integer dailyTxnCountLimit) {
+
+        /** Back-compat ctor (pre-V034 velocity cap) — null daily transaction-count cap. */
+        public TxnLimits(java.math.BigDecimal perTxnMinUsd, java.math.BigDecimal perTxnMaxUsd,
+                         java.math.BigDecimal dailyCapUsd, java.math.BigDecimal monthlyCapUsd,
+                         java.math.BigDecimal annualCapUsd, String licenseType) {
+            this(perTxnMinUsd, perTxnMaxUsd, dailyCapUsd, monthlyCapUsd, annualCapUsd, licenseType, null);
+        }
+    }
+
+    /**
      * Immutable view of a partner's configuration as published by config-registry.
      *
      * <p>{@code settlementRoundingMode} is mapped from the JSON string

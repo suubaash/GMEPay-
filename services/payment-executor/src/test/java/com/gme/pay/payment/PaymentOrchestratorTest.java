@@ -202,6 +202,125 @@ class PaymentOrchestratorTest {
         assertAbsent("SCHEME:SUBMIT", "scheme must never be submitted when the float is short");
     }
 
+    @Test
+    @DisplayName("Authorize gate 0: over the per-transaction limit → rejected before any float reserve or scheme contact")
+    void authorize_overPerTxnLimit_rejectedBeforeSideEffects() {
+        PrefundingClient prefundMustNotReserve = new PrefundingClient() {
+            @Override
+            public DeductionResult deduct(long p, String t, BigDecimal a) {
+                throw new AssertionError("deduct must not be called");
+            }
+            @Override
+            public ReverseResult reverse(long p, String t) {
+                return new ReverseResult(BigDecimal.ZERO, null);
+            }
+            @Override
+            public ReservationResult reserve(long p, String t, BigDecimal a) {
+                throw new AssertionError("float must NOT be reserved for an over-limit transaction");
+            }
+        };
+        SchemeClient schemeMustNotBeTouched = new SchemeClient() {
+            @Override
+            public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new AssertionError("scheme submit must NOT happen for an over-limit transaction");
+            }
+            @Override public void cancelPayment(String s, String r) { }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) { return null; }
+            @Override
+            public BalanceCheckResult checkBalance(String s, BigDecimal a, String c) {
+                throw new AssertionError("scheme balance-check must NOT happen for an over-limit transaction");
+            }
+        };
+        // Partner configured with a $1 per-transaction ceiling — the sample command's USD value is well above.
+        com.gme.pay.payment.domain.client.PartnerConfigClient tinyLimit =
+                new com.gme.pay.payment.domain.client.PartnerConfigClient() {
+            @Override
+            public PartnerConfigView loadPartner(String id) {
+                return new PartnerConfigView(id, "OVERSEAS", "USD", java.math.RoundingMode.HALF_UP);
+            }
+            @Override
+            public java.util.Optional<TxnLimits> resolveLimits(String partnerCode) {
+                return java.util.Optional.of(new TxnLimits(
+                        null, new BigDecimal("1"), null, null, null, "SOAEK_HAEOEMONG"));
+            }
+        };
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, prefundMustNotReserve, fakeQr, schemeMustNotBeTouched, fakeTxn,
+                null, null, tinyLimit);
+
+        // The gate (Step 1c) throws BEFORE Step 4 reserve / Step 5 scheme balance-check — the
+        // AssertionErrors above would fire if either side effect were reached.
+        assertThrows(com.gme.pay.payment.domain.TransactionLimitExceededException.class,
+                () -> orchestrator.authorizeMpm(sampleCommand, PartnerType.OVERSEAS));
+    }
+
+    @Test
+    @DisplayName("Authorize gate 0b: cumulative cap breach (after the hold) → hold released + txn failed; scheme never contacted")
+    void authorize_cumulativeCapBreach_voidsAndStops() {
+        PrefundingClient cumBreachPrefund = new PrefundingClient() {
+            @Override
+            public DeductionResult deduct(long p, String t, BigDecimal a) {
+                throw new AssertionError("deduct must not be called");
+            }
+            @Override
+            public ReverseResult reverse(long p, String t) {
+                return new ReverseResult(BigDecimal.ZERO, null);
+            }
+            @Override
+            public ReservationResult reserve(long p, String t, BigDecimal a) {
+                callLog.add("PREFUND:RESERVE");
+                return new ReservationResult(a, a, a);
+            }
+            @Override
+            public void chargeCumulative(long p, String t, BigDecimal amt,
+                                         BigDecimal d, BigDecimal m, BigDecimal y, Integer cnt) {
+                callLog.add("PREFUND:CHARGE_CUM");
+                throw new com.gme.pay.payment.domain.CumulativeLimitExceededException("daily cap breached");
+            }
+            @Override
+            public ReleaseResult release(long p, String t) {
+                callLog.add("PREFUND:RELEASE");
+                return new ReleaseResult(BigDecimal.ZERO, null);
+            }
+        };
+        SchemeClient schemeMustNotBeTouched = new SchemeClient() {
+            @Override
+            public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new AssertionError("scheme submit must NOT happen on a cumulative breach");
+            }
+            @Override public void cancelPayment(String s, String r) { }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) { return null; }
+            @Override
+            public BalanceCheckResult checkBalance(String s, BigDecimal a, String c) {
+                throw new AssertionError("scheme balance-check must NOT happen on a cumulative breach");
+            }
+        };
+        // Per-txn max null (so Step 1c passes) + a daily cap set (so the Step-4 cumulative charge runs + trips).
+        com.gme.pay.payment.domain.client.PartnerConfigClient dailyCapConfig =
+                new com.gme.pay.payment.domain.client.PartnerConfigClient() {
+            @Override
+            public PartnerConfigView loadPartner(String id) {
+                return new PartnerConfigView(id, "OVERSEAS", "USD", java.math.RoundingMode.HALF_UP);
+            }
+            @Override
+            public java.util.Optional<TxnLimits> resolveLimits(String partnerCode) {
+                return java.util.Optional.of(new TxnLimits(
+                        null, null, new BigDecimal("1000"), null, null, "SOAEK_HAEOEMONG"));
+            }
+        };
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, cumBreachPrefund, fakeQr, schemeMustNotBeTouched, fakeTxn,
+                null, null, dailyCapConfig);
+
+        assertThrows(com.gme.pay.payment.domain.CumulativeLimitExceededException.class,
+                () -> orchestrator.authorizeMpm(sampleCommand, PartnerType.OVERSEAS));
+
+        // Charge ran AFTER the hold; the breach then voided the authorization (released the hold).
+        assertPresent("PREFUND:RESERVE");
+        assertPresent("PREFUND:CHARGE_CUM");
+        assertPresent("PREFUND:RELEASE");
+    }
+
     // ======================================================================
     // Test 5: OVERSEAS cancel records the REAL reversed USD + posts a reversal journal (P1-2)
     // ======================================================================

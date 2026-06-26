@@ -4,12 +4,17 @@ import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.prefunding.PrefundingAccount;
 import com.gme.pay.prefunding.alert.TierAlertEvaluator;
+import com.gme.pay.prefunding.persistence.CumulativeUsageLedgerEntity;
+import com.gme.pay.prefunding.persistence.CumulativeUsageLedgerRepository;
 import com.gme.pay.prefunding.persistence.LedgerEntryEntity;
 import com.gme.pay.prefunding.persistence.LedgerEntryRepository;
 import com.gme.pay.prefunding.persistence.PartnerBalanceEntity;
 import com.gme.pay.prefunding.persistence.PartnerBalanceRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,15 +37,25 @@ public class PrefundingService {
     static final String ENTRY_RESERVE = "RESERVE";
     static final String ENTRY_CAPTURE = "CAPTURE";
     static final String ENTRY_RELEASE = "RELEASE";
+    static final String ENTRY_CUM_CHARGE = "CUM_CHARGE";
+    static final String ENTRY_CUM_REVERSE = "CUM_REVERSE";
+
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+    private static final DateTimeFormatter DAILY_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter MONTHLY_FMT = DateTimeFormatter.ofPattern("yyyy-MM");
+    private static final DateTimeFormatter ANNUAL_FMT = DateTimeFormatter.ofPattern("yyyy");
 
     private final PartnerBalanceRepository balances;
     private final LedgerEntryRepository ledger;
+    private final CumulativeUsageLedgerRepository cumulativeLedger;
     private final TierAlertEvaluator tierAlerts;
 
     public PrefundingService(PartnerBalanceRepository balances, LedgerEntryRepository ledger,
+                             CumulativeUsageLedgerRepository cumulativeLedger,
                              TierAlertEvaluator tierAlerts) {
         this.balances = balances;
         this.ledger = ledger;
+        this.cumulativeLedger = cumulativeLedger;
         this.tierAlerts = tierAlerts;
     }
 
@@ -129,6 +144,106 @@ public class PrefundingService {
 
     /** Outcome of a reverse: the amount credited back and the balance after. */
     public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter) {}
+
+    // ---- cumulative usage caps (AML daily/monthly/annual, V006) ----
+
+    /**
+     * Charge {@code amountUsd} against the partner's CUMULATIVE usage for the current KST day/month/year
+     * (authorize phase), rejecting with {@link ErrorCode#CUMULATIVE_LIMIT_EXCEEDED} if it would breach any
+     * non-null cap. <b>Race-free:</b> the per-partner row lock is taken FIRST (the same lock that serialises
+     * reserve/capture/release), then the period sums are read, compared, and the CUM_CHARGE appended — all
+     * under that exclusive lock, so two concurrent authorizes for one partner cannot both pass. Idempotent by
+     * {@code txnRef}: a repeat for a txnRef that already has a CUM_CHARGE is a no-op reporting current usage.
+     */
+    @Transactional
+    public CumulativeChargeResult chargeCumulative(String partnerId, String txnRef, BigDecimal amountUsd,
+                                                   BigDecimal dailyCap, BigDecimal monthlyCap, BigDecimal annualCap,
+                                                   Integer dailyTxnCountLimit) {
+        lockOrThrow(partnerId);   // serialise with reserve/capture/release + concurrent cumulative charges
+        Instant now = Instant.now();
+        String dKey = DAILY_FMT.format(now.atZone(KST));
+        String mKey = MONTHLY_FMT.format(now.atZone(KST));
+        String yKey = ANNUAL_FMT.format(now.atZone(KST));
+
+        boolean alreadyCharged = cumulativeLedger.findByPartnerIdAndTxnRef(partnerId, txnRef).stream()
+                .anyMatch(e -> ENTRY_CUM_CHARGE.equals(e.getEntryType()));
+        if (alreadyCharged) {
+            return new CumulativeChargeResult(
+                    cumulativeLedger.sumDaily(partnerId, dKey),
+                    cumulativeLedger.sumMonthly(partnerId, mKey),
+                    cumulativeLedger.sumAnnual(partnerId, yKey));
+        }
+
+        BigDecimal amt = amountUsd == null ? BigDecimal.ZERO : amountUsd;
+        BigDecimal daily = cumulativeLedger.sumDaily(partnerId, dKey);
+        BigDecimal monthly = cumulativeLedger.sumMonthly(partnerId, mKey);
+        BigDecimal annual = cumulativeLedger.sumAnnual(partnerId, yKey);
+        breachIfOver(partnerId, "daily", daily, amt, dailyCap);
+        breachIfOver(partnerId, "monthly", monthly, amt, monthlyCap);
+        breachIfOver(partnerId, "annual", annual, amt, annualCap);
+
+        // Velocity (V034 / WBS 13.8): this txn would be the (netDailyCount + 1)-th today.
+        if (dailyTxnCountLimit != null) {
+            long nextCount = cumulativeLedger.netDailyCount(partnerId, dKey) + 1;
+            if (nextCount > dailyTxnCountLimit) {
+                throw new ApiException(ErrorCode.CUMULATIVE_LIMIT_EXCEEDED,
+                        "partner " + partnerId + " daily transaction count " + nextCount
+                                + " would exceed the velocity cap of " + dailyTxnCountLimit);
+            }
+        }
+
+        cumulativeLedger.save(new CumulativeUsageLedgerEntity(
+                partnerId, txnRef, ENTRY_CUM_CHARGE, amt, dKey, mKey, yKey, now));
+        return new CumulativeChargeResult(daily.add(amt), monthly.add(amt), annual.add(amt));
+    }
+
+    /** Back-compat overload (amount caps only, no velocity cap). */
+    @Transactional
+    public CumulativeChargeResult chargeCumulative(String partnerId, String txnRef, BigDecimal amountUsd,
+                                                   BigDecimal dailyCap, BigDecimal monthlyCap, BigDecimal annualCap) {
+        return chargeCumulative(partnerId, txnRef, amountUsd, dailyCap, monthlyCap, annualCap, null);
+    }
+
+    private static void breachIfOver(String partnerId, String period, BigDecimal used,
+                                     BigDecimal amt, BigDecimal cap) {
+        if (cap != null && used.add(amt).compareTo(cap) > 0) {
+            throw new ApiException(ErrorCode.CUMULATIVE_LIMIT_EXCEEDED,
+                    "partner " + partnerId + " " + period + " cumulative usage "
+                            + used.add(amt) + " would exceed cap " + cap + " USD");
+        }
+    }
+
+    /**
+     * Reverse a previously-charged cumulative usage for {@code txnRef} (void / decline / expiry), so a
+     * held-but-never-confirmed authorize does not permanently consume cap. Appends a signed-negative
+     * CUM_REVERSE carrying the charge's ORIGINAL period keys (so it nets into the right period regardless of
+     * when the reverse happens). Idempotent: a repeat, or a txnRef with no charge, is a no-op.
+     */
+    @Transactional
+    public CumulativeReverseResult reverseCumulative(String partnerId, String txnRef) {
+        lockOrThrow(partnerId);
+        List<CumulativeUsageLedgerEntity> entries = cumulativeLedger.findByPartnerIdAndTxnRef(partnerId, txnRef);
+        boolean alreadyReversed = entries.stream().anyMatch(e -> ENTRY_CUM_REVERSE.equals(e.getEntryType()));
+        if (alreadyReversed) {
+            return new CumulativeReverseResult(BigDecimal.ZERO);
+        }
+        CumulativeUsageLedgerEntity charge = entries.stream()
+                .filter(e -> ENTRY_CUM_CHARGE.equals(e.getEntryType()))
+                .findFirst().orElse(null);
+        if (charge == null) {
+            return new CumulativeReverseResult(BigDecimal.ZERO);
+        }
+        cumulativeLedger.save(new CumulativeUsageLedgerEntity(
+                partnerId, txnRef, ENTRY_CUM_REVERSE, charge.getAmountUsd().negate(),
+                charge.getDailyKey(), charge.getMonthlyKey(), charge.getAnnualKey(), Instant.now()));
+        return new CumulativeReverseResult(charge.getAmountUsd());
+    }
+
+    /** Post-charge cumulative usage figures for the txn's KST day/month/year. */
+    public record CumulativeChargeResult(BigDecimal dailyUsage, BigDecimal monthlyUsage, BigDecimal annualUsage) {}
+
+    /** Outcome of a cumulative reverse: the amount returned to the period (0 if nothing / already reversed). */
+    public record CumulativeReverseResult(BigDecimal reversedAmount) {}
 
     private PartnerBalanceEntity lockOrThrow(String partnerId) {
         return balances.lockByPartnerId(partnerId)

@@ -45,5 +45,17 @@ public record LimitsView(
         String licenseType,
         Instant validFrom,
         Instant validTo,
-        Instant recordedAt) {
+        Instant recordedAt,
+        Integer dailyTxnCountLimit) {
+
+    /**
+     * Back-compat ctor (pre-V034, before the daily transaction-count velocity cap) — leaves
+     * {@code dailyTxnCountLimit} null (unconstrained). Lets existing positional callers compile unchanged.
+     */
+    public LimitsView(Long id, BigDecimal perTxnMinUsd, BigDecimal perTxnMaxUsd, BigDecimal dailyCapUsd,
+                      BigDecimal monthlyCapUsd, BigDecimal annualCapUsd, String licenseType,
+                      Instant validFrom, Instant validTo, Instant recordedAt) {
+        this(id, perTxnMinUsd, perTxnMaxUsd, dailyCapUsd, monthlyCapUsd, annualCapUsd, licenseType,
+                validFrom, validTo, recordedAt, null);
+    }
 }
