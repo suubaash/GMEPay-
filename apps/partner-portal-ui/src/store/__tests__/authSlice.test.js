@@ -7,7 +7,12 @@ vi.mock('@/api/client', () => ({
 vi.mock('@/api/auth', () => ({
   getToken: () => null,
   getPartnerId: () => null,
-  logout: vi.fn()
+  logout: vi.fn(),
+  // The slice also imports these (OIDC + logout paths); the mock must export them
+  // or the import resolves to undefined and logoutAction() throws when it calls clearAuth().
+  clearAuth: vi.fn(),
+  storeOidcSession: vi.fn(),
+  EXPIRES_AT_KEY: 'gmepay.partnerTokenExpiresAt'
 }));
 
 import reducer, {
@@ -29,6 +34,7 @@ describe('authSlice', () => {
       partnerId: null,
       token: null,
       role: null,
+      expiresAt: null,
       status: 'idle',
       error: null
     });
