@@ -59,7 +59,7 @@ class SchemePostgresMigrationIT {
         // own migrations to the same chain).
         Integer applied = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where success = true and version in ('22', '24')", Integer.class);
+                        + " where success = true and version in ('022', '024')", Integer.class);
         assertThat(applied)
                 .as("V022 (partner_scheme) and V024 (scheme_operating_hours) must apply on PG16")
                 .isEqualTo(2);

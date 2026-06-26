@@ -79,7 +79,8 @@ class IdentityPersistencePostgresIT {
                 "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank");
         assertThat(history)
                 .extracting(row -> row.get("version"))
-                .containsExactly("001", "002");
+                .as("foundational migrations applied (list grows as later slices add migrations)")
+                .contains("001", "002");
         assertThat(history)
                 .allSatisfy(row -> assertThat(row.get("success")).isEqualTo(true));
     }

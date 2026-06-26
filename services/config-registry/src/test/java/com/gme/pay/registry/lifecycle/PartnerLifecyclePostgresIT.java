@@ -61,7 +61,7 @@ class PartnerLifecyclePostgresIT {
     void v025AppliesOnPostgres16() {
         Integer applied = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '25' and success = true", Integer.class);
+                        + " where version = '025' and success = true", Integer.class);
         assertThat(applied).as("V025__partner_lifecycle must apply on PG16").isEqualTo(1);
     }
 

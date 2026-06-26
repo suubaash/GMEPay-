@@ -65,7 +65,7 @@ class PartnerWebhookSubscriptionPostgresIT {
     void v030AppliesOnPostgres16_withDefaultsFiring() {
         Integer v030 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '30' and success = true", Integer.class);
+                        + " where version = '030' and success = true", Integer.class);
         assertThat(v030).as("V030__partner_webhook_subscription must apply on PG16")
                 .isEqualTo(1);
 

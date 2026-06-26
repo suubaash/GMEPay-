@@ -67,12 +67,12 @@ class PartnerRegulatoryPostgresIT {
         // syntax error here aborts Flyway (the V004 lesson).
         Integer v029 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '29' and success = true", Integer.class);
+                        + " where version = '029' and success = true", Integer.class);
         assertThat(v029).as("V029__partner_regulatory must apply on PG16").isEqualTo(1);
 
         Integer v029_1 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '29.1' and success = true", Integer.class);
+                        + " where version = '029.1' and success = true", Integer.class);
         assertThat(v029_1).as("V029_1__partner_corridor_str_flag must apply on PG16")
                 .isEqualTo(1);
     }
