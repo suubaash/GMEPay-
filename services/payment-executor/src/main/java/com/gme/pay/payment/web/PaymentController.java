@@ -9,6 +9,7 @@ import com.gme.pay.payment.domain.PaymentOrchestrator.AuthorizeResult;
 import com.gme.pay.payment.domain.PaymentOrchestrator.ConfirmContext;
 import com.gme.pay.payment.domain.PaymentOrchestrator.MpmPaymentCommand;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
+import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.PartnerConfigClient;
@@ -23,10 +24,12 @@ import com.gme.pay.payment.web.dto.CpmGenerateResponse;
 import com.gme.pay.payment.web.dto.RefundPaymentResponse;
 import com.gme.pay.payment.web.dto.MpmPaymentRequest;
 import com.gme.pay.payment.web.dto.MpmPaymentResponse;
+import com.gme.pay.payment.web.dto.PaymentDetailResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -354,6 +357,64 @@ public class PaymentController {
                 result.refundedAt(),
                 result.prefundReturnedUsd()
         ));
+    }
+
+    /**
+     * GET /v1/payments/{id} — retrieve the full payment record for partner status polling
+     * (API-05 §4, backlog 5.2-T16).
+     *
+     * <p>Scoped to the calling partner via {@code X-Partner-Id}: a payment owned by a different
+     * partner (or no such payment) returns HTTP 404 {@code PAYMENT_NOT_FOUND} — never 403 — so
+     * ownership is not leaked. {@code prefund_deducted_usd} is emitted only for OVERSEAS partners;
+     * {@code approved_at}/{@code cancelled_at} stay null until the corresponding transition.
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<PaymentDetailResponse> getPayment(
+            @PathVariable("id") String paymentId,
+            @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId) {
+
+        PaymentAuthorizationEntity e = authorizationRepository
+                .findByPaymentIdAndPartnerId(paymentId, partnerId)
+                .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        return ResponseEntity.ok(toDetailResponse(e));
+    }
+
+    /** Maps the persisted two-phase status to the lowercase API status (API-05 contract). */
+    private static String toApiStatus(String entityStatus) {
+        return switch (entityStatus) {
+            case PaymentAuthorizationEntity.STATUS_CONFIRMED -> "approved";
+            case PaymentAuthorizationEntity.STATUS_FAILED -> "failed";
+            case PaymentAuthorizationEntity.STATUS_UNCERTAIN -> "uncertain";
+            case PaymentAuthorizationEntity.STATUS_RELEASED,
+                 PaymentAuthorizationEntity.STATUS_EXPIRED -> "cancelled";
+            default -> "pending"; // AUTHORIZED / CONFIRMING
+        };
+    }
+
+    private static PaymentDetailResponse toDetailResponse(PaymentAuthorizationEntity e) {
+        boolean overseas = PartnerType.OVERSEAS.name().equalsIgnoreCase(e.getPartnerType());
+        boolean approved = PaymentAuthorizationEntity.STATUS_CONFIRMED.equals(e.getStatus());
+        boolean cancelled = PaymentAuthorizationEntity.STATUS_RELEASED.equals(e.getStatus())
+                || PaymentAuthorizationEntity.STATUS_EXPIRED.equals(e.getStatus());
+        // prefund_deducted_usd is meaningful only once captured (CONFIRMED) for an OVERSEAS partner.
+        BigDecimal prefundDeducted = (overseas && approved) ? e.getReservedUsd() : null;
+        return new PaymentDetailResponse(
+                e.getPaymentId(),
+                toApiStatus(e.getStatus()),
+                e.getPartnerTxnRef(),
+                e.getSchemeId(),
+                e.getDirection(),
+                e.getMerchantId(),
+                e.getMerchantName(),
+                e.getTargetPayout(),
+                e.getPayoutCurrency(),
+                e.getCollectionAmount(),
+                e.getCollectionCurrency(),
+                e.getServiceCharge(),
+                prefundDeducted,
+                e.getCreatedAt(),
+                approved ? e.getConfirmedAt() : null,
+                cancelled ? e.getConfirmedAt() : null);
     }
 
     // ---- partner-type resolution ----

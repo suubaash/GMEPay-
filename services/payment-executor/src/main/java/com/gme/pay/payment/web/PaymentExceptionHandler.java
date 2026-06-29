@@ -4,6 +4,7 @@ import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
+import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
@@ -67,6 +68,17 @@ public class PaymentExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiError.of(ErrorCode.SCHEME_UNAVAILABLE,
                         ex.getMessage(), newRequestId()));
+    }
+
+    /**
+     * GET /v1/payments/{id} miss or cross-partner access (5.2-T16). 404 with a {@code PAYMENT_NOT_FOUND}
+     * string code — lib-errors' {@code ErrorCode} enum has no such constant (frozen), so we use the
+     * {@link ApiError} canonical constructor directly rather than {@code ApiError.of(ErrorCode,...)}.
+     */
+    @ExceptionHandler(PaymentNotFoundException.class)
+    public ResponseEntity<ApiError> handlePaymentNotFound(PaymentNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiError("PAYMENT_NOT_FOUND", ex.getMessage(), false, newRequestId()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
