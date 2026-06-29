@@ -24,6 +24,8 @@ import prefundingConfigReducer from './prefundingConfigSlice';
 import balanceReducer from './balanceSlice';
 import commercialTermsReducer from './commercialTermsSlice';
 import rulesReducer from './rulesSlice';
+import commissionSharesReducer from './commissionSharesSlice';
+import schemeCommissionReducer from './schemeCommissionSlice';
 import partnerSchemesReducer from './partnerSchemesSlice';
 import partnerLifecycleReducer from './partnerLifecycleSlice';
 import lifecycleReducer from './lifecycleSlice';
@@ -89,6 +91,8 @@ export const store = configureStore({
     balance: balanceReducer,
     commercialTerms: commercialTermsReducer,
     rules: rulesReducer,
+    commissionShares: commissionSharesReducer,
+    schemeCommission: schemeCommissionReducer,
     partnerSchemes: partnerSchemesReducer,
     partnerLifecycle: partnerLifecycleReducer,
     lifecycle: lifecycleReducer,

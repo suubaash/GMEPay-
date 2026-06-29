@@ -3,6 +3,7 @@ package com.gme.pay.registry.regulatory;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +47,15 @@ class PartnerRegulatoryPostgresIT {
     @Autowired
     private JdbcTemplate jdbc;
 
+    // @SpringBootTest is non-transactional and these tests write via raw auto-committed jdbc, so rows
+    // persist across methods. Every method keys on the seeded partner (current_partner_key = its id),
+    // which the partial-unique partner_regulatory_config_current permits only once — without cleanup the
+    // second method's setup insert collides. Wipe the table after each so methods are independent.
+    @AfterEach
+    void cleanRegulatory() {
+        jdbc.update("delete from partner_regulatory_config");
+    }
+
     /** The GMEREMIT seed row's surrogate id (PartnerSeeder runs in the full context). */
     private Long seededPartnerId() {
         return jdbc.queryForObject(
@@ -67,12 +77,12 @@ class PartnerRegulatoryPostgresIT {
         // syntax error here aborts Flyway (the V004 lesson).
         Integer v029 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '29' and success = true", Integer.class);
+                        + " where version = '029' and success = true", Integer.class);
         assertThat(v029).as("V029__partner_regulatory must apply on PG16").isEqualTo(1);
 
         Integer v029_1 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '29.1' and success = true", Integer.class);
+                        + " where version = '029.1' and success = true", Integer.class);
         assertThat(v029_1).as("V029_1__partner_corridor_str_flag must apply on PG16")
                 .isEqualTo(1);
     }

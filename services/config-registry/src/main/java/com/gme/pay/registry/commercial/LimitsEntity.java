@@ -58,6 +58,10 @@ public class LimitsEntity {
     @Column(name = "license_type", length = 30)
     private String licenseType;
 
+    /** Max transactions per KST day (V034 AML velocity cap); NULL = unconstrained. */
+    @Column(name = "daily_txn_count_limit")
+    private Integer dailyTxnCountLimit;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -100,7 +104,8 @@ public class LimitsEntity {
                 licenseType,
                 validFrom,
                 validTo,
-                recordedAt);
+                recordedAt,
+                dailyTxnCountLimit);
     }
 
     public Long getId() {
@@ -161,6 +166,14 @@ public class LimitsEntity {
 
     public void setLicenseType(String licenseType) {
         this.licenseType = licenseType;
+    }
+
+    public Integer getDailyTxnCountLimit() {
+        return dailyTxnCountLimit;
+    }
+
+    public void setDailyTxnCountLimit(Integer dailyTxnCountLimit) {
+        this.dailyTxnCountLimit = dailyTxnCountLimit;
     }
 
     public Instant getValidFrom() {

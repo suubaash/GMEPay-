@@ -59,7 +59,8 @@ public class RestTransactionClient implements TransactionClient {
                             request.collectionAmount(),
                             request.collectionCurrency(),
                             request.merchantId(),
-                            request.quoteId()))
+                            request.quoteId(),
+                            request.merchantFeeRate()))
                     .retrieve()
                     .body(TransactionCreatedResponse.class);
 
@@ -119,7 +120,8 @@ public class RestTransactionClient implements TransactionClient {
             BigDecimal collectionAmount,
             String collectionCurrency,
             String merchantId,
-            String quoteId
+            String quoteId,
+            BigDecimal merchantFeeRate
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)

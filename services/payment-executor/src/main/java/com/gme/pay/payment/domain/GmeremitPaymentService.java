@@ -124,7 +124,7 @@ public class GmeremitPaymentService {
             if (lenientMerchantValidation) {
                 log.warn("merchant-qr-data unreachable (lenient mode) — proceeding with unknown merchant: {}", ex.getMessage());
                 // Synthesise a placeholder merchant so the payment can proceed
-                merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "KRW", SCHEME_ID, true);
+                merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "KRW", SCHEME_ID, null, true);
             } else {
                 throw ex;
             }
@@ -167,7 +167,8 @@ public class GmeremitPaymentService {
                         new TransactionClient.CreateRequest(
                                 0L, partnerTxnRef, SCHEME_ID, "DOMESTIC", "MPM",
                                 amountKrw, "KRW", amountKrw, "KRW",
-                                merchant.merchantId(), null));
+                                merchant.merchantId(), null,
+                                null));  // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(
@@ -200,6 +201,7 @@ public class GmeremitPaymentService {
                 schemeResp.approvedAt() != null ? schemeResp.approvedAt() : Instant.now());
 
         return WalletResult.approved(
+                txnRef,
                 schemeResp.schemeTxnRef(),
                 merchant.merchantName(),
                 amountKrw,
@@ -240,6 +242,8 @@ public class GmeremitPaymentService {
      */
     public record WalletResult(
             boolean approved,
+            /** transaction-mgmt reference — the handle to GET /v1/transactions/{txnRef} for the full value breakdown. */
+            String txnRef,
             String schemeTxnRef,
             String merchantName,
             BigDecimal payAmountKrw,
@@ -253,13 +257,14 @@ public class GmeremitPaymentService {
             BigDecimal payAmountMnt
     ) {
         /** Factory for domestic KRW→KRW approved results. */
-        public static WalletResult approved(String schemeTxnRef,
+        public static WalletResult approved(String txnRef,
+                                            String schemeTxnRef,
                                             String merchantName,
                                             BigDecimal payAmountKrw,
                                             BigDecimal feeKrw,
                                             BigDecimal chargedKrw,
                                             String committedAt) {
-            return new WalletResult(true, schemeTxnRef, merchantName,
+            return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
                     payAmountKrw, feeKrw, chargedKrw, committedAt, null,
                     null, null, null);
         }
@@ -273,13 +278,13 @@ public class GmeremitPaymentService {
                                               String committedAt,
                                               BigDecimal fxRate,
                                               BigDecimal payAmountMnt) {
-            return new WalletResult(true, schemeTxnRef, merchantName,
+            return new WalletResult(true, null, schemeTxnRef, merchantName,
                     payAmountKrw, feeKrw, chargedKrw, committedAt, null,
                     true, fxRate, payAmountMnt);
         }
 
         public static WalletResult declined(String merchantName, String reason) {
-            return new WalletResult(false, null, merchantName,
+            return new WalletResult(false, null, null, merchantName,
                     null, null, null, null, reason,
                     null, null, null);
         }

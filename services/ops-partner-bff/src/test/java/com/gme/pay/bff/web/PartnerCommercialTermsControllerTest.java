@@ -206,6 +206,31 @@ class PartnerCommercialTermsControllerTest {
     }
 
     @Test
+    @DisplayName("PATCH /step-6-currency-split originates a real split and returns the split-aware view")
+    void patchStep6CurrencySplit_setsRealSplit() throws Exception {
+        createDraft("split_partner_001"); // seeded with settlementCurrency=USD
+
+        mvc.perform(patch("/v1/admin/partners/draft/{code}/step-6-currency-split",
+                        "split_partner_001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"collectionCcy\":\"USD\",\"settleACcy\":\"KRW\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.collectionCcy").value("USD"))
+                .andExpect(jsonPath("$.settleACcy").value("KRW"))
+                // the four-field identity is unchanged
+                .andExpect(jsonPath("$.settlementCurrency").value("USD"));
+    }
+
+    @Test
+    @DisplayName("PATCH /step-6-currency-split on an unknown partner returns 404")
+    void patchStep6CurrencySplit_unknownPartner_404() throws Exception {
+        mvc.perform(patch("/v1/admin/partners/draft/{code}/step-6-currency-split", "split_ghost")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"collectionCcy\":\"USD\",\"settleACcy\":\"KRW\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     @DisplayName("GET single-row sub-resources before any save return 404; fee list is empty")
     void getBeforeSave_emptyListAnd404s() throws Exception {
         createDraft("comm_partner_007");

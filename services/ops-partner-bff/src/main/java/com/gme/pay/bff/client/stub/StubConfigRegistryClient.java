@@ -91,6 +91,12 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     }
 
     @Override
+    public synchronized List<PartnerView> listPartnerViews() {
+        // The stub's canonical partner views live in the draft store (name + lifecycle status).
+        return List.copyOf(draftStore.values());
+    }
+
+    @Override
     public synchronized PartnerSummary createPartner(PartnerCreateRequest request) {
         RoundingMode mode = parseMode(request.settlementRoundingMode());
         PartnerSummary created = new PartnerSummary(
@@ -147,6 +153,42 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                     "no partner '" + partnerCode + "'");
         }
         PartnerView merged = mergeStep1(prior, request);
+        draftStore.put(partnerCode, merged);
+        return merged;
+    }
+
+    @Override
+    public synchronized PartnerView patchDraftStep6CurrencySplit(
+            String partnerCode, PartnerCommand.UpdateStep6CurrencySplit request) {
+        PartnerView prior = draftStore.get(partnerCode);
+        if (prior == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        // Mirror config-registry's updateCurrencySplit: set the split explicitly
+        // (this is the originate path), carry everything else forward unchanged.
+        PartnerView merged = new PartnerView(
+                prior.id(),
+                prior.partnerCode(),
+                prior.type(),
+                prior.settlementCurrency(),
+                prior.settlementRoundingMode(),
+                request.collectionCcy(),
+                request.settleACcy(),
+                prior.legalNameLocal(),
+                prior.legalNameRomanized(),
+                prior.taxId(),
+                prior.taxIdType(),
+                prior.countryOfIncorporation(),
+                prior.legalForm(),
+                prior.registeredAddress(),
+                prior.operatingAddress(),
+                prior.lei(),
+                prior.status(),
+                prior.validFrom(),
+                prior.validTo(),
+                Instant.now());
         draftStore.put(partnerCode, merged);
         return merged;
     }
@@ -659,6 +701,15 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     /** Stand-in for the {@code partner_rule} BIGSERIAL. */
     private final AtomicLong ruleSeq = new AtomicLong(400_000L);
 
+    /** V031 partner-side commission shares — keyed by partner_code (bulk-replace). */
+    private final Map<String, List<com.gme.pay.contracts.PartnerCommissionShareView>>
+            partnerCommissionStore = new LinkedHashMap<>();
+    /** V031 scheme-side commission shares — keyed by scheme code (bulk-replace). */
+    private final Map<String, List<com.gme.pay.contracts.SchemeCommissionShareView>>
+            schemeCommissionStore = new LinkedHashMap<>();
+    /** Stand-in for the commission-share BIGSERIALs. */
+    private final AtomicLong commissionSeq = new AtomicLong(300_000L);
+
     /** Mirrors config-registry's V017 direction CHECK roster. */
     private static final java.util.Set<String> RULE_DIRECTIONS = java.util.Set.of(
             "INBOUND", "OUTBOUND", "BOTH");
@@ -909,6 +960,8 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                     request.fxConfig().referenceRateSource(),
                     request.fxConfig().quoteHoldSeconds() == null
                             ? 300 : request.fxConfig().quoteHoldSeconds(),
+                    request.fxConfig().disclosedPartnerMargin() != null
+                            && request.fxConfig().disclosedPartnerMargin(),  // Step 10
                     priorFx == null ? now : priorFx.validFrom(),
                     null,
                     now);
@@ -2199,5 +2252,53 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
             }
         }
         return java.util.List.copyOf(result);
+    }
+
+    // -------- V031 configurable commission sharing (in-memory bulk-replace) -----
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerCommissionShareView>
+            listPartnerCommissionShares(String partnerCode) {
+        return partnerCommissionStore.getOrDefault(partnerCode, List.of());
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.PartnerCommissionShareView>
+            replacePartnerCommissionShares(
+                    String partnerCode,
+                    List<com.gme.pay.contracts.PartnerCommissionShareCommand> shares) {
+        Instant now = Instant.now();
+        List<com.gme.pay.contracts.PartnerCommissionShareView> fresh = new ArrayList<>();
+        for (com.gme.pay.contracts.PartnerCommissionShareCommand c
+                : (shares == null ? List.<com.gme.pay.contracts.PartnerCommissionShareCommand>of() : shares)) {
+            fresh.add(new com.gme.pay.contracts.PartnerCommissionShareView(
+                    commissionSeq.getAndIncrement(),
+                    c.schemeId(), c.direction(), c.partnerSharePct(), now, null, now));
+        }
+        partnerCommissionStore.put(partnerCode, List.copyOf(fresh));
+        return List.copyOf(fresh);
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.SchemeCommissionShareView>
+            listSchemeCommissionShares(String schemeId) {
+        return schemeCommissionStore.getOrDefault(schemeId, List.of());
+    }
+
+    @Override
+    public synchronized List<com.gme.pay.contracts.SchemeCommissionShareView>
+            replaceSchemeCommissionShares(
+                    String schemeId,
+                    List<com.gme.pay.contracts.SchemeCommissionShareCommand> shares) {
+        Instant now = Instant.now();
+        List<com.gme.pay.contracts.SchemeCommissionShareView> fresh = new ArrayList<>();
+        for (com.gme.pay.contracts.SchemeCommissionShareCommand c
+                : (shares == null ? List.<com.gme.pay.contracts.SchemeCommissionShareCommand>of() : shares)) {
+            fresh.add(new com.gme.pay.contracts.SchemeCommissionShareView(
+                    commissionSeq.getAndIncrement(),
+                    schemeId, c.direction(), c.gmeSharePct(), c.vanFeePct(), now, null, now));
+        }
+        schemeCommissionStore.put(schemeId, List.copyOf(fresh));
+        return List.copyOf(fresh);
     }
 }

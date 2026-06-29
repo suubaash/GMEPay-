@@ -71,7 +71,7 @@ class SendmnPaymentServiceTest {
 
         // Default stubs
         when(qrClient.resolve(anyString())).thenReturn(
-                new QrClient.MerchantView("M001", "MNT Merchant", "MNT", "zeropay", true));
+                new QrClient.MerchantView("M001", "MNT Merchant", "MNT", "zeropay", "RETAIL", true));
 
         when(rateClient.fetchLiveRate("KRW", "MNT")).thenReturn(
                 new RateClient.LiveRate("KRW", "MNT", MID_RATE, Instant.now(), "sim"));
@@ -304,7 +304,7 @@ class SendmnPaymentServiceTest {
         // Build a minimal domestic service (no txn/revenue clients)
         QrClient domesticQr = mock(QrClient.class);
         when(domesticQr.resolve(anyString())).thenReturn(
-                new QrClient.MerchantView("M002", "Coffee Shop", "KRW", "zeropay", true));
+                new QrClient.MerchantView("M002", "Coffee Shop", "KRW", "zeropay", "RETAIL", true));
 
         SchemeClient domesticScheme = mock(SchemeClient.class);
         when(domesticScheme.submitMpm(any())).thenReturn(

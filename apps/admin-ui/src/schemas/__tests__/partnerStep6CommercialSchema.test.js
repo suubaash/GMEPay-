@@ -57,7 +57,12 @@ describe('partnerStep6CommercialSchema', () => {
   it('rejects when scheme is empty', async () => {
     const data = valid();
     data.feeSchedule.scheme = '';
-    await expect(partnerStep6CommercialSchema.validate(data, { abortEarly: false })).rejects.toThrow(/scheme/i);
+    // An empty scheme trips both `.required` and the `.matches` pattern, so with abortEarly:false
+    // yup's top-level message is the "N errors occurred" summary — inspect inner errors instead
+    // (same pattern as the decimal/effective-from cases below).
+    const err = await partnerStep6CommercialSchema.validate(data, { abortEarly: false }).catch((e) => e);
+    const messages = err.inner?.map((e) => e.message) ?? [err.message];
+    expect(messages.some((m) => /scheme/i.test(m))).toBe(true);
   });
 
   it('rejects invalid direction', async () => {

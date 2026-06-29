@@ -36,6 +36,17 @@ public interface ConfigRegistryClient {
     List<PartnerSummary> listPartners();
 
     /**
+     * Lists every known partner as the canonical {@link PartnerView} (carries the partner name +
+     * lifecycle status), as opposed to {@link #listPartners()} which down-maps to the legacy four-field
+     * {@link PartnerSummary}. Maps config-registry's {@code GET /v1/partners}. Used by the compliance
+     * overview, which needs the {@code legalName*} + {@code status} that {@link PartnerSummary} drops.
+     */
+    default List<PartnerView> listPartnerViews() {
+        throw new UnsupportedOperationException(
+                "listPartnerViews is not implemented by " + getClass().getName());
+    }
+
+    /**
      * Creates a new partner from the Admin UI partner form. Production
      * implementation POSTs to {@code /v1/partners}; Phase-1 stub appends to an
      * in-memory map.
@@ -409,6 +420,23 @@ public interface ConfigRegistryClient {
     }
 
     /**
+     * Set the step-6 currency split (collection_ccy + settle_a_ccy) on a draft —
+     * the per-partner GME ↔ partner settlement-currency pair
+     * (SETTLEMENT_FLOW_SPEC §6.1). Routes to
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-6-currency-split};
+     * config-registry performs the SCD-6 paired write (the ONLY path that can
+     * ORIGINATE a real split — the four-field create/step-1 path carries no
+     * split fields) and returns the fresh split-aware {@link PartnerView}.
+     * Upstream 400 (malformed ISO-4217) / 404 (unknown draft) / 409 (split
+     * frozen post-activation) pass through with their messages preserved.
+     */
+    default PartnerView patchDraftStep6CurrencySplit(
+            String partnerCode, PartnerCommand.UpdateStep6CurrencySplit request) {
+        throw new UnsupportedOperationException(
+                "patchDraftStep6CurrencySplit is not implemented by " + getClass().getName());
+    }
+
+    /**
      * The CURRENT fee-schedule set for a partner. Routes to
      * {@code GET /v1/partners/{partnerCode}/fee-schedules}. A partner with no
      * fee rows yields an empty list; an unknown partner surfaces upstream's
@@ -448,6 +476,52 @@ public interface ConfigRegistryClient {
     default com.gme.pay.contracts.ContractView getContract(String partnerCode) {
         throw new UnsupportedOperationException(
                 "getContract is not implemented by " + getClass().getName());
+    }
+
+    // -------- V031 configurable commission sharing (two-sided, no fixed 70/30) ----
+    //
+    // Reads degrade to an empty list (a partner/scheme with no commission rows);
+    // writes throw so a missing override is loud. Both real implementations
+    // (rest + stub) override all four.
+
+    /**
+     * The CURRENT partner-side commission shares (GME↔partner split of GME's
+     * commission). Routes to {@code GET /v1/partners/{partnerCode}/commission-shares}.
+     */
+    default List<com.gme.pay.contracts.PartnerCommissionShareView> listPartnerCommissionShares(
+            String partnerCode) {
+        return List.of();
+    }
+
+    /**
+     * Bulk-replace the partner-side commission shares. Routes to
+     * {@code PUT /v1/partners/{partnerCode}/commission-shares}; upstream 400/404
+     * surface as a {@code ResponseStatusException} from the rest/stub impls.
+     */
+    default List<com.gme.pay.contracts.PartnerCommissionShareView> replacePartnerCommissionShares(
+            String partnerCode, List<com.gme.pay.contracts.PartnerCommissionShareCommand> shares) {
+        throw new UnsupportedOperationException(
+                "replacePartnerCommissionShares is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * The CURRENT scheme-side commission shares (GME↔scheme split of the net
+     * merchant fee). Routes to {@code GET /v1/schemes/{schemeId}/commission-shares}.
+     */
+    default List<com.gme.pay.contracts.SchemeCommissionShareView> listSchemeCommissionShares(
+            String schemeId) {
+        return List.of();
+    }
+
+    /**
+     * Bulk-replace the scheme-side commission shares. Routes to
+     * {@code PUT /v1/schemes/{schemeId}/commission-shares}; upstream 400/404
+     * surface as a {@code ResponseStatusException} from the rest/stub impls.
+     */
+    default List<com.gme.pay.contracts.SchemeCommissionShareView> replaceSchemeCommissionShares(
+            String schemeId, List<com.gme.pay.contracts.SchemeCommissionShareCommand> shares) {
+        throw new UnsupportedOperationException(
+                "replaceSchemeCommissionShares is not implemented by " + getClass().getName());
     }
 
     /**

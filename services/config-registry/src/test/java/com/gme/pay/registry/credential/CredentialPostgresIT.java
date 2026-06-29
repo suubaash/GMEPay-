@@ -53,7 +53,7 @@ class CredentialPostgresIT {
 
     @Test
     void v026Through28_applyOnPostgres16() {
-        for (String version : new String[] {"26", "27", "28"}) {
+        for (String version : new String[] {"026", "027", "028"}) {
             Integer applied = jdbc.queryForObject(
                     "select count(*) from flyway_schema_history"
                             + " where version = ? and success = true",

@@ -79,6 +79,11 @@ public abstract class AbstractZeroPayFileBuilder {
         }
     }
 
+    /** Null-safe BigDecimal: {@code null → ZERO}. KRW projections may arrive null on legacy rows. */
+    protected static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     private static String fieldOverflow(String v, int width) {
         return "field overflow: '" + v + "' exceeds width " + width;
     }

@@ -27,9 +27,16 @@ import org.springframework.web.bind.annotation.RestController;
  * graph, temporal user-role assignments, and constraints. Distinct paths from the read-only
  * resolution API ({@link RbacResolveController}'s {@code /resolve} + {@code /principals/{id}/permissions}).
  *
- * <p>Gated by {@code rbac.manage} ({@link RequiresPermission}). Enforced at the edge (api-gateway
- * stamps claims; these admin routes require {@code rbac.manage}); the annotation is also honoured
- * in-process if a deployment enables {@code gmepay.rbac.enabled} on auth-identity (defence-in-depth).
+ * <p><b>Perimeter (#90).</b> auth-identity is NOT fronted by the api-gateway — these routes are reached
+ * server-to-server by the ops BFF — so the gateway's strip/stamp/sign of {@code X-Gme-*} does not apply
+ * here. The actual gate is the service-to-service internal-auth filter ({@code gmepay.internal-auth}):
+ * a caller must present the shared {@code X-Gme-Internal} token only the gateway resolver and the ops
+ * BFF hold, so a direct network attacker cannot mutate the RBAC catalogue. The {@code rbac.manage}
+ * {@link RequiresPermission} below asserts the OPERATOR's authority and is enforced UPSTREAM (the BFF's
+ * own {@code @RequiresPermission} once operator claims are stamped onto BFF-bound traffic — still wiring,
+ * gated on the operator-auth story); it is dormant in-process here because enabling
+ * {@code gmepay.rbac.enabled} on auth-identity would 403 the BFF's unsigned calls. It also documents the
+ * required authority for the day this surface is moved behind the gateway.
  */
 @RestController
 @RequestMapping("/v1/rbac")

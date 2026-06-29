@@ -78,17 +78,27 @@ public interface TransactionMgmtClient {
             /** UTC instant FX rate was locked. TODO: persist at commit-time. */
             Instant rateTimestamp,
             /** USD deducted from prefunding balance. TODO: populated by prefunding post-deduction. */
-            BigDecimal prefundingDeductedUsd
+            BigDecimal prefundingDeductedUsd,
+            // --- scheme-confirmation + merchant fields (real values from transaction-mgmt) ---
+            /** Scheme transaction reference — proof the QR scheme paid the merchant. Null until APPROVED. */
+            String schemeTxnRef,
+            /** Scheme approval code (authorization id). Null until APPROVED. */
+            String schemeApprovalCode,
+            /** Merchant terminal/store id from the QR scheme. */
+            String merchantId,
+            /** UTC instant the scheme approved the payment. Null until APPROVED. */
+            Instant approvedAt
     ) {
         /**
          * Convenience factory for existing stub/test code that only knows the original 6 fields.
-         * New UC-10 fields default to {@code null}.
+         * New UC-10 + scheme-confirmation fields default to {@code null}.
          */
         public static TransactionSummary of(
                 String txnId, String partnerId, String state,
                 BigDecimal amount, String currency, Instant committedAt) {
             return new TransactionSummary(txnId, partnerId, state, amount, currency, committedAt,
-                    null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null,
+                    null, null, null, null);
         }
     }
 

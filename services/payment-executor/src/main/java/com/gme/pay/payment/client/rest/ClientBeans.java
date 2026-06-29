@@ -62,9 +62,10 @@ public class ClientBeans {
             SchemeClient schemeClient,
             TransactionClient transactionClient,
             SettlementBookingService settlementBookingService,
-            RevenueLedgerClient revenueLedgerClient) {
+            RevenueLedgerClient revenueLedgerClient,
+            com.gme.pay.payment.domain.client.PartnerConfigClient partnerConfigClient) {
         return new PaymentOrchestrator(
                 rateClient, prefundingClient, qrClient, schemeClient, transactionClient,
-                settlementBookingService, revenueLedgerClient);
+                settlementBookingService, revenueLedgerClient, partnerConfigClient);
     }
 }

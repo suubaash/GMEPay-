@@ -248,6 +248,97 @@ public class PartnerStore {
     }
 
     /**
+     * Sets the per-partner currency split — collection_ccy (what GME collects from the
+     * partner's prefund) and settle_a_ccy (the currency GME books the partner-liability
+     * leg in). This is the one path that can WRITE a real split; the four-field
+     * {@link #save} only ever <em>carries a prior real split forward</em> (the domain
+     * Partner record has no split fields), and {@link PartnerEntity#onPersist} only
+     * mirrors settlement_currency into the split when both sides are null. Without this
+     * method settle_a_ccy was effectively read-only — it could be stored by a migration
+     * default but never changed by an operator (SETTLEMENT_FLOW_SPEC §6.1, Step 5).
+     *
+     * <p>SCD-6 supersede-then-insert exactly like {@link #save}: the four-field identity,
+     * business-time interval, and the full lifecycle stamp set are carried forward from
+     * the prior current row; the only content change is the split. Once written as a
+     * "real" split (a side differing from settlement_currency), a subsequent four-field
+     * {@link #save} preserves it via that method's carry-forward.
+     *
+     * <p>Identity-critical after activation (ADR-011): the split is part of the
+     * commercial contract surface and is frozen once {@code go_live_at} is stamped, so an
+     * attempt to change it on a live partner is rejected (409) before any row is touched
+     * — symmetric with {@link com.gme.pay.registry.lifecycle.PartnerImmutabilityGuard}.
+     * Unknown partner ⇒ 404.
+     *
+     * @param partnerCode  the partner whose split is being set
+     * @param collectionCcy currency GME collects from the partner's prefund (3-char ISO)
+     * @param settleACcy   currency GME books the partner-liability leg in (3-char ISO)
+     */
+    @Transactional
+    public Partner updateCurrencySplit(String partnerCode, String collectionCcy, String settleACcy) {
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+
+        PartnerEntity prior = repository.findCurrentByPartnerCode(partnerCode)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "unknown partner: " + partnerCode));
+
+        // ADR-011: the currency split is identity-critical commercial config. Once the
+        // partner is live the split is frozen — reject BEFORE any supersede so a locked
+        // write leaves no half-superseded state (symmetric with the four-field guard).
+        if (prior.getGoLiveAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "currency split is locked after activation for partner " + partnerCode);
+        }
+
+        Partner before = prior.toDomain();
+
+        // Rebuild the fresh row from the prior's four-field identity, then carry forward
+        // the bitemporal interval and the full lifecycle stamp set — identical to save()
+        // so this write changes nothing except the split.
+        PartnerEntity fresh = PartnerEntity.fromDomain(prior.toDomain());
+        fresh.setId(nextPartnerSurrogateId());
+        fresh.setRecordedAt(now);
+        fresh.setValidFrom(prior.getValidFrom());
+        fresh.setValidTo(prior.getValidTo());
+        fresh.setStatus(prior.getStatus());
+        fresh.setGoLiveAt(prior.getGoLiveAt());
+        fresh.setActivatedBy(prior.getActivatedBy());
+        fresh.setSuspensionReason(prior.getSuspensionReason());
+        fresh.setSuspensionNotes(prior.getSuspensionNotes());
+        fresh.setSuspendedAt(prior.getSuspendedAt());
+        fresh.setTerminatedAt(prior.getTerminatedAt());
+        fresh.setTerminationReason(prior.getTerminationReason());
+
+        // The content change: set the split explicitly. Both sides are non-null so
+        // onPersist's null-guard will NOT re-mirror settlement_currency over them.
+        fresh.setCollectionCcy(collectionCcy);
+        fresh.setSettleACcy(settleACcy);
+
+        prior.setSupersededAt(now);
+        repository.saveAndFlush(prior);
+        PartnerEntity saved = repository.saveAndFlush(fresh);
+        cache.evict(cacheKey(partnerCode));
+
+        // ADR-007 audit row, same transaction as the write. canonicalPartner() captures
+        // the four-field identity (the split is not yet part of the canonical hash shape;
+        // changing that shape would re-baseline every existing audit chain), so the
+        // distinct PARTNER_CURRENCY_SPLIT_SET action is what marks a split write in the
+        // trail until the canonical form is extended.
+        AuditLogService auditLog = auditLogProvider.getIfAvailable();
+        if (auditLog != null) {
+            auditLog.publish(
+                    "partner",
+                    partnerCode,
+                    currentActorId(),
+                    currentActorIp(),
+                    "PARTNER_CURRENCY_SPLIT_SET",
+                    before == null ? null : canonicalPartner(before),
+                    canonicalPartner(saved.toDomain()));
+        }
+
+        return saved.toDomain();
+    }
+
+    /**
      * Resolve the actor (the operator who proposed/approved the write) from the
      * Slice 1 auth context. Until Slice 1B.4 wires Keycloak into config-registry
      * the only available principal is the BFF service account, so we record the

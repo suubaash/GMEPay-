@@ -50,14 +50,17 @@ public class WebhookPersistenceService {
      * entry point): inserts a {@code PENDING} row in {@code webhook_delivery_log}
      * with {@code attempt = 0} (no dispatch executed yet).
      *
-     * <p>Idempotent for Kafka at-least-once redelivery: if a row for the same
-     * {@code webhookId} + {@code eventType} already exists, nothing is inserted and
-     * {@link Optional#empty()} is returned so the consumer can still ack.
+     * <p>Idempotent for Kafka at-least-once redelivery: if a NON-DLQ row for the same
+     * {@code webhookId} + {@code eventType} already exists (in-flight {@code PENDING} or
+     * successful {@code DELIVERED}), nothing is inserted and {@link Optional#empty()} is
+     * returned so the consumer can still ack. A prior row that was DLQ'd does NOT block —
+     * re-publishing the event re-enqueues a fresh attempt (replay, #92), since a DLQ'd
+     * delivery is terminally failed, not a live duplicate.
      *
      * @param webhookId  logical webhook id (the event's aggregate id)
      * @param eventType  event type (e.g. {@code payment.approved})
      * @param payload    serialized JSON payload as received from the topic
-     * @return the new {@code PENDING} row, or empty if one already existed
+     * @return the new {@code PENDING} row, or empty if a live (non-DLQ) row existed
      */
     @Transactional
     public Optional<WebhookDeliveryEntity> enqueuePendingIfAbsent(String webhookId,
@@ -66,7 +69,8 @@ public class WebhookPersistenceService {
         Objects.requireNonNull(webhookId, "webhookId must not be null");
         Objects.requireNonNull(eventType, "eventType must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
-        if (deliveryRepository.existsByWebhookIdAndEventType(webhookId, eventType)) {
+        if (deliveryRepository.existsByWebhookIdAndEventTypeAndStatusNot(
+                webhookId, eventType, STATUS_DLQ)) {
             return Optional.empty();
         }
         Instant now = Instant.now(clock);

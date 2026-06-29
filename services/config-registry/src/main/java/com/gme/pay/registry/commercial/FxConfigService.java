@@ -97,6 +97,9 @@ public class FxConfigService {
         fresh.setReferenceRateSource(cmd.referenceRateSource());
         fresh.setQuoteHoldSeconds(cmd.quoteHoldSeconds() == null
                 ? DEFAULT_QUOTE_HOLD_SECONDS : cmd.quoteHoldSeconds());
+        // Step 10: optional transparency flag — null defaults to false (not disclosed).
+        fresh.setDisclosedPartnerMargin(
+                cmd.disclosedPartnerMargin() != null && cmd.disclosedPartnerMargin());
 
         FxConfigEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor,

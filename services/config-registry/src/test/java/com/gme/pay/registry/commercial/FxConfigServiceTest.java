@@ -131,6 +131,24 @@ class FxConfigServiceTest {
     }
 
     @Test
+    void disclosedPartnerMargin_defaultsFalse_andRoundTrips() {
+        seedPartner("FX_DISCLOSE");
+
+        // 3-arg back-compat command → disclosedPartnerMargin defaults to false (Step 10 Expand).
+        FxConfigView dflt = service.upsertFxConfig("FX_DISCLOSE",
+                new FxConfigCommand(null, "MID_MARKET", null), "maker_kim");
+        assertThat(dflt.disclosedPartnerMargin()).isFalse();
+
+        // Explicitly disclosed via the 4-arg command.
+        FxConfigView disclosed = service.upsertFxConfig("FX_DISCLOSE",
+                new FxConfigCommand(new BigDecimal("85"), "MID_MARKET", 300, true), "maker_kim");
+        assertThat(disclosed.disclosedPartnerMargin()).isTrue();
+
+        // Rehydrate (read path) carries the flag.
+        assertThat(service.currentFxConfig("FX_DISCLOSE").disclosedPartnerMargin()).isTrue();
+    }
+
+    @Test
     void quoteHoldBounds_60and1800Accepted() {
         seedPartner("FX_BOUNDS");
         assertThat(service.upsertFxConfig("FX_BOUNDS",

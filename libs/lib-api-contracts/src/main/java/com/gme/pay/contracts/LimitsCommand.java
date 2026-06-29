@@ -31,5 +31,15 @@ public record LimitsCommand(
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal dailyCapUsd,
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal monthlyCapUsd,
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal annualCapUsd,
-        String licenseType) {
+        String licenseType,
+        Integer dailyTxnCountLimit) {
+
+    /**
+     * Back-compat ctor (pre-V034, before the daily transaction-count velocity cap) — leaves
+     * {@code dailyTxnCountLimit} null (unconstrained). Lets existing positional callers compile unchanged.
+     */
+    public LimitsCommand(BigDecimal perTxnMinUsd, BigDecimal perTxnMaxUsd, BigDecimal dailyCapUsd,
+                         BigDecimal monthlyCapUsd, BigDecimal annualCapUsd, String licenseType) {
+        this(perTxnMinUsd, perTxnMaxUsd, dailyCapUsd, monthlyCapUsd, annualCapUsd, licenseType, null);
+    }
 }

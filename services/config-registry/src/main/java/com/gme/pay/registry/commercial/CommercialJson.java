@@ -70,7 +70,9 @@ final class CommercialJson {
         sb.append("\"referenceRateSource\":")
                 .append(jsonString(e.getReferenceRateSource())).append(',');
         sb.append("\"quoteHoldSeconds\":")
-                .append(e.getQuoteHoldSeconds() == null ? "null" : e.getQuoteHoldSeconds());
+                .append(e.getQuoteHoldSeconds() == null ? "null" : e.getQuoteHoldSeconds()).append(',');
+        sb.append("\"disclosedPartnerMargin\":")
+                .append(Boolean.TRUE.equals(e.getDisclosedPartnerMargin()));
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
@@ -85,7 +87,9 @@ final class CommercialJson {
         sb.append("\"dailyCapUsd\":").append(money(e.getDailyCapUsd())).append(',');
         sb.append("\"monthlyCapUsd\":").append(money(e.getMonthlyCapUsd())).append(',');
         sb.append("\"annualCapUsd\":").append(money(e.getAnnualCapUsd())).append(',');
-        sb.append("\"licenseType\":").append(jsonString(e.getLicenseType()));
+        sb.append("\"licenseType\":").append(jsonString(e.getLicenseType())).append(',');
+        sb.append("\"dailyTxnCountLimit\":")
+                .append(e.getDailyTxnCountLimit() == null ? "null" : e.getDailyTxnCountLimit());
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

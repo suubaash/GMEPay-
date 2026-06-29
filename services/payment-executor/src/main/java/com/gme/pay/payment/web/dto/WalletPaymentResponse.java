@@ -15,6 +15,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record WalletPaymentResponse(
         /** "APPROVED" or "DECLINED". */
         @JsonProperty("status")          String status,
+        /** transaction-mgmt reference — GET /v1/transactions/{txnRef} returns the full value breakdown. Null when DECLINED. */
+        @JsonProperty("txnRef")          String txnRef,
         /** Scheme transaction reference (ZeroPay TXN-xxx string), null when DECLINED. */
         @JsonProperty("schemeTxnRef")    String schemeTxnRef,
         /** Resolved merchant display name. */

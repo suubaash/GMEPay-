@@ -252,6 +252,40 @@ public record PartnerCommand(
     }
 
     /**
+     * Body for "Save step-6 currency split" on an already-created draft — the
+     * per-partner GME ↔ partner settlement-currency pair (SETTLEMENT_FLOW_SPEC
+     * §6.1). This is the ONLY write path that can set a real split on the
+     * partner root: the four-field {@code CreateDraft}/{@code UpdateStep1} path
+     * carries no split fields, so {@code PartnerStore.save} can only ever
+     * <em>carry a prior split forward</em>, never originate one.
+     *
+     * <ul>
+     *   <li>{@code collectionCcy} — the currency GME collects from the
+     *       partner's prefund float (what the partner agreed to be debited in).
+     *       For an overseas wallet partner this is typically the float currency
+     *       (e.g. {@code "USD"}); a domestic partner may collect in
+     *       {@code "KRW"}.</li>
+     *   <li>{@code settleACcy} — the currency GME books the partner-liability
+     *       leg (the "settle A" amount) in. May differ from
+     *       {@code collectionCcy} when GME quotes the partner in one currency
+     *       but books the liability in another.</li>
+     * </ul>
+     *
+     * <p>Both sides are required ISO-4217 alpha-3 codes. The split is part of
+     * the commercial contract surface and is identity-critical after activation
+     * (ADR-011): config-registry rejects a change once {@code go_live_at} is
+     * stamped (409). 404 when the partner code is unknown.
+     *
+     * <p>Per the wrapper's contract this lands as another nested record without
+     * churning the wrapper's component list or any existing consumer; the
+     * step-6 currency-split endpoint binds this record directly.
+     */
+    public record UpdateStep6CurrencySplit(
+            String collectionCcy,
+            String settleACcy) {
+    }
+
+    /**
      * Body for "Save step-7 scheme enablements" on an already-created draft —
      * Slice 7 (Scheme Enablement, see {@code docs/PARTNER_SETUP_PLAN.md}
      * §"Slice 7"). Same <b>bulk replace</b> contract as {@link UpdateStep2} /

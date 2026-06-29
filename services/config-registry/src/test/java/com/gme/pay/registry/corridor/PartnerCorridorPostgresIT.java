@@ -68,7 +68,7 @@ class PartnerCorridorPostgresIT {
         // successfully — V004 taught us a PG syntax error here aborts Flyway.
         Integer v023 = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
-                        + " where version = '23' and success = true", Integer.class);
+                        + " where version = '023' and success = true", Integer.class);
         assertThat(v023).as("V023__partner_corridor must apply on PG16").isEqualTo(1);
 
         // The generated column is genuinely STORED and computes TRUE on a

@@ -5,6 +5,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Spring Data repository for {@link SettlementBatchEntity}.
@@ -16,4 +17,8 @@ public interface SettlementBatchRepository extends JpaRepository<SettlementBatch
     List<SettlementBatchEntity> findByPartnerIdAndBusinessDate(String partnerId, LocalDate businessDate);
 
     List<SettlementBatchEntity> findByStatus(String status);
+
+    /** Outbound-batch idempotency key (V006 unique index): one batch per file_type + date + window. */
+    Optional<SettlementBatchEntity> findByFileTypeAndBusinessDateAndSettlementWindow(
+            String fileType, LocalDate businessDate, String settlementWindow);
 }

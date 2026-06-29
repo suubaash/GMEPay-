@@ -10,6 +10,7 @@ import com.gme.pay.scheme.zeropay.dto.AdapterHealthResponse;
 import com.gme.pay.scheme.zeropay.dto.CpmSubmitRequestDto;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentRequest;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
@@ -30,9 +32,35 @@ public class ZeroPaySchemeController {
 
     private final SchemeAdapter schemeAdapter;
 
+    /**
+     * SIM stand-in for GME's prepaid balance held WITH the scheme, used by the pre-submit
+     * balance-check until the real 전문 balance inquiry lands with the TCP transport (Step 8).
+     */
+    @Value("${gmepay.scheme.zeropay.sim-prepaid-balance-krw:1000000000}")
+    private long simPrepaidBalanceKrw = 1_000_000_000L;
+
     public ZeroPaySchemeController(SchemeAdapter schemeAdapter) {
         this.schemeAdapter = schemeAdapter;
     }
+
+    /**
+     * Pre-submit balance inquiry (SETTLEMENT_FLOW_SPEC §7.2): does GME hold enough prepaid balance
+     * with the scheme to fund {@code amountKrw}? POST /internal/scheme/zeropay/balance-check.
+     *
+     * <p>SIM: compares against a configurable balance. The real KFTC 전문 balance inquiry replaces
+     * this in Step 8.
+     */
+    @PostMapping("/balance-check")
+    public ResponseEntity<BalanceCheckResponse> balanceCheck(@RequestBody BalanceCheckRequest req) {
+        BigDecimal amount = req.amountKrw() == null ? BigDecimal.ZERO : req.amountKrw();
+        BigDecimal available = BigDecimal.valueOf(simPrepaidBalanceKrw);
+        boolean allowed = amount.compareTo(available) <= 0;
+        return ResponseEntity.ok(new BalanceCheckResponse(allowed, available));
+    }
+
+    public record BalanceCheckRequest(String schemeId, BigDecimal amountKrw, String currency) {}
+
+    public record BalanceCheckResponse(boolean allowed, BigDecimal available) {}
 
     /**
      * Submits a payment to ZeroPay (MPM mode).

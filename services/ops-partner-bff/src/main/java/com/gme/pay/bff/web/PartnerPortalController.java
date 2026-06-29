@@ -228,22 +228,22 @@ public class PartnerPortalController {
      * the same shape as the Admin UI.
      */
     private TransactionDetail buildDetail(TransactionMgmtClient.TransactionSummary summary) {
-        BigDecimal precise = summary.amount();
         ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(summary.partnerId());
         RoundingMode mode = partner == null ? RoundingMode.HALF_UP : partner.settlementRoundingMode();
-        BigDecimal booked = precise.setScale(2, mode);
-        BigDecimal residual = precise.subtract(booked);
-        Instant approvedAt = summary.committedAt() == null
-                ? null
-                : summary.committedAt().minus(2, ChronoUnit.SECONDS);
-        return TransactionDetail.of(
+        // Real values from transaction-mgmt — the scheme ref / approval / merchant id / approvedAt are
+        // the genuine merchant-paid evidence (not "SCH-"/"AP-" placeholders). Settlement booking is
+        // locked at settlement time, so booked amount + residual are null on a freshly approved txn.
+        return new TransactionDetail(
                 summary,
-                "SCH-" + summary.txnId(),
-                "AP-" + summary.txnId(),
-                precise,
-                approvedAt,
-                booked,
+                summary.schemeTxnRef(),
+                summary.schemeApprovalCode(),
+                summary.prefundingDeductedUsd(),
+                summary.approvedAt(),
+                null,
                 mode,
-                residual);
+                null,
+                summary.merchantId(),
+                null,
+                null);
     }
 }

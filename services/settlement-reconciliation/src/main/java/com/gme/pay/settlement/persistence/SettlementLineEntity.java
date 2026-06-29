@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -40,6 +41,36 @@ public class SettlementLineEntity {
     @Column(name = "matched", nullable = false)
     private boolean matched;
 
+    // ----- Outbound booking snapshot (V006) -----
+
+    @Column(name = "booked_settlement_amount", precision = 20, scale = 4)
+    private BigDecimal bookedSettlementAmount;
+
+    @Column(name = "rounding_residual", precision = 20, scale = 8)
+    private BigDecimal roundingResidual;
+
+    @Column(name = "settlement_rounding_mode", length = 16)
+    private String settlementRoundingMode;
+
+    @Column(name = "settlement_type", length = 1)
+    private String settlementType;           // 'N' | 'G'
+
+    // ----- Detail-file snapshot (V008) -----
+    // Captured at request-window write time so the ZP0065/ZP0066 detail run builds rows from the line
+    // alone — the authoritative settled record — without re-fetching (or re-rounding) the live txn.
+
+    @Column(name = "merchant_id", length = 64)
+    private String merchantId;
+
+    @Column(name = "scheme_ref", length = 64)
+    private String schemeRef;
+
+    @Column(name = "approved_at")
+    private Instant approvedAt;              // scheme approval instant (txn_time/date source)
+
+    @Column(name = "merchant_fee_rate", precision = 9, scale = 6)
+    private BigDecimal merchantFeeRate;     // V005 snapshot rate; 0 for GROSS
+
     public SettlementLineEntity() {
         // JPA no-arg constructor
     }
@@ -55,6 +86,30 @@ public class SettlementLineEntity {
         this.currency = currency;
         this.matched = matched;
     }
+
+    public BigDecimal getBookedSettlementAmount() { return bookedSettlementAmount; }
+    public void setBookedSettlementAmount(BigDecimal bookedSettlementAmount) { this.bookedSettlementAmount = bookedSettlementAmount; }
+
+    public BigDecimal getRoundingResidual() { return roundingResidual; }
+    public void setRoundingResidual(BigDecimal roundingResidual) { this.roundingResidual = roundingResidual; }
+
+    public String getSettlementRoundingMode() { return settlementRoundingMode; }
+    public void setSettlementRoundingMode(String settlementRoundingMode) { this.settlementRoundingMode = settlementRoundingMode; }
+
+    public String getSettlementType() { return settlementType; }
+    public void setSettlementType(String settlementType) { this.settlementType = settlementType; }
+
+    public String getMerchantId() { return merchantId; }
+    public void setMerchantId(String merchantId) { this.merchantId = merchantId; }
+
+    public String getSchemeRef() { return schemeRef; }
+    public void setSchemeRef(String schemeRef) { this.schemeRef = schemeRef; }
+
+    public Instant getApprovedAt() { return approvedAt; }
+    public void setApprovedAt(Instant approvedAt) { this.approvedAt = approvedAt; }
+
+    public BigDecimal getMerchantFeeRate() { return merchantFeeRate; }
+    public void setMerchantFeeRate(BigDecimal merchantFeeRate) { this.merchantFeeRate = merchantFeeRate; }
 
     public Long getId() {
         return id;

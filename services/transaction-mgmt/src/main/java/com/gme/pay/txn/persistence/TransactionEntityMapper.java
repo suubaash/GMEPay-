@@ -46,6 +46,7 @@ public final class TransactionEntityMapper {
         e.setCollectionAmount(txn.collectionAmount());
         e.setCollectionCurrency(txn.collectionCurrency());
         e.setMerchantId(txn.merchantId());
+        e.setMerchantFeeRate(txn.merchantFeeRate());
         e.setQuoteId(txn.quoteId());
         e.setPaymentId(txn.paymentId());
         e.setSchemeTxnRef(txn.schemeTxnRef());
@@ -61,7 +62,7 @@ public final class TransactionEntityMapper {
         RoundingMode mode = e.getSettlementRoundingMode() == null
                 ? null
                 : RoundingMode.valueOf(e.getSettlementRoundingMode());
-        return new Transaction(
+        Transaction txn = new Transaction(
                 e.getTxnRef(),
                 e.getPartnerRef(),
                 e.getSendAmount(),
@@ -91,5 +92,8 @@ public final class TransactionEntityMapper {
                 e.getPrefundDeductedUsd(),
                 e.getApprovedAt(),
                 e.getFailureReason());
+        // V005: snapshot field has no constructor slot — replay it post-construction.
+        txn.applyMerchantFeeRate(e.getMerchantFeeRate());
+        return txn;
     }
 }

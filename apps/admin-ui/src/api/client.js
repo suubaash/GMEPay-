@@ -484,6 +484,29 @@ export const adminApi = {
       { method: 'PATCH', body: JSON.stringify(body ?? {}) },
     ),
 
+  /**
+   * PATCH /v1/admin/partners/draft/{partnerCode}/step-6-currency-split
+   * body: { collectionCcy, settleACcy }
+   * -> PartnerView (fresh, split-aware) with refreshed bitemporal stamps.
+   *
+   * The per-partner GME ↔ partner settlement-currency split (collection_ccy =
+   * what GME collects from the partner's prefund; settle_a_ccy = the currency
+   * GME books the partner-liability leg in — SETTLEMENT_FLOW_SPEC §6.1). This
+   * is the ONLY write path that originates a real split; the four-field
+   * create/step-1 path carries no split fields. Both are ISO-4217 alpha-3
+   * codes; config-registry validates the shape and returns 409 if the partner
+   * is already live (the split is frozen post-activation), 404 for an unknown
+   * draft, 400 for a malformed code.
+   *
+   * @param {string} partnerCode
+   * @param {{collectionCcy: string, settleACcy: string}} body
+   */
+  patchDraftStep6CurrencySplit: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-currency-split`,
+      { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+    ),
+
   // ---------- Pricing rules (Slice 6A.1 backend) ----------------------------
   /**
    * GET /v1/admin/partners/{partnerCode}/rules
@@ -534,6 +557,55 @@ export const adminApi = {
     request(
       `/v1/admin/partners/draft/${encodeURIComponent(partnerCode)}/step-6-rules`,
       { method: 'PATCH', body: JSON.stringify({ rules: rules ?? [] }) },
+    ),
+
+  // ---------- Commission sharing (V031 — configurable, no fixed 70/30) -------
+  /**
+   * GET /v1/admin/partners/{partnerCode}/commission-shares
+   * -> PartnerCommissionShareView[]
+   *   { id, schemeId|null, direction|null, partnerSharePct (decimal string),
+   *     validFrom, validTo|null, recordedAt }
+   * partnerSharePct is the partner's fraction of GME's commission ([0,1]).
+   * Empty array when none configured; an unknown partner surfaces a 404.
+   */
+  getPartnerCommissionShares: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/commission-shares`,
+    ),
+
+  /**
+   * PUT /v1/admin/partners/{partnerCode}/commission-shares
+   * body: PartnerCommissionShareCommand[] { schemeId|null, direction|null, partnerSharePct }
+   * -> fresh PartnerCommissionShareView[] (bulk replace; empty array clears).
+   * 400 on validation failure (share out of [0,1] / bad direction / dup pair).
+   */
+  savePartnerCommissionShares: (partnerCode, shares) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/commission-shares`,
+      { method: 'PUT', body: JSON.stringify(shares ?? []) },
+    ),
+
+  /**
+   * GET /v1/admin/schemes/{schemeId}/commission-shares
+   * -> SchemeCommissionShareView[]
+   *   { id, schemeId, direction|null, gmeSharePct, vanFeePct (decimal strings),
+   *     validFrom, validTo|null, recordedAt }
+   * gmeSharePct is GME's fraction of the net merchant fee ((0,1]); the scheme
+   * keeps the remainder. Empty array when none; unknown scheme -> 404.
+   */
+  getSchemeCommissionShares: (schemeId) =>
+    request(`/v1/admin/schemes/${encodeURIComponent(schemeId)}/commission-shares`),
+
+  /**
+   * PUT /v1/admin/schemes/{schemeId}/commission-shares
+   * body: SchemeCommissionShareCommand[] { direction|null, gmeSharePct, vanFeePct }
+   * -> fresh SchemeCommissionShareView[] (bulk replace; empty array clears).
+   * 400 on validation failure (gmeShare out of (0,1] / van over range / dup dir).
+   */
+  saveSchemeCommissionShares: (schemeId, shares) =>
+    request(
+      `/v1/admin/schemes/${encodeURIComponent(schemeId)}/commission-shares`,
+      { method: 'PUT', body: JSON.stringify(shares ?? []) },
     ),
 
   // ---------- Step-7: Schemes & Corridors (Slice 7) ----------

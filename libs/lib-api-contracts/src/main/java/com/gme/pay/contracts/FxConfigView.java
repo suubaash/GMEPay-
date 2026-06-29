@@ -41,6 +41,7 @@ public record FxConfigView(
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal marginBps,
         String referenceRateSource,
         Integer quoteHoldSeconds,
+        Boolean disclosedPartnerMargin,
         Instant validFrom,
         Instant validTo,
         Instant recordedAt) {

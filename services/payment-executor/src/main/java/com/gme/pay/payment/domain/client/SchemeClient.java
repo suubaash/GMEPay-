@@ -35,6 +35,19 @@ public interface SchemeClient {
      */
     CpmSubmitResponse submitCpm(CpmSubmitRequest request);
 
+    /**
+     * Pre-submit balance inquiry (SETTLEMENT_FLOW_SPEC §7.2): does GME hold enough prepaid balance
+     * (+ any per-scheme credit) WITH the scheme to fund {@code amount}? Called during AUTHORIZE so a
+     * known-short scheme float is declined BEFORE the customer is charged — minimising the
+     * scheme-outage-after-charge case at confirm time.
+     *
+     * <p>Default returns allowed (no gate) so existing hand-written test fakes remain valid;
+     * {@code RestSchemeClient} performs the real inquiry against the scheme adapter.
+     */
+    default BalanceCheckResult checkBalance(String schemeId, BigDecimal amount, String currency) {
+        return new BalanceCheckResult(true, null);
+    }
+
     // ---- request/response value objects ----
 
     record MpmSubmitRequest(
@@ -76,6 +89,9 @@ public interface SchemeClient {
             String schemeTxnRef,
             Instant approvedAt
     ) {}
+
+    /** Result of a pre-submit scheme balance inquiry: whether GME may fund the amount, and the available figure. */
+    record BalanceCheckResult(boolean allowed, BigDecimal available) {}
 }
 
 // Pull exception imports to the right package so they compile with the interface

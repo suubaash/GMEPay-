@@ -29,7 +29,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -331,33 +330,29 @@ public class AdminDashboardController {
     }
 
     /**
-     * Synthesizes a Phase-1 {@link TransactionDetail} from the read-side summary.
-     * The scheme/approval fields are deterministic derivations of the txn id so
-     * the Admin UI drawer can render without booting transaction-mgmt. In
-     * production the BFF will fetch the rich detail from transaction-mgmt's
-     * {@code GET /v1/transactions/{id}} which already carries these fields.
+     * Builds the {@link TransactionDetail} from the read-side summary using the REAL values that
+     * transaction-mgmt's {@code GET /v1/transactions/{id}} now carries — the scheme txn ref, approval
+     * code, merchant id and scheme-approval instant are the genuine evidence the QR scheme paid the
+     * merchant (not the former {@code "SCH-"/"AP-"} placeholders). Settlement booking (booked amount +
+     * residual) is locked at settlement time, not at payment time, so it is left null on a freshly
+     * approved txn rather than derived from the amount; the partner's configured rounding mode is real.
      */
     private TransactionDetail buildDetail(TransactionMgmtClient.TransactionSummary summary) {
-        BigDecimal precise = summary.amount();
         ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(summary.partnerId());
         java.math.RoundingMode mode = partner == null
                 ? java.math.RoundingMode.HALF_UP
                 : partner.settlementRoundingMode();
-        // Phase-1: approximate "booked" by rounding precise to 2dp under the partner's mode;
-        // residual is precise - booked.
-        BigDecimal booked = precise.setScale(2, mode);
-        BigDecimal residual = precise.subtract(booked);
-        Instant approvedAt = summary.committedAt() == null
-                ? null
-                : summary.committedAt().minus(2, ChronoUnit.SECONDS);
-        return TransactionDetail.of(
+        return new TransactionDetail(
                 summary,
-                "SCH-" + summary.txnId(),
-                "AP-" + summary.txnId(),
-                precise, // prefund deducted in USD — approximated as the txn amount for the stub
-                approvedAt,
-                booked,
+                summary.schemeTxnRef(),
+                summary.schemeApprovalCode(),
+                summary.prefundingDeductedUsd(),
+                summary.approvedAt(),
+                null,   // bookedSettlementAmount — locked at settlement time, not payment time
                 mode,
-                residual);
+                null,   // roundingResidual — locked at settlement time
+                summary.merchantId(),
+                null,   // merchantName — not persisted on the txn yet (wallet response carries it)
+                null);  // statusHistory — not yet tracked
     }
 }

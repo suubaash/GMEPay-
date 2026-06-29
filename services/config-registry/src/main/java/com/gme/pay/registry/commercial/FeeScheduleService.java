@@ -14,11 +14,13 @@ import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -173,6 +175,114 @@ public class FeeScheduleService {
         return feeScheduleRepository.findCurrentByPartnerId(partner.getId()).stream()
                 .map(FeeScheduleEntity::toView)
                 .toList();
+    }
+
+    /** bps → fraction divisor: bpsFee is in basis points (1 bps = 0.0001). */
+    private static final BigDecimal BPS_DIVISOR = new BigDecimal("10000");
+
+    /**
+     * Resolve the effective GME→partner service fee (USD) for a
+     * ({@code partnerCode}, {@code schemeId}, {@code direction}, {@code amountUsd}) —
+     * SETTLEMENT_FLOW_SPEC §7.4 ("wire partner_fee_schedule into pricing"). This is
+     * the read-time analogue of {@code MerchantFeeScheduleService.resolveRate}: the
+     * quote-issuer (and an admin "effective fee" preview) call it to turn the stored
+     * fee schedule into a single USD amount.
+     *
+     * <p>Match specificity (most specific wins): an exact {@code schemeId} beats the
+     * {@code scheme = null} wildcard, and an exact {@code direction} beats
+     * {@code BOTH}/{@code null}. A row is a candidate only if BOTH dimensions match
+     * (exact or wildcard); the highest combined specificity wins.
+     *
+     * <p>Fee = {@code fixedFeeUsd + amountUsd × bps / 10000}, where {@code bps} is the
+     * applicable tier's {@code bpsOverride} (the highest band whose
+     * {@code fromVolumeUsd ≤ amountUsd}) or the row's flat {@code bpsFee} when no tier
+     * applies. Lenient like the merchant-fee resolver: unknown partner / no matching
+     * row ⇒ {@link Optional#empty()} (the caller defaults rather than failing).
+     */
+    @Transactional(readOnly = true)
+    public Optional<BigDecimal> resolveServiceFee(String partnerCode, String schemeId,
+                                                  String direction, BigDecimal amountUsd) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return Optional.empty();
+        }
+        Optional<PartnerEntity> partner = partnerRepository.findCurrentByPartnerCode(partnerCode);
+        if (partner.isEmpty()) {
+            return Optional.empty();
+        }
+        FeeScheduleEntity best = bestMatch(
+                feeScheduleRepository.findCurrentByPartnerId(partner.get().getId()),
+                blankToNull(schemeId), blankToNull(direction));
+        if (best == null) {
+            return Optional.empty();
+        }
+        BigDecimal volume = amountUsd == null ? BigDecimal.ZERO : amountUsd;
+        BigDecimal bps = effectiveBps(best, volume);
+        BigDecimal fixed = best.getFixedFeeUsd() == null ? BigDecimal.ZERO : best.getFixedFeeUsd();
+        BigDecimal variable = bps.multiply(volume).divide(BPS_DIVISOR, 4, RoundingMode.HALF_UP);
+        return Optional.of(fixed.add(variable));
+    }
+
+    /**
+     * Pick the most specific fee row for the given scheme/direction, or {@code null}
+     * when none match. Scheme/direction each score 2 (exact), 1 (wildcard: null, plus
+     * {@code BOTH} for direction), or excludes the row (mismatch); the highest
+     * combined score wins (scheme breaks ties).
+     */
+    private static FeeScheduleEntity bestMatch(List<FeeScheduleEntity> rows,
+                                               String schemeId, String direction) {
+        FeeScheduleEntity best = null;
+        int bestScore = -1;
+        int bestSchemeScore = -1;
+        for (FeeScheduleEntity r : rows) {
+            int s = schemeScore(r.getSchemeId(), schemeId);
+            int d = directionScore(r.getDirection(), direction);
+            if (s == 0 || d == 0) {
+                continue; // a dimension mismatched — not a candidate
+            }
+            int total = s + d;
+            if (total > bestScore || (total == bestScore && s > bestSchemeScore)) {
+                best = r;
+                bestScore = total;
+                bestSchemeScore = s;
+            }
+        }
+        return best;
+    }
+
+    /** 2 = exact scheme, 1 = wildcard (row scheme null), 0 = mismatch (exclude). */
+    private static int schemeScore(String rowScheme, String requested) {
+        if (rowScheme == null) {
+            return 1;
+        }
+        return requested != null && rowScheme.equalsIgnoreCase(requested) ? 2 : 0;
+    }
+
+    /** 2 = exact direction, 1 = wildcard (null or BOTH), 0 = mismatch (exclude). */
+    private static int directionScore(String rowDirection, String requested) {
+        if (rowDirection == null || "BOTH".equalsIgnoreCase(rowDirection)) {
+            return 1;
+        }
+        return requested != null && rowDirection.equalsIgnoreCase(requested) ? 2 : 0;
+    }
+
+    /**
+     * The bps that applies at {@code volume}: the highest tier band whose
+     * {@code fromVolumeUsd ≤ volume}, else the row's flat {@code bpsFee}. Tiers are
+     * stored ascending by {@code fromVolumeUsd} (write-side validated).
+     */
+    private static BigDecimal effectiveBps(FeeScheduleEntity row, BigDecimal volume) {
+        BigDecimal flat = row.getBpsFee() == null ? BigDecimal.ZERO : row.getBpsFee();
+        List<FeeTier> tiers = FeeTierTableJson.parse(row.getTierTableJson());
+        if (tiers == null || tiers.isEmpty()) {
+            return flat;
+        }
+        BigDecimal applicable = null;
+        for (FeeTier t : tiers) {
+            if (t.fromVolumeUsd() != null && t.fromVolumeUsd().compareTo(volume) <= 0) {
+                applicable = t.bpsOverride(); // ascending => last match is the highest band ≤ volume
+            }
+        }
+        return applicable != null ? applicable : flat;
     }
 
     // -------------------------- Helpers --------------------------------------

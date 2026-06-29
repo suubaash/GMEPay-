@@ -2,16 +2,21 @@ package com.gme.pay.bff.web;
 
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.web.dto.DraftPartnerStep6CommercialRequest;
+import com.gme.pay.bff.web.dto.DraftPartnerStep6CurrencySplitRequest;
 import com.gme.pay.contracts.CommercialTermsView;
 import com.gme.pay.contracts.ContractView;
 import com.gme.pay.contracts.FeeScheduleView;
 import com.gme.pay.contracts.FxConfigView;
 import com.gme.pay.contracts.LimitsView;
+import com.gme.pay.contracts.PartnerCommissionShareCommand;
+import com.gme.pay.contracts.PartnerCommissionShareView;
+import com.gme.pay.contracts.PartnerView;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -61,6 +66,27 @@ public class PartnerCommercialTermsController {
     }
 
     /**
+     * Set the step-6 currency split (collection_ccy + settle_a_ccy) on a draft —
+     * the per-partner GME ↔ partner settlement-currency pair
+     * (SETTLEMENT_FLOW_SPEC §6.1). Mirrors
+     * {@code PATCH /v1/partners/draft/{partnerCode}/step-6-currency-split} on
+     * config-registry, which performs the SCD-6 paired write (the ONLY path that
+     * ORIGINATES a real split) and returns the fresh split-aware
+     * {@link PartnerView}. Upstream 400 (malformed ISO-4217) / 404 (unknown
+     * draft) / 409 (split frozen post-activation) pass through.
+     */
+    @PatchMapping("/partners/draft/{partnerCode}/step-6-currency-split")
+    public PartnerView patchDraftStep6CurrencySplit(
+            @PathVariable String partnerCode,
+            @RequestBody DraftPartnerStep6CurrencySplitRequest body) {
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.patchDraftStep6CurrencySplit(
+                partnerCode, body.toUpdateStep6CurrencySplit());
+    }
+
+    /**
      * The CURRENT fee-schedule set for {@code partnerCode}. Mirrors
      * {@code GET /v1/partners/{partnerCode}/fee-schedules}. Empty list when
      * the partner has no fee rows yet; 404 only for an unknown code.
@@ -98,5 +124,32 @@ public class PartnerCommercialTermsController {
     @GetMapping("/partners/{partnerCode}/contract")
     public ContractView getContract(@PathVariable String partnerCode) {
         return configRegistry.getContract(partnerCode);
+    }
+
+    /**
+     * The CURRENT partner-side commission shares for {@code partnerCode} — the
+     * configurable GME↔partner split of GME's commission (V031). Mirrors
+     * {@code GET /v1/partners/{partnerCode}/commission-shares}. Empty list when
+     * none configured; 404 only for an unknown code.
+     */
+    @GetMapping("/partners/{partnerCode}/commission-shares")
+    public List<PartnerCommissionShareView> getCommissionShares(@PathVariable String partnerCode) {
+        return configRegistry.listPartnerCommissionShares(partnerCode);
+    }
+
+    /**
+     * Bulk-replace the partner-side commission shares (one row per
+     * {@code (schemeId, direction)}; empty list clears). Mirrors
+     * {@code PUT /v1/partners/{partnerCode}/commission-shares}; upstream 400
+     * (validation) / 404 (unknown partner) pass through with their messages.
+     */
+    @PutMapping("/partners/{partnerCode}/commission-shares")
+    public List<PartnerCommissionShareView> replaceCommissionShares(
+            @PathVariable String partnerCode,
+            @RequestBody List<PartnerCommissionShareCommand> shares) {
+        if (shares == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        return configRegistry.replacePartnerCommissionShares(partnerCode, shares);
     }
 }

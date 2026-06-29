@@ -30,6 +30,21 @@ gme:
     # Base URL of the config-registry service. Production injects this via env var.
     base-url: ${GME_CONFIG_REGISTRY_BASE_URL:http://config-registry:8080}
 
+# Service-to-service internal-auth gate (#90). auth-identity's /v1/rbac/** (resolution + management),
+# /v1/approvals/** (approval decisions), and /internal/** (API-key issuance + HMAC verify) are
+# internal-only — reached server-to-server by the api-gateway claim resolver, the ops BFF, and
+# config-registry, NOT through the gateway's strip/stamp filter — so without a gate any actor with
+# network reach could enumerate/mint RBAC claims, mutate the catalogue, forge an approval, or issue
+# partner API keys. When enabled, a request to those paths must carry the shared X-Gme-Internal token
+# (default path-patterns in InternalAuthProperties cover all three). Disabled by default so
+# local single-service dev / H2 tests are unaffected; docker-compose + production set both env vars
+# (the auto-config fails the service closed if enabled with a blank secret). NOTE: this gate asserts
+# "a trusted internal service is calling" — operator-level authority (rbac.manage) is enforced upstream.
+gmepay:
+  internal-auth:
+    enabled: ${GMEPAY_INTERNAL_AUTH_ENABLED:false}
+    secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
+
 logging:
   level:
     com.gme.pay.auth: INFO

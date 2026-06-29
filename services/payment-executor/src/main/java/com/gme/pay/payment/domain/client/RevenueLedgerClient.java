@@ -53,6 +53,33 @@ public interface RevenueLedgerClient {
     }
 
     /**
+     * Posts one committed transaction's TWO-SIDED commission split to revenue-ledger, which runs
+     * {@code CommissionSplitCalculator} and records it (Step 7 / task #102). Posts to
+     * {@code POST /v1/revenue/commission-split} (idempotent by {@code txnRef}).
+     *
+     * <p>KRW-denominated: only meaningful when the scheme settles the merchant fee in KRW (ZeroPay).
+     * Non-blocking like {@link #postRevenueCapture} — implementations log and continue, never throw.
+     * The default is a no-op so existing fakes/lambdas stay valid; {@code RestRevenueLedgerClient}
+     * overrides it.
+     *
+     * @param txnRef          transaction reference (idempotency key)
+     * @param partnerId       the partner
+     * @param schemeId        numeric scheme id, or {@code 0} when only the scheme code is carried
+     * @param revenueDate     KST business date the revenue was earned
+     * @param payoutAmountKrw the merchant payout in KRW (the base the merchant fee is charged on)
+     * @param merchantFeeRate gross merchant fee rate (fraction, e.g. {@code 0.0080})
+     * @param vanFeeRate      VAN intermediary rate (fraction)
+     * @param gmeSharePct     GME's configured share of the net fee (fraction in (0,1])
+     * @param partnerSharePct partner's configured share of GME's commission (fraction in [0,1])
+     */
+    default void postCommissionSplit(String txnRef, long partnerId, long schemeId, LocalDate revenueDate,
+                                     long payoutAmountKrw, BigDecimal merchantFeeRate,
+                                     BigDecimal vanFeeRate, BigDecimal gmeSharePct,
+                                     BigDecimal partnerSharePct) {
+        // no-op by default
+    }
+
+    /**
      * Posts a structured reversal journal to revenue-ledger when a payment is cancelled/refunded —
      * a balanced DEBIT REVENUE_REVERSAL / CREDIT RECEIVABLE_PARTNER for {@code reversalAmount}, so the
      * cancellation is booked rather than absorbed as a zero rounding residual. Posts to

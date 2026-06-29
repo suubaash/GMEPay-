@@ -42,7 +42,7 @@ class WebhookDispatcherTest {
     private final WebhookTargetResolver resolver = mock(WebhookTargetResolver.class);
 
     private WebhookDispatcher dispatcher() {
-        return new WebhookDispatcher(sender, repo, persistence, resolver, retryPolicy, clock);
+        return new WebhookDispatcher(sender, repo, persistence, resolver, retryPolicy, clock, 200);
     }
 
     private static WebhookDeliveryEntity pendingRow(int attempt, Instant lastAttemptedAt) {
@@ -61,7 +61,7 @@ class WebhookDispatcherTest {
     @Test
     void delivers_andMarksDelivered() {
         WebhookDeliveryEntity row = pendingRow(0, null);
-        when(repo.findByStatus("PENDING")).thenReturn(List.of(row));
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
         when(resolver.resolve(row)).thenReturn(Optional.of(new ResolvedTarget("https://p/wh", "whsec_x")));
         when(sender.sendWithAttempt(eq("evt_1"), eq("payment.approved"), eq("https://p/wh"),
                 any(), eq("whsec_x"), eq(1)))
@@ -76,7 +76,7 @@ class WebhookDispatcherTest {
     @Test
     void failure_marksFailedOrDlq() {
         WebhookDeliveryEntity row = pendingRow(0, null);
-        when(repo.findByStatus("PENDING")).thenReturn(List.of(row));
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
         when(resolver.resolve(row)).thenReturn(Optional.of(new ResolvedTarget("https://p/wh", "whsec_x")));
         when(sender.sendWithAttempt(anyString(), anyString(), anyString(), any(), anyString(), eq(1)))
                 .thenReturn(WebhookDeliveryResult.of(500, "boom", 5));
@@ -88,23 +88,25 @@ class WebhookDispatcherTest {
     }
 
     @Test
-    void unresolvedTarget_leavesPendingWithoutSending() {
+    void unresolvedTarget_advancesAttemptForEventualDlq() {
+        // #92: an unresolved target now counts as a failed attempt (so it DLQs at the
+        // ceiling) rather than retrying forever — but still sends nothing.
         WebhookDeliveryEntity row = pendingRow(0, null);
-        when(repo.findByStatus("PENDING")).thenReturn(List.of(row));
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
         when(resolver.resolve(row)).thenReturn(Optional.empty());
 
         dispatcher().drainPending();
 
         verifyNoInteractions(sender);
         verify(persistence, never()).markDelivered(any(), anyInt());
-        verify(persistence, never()).markAttemptFailedOrDlq(any(), anyInt(), any());
+        verify(persistence).markAttemptFailedOrDlq(eq(row), eq(1), anyString());
     }
 
     @Test
     void backoffWindowNotElapsed_skips() {
         // attempt 2 failed at NOW -> next retry is +30s, so NOW is too early to retry.
         WebhookDeliveryEntity row = pendingRow(2, NOW);
-        when(repo.findByStatus("PENDING")).thenReturn(List.of(row));
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
 
         dispatcher().drainPending();
 

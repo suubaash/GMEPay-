@@ -77,10 +77,14 @@ public class BalanceProvisioningController {
                     "partner '" + partnerCode + "' already has a prefunding balance"
                             + " — use /v1/prefunding/" + partnerCode + "/credit to top up");
         }
-        PartnerBalanceEntity saved = balances.save(new PartnerBalanceEntity(
+        PartnerBalanceEntity entity = new PartnerBalanceEntity(
                 partnerCode, PREFUNDING_CURRENCY,
                 body.openingBalanceUsd(), body.lowBalanceThresholdUsd(),
-                Instant.now().truncatedTo(ChronoUnit.MICROS)));
+                Instant.now().truncatedTo(ChronoUnit.MICROS));
+        // Seed the credit headroom from the provision request (config-registry's credit_limit_usd);
+        // null ⇒ 0 = strict prepaid, hard-decline at zero.
+        entity.setCreditLimit(body.creditLimitUsd() == null ? BigDecimal.ZERO : body.creditLimitUsd());
+        PartnerBalanceEntity saved = balances.save(entity);
         return ResponseEntity.status(HttpStatus.CREATED).body(toView(saved));
     }
 
@@ -132,6 +136,7 @@ public class BalanceProvisioningController {
     public record ProvisionRequest(
             String partnerCode,
             BigDecimal openingBalanceUsd,
-            BigDecimal lowBalanceThresholdUsd) {
+            BigDecimal lowBalanceThresholdUsd,
+            BigDecimal creditLimitUsd) {
     }
 }

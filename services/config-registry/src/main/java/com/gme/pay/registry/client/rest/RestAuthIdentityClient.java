@@ -64,8 +64,23 @@ public class RestAuthIdentityClient implements AuthIdentityClient {
      */
     @Autowired
     public RestAuthIdentityClient(
-            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl,
+            @Value("${gmepay.auth-identity.internal-secret:}") String internalSecret) {
+        this(buildClient(baseUrl, internalSecret));
+    }
+
+    /**
+     * auth-identity's {@code /internal/auth/keys} is an internal-only endpoint; when auth-identity
+     * enforces the service-to-service internal-auth gate (#90), config-registry is a trusted caller
+     * and must present the shared {@code X-Gme-Internal} token. Blank secret = local dev (gate off).
+     */
+    private static RestClient buildClient(String baseUrl, String internalSecret) {
+        RestClient.Builder builder = RestClient.builder().baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            builder.defaultHeader(
+                    com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        }
+        return builder.build();
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

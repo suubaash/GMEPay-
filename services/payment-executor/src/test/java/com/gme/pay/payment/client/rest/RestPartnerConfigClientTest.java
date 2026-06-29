@@ -61,4 +61,41 @@ class RestPartnerConfigClientTest {
         assertThrows(PaymentException.class, () -> client.loadPartner("P-MISSING"));
         server.verify();
     }
+
+    @Test
+    @DisplayName("resolveCommissionSplit maps the effective two-sided shares when resolved")
+    void resolveCommissionSplit_mapsResolvedShares() {
+        server.expect(requestTo("http://config-registry:8080/v1/commission/effective"
+                        + "?schemeId=zeropay&partnerCode=GMEREMIT&direction=INBOUND"))
+                .andExpect(method(org.springframework.http.HttpMethod.GET))
+                .andRespond(withSuccess(
+                        "{\"schemeId\":\"zeropay\",\"partnerCode\":\"GMEREMIT\",\"direction\":\"INBOUND\","
+                                + "\"gmeSharePct\":\"0.70\",\"vanFeePct\":\"0.0008\","
+                                + "\"partnerSharePct\":\"0.30\",\"resolved\":true}",
+                        MediaType.APPLICATION_JSON));
+
+        PartnerConfigClient.CommissionSplitConfig cfg =
+                client.resolveCommissionSplit("zeropay", "GMEREMIT", "INBOUND").orElseThrow();
+
+        assertEquals(0, cfg.gmeSharePct().compareTo(new java.math.BigDecimal("0.70")));
+        assertEquals(0, cfg.vanFeePct().compareTo(new java.math.BigDecimal("0.0008")));
+        assertEquals(0, cfg.partnerSharePct().compareTo(new java.math.BigDecimal("0.30")));
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("resolveCommissionSplit is empty when a side is unresolved (non-fatal skip)")
+    void resolveCommissionSplit_emptyWhenUnresolved() {
+        server.expect(requestTo("http://config-registry:8080/v1/commission/effective"
+                        + "?schemeId=zeropay&partnerCode=NEWPTNR&direction=INBOUND"))
+                .andRespond(withSuccess(
+                        "{\"schemeId\":\"zeropay\",\"partnerCode\":\"NEWPTNR\",\"direction\":\"INBOUND\","
+                                + "\"gmeSharePct\":\"0.70\",\"vanFeePct\":\"0.0008\","
+                                + "\"partnerSharePct\":null,\"resolved\":false}",
+                        MediaType.APPLICATION_JSON));
+
+        assertEquals(java.util.Optional.empty(),
+                client.resolveCommissionSplit("zeropay", "NEWPTNR", "INBOUND"));
+        server.verify();
+    }
 }

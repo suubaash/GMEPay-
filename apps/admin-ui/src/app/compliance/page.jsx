@@ -131,6 +131,7 @@ export default function CompliancePage() {
     lifecycleFilter,
     auditPage,
     auditMeta,
+    auditChainValid,
     auditLoading,
     auditError,
     auditAggregate,
@@ -408,6 +409,14 @@ export default function CompliancePage() {
             >
               Refresh
             </Button>
+            {auditPage.length > 0 && (
+              <Chip
+                size="small"
+                color={auditChainValid ? 'success' : 'error'}
+                label={auditChainValid ? 'Hash chain verified' : 'Hash chain BROKEN'}
+                aria-label="audit-chain-integrity"
+              />
+            )}
           </Stack>
 
           <ErrorAlert

@@ -22,9 +22,18 @@ import java.util.Objects;
 public class StubTransactionMgmtClient implements TransactionMgmtClient {
 
     private static final List<TransactionSummary> STORE = List.of(
-            TransactionSummary.of("TXN-1001", "partner_test_001", "COMMITTED",
+            // TXN-1001 carries the real scheme-confirmation + merchant fields (as transaction-mgmt would
+            // after the scheme confirmed the merchant was paid) so the Admin/Portal detail view shows the
+            // genuine schemeTxnRef / approval / merchant id — not a "SCH-"/"AP-" placeholder.
+            new TransactionSummary("TXN-1001", "partner_test_001", "COMMITTED",
                     new BigDecimal("125.50"), "USD",
-                    Instant.parse("2026-06-09T10:15:30Z")),
+                    Instant.parse("2026-06-09T10:15:30Z"),
+                    null, null, null, null, null, null,
+                    new BigDecimal("0.0935"),          // prefundingDeductedUsd
+                    "ZP-TXN-1001-CONF",                // schemeTxnRef (scheme settlement id)
+                    "AUTH-1001",                       // schemeApprovalCode
+                    "M0000000001",                     // merchantId
+                    Instant.parse("2026-06-09T10:15:31Z")),  // approvedAt
             TransactionSummary.of("TXN-1002", "partner_test_001", "COMMITTED",
                     new BigDecimal("75.00"), "USD",
                     Instant.parse("2026-06-09T11:02:11Z")),

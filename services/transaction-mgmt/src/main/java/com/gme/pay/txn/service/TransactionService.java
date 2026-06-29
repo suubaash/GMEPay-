@@ -83,17 +83,36 @@ public class TransactionService {
                                                   BigDecimal collectionAmount,
                                                   String collectionCurrency,
                                                   String merchantId,
-                                                  String quoteId) {
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
         if (targetPayout == null || targetPayout.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "targetPayout must be > 0");
         }
+        // V005: guard the merchant-fee snapshot before it hits NUMERIC(7,4) — reject
+        // out-of-scale (would be silently rounded by the DB, mutating the "rate that
+        // applied") or out-of-range (a fee rate is a fraction in [0,1]; >999.9999 would
+        // overflow the column → 500). Mirrors config-registry's upstream guard.
+        if (merchantFeeRate != null) {
+            if (merchantFeeRate.stripTrailingZeros().scale() > 4) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "merchantFeeRate must have at most 4 decimal places, was: "
+                                + merchantFeeRate.toPlainString());
+            }
+            if (merchantFeeRate.signum() < 0 || merchantFeeRate.compareTo(BigDecimal.ONE) > 0) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "merchantFeeRate must be between 0 and 1, was: "
+                                + merchantFeeRate.toPlainString());
+            }
+        }
         Transaction txn = new Transaction(
                 partnerId, partnerTxnRef, schemeId, direction, paymentMode,
                 targetPayout, payoutCurrency, collectionAmount, collectionCurrency,
                 merchantId, quoteId);
+        // V005: snapshot the gross merchant fee rate the caller resolved at creation.
+        txn.applyMerchantFeeRate(merchantFeeRate);
         return repository.save(txn);
     }
 

@@ -66,8 +66,8 @@ class PartnerPostgresMigrationIT {
         Integer requiredApplied = jdbc.queryForObject(
                 "select count(*) from flyway_schema_history"
                         + " where success = true"
-                        + " and version in ('1','2','3','5','6','7','8','9','10','11','12','13','14',"
-                        + " '15','16','17','18','19','20','21','22','23','24')",
+                        + " and version in ('001','002','003','005','006','007','008','009','010','011','012','013','014',"
+                        + " '015','016','017','018','019','020','021','022','023','024')",
                 Integer.class);
         assertThat(requiredApplied)
                 .as("V001..V003 + V005..V024 (V004 was dropped in Slice 1) — 23 migrations — must all apply on PG16")

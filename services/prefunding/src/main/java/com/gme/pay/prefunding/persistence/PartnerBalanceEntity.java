@@ -25,6 +25,14 @@ public class PartnerBalanceEntity {
     @Column(name = "balance", nullable = false, precision = 20, scale = 8)
     private BigDecimal balance;
 
+    /** Sum of active holds (RESERVE - CAPTURE - RELEASE). available = balance + creditLimit - reserved. */
+    @Column(name = "reserved", nullable = false, precision = 20, scale = 8)
+    private BigDecimal reserved = BigDecimal.ZERO;
+
+    /** Per-partner credit headroom (V005; wired from config-registry in a later slice). */
+    @Column(name = "credit_limit", nullable = false, precision = 20, scale = 8)
+    private BigDecimal creditLimit = BigDecimal.ZERO;
+
     @Column(name = "low_balance_threshold", precision = 20, scale = 8)
     private BigDecimal lowBalanceThreshold;
 
@@ -66,6 +74,22 @@ public class PartnerBalanceEntity {
 
     public void setBalance(BigDecimal balance) {
         this.balance = balance;
+    }
+
+    public BigDecimal getReserved() {
+        return reserved;
+    }
+
+    public void setReserved(BigDecimal reserved) {
+        this.reserved = reserved;
+    }
+
+    public BigDecimal getCreditLimit() {
+        return creditLimit;
+    }
+
+    public void setCreditLimit(BigDecimal creditLimit) {
+        this.creditLimit = creditLimit;
     }
 
     public BigDecimal getLowBalanceThreshold() {

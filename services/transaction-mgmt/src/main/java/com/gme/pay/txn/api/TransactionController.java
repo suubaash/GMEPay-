@@ -156,7 +156,8 @@ public class TransactionController {
                 req.collectionAmount(),
                 req.collectionCurrency(),
                 req.merchantId(),
-                req.quoteId());
+                req.quoteId(),
+                req.merchantFeeRate());
         return CreateTransactionResponse.from(txn);
     }
 

@@ -46,6 +46,13 @@ public class FxConfigEntity {
     @Column(name = "quote_hold_seconds", nullable = false)
     private Integer quoteHoldSeconds;
 
+    /**
+     * Step 10 (V033): whether the partner's FX margin is disclosed (transparency flag). Never NULL
+     * (DB DEFAULT false). Recorded for reporting/compliance — does not affect pricing.
+     */
+    @Column(name = "disclosed_partner_margin", nullable = false)
+    private Boolean disclosedPartnerMargin;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -74,6 +81,9 @@ public class FxConfigEntity {
         if (validFrom == null) {
             validFrom = recordedAt;
         }
+        if (disclosedPartnerMargin == null) {
+            disclosedPartnerMargin = Boolean.FALSE;
+        }
     }
 
     /** Adapt this row to the canonical {@link FxConfigView} wire DTO. */
@@ -83,6 +93,7 @@ public class FxConfigEntity {
                 marginBps,
                 referenceRateSource,
                 quoteHoldSeconds,
+                disclosedPartnerMargin,
                 validFrom,
                 validTo,
                 recordedAt);
@@ -122,6 +133,14 @@ public class FxConfigEntity {
 
     public void setQuoteHoldSeconds(Integer quoteHoldSeconds) {
         this.quoteHoldSeconds = quoteHoldSeconds;
+    }
+
+    public Boolean getDisclosedPartnerMargin() {
+        return disclosedPartnerMargin;
+    }
+
+    public void setDisclosedPartnerMargin(Boolean disclosedPartnerMargin) {
+        this.disclosedPartnerMargin = disclosedPartnerMargin;
     }
 
     public Instant getValidFrom() {

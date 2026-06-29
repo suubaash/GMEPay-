@@ -130,4 +130,39 @@ class RestRevenueLedgerClientTest {
                 new BigDecimal("500"), "KRW", new BigDecimal("0.70")));
         server.verify();
     }
+
+    @Test
+    void commissionSplit_postsExpectedJson_andReturnsNormally() {
+        server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/commission-split"))
+              .andExpect(method(HttpMethod.POST))
+              .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+              .andExpect(jsonPath("$.txnRef").value("TXN-CS"))
+              .andExpect(jsonPath("$.partnerId").value(42))
+              .andExpect(jsonPath("$.revenueDate").value("2026-06-15"))   // ISO string
+              .andExpect(jsonPath("$.payoutAmountKrw").value(50000))
+              .andExpect(jsonPath("$.merchantFeeRate").value(0.0080))
+              .andExpect(jsonPath("$.vanFeeRate").value(0.0008))
+              .andExpect(jsonPath("$.gmeSharePct").value(0.70))
+              .andExpect(jsonPath("$.partnerSharePct").value(0.30))
+              .andRespond(withStatus(HttpStatus.CREATED));
+
+        assertDoesNotThrow(() -> client.postCommissionSplit(
+                "TXN-CS", 42L, 0L, java.time.LocalDate.of(2026, 6, 15),
+                50000L, new BigDecimal("0.0080"), new BigDecimal("0.0008"),
+                new BigDecimal("0.70"), new BigDecimal("0.30")));
+
+        server.verify();
+    }
+
+    @Test
+    void commissionSplit_serverError_doesNotPropagateToCaller() {
+        // 5xx: the split is best-effort post-commit; must never fail the (already committed) payment.
+        server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/commission-split"))
+              .andRespond(withServerError());
+        assertDoesNotThrow(() -> client.postCommissionSplit(
+                "TXN-CS-5XX", 42L, 0L, java.time.LocalDate.of(2026, 6, 15),
+                50000L, new BigDecimal("0.0080"), new BigDecimal("0.0008"),
+                new BigDecimal("0.70"), new BigDecimal("0.30")));
+        server.verify();
+    }
 }

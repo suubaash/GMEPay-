@@ -70,26 +70,54 @@ public class PartnerController {
         this.contactService = contactService;
     }
 
-    /** Every partner currently in the registry. Powers the Admin UI partner list. */
+    /**
+     * Every partner currently in the registry. Powers the Admin UI partner list.
+     *
+     * <p>Mapped from the {@link PartnerEntity} via the SPLIT-AWARE
+     * {@link PartnerDraftService#toView} rather than the four-field
+     * {@link #toView(Partner)} — the latter routes through
+     * {@link PartnerView#ofCore} which backfills {@code collectionCcy}/
+     * {@code settleACcy} from {@code settlementCurrency}, masking a real
+     * operator-configured split. Reading the entity directly is also why this
+     * bypasses the store's four-field-domain cache (the cache cannot carry the
+     * split). See {@link #get} for the rationale.
+     */
     @GetMapping
     public List<PartnerView> list() {
-        return store.listAll().stream().map(PartnerController::toView).toList();
+        return repository.findAllCurrent().stream()
+                .map(PartnerDraftService::toView)
+                .toList();
     }
 
     /**
-     * Current view by default (served cache-aside). With {@code ?at=<ISO-8601 instant>}
-     * the lookup is point-in-time against the half-open effective window
-     * {@code [effective_from, effective_to)}; point-in-time reads bypass the cache.
+     * Current view by default. With {@code ?at=<ISO-8601 instant>} the lookup is
+     * point-in-time (bitemporal as-of, business == transaction time at the given
+     * instant, matching {@code PartnerStore.getEffectiveAt}).
      *
      * <p>{@code id} is the partner code (e.g. {@code "GMEREMIT"}), not the surrogate.
+     *
+     * <p>Maps from the {@link PartnerEntity} via the SPLIT-AWARE
+     * {@link PartnerDraftService#toView}, NOT the four-field {@link #toView(Partner)}
+     * — the latter routes through {@link PartnerView#ofCore}, which backfills
+     * {@code collectionCcy}/{@code settleACcy} from {@code settlementCurrency} and
+     * therefore hides a real operator-configured split. This is the read consumed
+     * by settlement-reconciliation's {@code RestPartnerConfigClient} (it reads
+     * {@code settleACcy} off this view), so masking the split here silently
+     * settles the partner leg in the wrong currency. Reading the entity bypasses
+     * the store's four-field-domain cache (which cannot carry the split) — an
+     * acceptable trade for a low-volume config read.
      */
     @GetMapping("/{id}")
     public PartnerView get(@PathVariable String id,
                            @RequestParam(name = "at", required = false) String at) {
-        Partner p = (at == null || at.isBlank())
-                ? store.get(id)
-                : store.getEffectiveAt(id, parseInstant(at));
-        return toView(p);
+        PartnerEntity entity = (at == null || at.isBlank())
+                ? repository.findCurrentByPartnerCode(id)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.NOT_FOUND, "unknown partner: " + id))
+                : repository.findAsOf(id, parseInstant(at), parseInstant(at))
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.NOT_FOUND, "unknown partner: " + id + " as of " + at));
+        return PartnerDraftService.toView(entity);
     }
 
     /**
@@ -186,7 +214,9 @@ public class PartnerController {
         // columns (they were not present on the row when 4-eyes was added; Slice 1B.4
         // will replace this with a change_request-gated path).
         repository.saveAndFlush(current);
-        return toView(current.toDomain());
+        // Split-aware: map the entity directly so a step-1 edit response carries any
+        // real collection_ccy/settle_a_ccy split rather than the ofCore mirror.
+        return PartnerDraftService.toView(current);
     }
 
     /**
@@ -417,7 +447,47 @@ public class PartnerController {
 
     @PutMapping("/{id}/rounding-mode")
     public PartnerView setRoundingMode(@PathVariable String id, @RequestBody RoundingModeRequest request) {
-        return toView(store.updateRoundingMode(id, parseRoundingMode(request.mode())));
+        store.updateRoundingMode(id, parseRoundingMode(request.mode()));
+        // Re-read the fresh current row and map split-aware (updateRoundingMode goes
+        // through PartnerStore.save, which carries a real split forward) so the
+        // response doesn't strip an existing collection_ccy/settle_a_ccy split.
+        PartnerEntity current = repository.findCurrentByPartnerCode(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "unknown partner: " + id));
+        return PartnerDraftService.toView(current);
+    }
+
+    /**
+     * Save the Step-6 currency split onto an existing partner draft — the
+     * per-partner GME ↔ partner settlement-currency pair (collection_ccy +
+     * settle_a_ccy, SETTLEMENT_FLOW_SPEC §6.1). This is the ONLY endpoint that
+     * can ORIGINATE a real split: the four-field create/step-1 path carries no
+     * split fields, so {@link PartnerStore#save} only ever carries a prior split
+     * forward. Routes through {@link PartnerStore#updateCurrencySplit} (SCD-6
+     * paired write + ADR-007 audit), then re-reads the fresh current row and
+     * returns the split-aware {@link PartnerView}.
+     *
+     * <p>Returns 200 with the updated view; 404 unknown partner; 409 if the
+     * partner is already live (the split is frozen post-activation, ADR-011);
+     * 400 on a missing/malformed ISO-4217 code.
+     */
+    @PatchMapping("/draft/{partnerCode}/step-6-currency-split")
+    public PartnerView patchDraftStep6CurrencySplit(
+            @PathVariable String partnerCode,
+            @RequestBody PartnerCommand.UpdateStep6CurrencySplit req) {
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
+        }
+        String collectionCcy = requireIsoCcy(req.collectionCcy(), "collectionCcy");
+        String settleACcy = requireIsoCcy(req.settleACcy(), "settleACcy");
+        store.updateCurrencySplit(partnerCode, collectionCcy, settleACcy);
+        // Re-read the fresh current row (the write committed in updateCurrencySplit's
+        // own transaction) and map the SPLIT-AWARE view — toView(Partner) above only
+        // carries the four core fields, so the split would otherwise be invisible.
+        PartnerEntity current = repository.findCurrentByPartnerCode(partnerCode)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "unknown partner: " + partnerCode));
+        return PartnerDraftService.toView(current);
     }
 
     /** Adapt a domain {@link Partner} into the canonical {@link PartnerView} wire DTO. */
@@ -443,6 +513,26 @@ public class PartnerController {
             throw new ApiException(ErrorCode.VALIDATION_ERROR,
                     "type must be one of LOCAL|OVERSEAS, was: " + raw);
         }
+    }
+
+    /** ISO-4217 alpha-3 shape gate for the currency-split endpoint. */
+    private static final java.util.regex.Pattern ISO_CCY = java.util.regex.Pattern.compile("[A-Z]{3}");
+
+    /**
+     * Validate + normalise an ISO-4217 alpha-3 currency code (uppercased). This is a
+     * shape check only — the catalogue of live currencies is enforced upstream by the
+     * rate engine; config-registry guards against typos and empty values.
+     */
+    private static String requireIsoCcy(String raw, String field) {
+        if (raw == null || raw.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " is required");
+        }
+        String up = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!ISO_CCY.matcher(up).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    field + " must be an ISO-4217 alpha-3 code (e.g. USD, KRW, MNT), was: " + raw);
+        }
+        return up;
     }
 
     private static RoundingMode parseRoundingMode(String raw) {

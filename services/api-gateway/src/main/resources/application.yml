@@ -50,6 +50,13 @@ api:
     v1:
       deprecated: false
 
+# Internal service-to-service token (#90). The gateway's RBAC claim resolver calls auth-identity's
+# internal-only /v1/rbac/resolve; when auth-identity enforces the internal-auth gate, the gateway
+# presents this shared secret in the X-Gme-Internal header. Blank = local dev (gate off).
+gmepay:
+  internal-auth:
+    secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
+
 # Replay-protection fail-open flag (true = allow request if Redis is unreachable)
 gateway:
   replay-protection:

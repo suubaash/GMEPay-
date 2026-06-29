@@ -104,6 +104,7 @@ public class LimitsService {
         fresh.setLicenseType(
                 cmd.licenseType() == null || cmd.licenseType().isBlank()
                         ? null : cmd.licenseType());
+        fresh.setDailyTxnCountLimit(cmd.dailyTxnCountLimit());
 
         LimitsEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor,
@@ -177,6 +178,9 @@ public class LimitsService {
 
         if (cmd.licenseType() != null && cmd.licenseType().length() > 30) {
             throw badRequest("limits.licenseType must be at most 30 characters");
+        }
+        if (cmd.dailyTxnCountLimit() != null && cmd.dailyTxnCountLimit() < 0) {
+            throw badRequest("limits.dailyTxnCountLimit must be >= 0, was: " + cmd.dailyTxnCountLimit());
         }
         if (LICENSE_SOAEK_HAEOEMONG.equals(cmd.licenseType())) {
             validateSoaekCaps(cmd);

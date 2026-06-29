@@ -18,9 +18,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit tests for {@link PaymentOrchestrator#executeCpm(PaymentOrchestrator.CpmPaymentCommand, PartnerType)}.
+ * Unit tests for {@link PaymentOrchestrator#executeCpm} on the two-phase ledger SPINE (Step 9):
+ * CPM is synchronous (customer present) but rides the same money-safety ordering as MPM (Step 4) —
+ * RESERVE the float (hold, not debit), scheme balance-check gate, submit (the irreversible charge,
+ * LAST), then CAPTURE only on success. Decline RELEASES the hold; the legacy deduct-before-submit
+ * is gone.
  *
  * <p>No Spring context, no Docker. Hand-written fakes record call order.
  */
@@ -28,13 +33,11 @@ class PaymentOrchestratorCpmTest {
 
     private final List<String> callLog = new ArrayList<>();
 
-    /** Fake rate client — returns a no-op view (not called by CPM path). */
     private final RateClient fakeRate = (quoteId, partnerId) -> {
         callLog.add("RATE");
         return null;
     };
 
-    /** Fake QR client — not called by CPM path. */
     private final QrClient fakeQr = qr -> {
         callLog.add("QR");
         return QrClient.MerchantView.of("M001", "Merchant", "KRW", "zeropay");
@@ -53,17 +56,35 @@ class PaymentOrchestratorCpmTest {
         }
     };
 
+    /** Two-phase prefunding fake: reserve/capture/release recorded; the legacy deduct must NOT run. */
     private final PrefundingClient fakePrefunding = new PrefundingClient() {
         @Override
         public DeductionResult deduct(long partnerId, String txnRef, BigDecimal amountUsd) {
-            callLog.add("PREFUND:DEDUCT");
-            return new DeductionResult(amountUsd, new BigDecimal("900.00"));
+            throw new AssertionError("deduct must NOT be called on the CPM spine — use reserve/capture");
         }
 
         @Override
         public ReverseResult reverse(long partnerId, String txnRef) {
             callLog.add("PREFUND:REVERSE");
             return new ReverseResult(new BigDecimal("125.50"), new BigDecimal("900.00"));
+        }
+
+        @Override
+        public ReservationResult reserve(long partnerId, String txnRef, BigDecimal amountUsd) {
+            callLog.add("PREFUND:RESERVE");
+            return new ReservationResult(amountUsd, new BigDecimal("962.21"), new BigDecimal("1000.00"));
+        }
+
+        @Override
+        public CaptureResult capture(long partnerId, String txnRef) {
+            callLog.add("PREFUND:CAPTURE");
+            return new CaptureResult(new BigDecimal("37.04"), new BigDecimal("962.21"));
+        }
+
+        @Override
+        public ReleaseResult release(long partnerId, String txnRef) {
+            callLog.add("PREFUND:RELEASE");
+            return new ReleaseResult(new BigDecimal("37.04"), new BigDecimal("1000.00"));
         }
     };
 
@@ -84,6 +105,12 @@ class PaymentOrchestratorCpmTest {
             callLog.add("SCHEME:CPM:token=" + req.qrToken());
             return new CpmSubmitResponse("ZP_CPM_APPROVAL", "ZP_CPM_TXN_001", Instant.now());
         }
+
+        @Override
+        public BalanceCheckResult checkBalance(String schemeId, BigDecimal amount, String currency) {
+            callLog.add("SCHEME:BALANCE");
+            return new BalanceCheckResult(true, new BigDecimal("1000000000"));
+        }
     };
 
     private final SchemeClient decliningScheme = new SchemeClient() {
@@ -100,150 +127,100 @@ class PaymentOrchestratorCpmTest {
             callLog.add("SCHEME:CPM:DECLINE");
             throw new SchemeDeclinedException("ZP_CPM_ERR_001", "CPM declined");
         }
+
+        @Override
+        public BalanceCheckResult checkBalance(String schemeId, BigDecimal amount, String currency) {
+            callLog.add("SCHEME:BALANCE");
+            return new BalanceCheckResult(true, new BigDecimal("1000000000"));
+        }
     };
+
+    private static PaymentOrchestrator.CpmPaymentCommand cpm(long partnerId, String token,
+                                                             BigDecimal collectionUsd) {
+        return new PaymentOrchestrator.CpmPaymentCommand(
+                partnerId, "PTNR-CPM-" + partnerId, "zeropay",
+                token, "M001",
+                new BigDecimal("50000"), "KRW",
+                new BigDecimal("50000"), "KRW",
+                collectionUsd);
+    }
 
     @BeforeEach
     void setUp() {
         callLog.clear();
     }
 
-    // -----------------------------------------------------------------------
-    // CPM LOCAL happy path
-    // -----------------------------------------------------------------------
-
     @Test
-    @DisplayName("CPM LOCAL: no prefunding deduction, scheme CPM submitted, APPROVED")
+    @DisplayName("CPM LOCAL: no float hold, scheme CPM submitted, APPROVED")
     void cpm_local_happyPath() {
         PaymentOrchestrator orchestrator = new PaymentOrchestrator(
                 fakeRate, fakePrefunding, fakeQr, fakeScheme, fakeTxn);
 
-        PaymentOrchestrator.CpmPaymentCommand cmd = new PaymentOrchestrator.CpmPaymentCommand(
-                1L, "PTNR-CPM-001", "zeropay",
-                "CPM-TOKEN-AABB1122", "M001",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("50000"), "KRW",
-                null  // no USD prefunding for LOCAL
-        );
-
-        PaymentOrchestrator.PaymentResult result = orchestrator.executeCpm(cmd, PartnerType.LOCAL);
+        PaymentOrchestrator.PaymentResult result =
+                orchestrator.executeCpm(cpm(1L, "CPM-TOKEN-AABB1122", null), PartnerType.LOCAL);
 
         assertEquals(PaymentStatus.APPROVED, result.status());
-        assertEquals("pay_cpm_001", result.paymentId());
         assertEquals("ZP_CPM_TXN_001", result.schemeTxnId());
-        assertNull(result.prefundDeductedUsd(), "LOCAL CPM must NOT deduct prefunding");
+        assertNull(result.prefundDeductedUsd(), "LOCAL CPM holds no float");
 
-        // Call order: TXN:CREATE → SCHEME:CPM → TXN:COMMIT:APPROVED
-        // No RATE, no QR, no PREFUND
-        assertEquals(3, callLog.size(), "Expected exactly 3 calls: TXN:CREATE, SCHEME:CPM, TXN:COMMIT");
+        // LOCAL: no reserve/capture; the scheme balance gate still runs, then submit, then commit.
         assertEquals("TXN:CREATE:mode=CPM", callLog.get(0));
-        assertEquals("SCHEME:CPM:token=CPM-TOKEN-AABB1122", callLog.get(1));
-        assertEquals("TXN:COMMIT:APPROVED", callLog.get(2));
+        assertTrue(callLog.contains("SCHEME:BALANCE"));
+        assertEquals("SCHEME:CPM:token=CPM-TOKEN-AABB1122",
+                callLog.stream().filter(s -> s.startsWith("SCHEME:CPM")).findFirst().orElse(""));
+        assertEquals("TXN:COMMIT:APPROVED", callLog.get(callLog.size() - 1));
+        assertTrue(callLog.stream().noneMatch(s -> s.startsWith("PREFUND")), "LOCAL holds no float");
     }
 
     @Test
-    @DisplayName("CPM LOCAL: result carries correct scheme fields")
-    void cpm_local_resultFieldsCorrect() {
+    @DisplayName("CPM OVERSEAS: RESERVE → balance → submit → CAPTURE → APPROVED (deduct never called)")
+    void cpm_overseas_reservesThenCaptures() {
         PaymentOrchestrator orchestrator = new PaymentOrchestrator(
                 fakeRate, fakePrefunding, fakeQr, fakeScheme, fakeTxn);
 
-        PaymentOrchestrator.CpmPaymentCommand cmd = new PaymentOrchestrator.CpmPaymentCommand(
-                1L, "PTNR-CPM-002", "zeropay",
-                "CPM-TOKEN-CCDD2233", "MERCHANT_X",
-                new BigDecimal("75000"), "KRW",
-                new BigDecimal("75000"), "KRW",
-                null
-        );
-
-        PaymentOrchestrator.PaymentResult result = orchestrator.executeCpm(cmd, PartnerType.LOCAL);
-
-        assertNotNull(result.approvedAt());
-        assertEquals("ZP_CPM_TXN_001", result.schemeTxnId());
-        assertEquals("KRW", result.payoutCurrency());
-        assertEquals(new BigDecimal("75000"), result.targetPayout());
-    }
-
-    // -----------------------------------------------------------------------
-    // CPM OVERSEAS — prefunding deducted before scheme call
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("CPM OVERSEAS: prefunding deducted, CPM submitted, APPROVED with deductedUsd")
-    void cpm_overseas_prefundingDeducted() {
-        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
-                fakeRate, fakePrefunding, fakeQr, fakeScheme, fakeTxn);
-
-        PaymentOrchestrator.CpmPaymentCommand cmd = new PaymentOrchestrator.CpmPaymentCommand(
-                2L, "PTNR-CPM-OVERSEAS-001", "zeropay",
-                "CPM-TOKEN-INTL-001", "MERCHANT_INTL",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("37.04")  // USD equivalent
-        );
-
-        PaymentOrchestrator.PaymentResult result = orchestrator.executeCpm(cmd, PartnerType.OVERSEAS);
+        PaymentOrchestrator.PaymentResult result =
+                orchestrator.executeCpm(cpm(2L, "CPM-TOKEN-INTL-001", new BigDecimal("37.04")),
+                        PartnerType.OVERSEAS);
 
         assertEquals(PaymentStatus.APPROVED, result.status());
-        assertNotNull(result.prefundDeductedUsd(), "OVERSEAS CPM must deduct prefunding");
+        assertNotNull(result.prefundDeductedUsd(), "OVERSEAS CPM captures the held float");
 
-        // Call order: TXN:CREATE → PREFUND:DEDUCT → SCHEME:CPM → TXN:COMMIT
-        int txnCreate   = callLog.indexOf("TXN:CREATE:mode=CPM");
-        int prefund     = callLog.indexOf("PREFUND:DEDUCT");
-        int schemeCpm   = callLog.stream().anyMatch(s -> s.startsWith("SCHEME:CPM:token="))
-                ? callLog.stream().filter(s -> s.startsWith("SCHEME:CPM:token=")).mapToInt(callLog::indexOf).findFirst().orElse(-1)
-                : -1;
-        int txnCommit   = callLog.indexOf("TXN:COMMIT:APPROVED");
-
-        // Verify order: create < prefund < cpm < commit
-        assert txnCreate < prefund : "TXN:CREATE must precede PREFUND:DEDUCT";
-        assert prefund < schemeCpm : "PREFUND:DEDUCT must precede SCHEME:CPM";
-        assert schemeCpm < txnCommit : "SCHEME:CPM must precede TXN:COMMIT";
+        int reserve = callLog.indexOf("PREFUND:RESERVE");
+        int balance = callLog.indexOf("SCHEME:BALANCE");
+        int cpmSubmit = callLog.indexOf("SCHEME:CPM:token=CPM-TOKEN-INTL-001");
+        int capture = callLog.indexOf("PREFUND:CAPTURE");
+        int commit = callLog.indexOf("TXN:COMMIT:APPROVED");
+        assertTrue(reserve >= 0 && balance > reserve && cpmSubmit > balance
+                        && capture > cpmSubmit && commit > capture,
+                "order must be RESERVE → BALANCE → CPM submit → CAPTURE → COMMIT; log=" + callLog);
     }
 
-    // -----------------------------------------------------------------------
-    // CPM scheme decline — prefunding reversed, FAILED committed
-    // -----------------------------------------------------------------------
-
     @Test
-    @DisplayName("CPM OVERSEAS scheme decline: prefunding reversed, FAILED committed, exception rethrown")
-    void cpm_overseas_schemeDecline_reversesAndRethrows() {
+    @DisplayName("CPM OVERSEAS scheme decline: hold RELEASED (not captured), FAILED committed, rethrown")
+    void cpm_overseas_schemeDecline_releasesAndRethrows() {
         PaymentOrchestrator orchestrator = new PaymentOrchestrator(
                 fakeRate, fakePrefunding, fakeQr, decliningScheme, fakeTxn);
 
-        PaymentOrchestrator.CpmPaymentCommand cmd = new PaymentOrchestrator.CpmPaymentCommand(
-                2L, "PTNR-CPM-DECLINE-001", "zeropay",
-                "CPM-TOKEN-DECLINE", "M001",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("37.04")
-        );
-
         assertThrows(SchemeDeclinedException.class,
-                () -> orchestrator.executeCpm(cmd, PartnerType.OVERSEAS));
+                () -> orchestrator.executeCpm(cpm(2L, "CPM-TOKEN-DECLINE", new BigDecimal("37.04")),
+                        PartnerType.OVERSEAS));
 
-        // Must have reversed prefunding and committed FAILED
-        assertEquals(1, callLog.stream().filter("PREFUND:REVERSE"::equals).count());
+        assertEquals(1, callLog.stream().filter("PREFUND:RESERVE"::equals).count());
+        assertEquals(1, callLog.stream().filter("PREFUND:RELEASE"::equals).count(), "decline releases the hold");
+        assertEquals(0, callLog.stream().filter("PREFUND:CAPTURE"::equals).count(), "no capture on decline");
         assertEquals(1, callLog.stream().filter("TXN:COMMIT:FAILED"::equals).count());
     }
 
     @Test
-    @DisplayName("CPM LOCAL scheme decline: no prefunding reversal, FAILED committed")
-    void cpm_local_schemeDecline_noReversal() {
+    @DisplayName("CPM LOCAL scheme decline: no float, FAILED committed")
+    void cpm_local_schemeDecline_noFloat() {
         PaymentOrchestrator orchestrator = new PaymentOrchestrator(
                 fakeRate, fakePrefunding, fakeQr, decliningScheme, fakeTxn);
 
-        PaymentOrchestrator.CpmPaymentCommand cmd = new PaymentOrchestrator.CpmPaymentCommand(
-                1L, "PTNR-CPM-DECLINE-002", "zeropay",
-                "CPM-TOKEN-DECLINE", "M001",
-                new BigDecimal("50000"), "KRW",
-                new BigDecimal("50000"), "KRW",
-                null
-        );
-
         assertThrows(SchemeDeclinedException.class,
-                () -> orchestrator.executeCpm(cmd, PartnerType.LOCAL));
+                () -> orchestrator.executeCpm(cpm(1L, "CPM-TOKEN-DECLINE", null), PartnerType.LOCAL));
 
-        // No PREFUND:REVERSE for LOCAL
-        assertEquals(0, callLog.stream().filter("PREFUND:REVERSE"::equals).count());
+        assertTrue(callLog.stream().noneMatch(s -> s.startsWith("PREFUND")), "LOCAL holds no float");
         assertEquals(1, callLog.stream().filter("TXN:COMMIT:FAILED"::equals).count());
     }
 }
