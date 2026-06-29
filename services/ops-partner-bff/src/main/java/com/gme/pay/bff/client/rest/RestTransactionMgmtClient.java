@@ -166,7 +166,12 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             BigDecimal payerCurrencyAmount,
             BigDecimal appliedFxRate,
             Instant rateTimestamp,
-            BigDecimal prefundingDeductedUsd
+            BigDecimal prefundingDeductedUsd,
+            // scheme-confirmation + merchant fields from transaction-mgmt's TransactionResponse
+            String schemeTxnRef,
+            String schemeApprovalCode,
+            String merchantId,
+            Instant approvedAt
     ) {
         TransactionSummary toSummary() {
             return new TransactionSummary(
@@ -182,7 +187,11 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
                     payerCurrencyAmount,
                     appliedFxRate,
                     rateTimestamp,
-                    prefundingDeductedUsd);
+                    prefundingDeductedUsd,
+                    schemeTxnRef,
+                    schemeApprovalCode,
+                    merchantId,
+                    approvedAt);
         }
     }
 

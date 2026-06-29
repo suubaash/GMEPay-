@@ -160,6 +160,12 @@ class TransactionContractIT {
         // prefundingDeductedUsd comes from prefundDeductedUsd patch field
         assertNotNull(txnBody.get("prefundingDeductedUsd"), "prefundingDeductedUsd must be set");
         assertEquals("38.50000000", txnBody.get("prefundingDeductedUsd").asText());
+        // The scheme-confirmation evidence (proof the QR scheme paid the merchant) must be readable on
+        // the GET — these were persisted by the patch but previously omitted from the response DTO.
+        assertNotNull(txnBody.get("schemeTxnRef"), "schemeTxnRef must be exposed on GET after APPROVED");
+        assertEquals("SCHEME-TXN-999", txnBody.get("schemeTxnRef").asText());
+        assertEquals("APV-CODE-123", txnBody.get("schemeApprovalCode").asText(),
+                "schemeApprovalCode must be exposed on GET after APPROVED");
     }
 
     // =========================================================================

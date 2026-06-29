@@ -86,7 +86,19 @@ public record TransactionResponse(
          * the per-window cutoff (morning vs afternoon), so a txn approved after the morning cutoff rolls
          * into the afternoon batch rather than being mis-settled in the morning file.
          */
-        Instant approvedAt
+        Instant approvedAt,
+        /**
+         * Scheme transaction reference — the QR scheme's settlement id returned when the scheme confirmed
+         * it paid the merchant (persisted at APPROVED via {@code StatusPatchRequest}). This is the proof a
+         * wallet payment actually reached the merchant; null until APPROVED. Exposed so the read path
+         * (BFF / Admin / Partner detail views) shows the REAL scheme confirmation, not a placeholder.
+         */
+        String schemeTxnRef,
+        /**
+         * Scheme approval code — the QR scheme's authorization id (used for refund/cancel). Persisted at
+         * APPROVED; null until then. Surfaced alongside {@code schemeTxnRef} as the merchant-paid evidence.
+         */
+        String schemeApprovalCode
 ) {
     /**
      * One entry in the status transition history.
@@ -136,7 +148,9 @@ public record TransactionResponse(
                 txn.merchantId(),   // merchantId — from V003
                 null,               // merchantName — TODO: from scheme-adapter
                 txn.merchantFeeRate(),  // merchantFeeRate — V005 snapshot
-                txn.approvedAt()        // approvedAt — drives settlement window cutoff
+                txn.approvedAt(),       // approvedAt — drives settlement window cutoff
+                txn.schemeTxnRef(),     // schemeTxnRef — real scheme settlement id (merchant-paid proof)
+                txn.schemeApprovalCode() // schemeApprovalCode — real scheme authorization id
         );
     }
 }

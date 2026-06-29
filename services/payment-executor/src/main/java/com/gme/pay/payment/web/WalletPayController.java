@@ -115,6 +115,7 @@ public class WalletPayController {
 
         WalletPaymentResponse response = new WalletPaymentResponse(
                 result.approved() ? "APPROVED" : "DECLINED",
+                result.txnRef(),
                 result.schemeTxnRef(),
                 result.merchantName(),
                 result.payAmountKrw() != null ? result.payAmountKrw().toPlainString() : null,

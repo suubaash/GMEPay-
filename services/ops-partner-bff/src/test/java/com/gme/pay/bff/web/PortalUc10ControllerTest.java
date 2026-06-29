@@ -167,12 +167,13 @@ class PortalUc10ControllerTest {
                 .andExpect(jsonPath("$.summary.txnId").value("TXN-1001"))
                 .andExpect(jsonPath("$.summary.partnerId").value(PARTNER))
                 .andExpect(jsonPath("$.summary.state").value("COMMITTED"))
-                .andExpect(jsonPath("$.schemeTxnRef").value("SCH-TXN-1001"))
-                .andExpect(jsonPath("$.schemeApprovalCode").value("AP-TXN-1001"))
+                // REAL scheme-confirmation values pass through from transaction-mgmt (no "SCH-"/"AP-" stub)
+                .andExpect(jsonPath("$.schemeTxnRef").value("ZP-TXN-1001-CONF"))
+                .andExpect(jsonPath("$.schemeApprovalCode").value("AUTH-1001"))
+                .andExpect(jsonPath("$.merchantId").value("M0000000001"))
                 .andExpect(jsonPath("$.settlementRoundingMode").value("HALF_UP"))
-                .andExpect(jsonPath("$.bookedSettlementAmount").exists())
-                // UC-10-03 additive fields: merchantId, merchantName, statusHistory are null
-                // in stub → absent from JSON per @JsonInclude(NON_NULL) — correct
+                // settlement booking is locked at settlement time, not payment time → absent here
+                .andExpect(jsonPath("$.bookedSettlementAmount").doesNotExist())
                 .andExpect(jsonPath("$.prefundDeductedUsd").exists());
     }
 

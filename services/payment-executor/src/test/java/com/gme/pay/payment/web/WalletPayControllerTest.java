@@ -75,6 +75,7 @@ class WalletPayControllerTest {
     @DisplayName("POST /v1/pay — APPROVED: 201 with schemeTxnRef, KRW fields, fee=500")
     void walletPay_approvedHappyPath() throws Exception {
         WalletResult approved = WalletResult.approved(
+                "GMEREMIT-9001",
                 "TXN-AABB1122",
                 "Coffee Shop",
                 new BigDecimal("50000"),
@@ -99,6 +100,7 @@ class WalletPayControllerTest {
                         .content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.txnRef", is("GMEREMIT-9001")))
                 .andExpect(jsonPath("$.schemeTxnRef", is("TXN-AABB1122")))
                 .andExpect(jsonPath("$.merchantName", is("Coffee Shop")))
                 .andExpect(jsonPath("$.payAmountKrw", is("50000")))
