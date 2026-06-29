@@ -50,6 +50,15 @@ public class InMemoryMerchantRepository implements MerchantRepository {
                 "00020101021129260011com.zeropay0107ZP-M0015204581253034105802KR5918Seoul Noodle House6005Seoul63040B08",
                 "Seoul Noodle House", "RETAIL", "DOMESTIC", "ACTIVE", true,
                 "KRW", "ZEROPAY", "Seoul", "5812"));
+
+        // End-to-end demo fixture (SMOKE_MERCH_01): keyed by the SAME EMVCo QR the qr-pay demo scans and
+        // sim-scheme registers/extracts (merchant id in sub-tag 01), so ONE scanned QR resolves here AND
+        // is approved by sim-scheme — the wallet → txn → scheme-confirmed → view flow runs without
+        // synthesising an UNKNOWN merchant. Mirrors .smoke/05_qr_payload.txt + 04_merchant_register.json.
+        seed(new Merchant("SMOKE_MERCH_01",
+                "00020101021229330011com.zeropay0114SMOKE_MERCH_015204599953034105405100005802KR5914Smoke Merchant6005Seoul6304E765",
+                "Smoke Merchant", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5999"));
     }
 
     private void seed(Merchant merchant) {
