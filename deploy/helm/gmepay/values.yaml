@@ -76,8 +76,8 @@ secrets:
     # Redis (empty = no auth on self-host default).
     SPRING_DATA_REDIS_PASSWORD: ""
     # Object store keys (lib-vault gmepay.vault.accessKey/secretKey).
-    GMEPAY_VAULT_ACCESSKEY: gmepay
-    GMEPAY_VAULT_SECRETKEY: CHANGE_ME_VAULT_SECRET
+    GMEPAY_VAULT_ACCESS_KEY: gmepay
+    GMEPAY_VAULT_SECRET_KEY: CHANGE_ME_VAULT_SECRET
     # Cross-service signing / internal-auth secrets (#90 RBAC + webhook).
     GMEPAY_RBAC_SECRET: CHANGE_ME_RBAC_EDGE_SECRET
     GMEPAY_INTERNAL_AUTH_SECRET: CHANGE_ME_INTERNAL_SVC_SECRET
@@ -121,7 +121,7 @@ services:
     containerPort: 8080
     probe: { type: tcp }
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_VAULT_ACCESSKEY, GMEPAY_VAULT_SECRETKEY]
+                    GMEPAY_VAULT_ACCESS_KEY, GMEPAY_VAULT_SECRET_KEY]
     envSecretAliases:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
