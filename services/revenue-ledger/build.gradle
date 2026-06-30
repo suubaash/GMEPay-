@@ -19,6 +19,10 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Phase 2 cross-service wiring: canonical shared DTOs. PaymentApprovedPayload is the type
+    // payment-executor now emits on gmepay.payment.approved; RevenueSummaryView is the shape ops-bff
+    // + reporting converge on for GET /v1/revenue. Libs are frozen — we only consume these types.
+    implementation project(':libs:lib-api-contracts')
     // 17.4-G03: Kafka-backed EventPublisher. Its auto-configuration activates only when
     // spring.kafka.bootstrap-servers is set (docker-compose: SPRING_KAFKA_BOOTSTRAP_SERVERS);
     // without it the outbox keeps draining to LogEventPublisher — safe local default.

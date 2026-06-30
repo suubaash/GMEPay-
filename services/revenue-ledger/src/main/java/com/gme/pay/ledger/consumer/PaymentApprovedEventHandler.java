@@ -1,15 +1,16 @@
 package com.gme.pay.ledger.consumer;
 
 import com.fasterxml.jackson.core.JacksonException;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.contracts.events.PaymentApprovedPayload;
 import com.gme.pay.ledger.revenue.RevenueCaptureService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Objects;
@@ -23,13 +24,20 @@ import java.util.Objects;
  * sync {@code POST /v1/revenue/capture} endpoint and shares the same idempotent write path, so a
  * transaction captured by either surface yields exactly one row.
  *
- * <p><b>Payload contract.</b> The event value is the JSON-serialised domain event. Beyond the
- * {@code DomainEvent} base fields ({@code eventType}, {@code aggregateId}, {@code occurredAt}) the
- * revenue fields ride as components: {@code txnRef} (falls back to {@code aggregateId}),
- * {@code partnerId}, {@code schemeId}, {@code collectionMarginUsd}, {@code payoutMarginUsd},
- * {@code serviceChargeAmount}, {@code serviceChargeCcy}, {@code feeSharePct}, and optional
- * {@code revenueDate} (falls back to {@code occurredAt}'s UTC date). Money fields ride as decimal
- * strings per {@code docs/MONEY_CONVENTION.md}.
+ * <p><b>Payload contract (Phase 2).</b> The event value is the JSON serialisation of the canonical
+ * {@link PaymentApprovedPayload} (lib-api-contracts) that payment-executor now emits — we deserialize
+ * directly into that DTO instead of plucking JSON fields by hand, so producer and consumer agree at
+ * the type level. The DTO carries: {@code eventType}, {@code aggregateId}, {@code txnRef},
+ * {@code occurredAt}, {@code revenueDate} (optional), {@code partnerId}, {@code schemeId},
+ * {@code collectionMarginUsd}, {@code payoutMarginUsd}, {@code serviceChargeAmount},
+ * {@code serviceChargeCcy}, {@code feeSharePct}. Money fields ride as decimal strings per
+ * {@code docs/MONEY_CONVENTION.md}.
+ *
+ * <p><b>Defensive defaults.</b> The DTO binding is lenient about presence: a null money field maps to
+ * {@code BigDecimal.ZERO}, {@code serviceChargeCcy} defaults to {@code USD}, {@code txnRef} falls back
+ * to {@code aggregateId} then the Kafka record key, and {@code revenueDate} falls back to the UTC date
+ * of {@code occurredAt}. This keeps the consumer resilient to older/leaner producers without abandoning
+ * the strong type.
  *
  * <p><b>Poison handling.</b> Unparseable JSON, a wrong/missing {@code eventType}, a missing
  * {@code txnRef}, or invalid money raise {@link IllegalArgumentException}; the Kafka error handler
@@ -40,12 +48,15 @@ import java.util.Objects;
 public class PaymentApprovedEventHandler {
 
     /** Event type this handler accepts; anything else on the topic is poison. */
-    public static final String EVENT_TYPE = "payment.approved";
+    public static final String EVENT_TYPE = PaymentApprovedPayload.EVENT_TYPE;
 
     private static final Logger log = LoggerFactory.getLogger(PaymentApprovedEventHandler.class);
 
     private final RevenueCaptureService captureService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            // Tolerate producers that add fields ahead of us; never fail on an unknown property.
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
     public PaymentApprovedEventHandler(RevenueCaptureService captureService) {
         this.captureService = Objects.requireNonNull(captureService, "captureService required");
@@ -56,7 +67,7 @@ public class PaymentApprovedEventHandler {
      *
      * @param recordKey the Kafka record key (publisher sets it to the aggregate id); used as the
      *                  {@code txnRef} fallback when the payload omits one
-     * @param payload   the raw JSON record value
+     * @param payload   the raw JSON record value (a serialised {@link PaymentApprovedPayload})
      * @return {@code true} if a new revenue row was created, {@code false} on an idempotent skip
      * @throws IllegalArgumentException if the record is poison (invalid JSON / contract / money)
      */
@@ -65,42 +76,44 @@ public class PaymentApprovedEventHandler {
             throw new IllegalArgumentException("payment.approved record has an empty payload");
         }
 
-        JsonNode root;
+        PaymentApprovedPayload event;
         try {
-            root = objectMapper.readTree(payload);
+            event = objectMapper.readValue(payload, PaymentApprovedPayload.class);
+        } catch (com.fasterxml.jackson.databind.exc.InvalidFormatException e) {
+            // A well-formed JSON object whose value cannot bind to its DTO field (e.g. a non-numeric
+            // money string). Surface the offending field path so the DLT record is diagnosable.
+            String field = e.getPath().isEmpty() ? "?" : e.getPath().get(e.getPath().size() - 1).getFieldName();
+            throw new IllegalArgumentException(
+                    "payment.approved field " + field + " has an invalid value: " + e.getValue(), e);
         } catch (JacksonException e) {
             throw new IllegalArgumentException("payment.approved payload is not valid JSON", e);
         }
-        if (root == null || !root.isObject()) {
-            throw new IllegalArgumentException("payment.approved payload must be a JSON object");
+        if (event == null) {
+            throw new IllegalArgumentException("payment.approved payload deserialized to null");
         }
 
-        String eventType = textOrNull(root, "eventType");
-        if (!EVENT_TYPE.equals(eventType)) {
+        if (!EVENT_TYPE.equals(event.eventType())) {
             throw new IllegalArgumentException(
-                    "unexpected eventType on payment.approved topic: " + eventType);
+                    "unexpected eventType on payment.approved topic: " + event.eventType());
         }
 
-        String txnRef = firstNonBlank(textOrNull(root, "txnRef"),
-                textOrNull(root, "aggregateId"), recordKey);
+        String txnRef = firstNonBlank(event.txnRef(), event.aggregateId(), recordKey);
         if (txnRef == null) {
             throw new IllegalArgumentException(
                     "payment.approved event has no txnRef (payload field, aggregateId or record key)");
         }
 
-        long partnerId = longOrZero(root, "partnerId");
-        long schemeId = longOrZero(root, "schemeId");
-        LocalDate revenueDate = resolveRevenueDate(root);
-        BigDecimal collectionMarginUsd = decimalOrZero(root, "collectionMarginUsd");
-        BigDecimal payoutMarginUsd = decimalOrZero(root, "payoutMarginUsd");
-        BigDecimal serviceChargeAmount = decimalOrZero(root, "serviceChargeAmount");
-        String serviceChargeCcy = firstNonBlank(textOrNull(root, "serviceChargeCcy"), "USD");
-        BigDecimal feeSharePct = decimalOrZero(root, "feeSharePct");
+        LocalDate revenueDate = resolveRevenueDate(event);
+        BigDecimal collectionMarginUsd = orZero(event.collectionMarginUsd());
+        BigDecimal payoutMarginUsd = orZero(event.payoutMarginUsd());
+        BigDecimal serviceChargeAmount = orZero(event.serviceChargeAmount());
+        String serviceChargeCcy = firstNonBlank(event.serviceChargeCcy(), "USD");
+        BigDecimal feeSharePct = orZero(event.feeSharePct());
 
         boolean created;
         try {
             created = captureService.capture(
-                    txnRef, partnerId, schemeId, revenueDate,
+                    txnRef, event.partnerId(), event.schemeId(), revenueDate,
                     collectionMarginUsd, payoutMarginUsd,
                     serviceChargeAmount, serviceChargeCcy, feeSharePct).created();
         } catch (IllegalArgumentException | NullPointerException e) {
@@ -110,7 +123,7 @@ public class PaymentApprovedEventHandler {
         }
 
         if (created) {
-            log.info("revenue captured from payment.approved: txnRef={} partnerId={}", txnRef, partnerId);
+            log.info("revenue captured from payment.approved: txnRef={} partnerId={}", txnRef, event.partnerId());
         } else {
             log.info("duplicate payment.approved skipped (already captured): txnRef={}", txnRef);
         }
@@ -118,46 +131,18 @@ public class PaymentApprovedEventHandler {
     }
 
     /** Use the explicit {@code revenueDate} when present, else the UTC date of {@code occurredAt}. */
-    private LocalDate resolveRevenueDate(JsonNode root) {
-        String explicit = textOrNull(root, "revenueDate");
-        if (explicit != null && !explicit.isBlank()) {
-            try {
-                return LocalDate.parse(explicit);
-            } catch (RuntimeException e) {
-                throw new IllegalArgumentException("payment.approved revenueDate is not an ISO date: " + explicit, e);
-            }
+    private LocalDate resolveRevenueDate(PaymentApprovedPayload event) {
+        if (event.revenueDate() != null) {
+            return event.revenueDate();
         }
-        String occurredAt = textOrNull(root, "occurredAt");
-        if (occurredAt != null && !occurredAt.isBlank()) {
-            try {
-                return Instant.parse(occurredAt).atZone(ZoneOffset.UTC).toLocalDate();
-            } catch (RuntimeException e) {
-                throw new IllegalArgumentException("payment.approved occurredAt is not an ISO instant: " + occurredAt, e);
-            }
+        if (event.occurredAt() != null) {
+            return event.occurredAt().atZone(ZoneOffset.UTC).toLocalDate();
         }
         throw new IllegalArgumentException("payment.approved event has neither revenueDate nor occurredAt");
     }
 
-    private static String textOrNull(JsonNode root, String field) {
-        JsonNode node = root.get(field);
-        return node == null || node.isNull() ? null : node.asText();
-    }
-
-    private static long longOrZero(JsonNode root, String field) {
-        JsonNode node = root.get(field);
-        return node == null || node.isNull() ? 0L : node.asLong();
-    }
-
-    private static BigDecimal decimalOrZero(JsonNode root, String field) {
-        JsonNode node = root.get(field);
-        if (node == null || node.isNull()) {
-            return BigDecimal.ZERO;
-        }
-        try {
-            return new BigDecimal(node.asText());
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("payment.approved field " + field + " is not a number: " + node.asText(), e);
-        }
+    private static BigDecimal orZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     private static String firstNonBlank(String... values) {

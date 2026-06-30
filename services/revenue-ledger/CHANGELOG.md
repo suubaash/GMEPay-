@@ -2,6 +2,41 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-06-30 — Phase 2 cross-service wiring (p2/revenue-ledger)
+
+### Changed
+- **Re-targeted the `payment.approved` consumer onto the canonical
+  `com.gme.pay.contracts.events.PaymentApprovedPayload`** (lib-api-contracts) — `PaymentApprovedEventHandler`
+  now deserializes the event directly into that shared DTO via Jackson (`JavaTimeModule`,
+  `FAIL_ON_UNKNOWN_PROPERTIES` off) instead of plucking JSON fields by hand, so payment-executor
+  (producer) and revenue-ledger (consumer) agree at the type level. Field set
+  (partnerId, schemeId, collectionMarginUsd, payoutMarginUsd, serviceChargeAmount, serviceChargeCcy,
+  feeSharePct) maps 1:1 onto `RevenueCaptureService.capture(...)`. Defensive defaults preserved: null
+  money → ZERO, serviceChargeCcy → "USD", txnRef → aggregateId → record key, revenueDate → occurredAt
+  UTC date. Poison handling unchanged (still `IllegalArgumentException` → DLT); a bad-money value now
+  surfaces via `InvalidFormatException` carrying the offending field path. Added `lib-api-contracts`
+  as an `implementation` dependency.
+- **`GET /v1/revenue` now returns the canonical shared `com.gme.pay.contracts.RevenueSummaryView`**
+  (incl. `totalRoundingUsd`) so ops-partner-bff and the reporting revenue board bind one type. The
+  service-local `RevenueSummaryResponse` is retained only as the value source. Money rides as decimal
+  STRINGs via the view's `@JsonFormat(STRING)` (the prior local DTO emitted unquoted numbers); field
+  names unchanged (camelCase — the old "snake_case" Javadoc was inaccurate, no naming strategy was set).
+
+### Confirmed (no code change)
+- **Rounding-residual reference-key shape (settlement-reconciliation IR-2).** `postRoundingResidual(reference,
+  residual, currency)` takes `reference` as an opaque audit handle (ledger `reference` column `length=64`),
+  accepting EITHER a per-txn ref (`TXN-…`, payment-executor) OR a settlement batch id
+  (`ZP00NN-YYYYMMDD-WINDOW`, ≤25 chars; settlement-reconciliation's per-batch aggregate residual).
+  Documented on `RoundingResidualController`; not idempotent on `reference` (callers post once).
+
+### Tests
+- `RevenueControllerTest` (new, 3) — asserts the `RevenueSummaryView` wire shape incl. money-as-string
+  and `totalRoundingUsd` (populated + null-coalesced-to-zero), plus the 400 date-range guard.
+- `PaymentApprovedEventHandlerTest` — retargeted onto the DTO path (11 green; bad-money assertion still
+  surfaces the field name).
+- `RoundingResidualTest` — added a batch-id-keyed case proving the reference is audited verbatim on
+  every ledger line (IR-2 proof).
+
 ## 2026-06-30 — surface REVENUE_ROUNDING in GET /v1/revenue (7.3-T27)
 
 ### Added
