@@ -81,8 +81,26 @@ public interface PrefundingClient {
         // no-op by default
     }
 
+    /**
+     * Read the partner's current prefunding balance (GET /v1/balance, backlog 5.2-T27). Read-only,
+     * no hold/debit. Keyed by the partner's natural code (prefunding's {@code partner_balance} row key).
+     *
+     * <p>Default throws {@link UnsupportedOperationException} so existing hand-written test fakes remain
+     * valid; {@code RestPrefundingClient} provides the real implementation against prefunding's
+     * {@code GET /v1/prefunding/{partnerCode}/balance}.
+     */
+    default BalanceSnapshot balance(String partnerCode) {
+        throw new UnsupportedOperationException("balance not implemented in this PrefundingClient");
+    }
+
     /** Result returned by a successful deduction. */
     record DeductionResult(BigDecimal deductedUsd, BigDecimal balanceAfter) {}
+
+    /**
+     * A point-in-time prefunding balance read: the USD balance, the configured low-balance threshold,
+     * and the balance currency. {@code threshold} may be null when no threshold is configured.
+     */
+    record BalanceSnapshot(BigDecimal balanceUsd, BigDecimal lowBalanceThresholdUsd, String currency) {}
 
     /** Result returned by a reversal. */
     record ReverseResult(BigDecimal reversedUsd, BigDecimal balanceAfter) {}

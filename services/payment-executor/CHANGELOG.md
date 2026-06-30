@@ -5,6 +5,13 @@ All notable changes to the payment-executor service. Newest first.
 ## [agent/payment-executor] — 2026-06-30
 
 ### Added
+- **5.2-T27 — GET /v1/balance prefunding balance inquiry.** New `BalanceController`
+  delegating to the prefunding service via a new `PrefundingClient.balance(partnerCode)`
+  seam (implemented in `RestPrefundingClient` against
+  `GET /v1/prefunding/{code}/balance`; default-throws so existing fakes stay valid) —
+  payment-executor owns no prefunding store. LOCAL partners get HTTP 403 `FORBIDDEN`;
+  OVERSEAS get balance + `is_below_threshold`. Money serialized as decimal strings per
+  MONEY_CONVENTION. Covered by `BalanceControllerTest` + `RestPrefundingClientTest`.
 - **5.2-T13 / 5.6-T11 — payment lifecycle event emission.** The service now EXPOSES
   its contract events through a `lib-events` `EventPublisher` seam: `payment.approved`
   (on confirm capture+APPROVE), `payment.failed` (on scheme DECLINE at confirm), and

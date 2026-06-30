@@ -218,6 +218,30 @@ public class RestPrefundingClient implements PrefundingClient {
     }
 
     @Override
+    public BalanceSnapshot balance(String partnerCode) {
+        try {
+            BalanceResponse body = restClient.get()
+                    .uri("/v1/prefunding/{partnerCode}/balance", partnerCode)
+                    .retrieve()
+                    .body(BalanceResponse.class);
+            if (body == null) {
+                throw new PaymentException("prefunding returned empty body for balance " + partnerCode);
+            }
+            return new BalanceSnapshot(body.balance(), body.threshold(), body.currency());
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/balance failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/balance failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
     public void reverseCumulative(long partnerId, String txnRef) {
         try {
             restClient.post()
@@ -280,4 +304,9 @@ public class RestPrefundingClient implements PrefundingClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ReleaseResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance) {}
+
+    /** Wire format for prefunding's {@code GET /v1/prefunding/{partnerCode}/balance} (BalanceView). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record BalanceResponse(String partnerCode, String currency, BigDecimal balance,
+                           BigDecimal threshold, BigDecimal pctOfThreshold) {}
 }

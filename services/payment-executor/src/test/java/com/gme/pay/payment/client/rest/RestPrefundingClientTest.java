@@ -54,6 +54,35 @@ class RestPrefundingClientTest {
     }
 
     @Test
+    @DisplayName("balance: GETs the BalanceView and maps balance/threshold/currency")
+    void balance_parsesBalanceView() {
+        server.expect(requestTo("http://prefunding:8080/v1/prefunding/PTNR-OS/balance"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        "{\"partnerCode\":\"PTNR-OS\",\"currency\":\"USD\","
+                                + "\"balance\":\"48234.5600\",\"threshold\":\"10000.00\","
+                                + "\"pctOfThreshold\":\"482.35\"}",
+                        MediaType.APPLICATION_JSON));
+
+        PrefundingClient.BalanceSnapshot snap = client.balance("PTNR-OS");
+
+        assertEquals(new BigDecimal("48234.5600"), snap.balanceUsd());
+        assertEquals(new BigDecimal("10000.00"), snap.lowBalanceThresholdUsd());
+        assertEquals("USD", snap.currency());
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("balance: a non-2xx is wrapped as PaymentException")
+    void balance_errorWrapped() {
+        server.expect(requestTo("http://prefunding:8080/v1/prefunding/PTNR-OS/balance"))
+                .andRespond(withServerError());
+
+        assertThrows(PaymentException.class, () -> client.balance("PTNR-OS"));
+        server.verify();
+    }
+
+    @Test
     @DisplayName("deduct: 402 Payment Required maps to InsufficientPrefundingException")
     void deduct_paymentRequiredMapsToInsufficient() {
         server.expect(requestTo("http://prefunding:8080/v1/prefunding/42/deduct"))
