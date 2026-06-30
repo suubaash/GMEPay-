@@ -5,11 +5,15 @@ import com.gme.pay.kyb.KybProvider;
 import com.gme.pay.kyb.KybSubject;
 import com.gme.pay.kyb.ScreeningResult;
 import com.gme.pay.kybadapter.event.KybScreeningEvent;
+import com.gme.pay.kybadapter.kyb.KybVerificationRequest;
+import com.gme.pay.kybadapter.kyb.KybVerificationResult;
+import com.gme.pay.kybadapter.service.KybVerificationService;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,10 +45,13 @@ public class ScreeningController {
 
     private final KybProvider kybProvider;
     private final EventPublisher eventPublisher;
+    private final KybVerificationService verificationService;
 
-    public ScreeningController(KybProvider kybProvider, EventPublisher eventPublisher) {
+    public ScreeningController(KybProvider kybProvider, EventPublisher eventPublisher,
+            KybVerificationService verificationService) {
         this.kybProvider = kybProvider;
         this.eventPublisher = eventPublisher;
+        this.verificationService = verificationService;
     }
 
     /**
@@ -70,6 +77,40 @@ public class ScreeningController {
                     subject.partnerCode(), e.getMessage(), e);
         }
         return result;
+    }
+
+    /**
+     * Run a FULL KYB verification — sanctions/PEP screening + business-registration
+     * verification + document-completeness, collapsed into one
+     * PASS/FAIL/MANUAL_REVIEW decision and persisted to {@code kyb_screening}.
+     *
+     * <p>Idempotent: re-verifying an unchanged subject replays the stored run
+     * (no second vendor call, no duplicate event) unless {@code force=true}.
+     * config-registry's onboarding wizard calls this; the verdict is evidence,
+     * not an activation authorisation (the activation stays an ADR-008 4-eyes
+     * operator decision). 400 when the subject or its partner code is missing.
+     */
+    @PostMapping("/verify")
+    public KybVerificationResult verify(@RequestBody KybVerificationRequest request) {
+        if (request == null || request.subject() == null
+                || request.subject().partnerCode() == null
+                || request.subject().partnerCode().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "subject with a partnerCode is required");
+        }
+        return verificationService.verify(request);
+    }
+
+    /**
+     * Retrieve a persisted verification run by its provider reference (the
+     * {@code GET /v1/kyb/result/{vendorRef}} contract named in the service
+     * backlog). 404 when no run with that reference exists.
+     */
+    @GetMapping("/result/{providerRef}")
+    public KybVerificationResult result(@PathVariable String providerRef) {
+        return verificationService.findByProviderRef(providerRef)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "no KYB verification run found for providerRef " + providerRef));
     }
 
     /**
