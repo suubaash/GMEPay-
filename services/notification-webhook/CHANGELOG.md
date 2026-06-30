@@ -2,6 +2,27 @@
 
 All notable changes to the notification-webhook service. Newest first.
 
+## 2026-06-30 — Phase 2: align payment.approved consumer to canonical contract
+
+### Changed
+- **PaymentApprovedEventHandler** now deserializes the canonical
+  `com.gme.pay.contracts.events.PaymentApprovedPayload` (lib-api-contracts, camelCase)
+  instead of bespoke `JsonNode` field-plucking, so producer (payment-executor) and this
+  consumer agree on the wire shape for topic `gmepay.payment.approved`.
+  - Transaction reference resolution is now `txnRef` → `aggregateId` → record key
+    (was `aggregateId` → record key); still bounded to the 64-char `webhook_id` column.
+  - The persisted/partner-delivered payload is a normalized re-serialization of the typed
+    event, guaranteeing the approved-payment fields (`txnRef`, `partnerId`, `schemeId`,
+    `collectionMarginUsd`, `payoutMarginUsd`, `serviceChargeAmount`, `serviceChargeCcy`,
+    `feeSharePct`) are always carried in the canonical shape.
+  - `EVENT_TYPE` now references `PaymentApprovedPayload.EVENT_TYPE`; topic/DLT constants
+    unchanged (`gmepay.payment.approved`).
+  - Defensive: unknown additive producer fields tolerated (`FAIL_ON_UNKNOWN_PROPERTIES`
+    disabled); blank/invalid JSON and eventType/txnRef gaps remain poison → DLT.
+- **PaymentApprovedEventHandlerTest** reworked onto a canonical payload + a new assertion
+  that the delivery payload carries the mapped approved-payment fields, plus an
+  unknown-field tolerance case. Broker-free (mocked persistence). `:services:notification-webhook:test` green.
+
 ## 2026-06-30 — Ops alerting (WBS 8.6-T24)
 
 ### Added
