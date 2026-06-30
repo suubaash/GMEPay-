@@ -67,6 +67,9 @@ class PaymentControllerIdempotencyTest {
         e.setPayoutCurrency("KRW");
         e.setCollectionAmount(new BigDecimal("131385.49"));
         e.setCollectionCurrency("MNT");
+        e.setCollectionMarginUsd(new BigDecimal("1.2345"));
+        e.setPayoutMarginUsd(new BigDecimal("0.6789"));
+        e.setServiceCharge(new BigDecimal("0.50"));
         e.setTxnRef("txn_1");
         e.setPaymentId("pay_1");
         e.setStatus(PaymentAuthorizationEntity.STATUS_AUTHORIZED);
@@ -136,5 +139,38 @@ class PaymentControllerIdempotencyTest {
                 .isEqualTo("payment.approved");
         org.assertj.core.api.Assertions.assertThat(eventPublisher.published().get(0).aggregateId())
                 .isEqualTo("pay_1");
+    }
+
+    @Test
+    void confirm_wonClaim_emitsCanonicalPaymentApprovedPayloadWithRevenueFields() throws Exception {
+        when(authorizationRepository.findById("AUTH-1")).thenReturn(Optional.of(authorizedEntity()));
+        when(authorizationService.compareAndSetStatus("AUTH-1",
+                PaymentAuthorizationEntity.STATUS_AUTHORIZED,
+                PaymentAuthorizationEntity.STATUS_CONFIRMING)).thenReturn(true);
+        when(orchestrator.confirmMpm(any())).thenReturn(sampleResult("pay_1"));
+
+        mvc.perform(post("/v1/payments/AUTH-1/confirm")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"wallet_charge_ref\":\"WCR1\"}"))
+                .andExpect(status().isCreated());
+
+        var event = (com.gme.pay.payment.domain.event.PaymentEvents.PaymentApproved)
+                eventPublisher.published().get(0);
+        var payload = event.payload();
+        // Canonical lib-api-contracts payload (consumed by revenue-ledger + notification-webhook).
+        org.assertj.core.api.Assertions.assertThat(payload.eventType()).isEqualTo("payment.approved");
+        org.assertj.core.api.Assertions.assertThat(payload.aggregateId()).isEqualTo("pay_1");
+        org.assertj.core.api.Assertions.assertThat(payload.txnRef()).isEqualTo("txn_1");
+        org.assertj.core.api.Assertions.assertThat(payload.partnerId()).isEqualTo(1L);
+        org.assertj.core.api.Assertions.assertThat(payload.collectionMarginUsd())
+                .isEqualByComparingTo(new BigDecimal("1.2345"));
+        org.assertj.core.api.Assertions.assertThat(payload.payoutMarginUsd())
+                .isEqualByComparingTo(new BigDecimal("0.6789"));
+        org.assertj.core.api.Assertions.assertThat(payload.serviceChargeAmount())
+                .isEqualByComparingTo(new BigDecimal("0.50"));
+        org.assertj.core.api.Assertions.assertThat(payload.serviceChargeCcy()).isEqualTo("MNT");
+        org.assertj.core.api.Assertions.assertThat(payload.feeSharePct())
+                .isEqualByComparingTo(new BigDecimal("0.70"));
+        org.assertj.core.api.Assertions.assertThat(payload.revenueDate()).isNotNull();
     }
 }

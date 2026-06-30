@@ -3,6 +3,8 @@ package com.gme.pay.payment.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.contracts.BalanceDeductionEntry;
+import com.gme.pay.contracts.PrefundingDeductionHistoryView;
 import com.gme.pay.payment.domain.client.PartnerConfigClient;
 import com.gme.pay.payment.domain.client.PrefundingClient;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,9 +13,15 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -68,6 +76,39 @@ class BalanceControllerTest {
                         .header("X-Partner-Type", "OVERSEAS"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.is_below_threshold").value(true));
+    }
+
+    @Test
+    void overseas_includeHistory_appendsRecentDeductions() throws Exception {
+        when(prefundingClient.balance(anyString())).thenReturn(new PrefundingClient.BalanceSnapshot(
+                new BigDecimal("48234.5600"), new BigDecimal("10000.00"), "USD"));
+        when(prefundingClient.deductionHistory(eq("PTNR-OS"), eq(20)))
+                .thenReturn(new PrefundingDeductionHistoryView("PTNR-OS",
+                        List.of(new BalanceDeductionEntry(new BigDecimal("12.50"),
+                                Instant.parse("2026-06-29T01:00:00Z"), "txn_9")), 20));
+
+        mvc.perform(get("/v1/balance")
+                        .header("X-Partner-Id", "101")
+                        .header("X-Partner-Code", "PTNR-OS")
+                        .header("X-Partner-Type", "OVERSEAS")
+                        .param("include_history", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recent_deductions[0].amountUsd").value("12.50"))
+                .andExpect(jsonPath("$.recent_deductions[0].txnRef").value("txn_9"));
+    }
+
+    @Test
+    void overseas_withoutHistory_omitsRecentDeductionsAndDoesNotCallHistory() throws Exception {
+        when(prefundingClient.balance(anyString())).thenReturn(new PrefundingClient.BalanceSnapshot(
+                new BigDecimal("48234.5600"), new BigDecimal("10000.00"), "USD"));
+
+        mvc.perform(get("/v1/balance")
+                        .header("X-Partner-Id", "101")
+                        .header("X-Partner-Type", "OVERSEAS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recent_deductions").doesNotExist());
+
+        verify(prefundingClient, never()).deductionHistory(anyString(), anyInt());
     }
 
     @Test

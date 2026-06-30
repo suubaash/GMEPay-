@@ -4,6 +4,7 @@ import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
+import com.gme.pay.payment.domain.MerchantNotFoundException;
 import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
@@ -71,14 +72,26 @@ public class PaymentExceptionHandler {
     }
 
     /**
-     * GET /v1/payments/{id} miss or cross-partner access (5.2-T16). 404 with a {@code PAYMENT_NOT_FOUND}
-     * string code — lib-errors' {@code ErrorCode} enum has no such constant (frozen), so we use the
-     * {@link ApiError} canonical constructor directly rather than {@code ApiError.of(ErrorCode,...)}.
+     * GET /v1/payments/{id} miss or cross-partner access (5.2-T16). 404 {@code PAYMENT_NOT_FOUND} —
+     * now the canonical {@link ErrorCode#PAYMENT_NOT_FOUND} (Phase 2: the String-literal workaround is
+     * retired). A cross-partner payment maps here too (never 403) so ownership is not leaked.
      */
     @ExceptionHandler(PaymentNotFoundException.class)
     public ResponseEntity<ApiError> handlePaymentNotFound(PaymentNotFoundException ex) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(new ApiError("PAYMENT_NOT_FOUND", ex.getMessage(), false, newRequestId()));
+        return ResponseEntity.status(ErrorCode.PAYMENT_NOT_FOUND.httpStatus())
+                .body(ApiError.of(ErrorCode.PAYMENT_NOT_FOUND, ex.getMessage(), newRequestId()));
+    }
+
+    /**
+     * Strict-mode merchant resolution failure (lookup miss / unreachable, dev-synth disabled) →
+     * canonical {@link ErrorCode#MERCHANT_NOT_FOUND} (404). Declared BEFORE the {@code IllegalArgument}
+     * handler; {@code MerchantNotFoundException} extends {@code PaymentException} (RuntimeException) so it
+     * needs its own mapping rather than falling through to a generic 500.
+     */
+    @ExceptionHandler(MerchantNotFoundException.class)
+    public ResponseEntity<ApiError> handleMerchantNotFound(MerchantNotFoundException ex) {
+        return ResponseEntity.status(ErrorCode.MERCHANT_NOT_FOUND.httpStatus())
+                .body(ApiError.of(ErrorCode.MERCHANT_NOT_FOUND, ex.getMessage(), newRequestId()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
