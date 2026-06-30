@@ -9,14 +9,20 @@ spring:
       default-filters:
         - AddRequestHeader=X-Gateway-Version, v1
   # Slice 1 (ADR-011): OAuth2 resource server. Human traffic from admin-ui /
-  # partner-portal-ui bears Keycloak-issued JWTs. The issuer URI below is the
-  # default for the docker-compose Keycloak service (realm = gmepay); override
-  # via SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI per environment.
+  # partner-portal-ui bears OIDC-issued JWTs. Provider-neutral: the issuer URI is
+  # injected and accepts ANY OIDC issuer (self-hosted Keycloak or any cloud IdP) —
+  # it is NOT pinned to a literal Keycloak URL. The default below targets the
+  # docker-compose Keycloak service (realm = gmepay) for local dev only.
+  #   OIDC_ISSUER_URI  — provider-neutral env name (preferred; works for any IdP)
+  #   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI — set this only when
+  #   the IdP's OIDC discovery (.well-known) is unreachable and JWKS must be pinned.
+  # SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI also still works (Spring
+  # relaxed binding) and takes precedence if both that and OIDC_ISSUER_URI are set.
   security:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: http://localhost:8090/realms/gmepay
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8090/realms/gmepay}
 
 server:
   port: 8080

@@ -1,5 +1,19 @@
 # api-gateway — CHANGELOG
 
+## 2026-06-30 — OIDC issuer made provider-neutral (agent/cloud-audit)
+
+### Changed
+- **Resource-server issuer URI is now injected and provider-neutral** — accepts ANY
+  OIDC issuer (self-hosted Keycloak or any cloud IdP), not a literal Keycloak URL.
+  `spring.security.oauth2.resourceserver.jwt.issuer-uri` now defaults to
+  `${OIDC_ISSUER_URI:http://localhost:8090/realms/gmepay}` — the local Keycloak default
+  is dev-only. Set `OIDC_ISSUER_URI` (provider-neutral env name) per environment;
+  `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` (relaxed binding) still works
+  and takes precedence. JWKS can be pinned via
+  `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI` when discovery is unreachable.
+  No code change; the JWT decoder already binds from this property. Additive — local
+  Keycloak flow unchanged.
+
 ## 2026-06-30 — Rate limiting + config-backed credential source (agent/api-gateway)
 
 ### Added
