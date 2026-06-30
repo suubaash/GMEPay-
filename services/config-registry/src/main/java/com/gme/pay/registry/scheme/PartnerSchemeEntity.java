@@ -176,6 +176,46 @@ public class PartnerSchemeEntity {
                 enabled);
     }
 
+    /**
+     * Adapt this row to the Wave-3 location-resolution {@link PartnerSchemeView}
+     * — the canonical projection plus the five fields smart-router needs to pick
+     * a scheme for a (country, presentment-mode, direction) tuple. Derived from
+     * the columns this service already stores:
+     * <ul>
+     *   <li>{@code countryCode} — the owning partner's operating country, passed
+     *       in by the service (this row carries no country of its own);</li>
+     *   <li>{@code supportsCpm} / {@code supportsMpm} — whether the row declares
+     *       an approval method for each presentment mode
+     *       ({@code approval_method_cpm}/{@code _mpm} non-null);</li>
+     *   <li>{@code priority} — {@code null}: there is no per-row selection-order
+     *       column yet, so the resolver falls back to its own ordering;</li>
+     *   <li>{@code status} — {@code ACTIVE} when the kill switch is on,
+     *       {@code SUSPENDED} when off — orthogonal to {@code enabled} on the
+     *       wire but derived from it until a dedicated lifecycle column exists.</li>
+     * </ul>
+     */
+    public PartnerSchemeView toLocationView(String countryCode) {
+        boolean on = Boolean.TRUE.equals(enabled);
+        return new PartnerSchemeView(
+                partnerId,
+                schemeId,
+                direction,
+                role,
+                zeropayMerchantId,
+                zeropaySubMerchantId,
+                kftcInstitutionCode,
+                partnerTypeChar,
+                vaultSecretId,
+                approvalMethodCpm,
+                approvalMethodMpm,
+                enabled,
+                countryCode,
+                approvalMethodCpm != null,
+                approvalMethodMpm != null,
+                null,
+                on ? "ACTIVE" : "SUSPENDED");
+    }
+
     public Long getId() {
         return id;
     }

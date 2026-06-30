@@ -83,6 +83,18 @@ public class RuleEntity {
     @Column(name = "service_charge_usd", nullable = false, precision = 19, scale = 4)
     private BigDecimal serviceChargeUsd;
 
+    /**
+     * Wave-3 (V035): provenance of the COLLECTION-leg cost rate rate-fx should
+     * use — roster {@code IDENTITY|LIVE|MANUAL|PARTNER}. Column DEFAULT 'LIVE';
+     * read normalises NULL → {@code LIVE} (see {@link #toView}).
+     */
+    @Column(name = "rate_coll_source", length = 10)
+    private String rateCollSource;
+
+    /** Wave-3 (V035): provenance of the PAYOUT-leg cost rate; see {@link #rateCollSource}. */
+    @Column(name = "rate_pay_source", length = 10)
+    private String ratePaySource;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -127,6 +139,15 @@ public class RuleEntity {
             // Mirrors the V017 column DEFAULT 0 for entities built without one.
             serviceChargeUsd = BigDecimal.ZERO.setScale(4);
         }
+        // Mirror the V035 column DEFAULT 'LIVE': Hibernate lists these NOT NULL
+        // columns in the INSERT with a null bind (it does not defer to the DB
+        // DEFAULT), so an entity built without an explicit source must stamp it.
+        if (rateCollSource == null) {
+            rateCollSource = DEFAULT_RATE_SOURCE;
+        }
+        if (ratePaySource == null) {
+            ratePaySource = DEFAULT_RATE_SOURCE;
+        }
         // Fresh rows are current by definition: stamp the partial-unique key
         // (superseded rows are never INSERTed — SCD-6 supersession is an UPDATE
         // of the prior row's superseded_at, handled by onUpdate below).
@@ -145,7 +166,15 @@ public class RuleEntity {
         }
     }
 
-    /** Adapt this row to the canonical {@link RuleView} wire DTO. */
+    /** Roster default when a rate-source column is unset (pre-V035 row, never re-saved). */
+    static final String DEFAULT_RATE_SOURCE = "LIVE";
+
+    /**
+     * Adapt this row to the canonical {@link RuleView} wire DTO, including the
+     * Wave-3 rate-source provenance (rate-fx consumes it). A NULL source column
+     * (a rule predating V035 that was never re-saved) reads as
+     * {@value #DEFAULT_RATE_SOURCE} — the safe cross-border assumption.
+     */
     public RuleView toView() {
         return new RuleView(
                 id,
@@ -156,7 +185,9 @@ public class RuleEntity {
                 serviceChargeUsd,
                 validFrom,
                 validTo,
-                recordedAt);
+                recordedAt,
+                rateCollSource == null ? DEFAULT_RATE_SOURCE : rateCollSource,
+                ratePaySource == null ? DEFAULT_RATE_SOURCE : ratePaySource);
     }
 
     public Long getId() {
@@ -209,6 +240,22 @@ public class RuleEntity {
 
     public void setServiceChargeUsd(BigDecimal serviceChargeUsd) {
         this.serviceChargeUsd = serviceChargeUsd;
+    }
+
+    public String getRateCollSource() {
+        return rateCollSource;
+    }
+
+    public void setRateCollSource(String rateCollSource) {
+        this.rateCollSource = rateCollSource;
+    }
+
+    public String getRatePaySource() {
+        return ratePaySource;
+    }
+
+    public void setRatePaySource(String ratePaySource) {
+        this.ratePaySource = ratePaySource;
     }
 
     public Instant getValidFrom() {

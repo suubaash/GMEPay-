@@ -62,7 +62,9 @@ import org.springframework.web.server.ResponseStatusException;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({PrefundingConfigServiceTest.TestConfig.class, PrefundingConfigService.class,
-        AuditLogService.class, PartnerStore.class, CacheConfig.class})
+        AuditLogService.class, PartnerStore.class, CacheConfig.class,
+        com.gme.pay.registry.prefunding.push.CreditLimitPusher.class,
+        com.gme.pay.registry.prefunding.push.NoOpPrefundingCreditLimitClient.class})
 class PrefundingConfigServiceTest {
 
     @Autowired

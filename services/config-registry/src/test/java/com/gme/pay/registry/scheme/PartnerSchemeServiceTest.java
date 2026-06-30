@@ -99,6 +99,13 @@ class PartnerSchemeServiceTest {
         return partnerRepository.findCurrentByPartnerCode(code).orElseThrow().getId();
     }
 
+    /** Stamp the operating country onto the current partner row (the location read joins on it). */
+    private void setOperatingCountry(Long partnerId, String country) {
+        PartnerEntity partner = partnerRepository.findById(partnerId).orElseThrow();
+        partner.setOperatingCountry(country);
+        partnerRepository.saveAndFlush(partner);
+    }
+
     /** A fully-wired ZEROPAY enablement (passes the cross-field invariant). */
     private static PartnerSchemeCommand zeropay(Boolean enabled) {
         return new PartnerSchemeCommand("ZEROPAY", "OUTBOUND", "ACQUIRER",
@@ -163,6 +170,63 @@ class PartnerSchemeServiceTest {
         assertThat(service.replaceDraftSchemes("SCH_REPLACE", List.of(), "maker_kim")).isEmpty();
         assertThat(service.currentSchemes("SCH_REPLACE")).isEmpty();
         assertThat(schemeRepository.findAllCurrentByPartnerId(partnerId)).isEmpty();
+    }
+
+    @Test
+    void resolveByLocation_carriesCountryAndDerivedFields_filtersByCountry() {
+        Long krId = seedPartner("SCH_LOC_KR");
+        Long vnId = seedPartner("SCH_LOC_VN");
+        // Stamp operating countries on the current partner rows (the location
+        // read joins on partners.operating_country).
+        setOperatingCountry(krId, "KR");
+        setOperatingCountry(vnId, "VN");
+
+        // KR partner: a fully-wired ZEROPAY row (both approval methods set) +
+        // a CPM-only row (only approvalMethodCpm set).
+        service.replaceDraftSchemes("SCH_LOC_KR",
+                List.of(zeropay(true), scheme("BAKONG", "INBOUND", "ISSUER")), "maker");
+        service.replaceDraftSchemes("SCH_LOC_VN",
+                List.of(scheme("NAPAS_247", "BOTH", "BOTH")), "maker");
+
+        // Filter to KR: only the two KR enablements, each carrying countryCode +
+        // derived supportsCpm/Mpm + status.
+        List<PartnerSchemeView> kr = service.resolveByLocation("KR");
+        assertThat(kr).extracting(PartnerSchemeView::schemeId)
+                .containsExactlyInAnyOrder("ZEROPAY", "BAKONG");
+        assertThat(kr).allSatisfy(v -> {
+            assertThat(v.countryCode()).isEqualTo("KR");
+            assertThat(v.status()).isEqualTo("ACTIVE");
+        });
+        PartnerSchemeView zp = kr.stream()
+                .filter(v -> v.schemeId().equals("ZEROPAY")).findFirst().orElseThrow();
+        // zeropay() sets both approval methods → supports both modes.
+        assertThat(zp.supportsCpm()).isTrue();
+        assertThat(zp.supportsMpm()).isTrue();
+        PartnerSchemeView bakong = kr.stream()
+                .filter(v -> v.schemeId().equals("BAKONG")).findFirst().orElseThrow();
+        // scheme() leaves both approval methods null → supports neither.
+        assertThat(bakong.supportsCpm()).isFalse();
+        assertThat(bakong.supportsMpm()).isFalse();
+
+        // Unknown country → empty list (no 404); null → every current enablement.
+        assertThat(service.resolveByLocation("ZZ")).isEmpty();
+        assertThat(service.resolveByLocation(null))
+                .extracting(PartnerSchemeView::schemeId)
+                .containsExactlyInAnyOrder("ZEROPAY", "BAKONG", "NAPAS_247");
+    }
+
+    @Test
+    void resolveByLocation_disabledRowReportsSuspendedStatus() {
+        Long id = seedPartner("SCH_LOC_SUSPEND");
+        setOperatingCountry(id, "KR");
+        PartnerSchemeCommand disabled = new PartnerSchemeCommand(
+                "PROMPT_PAY", "OUTBOUND", "ISSUER",
+                null, null, null, null, null, null, null, false);
+        service.replaceDraftSchemes("SCH_LOC_SUSPEND", List.of(disabled), "maker");
+
+        PartnerSchemeView v = service.resolveByLocation("KR").get(0);
+        assertThat(v.enabled()).isFalse();
+        assertThat(v.status()).isEqualTo("SUSPENDED");
     }
 
     @Test
