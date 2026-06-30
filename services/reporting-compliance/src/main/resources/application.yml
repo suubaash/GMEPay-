@@ -32,6 +32,13 @@ gmepay:
   transaction-mgmt:
     # Override in production/K8s via env var GMEPAY_TRANSACTION_MGMT_BASE_URL
     base-url: http://transaction-mgmt:8080
+    fx-committed:
+      # Gate for RestCommittedFxTransactionPort — the REAL committed-FX projection adapter
+      # calling GET /v1/transactions/fx-committed -> List<CommittedFxView>. Default false so
+      # local boots and tests fall back to the in-process FixtureCommittedFxTransactionPort
+      # (@ConditionalOnMissingBean). Set true in production once transaction-mgmt exposes the
+      # projection; FX1015 #14 (offer_rate_coll) then sources from real data.
+      enabled: false
   config-registry:
     # config-registry base URL — used by the production RegulatoryConfigClient.
     base-url: http://config-registry:8086
