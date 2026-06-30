@@ -28,6 +28,18 @@ daily ZeroPay batch files carry actual approved payments and refunds.
   `ZpCommittedTxnRecorder`. A second (recorder-less) constructor preserves existing unit-test
   slices; the production constructor is `@Autowired`.
 
+### Added — batch-file registry wiring
+- **`ZpBatchRegistrar`** — persists the `zp_batch_files` registry row (status `GENERATED`)
+  and stages ZP0011 detail lines (`zp_staged_records`) for each outbound file, then flips the
+  row to `TRANSMITTED` after a successful SFTP put. Idempotent on the natural key
+  `(file_type, business_date, sequence_no)`; staged fields are defensively truncated to their
+  column widths. Closes the gap where the V001/V002 registry tables were written by nothing on
+  the live path (so duplicate-generation / out-of-window detection and ZP0012 reconciliation
+  had no data to work with).
+- `ZeroPayBatchScheduler` now registers → transfers → marks-transmitted via the registrar
+  (best-effort; a registry failure never blocks the transfer). A second (registrar-less)
+  constructor preserves the existing scheduler unit test.
+
 ### Tests
 - `ZpCommittedTxnPersistenceH2SliceTest` — round-trips committed payment/refund rows + the
   unique `(txn_kind, zeropay_txn_ref)` guard, on H2 (PostgreSQL mode).
@@ -35,6 +47,8 @@ daily ZeroPay batch files carry actual approved payments and refunds.
   and per-merchant aggregation, against a mocked repository.
 - `ZpPersistenceBatchDataPortRoundTripTest` — captured txns → data port → ZP0011/ZP0021
   formatter → parser round-trip with non-empty records and matching control sums.
+- `ZpBatchRegistrarH2SliceTest` — registry round-trip (GENERATED → staged lines → TRANSMITTED)
+  + natural-key idempotency, on H2.
 
 ### Externally blocked (not attempted)
 - Real KFTC/ZeroPay SFTP endpoint, PGP encryption, and final IDD field widths (van_fee,
