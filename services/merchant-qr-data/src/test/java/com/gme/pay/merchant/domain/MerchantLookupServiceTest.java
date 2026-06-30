@@ -101,9 +101,38 @@ class MerchantLookupServiceTest {
         ApiException ex = assertThrows(ApiException.class,
                 () -> strict.getByQrCodeId("QR_DEACTIVATED_______"),
                 "strict mode must reject a non-operational merchant");
-        assertEquals(ErrorCode.MERCHANT_NOT_FOUND, ex.errorCode());
+        assertEquals(ErrorCode.MERCHANT_DEACTIVATED, ex.errorCode());
+        assertEquals(422, ex.errorCode().httpStatus());
+        assertFalse(ex.errorCode().retryable());
         assertTrue(ex.getMessage().contains("not operational"));
         assertTrue(strict.isStrictMode());
+    }
+
+    @Test
+    void strictMode_suspendedMerchant_rejectedWithSuspendedCode() {
+        repository.put(new Merchant(
+                "M0000000070", "QR_SUSPENDED_STRICT__",
+                "Suspended Shop", "RETAIL", "DOMESTIC", "SUSPENDED", false));
+
+        MerchantLookupService strict = new MerchantLookupService(repository, true);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> strict.getByQrCodeId("QR_SUSPENDED_STRICT__"),
+                "strict mode must reject a suspended merchant");
+        assertEquals(ErrorCode.MERCHANT_SUSPENDED, ex.errorCode());
+        assertEquals(422, ex.errorCode().httpStatus());
+        assertFalse(ex.errorCode().retryable());
+    }
+
+    @Test
+    void strictMode_unknownQr_stillThrowsNotFound() {
+        MerchantLookupService strict = new MerchantLookupService(repository, true);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> strict.getByQrCodeId(UNKNOWN_QR),
+                "genuinely-unknown QR must still be 404 MERCHANT_NOT_FOUND in strict mode");
+        assertEquals(ErrorCode.MERCHANT_NOT_FOUND, ex.errorCode());
+        assertEquals(404, ex.errorCode().httpStatus());
     }
 
     @Test

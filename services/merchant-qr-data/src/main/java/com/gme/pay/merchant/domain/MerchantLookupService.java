@@ -19,15 +19,16 @@ import org.springframework.stereotype.Service;
  * with HTTP 200, leaving the payment path to decide whether the merchant was usable
  * (the "lenient fake-merchant bypass"). When
  * {@code gmepay.merchant.strict-mode=true} (see {@code application.yml}) a non-operational
- * merchant (status != ACTIVE or {@code active=false}) is rejected at lookup time with
- * {@link ErrorCode#MERCHANT_NOT_FOUND} and a reason describing why, so the QR-pay flow
- * cannot proceed against an inactive merchant. Default ({@code false}) preserves the
- * legacy lenient behaviour for the existing golden path; flip the flag on to enforce.
+ * merchant (status != ACTIVE or {@code active=false}) is rejected at lookup time with a
+ * precise 422 code describing why, so the QR-pay flow cannot proceed against an inactive
+ * merchant. Default ({@code false}) preserves the legacy lenient behaviour for the existing
+ * golden path; flip the flag on to enforce.
  *
- * <p>NOTE: lib-errors (frozen) has no dedicated {@code MERCHANT_SUSPENDED} /
- * {@code MERCHANT_DEACTIVATED} codes, so strict rejections reuse
- * {@link ErrorCode#MERCHANT_NOT_FOUND} (404) with the specific reason in the message.
- * See INTEGRATION REQUEST #1 in the build report.
+ * <p>Strict-mode rejection codes (Phase 2 wiring — lib-errors now carries the precise codes):
+ * a SUSPENDED merchant maps to {@link ErrorCode#MERCHANT_SUSPENDED} (422); any other
+ * non-operational merchant (DEACTIVATED, or {@code active=false}) maps to
+ * {@link ErrorCode#MERCHANT_DEACTIVATED} (422). A genuinely-unknown QR code still yields
+ * {@link ErrorCode#MERCHANT_NOT_FOUND} (404).
  */
 @Service
 public class MerchantLookupService {
@@ -77,8 +78,11 @@ public class MerchantLookupService {
         if (strictMode && !merchant.isOperational()) {
             log.warn("Strict-mode lookup rejected non-operational merchant: qr={}, merchantId={}, status={}, active={}",
                     qrCodeId, merchant.merchantId(), merchant.status(), merchant.active());
+            ErrorCode code = "SUSPENDED".equalsIgnoreCase(merchant.status())
+                    ? ErrorCode.MERCHANT_SUSPENDED
+                    : ErrorCode.MERCHANT_DEACTIVATED;
             throw new ApiException(
-                    ErrorCode.MERCHANT_NOT_FOUND,
+                    code,
                     "Merchant for QR code " + qrCodeId + " is not operational (status="
                             + merchant.status() + ", active=" + merchant.active() + ")");
         }

@@ -3,7 +3,18 @@
 All notable changes to the `merchant-qr-data` service are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — 2026-06-30 (agent/merchant-qr-data)
+## [Unreleased] — 2026-06-30 (p2/merchant-qr-data)
+
+### Changed
+- **Strict-mode rejection codes wired to canonical 422s** (Phase 2). Now that
+  lib-errors carries `MERCHANT_SUSPENDED`(422) and `MERCHANT_DEACTIVATED`(422),
+  strict-mode `GET /v1/merchants/{qr}` returns `MERCHANT_SUSPENDED` for SUSPENDED
+  merchants and `MERCHANT_DEACTIVATED` for all other non-operational merchants
+  (DEACTIVATED / `active=false`), replacing the previous `MERCHANT_NOT_FOUND`(404)
+  workaround. Genuinely-unknown QR codes still return `MERCHANT_NOT_FOUND`(404).
+  Tests updated to assert the new 422 codes per status.
+
+## [Earlier] — 2026-06-30 (agent/merchant-qr-data)
 
 ### Added
 - **Strict-mode merchant resolution** (`gmepay.merchant.strict-mode`, default `false`).
