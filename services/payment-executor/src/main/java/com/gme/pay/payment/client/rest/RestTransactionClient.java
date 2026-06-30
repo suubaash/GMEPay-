@@ -60,7 +60,15 @@ public class RestTransactionClient implements TransactionClient {
                             request.collectionCurrency(),
                             request.merchantId(),
                             request.quoteId(),
-                            request.merchantFeeRate()))
+                            request.merchantFeeRate(),
+                            request.offerRateColl(),
+                            request.crossRate(),
+                            request.costRateColl(),
+                            request.costRatePay(),
+                            request.collectionUsd(),
+                            request.payoutUsdCost(),
+                            request.collectionMarginUsd(),
+                            request.payoutMarginUsd()))
                     .retrieve()
                     .body(TransactionCreatedResponse.class);
 
@@ -93,7 +101,12 @@ public class RestTransactionClient implements TransactionClient {
                             patch.approvedAt(),
                             patch.bookedSettlementAmount(),
                             patch.settlementRoundingMode(),
-                            patch.roundingResidual()))
+                            patch.roundingResidual(),
+                            patch.collectionMarginUsd(),
+                            patch.payoutMarginUsd(),
+                            patch.collectionUsd(),
+                            patch.costRateColl(),
+                            patch.costRatePay()))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException ex) {

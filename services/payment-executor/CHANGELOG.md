@@ -2,6 +2,35 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [w3/payment-executor] — 2026-06-30 (Wave-3 cross-service reconcile)
+
+### Fixed
+- **Prefunding CPM reserve/release URL.** `RestPrefundingClient.reserveCpm` now POSTs to prefunding's
+  real `POST /internal/v1/prefunding/{partner}/reserve` and `releaseCpm` POSTs to
+  `POST /internal/v1/prefunding/{partner}/release` (was the non-existent `/reservations` POST/DELETE).
+  Shared `PrefundingReserveRequest`/`Response`/`ReleaseRequest` DTOs unchanged. Tests updated.
+- **CPM execution now invokes reserveCpm/releaseCpm.** `PaymentOrchestrator.executeCpm` OVERSEAS path
+  RESERVES via the canonical idempotent `reserveCpm` (idempotencyKey == txnRef) at authorize and
+  RELEASES via `releaseCpm` on scheme decline, replacing the txnRef-keyed `reserve`/`release` on the
+  CPM path (capture-on-success still uses the txnRef `capture` — no captureCpm exists). They were
+  bound + unit-tested but never called.
+- **schemeId code→numeric.** New `SchemeId.resolve(code)` maps the carried scheme CODE (e.g.
+  `zeropay`) to a stable 1-based numeric id off config-registry's canonical scheme roster
+  (ZEROPAY=1…QRIS=7; config-registry's catalog is code-keyed with no numeric surrogate / endpoint).
+  The `payment.approved` event (`PaymentController.publishApproved`) and the per-txn revenue
+  capture + commission split (`confirmMpm`) now carry the resolved id instead of 0.
+- **Margins on commit/create (FX1015 zero-margin).** `TransactionClient.CreateRequest` +
+  `StatusPatch` extended (additive, back-compat ctors) with the rate-lock pool fields; `authorizeMpm`
+  populates them on create from the locked quote (offerRateColl, crossRate, collectionUsd,
+  payoutUsdCost, collection/payout margins) and `confirmMpm` carries margins + collectionUsd on the
+  APPROVED commit, so transaction-mgmt persists real margins. Cost rates (costRateColl/Pay) are not
+  on the quote view / authorization snapshot → sent null.
+
+### Tests
+- `RestPrefundingClientTest`: reserveCpm/releaseCpm now expect the `/internal/v1/.../reserve|release` URLs.
+- `PaymentOrchestratorCpmTest`: CPM fakes assert reserveCpm/releaseCpm (txnRef reserve/release now throw).
+- `SchemeIdTest`: roster mapping, suffix tolerance, UNSET fallback.
+
 ## [p2/payment-executor] — 2026-06-30 (Phase 2 cross-service wiring)
 
 ### Added
