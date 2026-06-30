@@ -223,6 +223,106 @@ class TransactionContractIT {
     }
 
     // =========================================================================
+    // 2b. Wave-3: margin persisted via PATCH → margin-accurate offerRateColl on /fx-committed
+    // =========================================================================
+
+    @Test
+    @DisplayName("Wave-3: PATCH carries margin+collectionUsd → /fx-committed offerRateColl is margin-accurate")
+    void patchWithMargin_yieldsMarginAccurateOfferRateColl() throws Exception {
+        // Cross-border OUTBOUND: collect 10,850,000 IDR (= send_amount), pay out 130,000 KRW.
+        String createBody = """
+                {
+                  "partnerId": 7001,
+                  "partnerTxnRef": "PE-FX-001",
+                  "schemeId": "zeropay_kr",
+                  "direction": "OUTBOUND",
+                  "paymentMode": "CPM",
+                  "targetPayout": "130000.00000000",
+                  "payoutCurrency": "KRW",
+                  "collectionAmount": "10850000.00000000",
+                  "collectionCurrency": "IDR",
+                  "merchantId": "M-FX",
+                  "quoteId": "Q-FX"
+                }
+                """;
+        String txnRef = objectMapper.readTree(mockMvc.perform(post("/v1/transactions")
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody))
+                .andExpect(status().isCreated()).andReturn()
+                .getResponse().getContentAsString()).get("txnRef").asText();
+
+        // PATCH APPROVED carrying the rate-lock pool: real collection_usd 673.0769, margin 6.7308.
+        String patchBody = """
+                {
+                  "newStatus": "APPROVED",
+                  "schemeTxnRef": "SCH-FX",
+                  "schemeApprovalCode": "AP-FX",
+                  "prefundDeductedUsd": "999.99999999",
+                  "approvedAt": "2026-06-20T03:00:00Z",
+                  "collectionUsd": "673.0769",
+                  "collectionMarginUsd": "6.7308",
+                  "payoutMarginUsd": "3.1500",
+                  "costRateColl": "0.00148000",
+                  "costRatePay": "0.00752000"
+                }
+                """;
+        mockMvc.perform(patch("/v1/transactions/{ref}/status", txnRef)
+                        .contentType(MediaType.APPLICATION_JSON).content(patchBody))
+                .andExpect(status().isNoContent());
+
+        // committed_at is stamped at the APPROVED transition (= now), so query a [-1,+1] day window.
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        MvcResult fx = mockMvc.perform(get("/v1/transactions/fx-committed")
+                        .param("from", today.minusDays(1).toString())
+                        .param("to", today.plusDays(1).toString())
+                        .param("partnerId", "7001"))
+                .andExpect(status().isOk()).andReturn();
+
+        JsonNode rows = objectMapper.readTree(fx.getResponse().getContentAsString());
+        assertTrue(rows.isArray() && rows.size() == 1, "exactly one committed row expected");
+        JsonNode row = rows.get(0);
+        // offerRateColl = 10,850,000 / (673.0769 - 6.7308) = 16,282.82959861  (NON-zero margin).
+        assertEquals(new java.math.BigDecimal("16282.82959861"),
+                new java.math.BigDecimal(row.get("offerRateColl").asText()),
+                "offerRateColl must use the REAL persisted collectionMarginUsd, not zero margin");
+        // usdAmount must be the REAL collection_usd (673.0769), not the prefund proxy (999.99999999).
+        assertEquals(0, new java.math.BigDecimal(row.get("usdAmount").asText())
+                .compareTo(new java.math.BigDecimal("673.0769")));
+        assertEquals(0, new java.math.BigDecimal(row.get("collectionMarginUsd").asText())
+                .compareTo(new java.math.BigDecimal("6.7308")));
+    }
+
+    // =========================================================================
+    // 2c. Wave-3: GET /v1/transactions/refunded returns the canonical RefundedTransactionView
+    // =========================================================================
+
+    @Test
+    @DisplayName("Wave-3: /refunded returns canonical view shape (txnRef/originalPaymentTxnRef/refundAmountKrw/settlementDate)")
+    void refunded_returnsCanonicalView() throws Exception {
+        // Create → APPROVED → REFUNDED so the row is refunded "today" and findRefundedOn finds it.
+        String txnRef = createTxn("PE-REFUND-001", 8001L);
+        patchStatus(txnRef, "APPROVED");
+        patchStatus(txnRef, "REFUNDED");
+
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        MvcResult result = mockMvc.perform(get("/v1/transactions/refunded")
+                        .param("refundedOn", today.toString()))
+                .andExpect(status().isOk()).andReturn();
+
+        JsonNode rows = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertTrue(rows.isArray() && rows.size() >= 1, "expected at least one refunded row today");
+        JsonNode row = rows.get(0);
+        // Canonical RefundedTransactionView field names (producer-authoritative).
+        assertNotNull(row.get("txnRef"), "txnRef (canonical) must be present");
+        assertTrue(row.has("status"));
+        assertEquals("REFUNDED", row.get("status").asText());
+        // settlementDate slot exists on the canonical view; null here (no settlement window booked
+        // yet) and @JsonInclude(NON_NULL) omits it — assert it is NOT a wrong-named field.
+        assertFalse(row.has("refundTxnRef"), "must not carry settlement's divergent ad-hoc name");
+        assertFalse(row.has("originalTxnRef"), "must not carry settlement's divergent ad-hoc name");
+        assertFalse(row.has("refundSchemeTxnRef"), "must not carry scheme-adapter's ad-hoc name");
+    }
+
+    // =========================================================================
     // 3. GET /v1/transactions — filters + pagination
     // =========================================================================
 

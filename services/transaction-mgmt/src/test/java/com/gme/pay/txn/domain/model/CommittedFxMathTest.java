@@ -97,6 +97,45 @@ class CommittedFxMathTest {
     }
 
     @Test
+    @DisplayName("Wave-3: persisted margin + real collectionUsd → margin-accurate offerRateColl at commit")
+    void captureUsesPersistedMarginAndCollectionUsd() {
+        Transaction txn = new Transaction(
+                700L, "PTX-3", "zeropay_kr", "OUTBOUND", "CPM",
+                new BigDecimal("130000.00000000"), "KRW",
+                new BigDecimal("10850000.00000000"), "IDR",   // send_amount = collectionAmount
+                "M-3", "Q-3");
+        // prefund proxy deliberately DIFFERENT from the real collection_usd, to prove the real
+        // pool value is preferred over the proxy.
+        txn.applyStatusPatch("SCH-3", "AP-3", new BigDecimal("999.99999999"),
+                Instant.now(), null, null, null);
+        // Persist the rate-lock pool: real collection_usd 673.0769, collection margin 6.7308.
+        txn.applyRateLockPool(new BigDecimal("6.7308"), new BigDecimal("3.1500"),
+                new BigDecimal("673.0769"), new BigDecimal("0.00148000"),
+                new BigDecimal("0.00752000"), new BigDecimal("130.0000"));
+
+        // SM passes null margins → falls back to the persisted aggregate margin/collectionUsd.
+        txn.captureCommittedFxAtCommit(null, null, Instant.now());
+
+        // offerRateColl = 10,850,000 / (673.0769 - 6.7308) = 16,282.82959861  (NON-zero margin)
+        assertEquals(new BigDecimal("16282.82959861"), txn.offerRateColl());
+        // usdAmount uses the REAL collection_usd (673.0769), not the prefund proxy (999.99999999).
+        assertEquals(0, txn.usdAmount().compareTo(new BigDecimal("673.0769")));
+        assertEquals(0, txn.collectionMarginUsd().compareTo(new BigDecimal("6.7308")));
+    }
+
+    @Test
+    @DisplayName("Wave-3: no pool fields (legacy row) → zero-margin fallback over prefund proxy")
+    void captureFallsBackToZeroMarginWhenPoolAbsent() {
+        Transaction txn = crossBorder(); // prefundDeductedUsd=673.0769, no pool
+        txn.captureCommittedFxAtCommit(null, null, Instant.now());
+        // collapses to send_amount / collection_usd with zero margin
+        // 11,000,000 / 673.0769 = 16,343.36... ; just assert non-null and margin null
+        assertNotNull(txn.offerRateColl());
+        assertNull(txn.collectionMarginUsd());
+        assertEquals(0, txn.usdAmount().compareTo(new BigDecimal("673.07690000")));
+    }
+
+    @Test
     @DisplayName("same-currency txn at commit records usd/committedAt but null FX rates")
     void captureSameCcy() {
         Transaction txn = new Transaction(

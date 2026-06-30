@@ -67,6 +67,11 @@ public final class TransactionEntityMapper {
         e.setQrCodeId(txn.qrCodeId());
         e.setRefundedAt(txn.refundedAt());
         e.setOriginalPaymentTxnRef(txn.originalPaymentTxnRef());
+        // V008: Wave-3 rate-lock pool
+        e.setCollectionUsd(txn.collectionUsd());
+        e.setCostRateColl(txn.costRateColl());
+        e.setCostRatePay(txn.costRatePay());
+        e.setPayoutUsdCost(txn.payoutUsdCost());
         return e;
     }
 
@@ -116,6 +121,11 @@ public final class TransactionEntityMapper {
         txn.applyRefundEnrichment(
                 e.getRefundAmountKrw(), e.getQrCodeId(),
                 e.getRefundedAt(), e.getOriginalPaymentTxnRef());
+        // V008: Wave-3 rate-lock pool — replayed post-construction.
+        txn.applyRateLockPool(
+                e.getCollectionMarginUsd(), e.getPayoutMarginUsd(),
+                e.getCollectionUsd(), e.getCostRateColl(),
+                e.getCostRatePay(), e.getPayoutUsdCost());
         return txn;
     }
 }

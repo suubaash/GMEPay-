@@ -87,6 +87,37 @@ public class TransactionService {
                                                   String merchantId,
                                                   String quoteId,
                                                   BigDecimal merchantFeeRate) {
+        return createFromPaymentExecutor(partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                targetPayout, payoutCurrency, collectionAmount, collectionCurrency, merchantId,
+                quoteId, merchantFeeRate, null, null, null, null, null, null);
+    }
+
+    /**
+     * Wave-3 create path overload: additionally persists the rate-lock pool fields (margins,
+     * collection-leg USD, per-leg cost rates, payout USD cost) when payment-executor carries them
+     * at creation, so the committed-FX projection can later derive a margin-accurate
+     * {@code offerRateColl}. All pool args nullable — null leaves the snapshot empty (current
+     * behaviour). The commit-time PATCH may still supersede/fill these via its own pool fields.
+     */
+    @Transactional
+    public Transaction createFromPaymentExecutor(Long partnerId,
+                                                  String partnerTxnRef,
+                                                  String schemeId,
+                                                  String direction,
+                                                  String paymentMode,
+                                                  BigDecimal targetPayout,
+                                                  String payoutCurrency,
+                                                  BigDecimal collectionAmount,
+                                                  String collectionCurrency,
+                                                  String merchantId,
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate,
+                                                  BigDecimal collectionMarginUsd,
+                                                  BigDecimal payoutMarginUsd,
+                                                  BigDecimal collectionUsd,
+                                                  BigDecimal costRateColl,
+                                                  BigDecimal costRatePay,
+                                                  BigDecimal payoutUsdCost) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -115,6 +146,9 @@ public class TransactionService {
                 merchantId, quoteId);
         // V005: snapshot the gross merchant fee rate the caller resolved at creation.
         txn.applyMerchantFeeRate(merchantFeeRate);
+        // Wave-3: persist the rate-lock pool snapshot if carried at creation (margin-accurate FX1015).
+        txn.applyRateLockPool(collectionMarginUsd, payoutMarginUsd, collectionUsd,
+                costRateColl, costRatePay, payoutUsdCost);
         return repository.save(txn);
     }
 
@@ -145,8 +179,21 @@ public class TransactionService {
                                    Instant approvedAt,
                                    BigDecimal bookedSettlementAmount,
                                    String settlementRoundingMode,
-                                   BigDecimal roundingResidual) {
+                                   BigDecimal roundingResidual,
+                                   BigDecimal collectionMarginUsd,
+                                   BigDecimal payoutMarginUsd,
+                                   BigDecimal collectionUsd,
+                                   BigDecimal costRateColl,
+                                   BigDecimal costRatePay) {
         Transaction txn = getByTxnRef(txnRef);
+
+        // Apply the lock fields — incl. the Wave-3 rate-lock pool (margins, collectionUsd, cost
+        // rates) — BEFORE the FSM transition. The APPROVED transition captures the committed-FX
+        // projection from the aggregate, so the margins/collectionUsd must already be present for
+        // a margin-accurate offerRateColl (else it falls back to the zero-margin approximation).
+        txn.applyStatusPatch(schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                collectionMarginUsd, payoutMarginUsd, collectionUsd, costRateColl, costRatePay);
 
         // Map from PaymentStatus (payment-executor) → TransactionStatus (this service).
         // Skip the transition when the target equals the current status: a PATCH that merely
@@ -157,8 +204,6 @@ public class TransactionService {
             stateMachine.transition(txn, target);
         }
 
-        txn.applyStatusPatch(schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
-                bookedSettlementAmount, settlementRoundingMode, roundingResidual);
         return repository.save(txn);
     }
 
