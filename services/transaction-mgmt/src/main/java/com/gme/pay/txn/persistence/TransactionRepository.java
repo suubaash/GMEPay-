@@ -67,4 +67,42 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     List<TransactionEntity> findExpiredNonTerminal(
             @Param("expiryBefore") Instant expiryBefore,
             @Param("sweepStatuses") List<String> sweepStatuses);
+
+    /**
+     * V007: committed-FX projection feed (GET /v1/transactions/fx-committed). Returns committed
+     * rows (committed_at populated) in the half-open instant window {@code [from, to)}, optionally
+     * narrowed to one partner. Ordered by commit time so callers page deterministically.
+     *
+     * @param from      lower bound (inclusive) on committed_at
+     * @param to        upper bound (exclusive) on committed_at
+     * @param partnerId filter by partner_id (null = all partners)
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE t.committedAt IS NOT NULL
+              AND t.committedAt >= :from
+              AND t.committedAt <  :to
+              AND (:partnerId IS NULL OR t.partnerId = :partnerId)
+            ORDER BY t.committedAt ASC
+            """)
+    List<TransactionEntity> findCommittedFx(
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("partnerId") Long partnerId);
+
+    /**
+     * V007: refund query (GET /v1/transactions/refunded?refundedOn). Returns rows whose
+     * {@code refunded_at} falls within the half-open instant window {@code [from, to)} for the
+     * requested calendar day. Ordered by refund time.
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE t.refundedAt IS NOT NULL
+              AND t.refundedAt >= :from
+              AND t.refundedAt <  :to
+            ORDER BY t.refundedAt ASC
+            """)
+    List<TransactionEntity> findRefundedOn(
+            @Param("from") Instant from,
+            @Param("to") Instant to);
 }

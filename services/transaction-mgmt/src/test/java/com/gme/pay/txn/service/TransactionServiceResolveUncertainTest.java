@@ -120,5 +120,13 @@ class TransactionServiceResolveUncertainTest {
         @Override public List<Transaction> findExpiredNonTerminal(Instant expiryBefore) {
             return List.of();
         }
+
+        @Override public List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
+            return List.of();
+        }
+
+        @Override public List<Transaction> findRefundedOn(LocalDate refundedOn) {
+            return List.of();
+        }
     }
 }

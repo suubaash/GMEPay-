@@ -1,5 +1,6 @@
 package com.gme.pay.txn.service;
 
+import com.gme.pay.contracts.CommittedFxView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.txn.domain.model.Transaction;
@@ -14,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -205,6 +207,64 @@ public class TransactionService {
         PageRequest pageRequest = PageRequest.of(page, safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         return repository.findByFilters(from, to, status, partnerId, pageRequest);
+    }
+
+    /**
+     * Committed-FX projection feed (GET /v1/transactions/fx-committed). Maps each committed
+     * transaction to the canonical {@link CommittedFxView} contract — the rate-locked FX fields
+     * captured at commit. {@code from}/{@code to} are inclusive date bounds (nullable); a null
+     * partnerId returns all partners.
+     *
+     * <p>{@code direction} rides as the wire String per the contract. Same-currency short-circuit
+     * rows carry null offerRateColl/crossRate (no FX leg).
+     */
+    public List<CommittedFxView> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
+        return repository.findCommittedFx(from, to, partnerId).stream()
+                .map(TransactionService::toCommittedFxView)
+                .toList();
+    }
+
+    /** Maps a committed aggregate to the canonical {@link CommittedFxView}. */
+    static CommittedFxView toCommittedFxView(Transaction txn) {
+        return new CommittedFxView(
+                stableTxnId(txn.txnRef()),
+                txn.txnRef(),
+                txn.partnerId() != null ? txn.partnerId() : 0L,
+                txn.direction(),
+                Boolean.TRUE.equals(txn.sameCcyShortcircuit()),
+                txn.offerRateColl(),
+                txn.crossRate(),
+                txn.collectionAmount() != null ? txn.collectionAmount() : txn.sendAmount(),
+                txn.collectionCurrency() != null ? txn.collectionCurrency() : txn.sendCcy(),
+                txn.targetPayout(),
+                txn.payoutCurrency() != null ? txn.payoutCurrency() : txn.targetCcy(),
+                txn.usdAmount(),
+                txn.collectionMarginUsd(),
+                txn.payoutMarginUsd(),
+                txn.committedAt());
+    }
+
+    /**
+     * Derives a stable numeric txnId for the projection's {@code long txnId} slot. The aggregate's
+     * key is a UUID string; consumers (reporting-compliance CommittedTransaction) carry a long id,
+     * so we expose a deterministic non-negative hash of the txnRef. The authoritative key remains
+     * {@code txnRef}; this is purely the contract's numeric handle.
+     */
+    static long stableTxnId(String txnRef) {
+        return txnRef == null ? 0L : (txnRef.hashCode() & 0x7fffffffL);
+    }
+
+    /**
+     * Refund query (GET /v1/transactions/refunded?refundedOn). Returns the transactions refunded
+     * on the given calendar day, as domain aggregates (the controller maps to the refund DTO with
+     * the original payment txnRef). Settlement-reconciliation uses this for cross-date refund
+     * netting against the refund date rather than the original creation date.
+     */
+    public List<Transaction> findRefundedOn(LocalDate refundedOn) {
+        if (refundedOn == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "refundedOn is required");
+        }
+        return repository.findRefundedOn(refundedOn);
     }
 
     /**
