@@ -9,6 +9,7 @@ import com.gme.pay.settlement.persistence.SettlementBatchEntity;
 import com.gme.pay.settlement.persistence.SettlementBatchRepository;
 import com.gme.pay.settlement.persistence.SettlementLineEntity;
 import com.gme.pay.settlement.persistence.SettlementLineRepository;
+import com.gme.pay.settlement.port.RoundingResidualPort;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,18 +49,21 @@ public class ReconDiffEngine {
     private final ReconExceptionRepository reconExceptionRepository;
     private final SettlementBatchRepository batchRepository;
     private final SettlementLineRepository lineRepository;
+    private final RoundingResidualPort roundingResidualPort;
 
     public ReconDiffEngine(
             TransactionQueryPort transactionQueryPort,
             LineMatcher lineMatcher,
             ReconExceptionRepository reconExceptionRepository,
             SettlementBatchRepository batchRepository,
-            SettlementLineRepository lineRepository) {
+            SettlementLineRepository lineRepository,
+            RoundingResidualPort roundingResidualPort) {
         this.transactionQueryPort = transactionQueryPort;
         this.lineMatcher = lineMatcher;
         this.reconExceptionRepository = reconExceptionRepository;
         this.batchRepository = batchRepository;
         this.lineRepository = lineRepository;
+        this.roundingResidualPort = roundingResidualPort;
     }
 
     /**
@@ -158,6 +162,10 @@ public class ReconDiffEngine {
                                 r -> r.amount() != null ? r.amount() : BigDecimal.ZERO,
                                 BigDecimal::add)));
 
+        // Capture the entry status: a batch ALREADY at RECONCILED on entry had its recon (and any
+        // residual post) closed in a prior run — this run is a pure no-op for it.
+        boolean alreadyClosedOnEntry = SettlementBatchStatus.RECONCILED.name().equals(batch.getStatus());
+
         // 3. Diff.
         List<ReconLine> allLines = lineMatcher.match(gmeMap, schemeMap);
 
@@ -168,10 +176,51 @@ public class ReconDiffEngine {
         markMatchedLines(lines, allLines);
         advanceBatchStatus(batch, exceptionCount);
 
+        // 6. Addendum-001: when the batch has fully reconciled, post its per-partner rounding-mode
+        //    residual to revenue-ledger — exactly once per batch (guarded by residual_posted_at, so a
+        //    recon re-run on the same batch never re-posts). Skipped entirely for a batch already
+        //    closed on entry (recon already done in a prior run).
+        if (!alreadyClosedOnEntry) {
+            postRoundingResidualOnce(batch);
+        }
+
         log.info("ReconDiffForBatch batchId={} merchants={} matched={} exceptions={} -> status={}",
                 batchId, allLines.size(), allLines.size() - exceptionCount, exceptionCount, batch.getStatus());
 
         return allLines;
+    }
+
+    /**
+     * Post the batch's Addendum-001 rounding residual to revenue-ledger once, keyed by the settlement
+     * batch id ({@code reference = batchId}). Guards:
+     * <ul>
+     *   <li>only after the batch is RECONCILED (a clean tie-out) — a batch still holding exceptions is
+     *       not yet final, so its residual is not committed;</li>
+     *   <li>{@code residual_posted_at} already set → no-op (idempotent on recon re-run);</li>
+     *   <li>zero/null residual → nothing to post (revenue-ledger would 204 anyway), but still stamp the
+     *       guard so we do not re-evaluate every run.</li>
+     * </ul>
+     * The stamp is only written when the post is accepted (or the residual is zero), so a transient
+     * revenue-ledger failure leaves the batch eligible to retry on the next recon run.
+     */
+    private void postRoundingResidualOnce(SettlementBatchEntity batch) {
+        if (!SettlementBatchStatus.RECONCILED.name().equals(batch.getStatus())) {
+            return;   // not finalised yet — residual not committed
+        }
+        if (batch.getResidualPostedAt() != null) {
+            return;   // already posted — idempotent no-op on re-run
+        }
+        BigDecimal residual = batch.getRoundingResidual();
+        String currency = batch.getSettleCurrency() != null ? batch.getSettleCurrency() : "KRW";
+
+        boolean accepted = roundingResidualPort.postResidual(batch.getBatchId(), residual, currency);
+        if (accepted) {
+            batch.setResidualPostedAt(Instant.now());
+            batchRepository.save(batch);
+        } else {
+            log.warn("rounding residual not posted for batch {} — will retry on the next recon run",
+                    batch.getBatchId());
+        }
     }
 
     /**

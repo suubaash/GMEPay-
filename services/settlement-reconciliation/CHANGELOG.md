@@ -4,6 +4,30 @@ All notable changes to this service. Dates are KST.
 
 ## [Unreleased]
 
+### 2026-06-30 — Phase-2 cross-service wiring (refund-date query + rounding residual post)
+
+Consumes the new shared transaction-mgmt / revenue-ledger Phase-2 contracts (commit 5dbafd5).
+
+- **Added** `RefundedTransactionPort` + gated `RestRefundedTransactionClient` calling transaction-mgmt
+  `GET /v1/transactions/refunded?refundedOn=YYYY-MM-DD`, mapping each refund leg incl. the **original
+  payment txnRef** (`RefundLeg`) to drive cross-date claw-back netting (settlement IR-1). Gated by
+  `gmepay.clients.transaction-mgmt.refunded.enabled` (default false); in-process
+  `FixtureRefundedTransactionAdapter` is the fallback. Fails soft to an empty set on transport error.
+- **Added** `RoundingResidualPort` + gated `RestRoundingResidualClient` POSTing the Addendum-001
+  rounding residual to revenue-ledger `POST /v1/journals/rounding-residual` with **`reference` = the
+  settlement batch id** (`ZP00NN-YYYYMMDD-WINDOW`). Gated by `gmepay.clients.revenue-ledger.enabled`
+  (default false); in-process `FixtureRoundingResidualAdapter` fallback. Zero residual is a no-op.
+- **Wired** the residual post into `ReconDiffEngine.runDiffForBatch`: a batch posts its residual
+  **exactly once**, only when this run finalises it to `RECONCILED`. Idempotency guarded by a new
+  `settlement_batches.residual_posted_at` column (**V009**) — set only on an accepted post, so a
+  transient revenue-ledger failure leaves the batch eligible to retry on the next recon run, and a
+  recon re-run never re-posts.
+- **Added** JUnit tests (MockRestServiceServer): refund-date client mapping incl. original txnRef +
+  fail-soft; residual posted once per batch with batch-id reference; no double-post on re-run; no post
+  while a discrepancy holds the batch at RECEIVED; retry-eligible on revenue-ledger failure.
+- **Remaining**: `CommittedFxView` consumption for GROSS/FX rate-locked tie-out (no GROSS FX recon path
+  exists yet — deferred, not cheap); real SFTP pull + IDD widths remain externally blocked.
+
 ### 2026-06-30 — Batch-tied reconciliation pipeline
 
 Closes the "recon pipeline never ties to the batches it actually sent" gap: ZP0062/ZP0064
