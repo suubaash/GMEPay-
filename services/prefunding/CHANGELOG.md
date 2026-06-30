@@ -1,5 +1,35 @@
 # prefunding — CHANGELOG
 
+## 2026-06-30 (w3/prefunding — Wave-3 credit-limit / AML-cap push, IR-pf-2)
+
+### Added — config-registry → prefunding limit push
+- `PUT /internal/v1/prefunding/{partnerId}/credit-limit` on `PrefundingInternalController`
+  (`CreditLimitPushRequest` → `CreditLimitPushResponse`) accepts per-partner `creditLimitUsd` +
+  AML caps (`amlDailyCapUsd` / `amlMonthlyCapUsd` / `amlAnnualCapUsd` / `amlDailyTxnCountCap`),
+  pushed once from config-registry instead of arriving per-request. Idempotent upsert: re-PUT
+  overwrites (a null cap clears it); if the partner has no balance row yet (push can precede
+  provisioning) one is created with a zero opening balance. Money as decimal strings; negative
+  values → 400 VALIDATION_ERROR. Returns stored limits + derived available + balance.
+- `PrefundingService.pushPartnerLimits(...)` (upsert under the per-partner row lock) +
+  `getPartnerLimits(...)` (read). New record `PartnerLimits`.
+- V007 migration: `partner_balance` gains `aml_daily_cap_usd` / `aml_monthly_cap_usd` /
+  `aml_annual_cap_usd` NUMERIC(19,4) + `aml_daily_txn_count_cap` INTEGER (all NULLABLE = no cap).
+  Entity `PartnerBalanceEntity` extended with the matching fields.
+
+### Applied — stored limits now take effect
+- Stored `credit_limit` already feeds the deduct/reserve gate (available = balance + credit_limit −
+  reserved) via the existing `PrefundingAccount` (lib-prefunding, untouched) — so PUT-ing a credit
+  limit immediately raises a partner's deduction headroom.
+- `PrefundingService.chargeCumulative` now falls back to the STORED AML caps when the caller omits
+  them per-request; a non-null per-request cap still overrides (purely additive, no behaviour change
+  for existing callers that pass caps).
+
+### Tests
+- `PrefundingCreditLimitApiTest` (MockMvc, H2 PG-mode): PUT stores limits; re-PUT updates + clears
+  null caps; upsert creates a missing partner row; stored credit limit lets a deduct exceed raw
+  balance (and 402s beyond limit); stored daily AML cap enforced on `/cumulative-charge` with no
+  per-request cap.
+
 ## 2026-06-30 (p2/prefunding — Phase-2 cross-service wiring)
 
 ### Added — deduction history (IR-pe-2)
