@@ -9,6 +9,7 @@ import com.gme.pay.settlement.persistence.SettlementBatchEntity;
 import com.gme.pay.settlement.persistence.SettlementBatchRepository;
 import com.gme.pay.settlement.persistence.SettlementLineEntity;
 import com.gme.pay.settlement.persistence.SettlementLineRepository;
+import com.gme.pay.settlement.port.RoundingResidualPort;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +42,7 @@ class ReconDiffForBatchTest {
     @Mock private ReconExceptionRepository reconExceptionRepository;
     @Mock private SettlementBatchRepository batchRepository;
     @Mock private SettlementLineRepository lineRepository;
+    @Mock private RoundingResidualPort roundingResidualPort;
 
     private ReconDiffEngine engine;
     private final ZP0062Parser parser = new ZP0062Parser();
@@ -50,18 +52,25 @@ class ReconDiffForBatchTest {
     @BeforeEach
     void setUp() {
         engine = new ReconDiffEngine(transactionQueryPort, new LineMatcher(),
-                reconExceptionRepository, batchRepository, lineRepository);
+                reconExceptionRepository, batchRepository, lineRepository, roundingResidualPort);
         lenient().when(reconExceptionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(lineRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(batchRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(roundingResidualPort.postResidual(any(), any(), any())).thenReturn(true);
     }
 
     private SettlementBatchEntity batch(String status) {
+        return batch(status, new BigDecimal("0.37"));   // default: a non-zero residual to post
+    }
+
+    private SettlementBatchEntity batch(String status, BigDecimal residual) {
         SettlementBatchEntity b = new SettlementBatchEntity(
                 BATCH_ID, "MRC001", LocalDate.of(2026, 6, 15), status,
                 new BigDecimal("34720"), "KRW", Instant.now());
         b.setFileType("ZP0061");
         b.setSettlementWindow("MORNING");
+        b.setSettleCurrency("KRW");
+        b.setRoundingResidual(residual);
         return b;
     }
 
@@ -168,5 +177,77 @@ class ReconDiffForBatchTest {
 
         assertThat(b.getStatus()).isEqualTo(SettlementBatchStatus.RECONCILED.name());
         verify(batchRepository, never()).save(any());   // status untouched
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Addendum-001 rounding residual — posted once per batch, keyed by batch id
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("RECONCILED batch posts its residual once, reference = batch id, then stamps the guard")
+    void residualPostedOncePerBatch() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000034720",
+                "EOF0000000001000000000000034720"));
+
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name(), new BigDecimal("0.37"));
+        engine.runDiffForBatch(b, recs);
+
+        // reference is the batch id; residual + currency carried through.
+        verify(roundingResidualPort, times(1))
+                .postResidual(eq(BATCH_ID), eq(new BigDecimal("0.37")), eq("KRW"));
+        assertThat(b.getResidualPostedAt()).isNotNull();   // guard stamped
+    }
+
+    @Test
+    @DisplayName("recon re-run on the same batch does NOT re-post the residual (guard holds)")
+    void residualNotRePostedOnReRun() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000034720",
+                "EOF0000000001000000000000034720"));
+
+        // SAME batch entity reconciled twice — the second run sees residual_posted_at already set.
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name(), new BigDecimal("0.37"));
+        engine.runDiffForBatch(b, recs);
+        engine.runDiffForBatch(b, recs);
+
+        verify(roundingResidualPort, times(1)).postResidual(eq(BATCH_ID), any(), any());
+    }
+
+    @Test
+    @DisplayName("batch holding a discrepancy (RECEIVED, not RECONCILED) does not post a residual")
+    void noResidualPostWhenNotReconciled() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000034000",   // discrepancy
+                "EOF0000000001000000000000034000"));
+
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name(), new BigDecimal("0.37"));
+        engine.runDiffForBatch(b, recs);
+
+        assertThat(b.getStatus()).isEqualTo(SettlementBatchStatus.RECEIVED.name());
+        verify(roundingResidualPort, never()).postResidual(any(), any(), any());
+        assertThat(b.getResidualPostedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("transient revenue-ledger failure leaves the batch eligible to retry (guard unstamped)")
+    void residualRetryOnFailure() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000034720",
+                "EOF0000000001000000000000034720"));
+        when(roundingResidualPort.postResidual(any(), any(), any())).thenReturn(false);
+
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name(), new BigDecimal("0.37"));
+        engine.runDiffForBatch(b, recs);
+
+        assertThat(b.getResidualPostedAt()).isNull();   // not stamped → retried next run
     }
 }
