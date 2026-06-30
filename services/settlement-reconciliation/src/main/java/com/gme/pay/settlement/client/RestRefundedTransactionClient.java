@@ -1,6 +1,6 @@
 package com.gme.pay.settlement.client;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.contracts.RefundedTransactionView;
 import com.gme.pay.settlement.port.RefundedTransactionPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +16,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.format.DateTimeParseException;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -68,13 +68,13 @@ public class RestRefundedTransactionClient implements RefundedTransactionPort {
                 .toUriString();
         log.debug("GET {}", url);
         try {
-            RefundedTransactionResponse[] body =
-                    restTemplate.getForObject(url, RefundedTransactionResponse[].class);
+            RefundedTransactionView[] body =
+                    restTemplate.getForObject(url, RefundedTransactionView[].class);
             if (body == null) {
                 return List.of();
             }
             List<RefundLeg> legs = new ArrayList<>(body.length);
-            for (RefundedTransactionResponse r : body) {
+            for (RefundedTransactionView r : body) {
                 legs.add(toRefundLeg(r, refundedOn));
             }
             log.debug("Fetched {} refund legs refundedOn={}", legs.size(), refundedOn);
@@ -88,72 +88,32 @@ public class RestRefundedTransactionClient implements RefundedTransactionPort {
         }
     }
 
-    private static RefundLeg toRefundLeg(RefundedTransactionResponse r, LocalDate fallbackDate) {
-        BigDecimal amount = parseDecimalOrZero(r.refundAmount(), "refundAmount", r.refundTxnRef());
+    /**
+     * Map one canonical {@link RefundedTransactionView} row to a {@link RefundLeg}. The view uses the
+     * PRODUCER's field names ({@code txnRef}/{@code originalPaymentTxnRef}/{@code refundAmountKrw}/
+     * {@code refundedAt}), so the original-payment ref and KRW amount now bind to REAL values — the prior
+     * ad-hoc record bound {@code originalTxnRef}/{@code refundAmount} which never matched the wire, leaving
+     * every refund leg silently null and the cross-date claw-back netting a no-op.
+     */
+    private static RefundLeg toRefundLeg(RefundedTransactionView r, LocalDate fallbackDate) {
         // Carry the magnitude positive — the netting layer subtracts it from the merchant's gross.
-        amount = amount.abs();
-        LocalDate refundedOn = parseDateOrNull(r.refundedOn());
+        BigDecimal amount = (r.refundAmountKrw() == null ? BigDecimal.ZERO : r.refundAmountKrw()).abs();
+        // Prefer the producer's settlement value date; else the refund instant's date; else the query date.
+        OffsetDateTime refundedAt =
+                r.refundedAt() == null ? null : r.refundedAt().atOffset(ZoneOffset.UTC);
+        LocalDate refundedOn = r.settlementDate();
+        if (refundedOn == null && refundedAt != null) {
+            refundedOn = refundedAt.toLocalDate();
+        }
         if (refundedOn == null) {
             refundedOn = fallbackDate;
         }
-        OffsetDateTime refundedAt = parseInstantOrNull(r.refundedAt(), r.refundTxnRef());
         return new RefundLeg(
-                r.refundTxnRef(),
-                r.originalTxnRef(),
+                r.txnRef(),
+                r.originalPaymentTxnRef(),
                 r.merchantId(),
                 amount,
                 refundedOn,
                 refundedAt);
-    }
-
-    private static BigDecimal parseDecimalOrZero(String value, String field, String txnRef) {
-        if (value == null || value.isBlank()) {
-            return BigDecimal.ZERO;
-        }
-        try {
-            return new BigDecimal(value.trim());
-        } catch (NumberFormatException e) {
-            log.warn("Unparseable {} '{}' on refund {} — treating as 0", field, value, txnRef);
-            return BigDecimal.ZERO;
-        }
-    }
-
-    private static LocalDate parseDateOrNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return LocalDate.parse(value.trim());
-        } catch (DateTimeParseException e) {
-            return null;
-        }
-    }
-
-    private static OffsetDateTime parseInstantOrNull(String value, String txnRef) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return OffsetDateTime.parse(value.trim());
-        } catch (DateTimeParseException e) {
-            log.warn("Unparseable refundedAt '{}' on refund {} — null", value, txnRef);
-            return null;
-        }
-    }
-
-    /**
-     * One refund leg item from {@code GET /v1/transactions/refunded}. Field names must match
-     * transaction-mgmt's projection verbatim (Jackson binds by name; a mismatch silently nulls).
-     * {@code @JsonIgnoreProperties(ignoreUnknown = true)} keeps unknown future fields harmless.
-     */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public record RefundedTransactionResponse(
-            String refundTxnRef,
-            String originalTxnRef,
-            String merchantId,
-            String refundAmount,
-            String refundCcy,
-            String refundedOn,
-            String refundedAt) {
     }
 }

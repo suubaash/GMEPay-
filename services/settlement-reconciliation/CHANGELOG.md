@@ -4,6 +4,27 @@ All notable changes to this service. Dates are KST.
 
 ## [Unreleased]
 
+### 2026-06-30 — Wave-3 RECONCILE: canonical `/refunded` contract + cross-date netting folded in
+
+- **Fixed (latent silent-null bug)** `RestRefundedTransactionClient` bound an ad-hoc wire record
+  (`refundTxnRef`/`originalTxnRef`/`refundAmount`(String)/`refundedOn`) whose names did NOT match
+  transaction-mgmt's real `/refunded` projection, so Jackson mapped **every** refund leg to `null`
+  (original payment ref + amount), making cross-date claw-back netting a silent no-op. Replaced it with
+  the canonical `lib-api-contracts` `RefundedTransactionView` (producer field names: `txnRef`,
+  `originalPaymentTxnRef`, `refundAmountKrw`, `refundedAt`, `settlementDate`) — refund legs now map REAL
+  values.
+- **Completed** the netting: `SettlementBatchJobService.runWindow` now folds the refund-date legs into the
+  batch net via `foldCrossDateRefunds` — a leg whose **original** payment was settled in a prior batch
+  (and not yet clawed back) reduces the merchant's net, is persisted as a negative claw-back line (its own
+  refund txnRef = the cross-window idempotency marker), and is reported in the file row (folded into the
+  merchant's row when present, else a refund-only GROSS row). Numeric net field stays non-negative
+  (claw-back carried in `refund_amount`; batch net reduced by the full magnitude). Added via a new
+  `RefundedTransactionPort` constructor arg; a backwards-compatible 9-arg ctor (no-op fixture) keeps
+  existing call sites/tests unchanged.
+- **Added** tests (MockRestServiceServer; transaction-mgmt not running): refund legs map non-null from
+  canonical JSON; a cross-date refund reduces the netted settlement (50000 − 8000 = 42000); an unsettled
+  original is not clawed back.
+
 ### 2026-06-30 — Phase-2 cross-service wiring (refund-date query + rounding residual post)
 
 Consumes the new shared transaction-mgmt / revenue-ledger Phase-2 contracts (commit 5dbafd5).

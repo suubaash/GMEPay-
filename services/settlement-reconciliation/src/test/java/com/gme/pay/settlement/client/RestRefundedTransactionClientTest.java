@@ -35,15 +35,18 @@ class RestRefundedTransactionClientTest {
         server.expect(requestTo("http://transaction-mgmt:8082/v1/transactions/refunded?refundedOn=2026-06-29"))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(
-                        "[{\"refundTxnRef\":\"RFND-001\",\"originalTxnRef\":\"PAY-900\","
-                                + "\"merchantId\":\"MRC001\",\"refundAmount\":\"10000\",\"refundCcy\":\"KRW\","
-                                + "\"refundedOn\":\"2026-06-29\",\"refundedAt\":\"2026-06-29T03:15:00Z\"}]",
+                        // CANONICAL producer field names (RefundedTransactionView): txnRef /
+                        // originalPaymentTxnRef / refundAmountKrw / refundedAt / settlementDate.
+                        "[{\"txnRef\":\"RFND-001\",\"originalPaymentTxnRef\":\"PAY-900\","
+                                + "\"merchantId\":\"MRC001\",\"refundAmountKrw\":\"10000\",\"targetCcy\":\"KRW\","
+                                + "\"refundedAt\":\"2026-06-29T03:15:00Z\",\"settlementDate\":\"2026-06-29\"}]",
                         MediaType.APPLICATION_JSON));
 
         List<RefundLeg> legs = client.findRefundedOn(LocalDate.of(2026, 6, 29));
 
         assertThat(legs).hasSize(1);
         RefundLeg leg = legs.get(0);
+        // Real values map (non-null) — the prior ad-hoc field names silently nulled these.
         assertThat(leg.refundTxnRef()).isEqualTo("RFND-001");
         assertThat(leg.originalTxnRef()).isEqualTo("PAY-900");   // netting key carried through
         assertThat(leg.merchantId()).isEqualTo("MRC001");
@@ -58,9 +61,9 @@ class RestRefundedTransactionClientTest {
     void normalisesNegativeAmountToMagnitude() {
         server.expect(requestTo("http://transaction-mgmt:8082/v1/transactions/refunded?refundedOn=2026-06-29"))
                 .andRespond(withSuccess(
-                        "[{\"refundTxnRef\":\"RFND-002\",\"originalTxnRef\":\"PAY-901\","
-                                + "\"merchantId\":\"MRC002\",\"refundAmount\":\"-5000\",\"refundCcy\":\"KRW\","
-                                + "\"refundedOn\":\"2026-06-29\"}]",
+                        "[{\"txnRef\":\"RFND-002\",\"originalPaymentTxnRef\":\"PAY-901\","
+                                + "\"merchantId\":\"MRC002\",\"refundAmountKrw\":\"-5000\",\"targetCcy\":\"KRW\","
+                                + "\"settlementDate\":\"2026-06-29\"}]",
                         MediaType.APPLICATION_JSON));
 
         List<RefundLeg> legs = client.findRefundedOn(LocalDate.of(2026, 6, 29));
