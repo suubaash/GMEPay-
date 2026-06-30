@@ -75,7 +75,32 @@ public class PrefundingService {
      */
     @Transactional
     public BigDecimal deduct(String partnerId, String txnRef, BigDecimal amount) {
+        return deductIdempotent(partnerId, txnRef, amount).balanceAfter();
+    }
+
+    /**
+     * Idempotent atomic deduction for the internal (transaction-mgmt) channel. Identical to
+     * {@link #deduct(String, String, BigDecimal)} but reports both the resulting balance AND the id of
+     * the DEBIT ledger entry, and is a safe replay: under the per-partner row lock, if a DEBIT for this
+     * {@code idempotencyKey} (recorded in {@code txn_ref}) already exists, NO new debit is applied — the
+     * original entry's id + the current balance are returned and {@code replayed=true}. This lets
+     * transaction-mgmt drive PENDING_DEBIT→DEBITED at-least-once without double-charging. Throws
+     * {@link ErrorCode#INSUFFICIENT_PREFUNDING} on a fresh deduction that would overdraw.
+     *
+     * @param idempotencyKey the caller's idempotency key; persisted as the ledger {@code txn_ref}.
+     */
+    @Transactional
+    public DeductResult deductIdempotent(String partnerId, String idempotencyKey, BigDecimal amount) {
         PartnerBalanceEntity row = lockOrThrow(partnerId);
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            LedgerEntryEntity existing = ledger.findByPartnerIdAndTxnRef(partnerId, idempotencyKey).stream()
+                    .filter(e -> ENTRY_DEBIT.equals(e.getEntryType()))
+                    .findFirst().orElse(null);
+            if (existing != null) {
+                // Replay: the deduction already happened under this key — do NOT debit again.
+                return new DeductResult(row.getBalance(), existing.getId(), true);
+            }
+        }
         BigDecimal previousBalance = row.getBalance();
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.deduct(amount); // throws INSUFFICIENT_PREFUNDING if too low
@@ -83,11 +108,14 @@ public class PrefundingService {
         row.setBalance(newBalance);
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_DEBIT, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
+                ENTRY_DEBIT, amount, row.getCurrency(), now));
         tierAlerts.afterBalanceChange(saved, previousBalance);
-        return newBalance;
+        return new DeductResult(newBalance, entry.getId(), false);
     }
+
+    /** Outcome of an idempotent deduct: the balance after, the DEBIT ledger entry id, and whether this was a replay. */
+    public record DeductResult(BigDecimal balanceAfter, Long ledgerEntryId, boolean replayed) {}
 
     /** Atomically credit {@code amount} onto the partner's balance and append a CREDIT entry. */
     @Transactional
@@ -127,7 +155,12 @@ public class PrefundingService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         if (alreadyReversed || debited.signum() == 0) {
             // Idempotent no-op: nothing to reverse (or already reversed). Report zero reversed.
-            return new ReverseResult(BigDecimal.ZERO, row.getBalance());
+            // On a replay, surface the existing reversal CREDIT entry id (null if there was nothing to reverse).
+            Long existingReversalId = entries.stream()
+                    .filter(e -> ENTRY_CREDIT.equals(e.getEntryType()))
+                    .map(LedgerEntryEntity::getId)
+                    .findFirst().orElse(null);
+            return new ReverseResult(BigDecimal.ZERO, row.getBalance(), existingReversalId);
         }
         BigDecimal previousBalance = row.getBalance();
         PrefundingAccount account = toDomain(row);
@@ -136,14 +169,14 @@ public class PrefundingService {
         row.setBalance(newBalance);
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT, debited,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT,
+                debited, row.getCurrency(), now));
         tierAlerts.afterBalanceChange(saved, previousBalance);
-        return new ReverseResult(debited, newBalance);
+        return new ReverseResult(debited, newBalance, entry.getId());
     }
 
-    /** Outcome of a reverse: the amount credited back and the balance after. */
-    public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter) {}
+    /** Outcome of a reverse: the amount credited back, the balance after, and the reversal CREDIT ledger entry id. */
+    public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter, Long ledgerEntryId) {}
 
     // ---- cumulative usage caps (AML daily/monthly/annual, V006) ----
 
