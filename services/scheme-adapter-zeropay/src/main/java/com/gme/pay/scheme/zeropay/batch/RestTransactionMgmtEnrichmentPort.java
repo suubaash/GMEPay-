@@ -1,6 +1,7 @@
 package com.gme.pay.scheme.zeropay.batch;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.contracts.RefundedTransactionView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,7 +11,6 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -64,7 +64,7 @@ public class RestTransactionMgmtEnrichmentPort implements ZpBatchEnrichmentPort 
 
     @Override
     public Map<String, RefundEnrichment> refundEnrichment(LocalDate businessDate) {
-        List<RefundedTxnView> rows;
+        List<RefundedTransactionView> rows;
         try {
             rows = restClient.get()
                     .uri(uriBuilder -> uriBuilder
@@ -82,8 +82,10 @@ public class RestTransactionMgmtEnrichmentPort implements ZpBatchEnrichmentPort 
             return Map.of();
         }
         Map<String, RefundEnrichment> out = new LinkedHashMap<>(rows.size());
-        for (RefundedTxnView r : rows) {
-            String key = firstNonBlank(r.refundSchemeTxnRef(), r.originalSchemeTxnRef(), r.txnRef());
+        for (RefundedTransactionView r : rows) {
+            // Key by the refund leg's scheme-side ref (matches zp_committed_txns.zeropayTxnRef),
+            // falling back to the original payment ref then the internal txnRef.
+            String key = firstNonBlank(r.schemeTxnRef(), r.originalPaymentTxnRef(), r.txnRef());
             if (key == null) {
                 continue;
             }
@@ -135,22 +137,14 @@ public class RestTransactionMgmtEnrichmentPort implements ZpBatchEnrichmentPort 
     // Tolerant of extra/missing fields (@JsonIgnoreProperties) so the upstream can evolve.
     // -------------------------------------------------------------------------
 
-    private static final org.springframework.core.ParameterizedTypeReference<List<RefundedTxnView>>
+    // Canonical lib-api-contracts type — binds transaction-mgmt's REAL producer field names
+    // (txnRef / originalPaymentTxnRef / refundAmountKrw / merchantId / qrCodeId / schemeTxnRef).
+    // Previously an ad-hoc record bound refundSchemeTxnRef/originalSchemeTxnRef → silently null.
+    private static final org.springframework.core.ParameterizedTypeReference<List<RefundedTransactionView>>
             REFUNDED_LIST = new org.springframework.core.ParameterizedTypeReference<>() {};
 
     private static final org.springframework.core.ParameterizedTypeReference<List<CommittedTxnView>>
             COMMITTED_LIST = new org.springframework.core.ParameterizedTypeReference<>() {};
-
-    /** One refund leg from {@code GET /v1/transactions/refunded}. */
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    record RefundedTxnView(
-            String txnRef,
-            String refundSchemeTxnRef,
-            String originalSchemeTxnRef,
-            BigDecimal refundAmountKrw,
-            String merchantId,
-            String qrCodeId) {
-    }
 
     /** One committed transaction from {@code GET /v1/transactions/fx-committed}. */
     @JsonIgnoreProperties(ignoreUnknown = true)

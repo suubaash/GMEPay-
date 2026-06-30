@@ -2,6 +2,28 @@
 
 All notable changes to the ZeroPay scheme adapter. Newest first.
 
+## 2026-06-30 — Wave-3 reconcile: /refunded field-name mismatch (latent silent-null bug)
+
+The refund-enrichment consumer (`RestTransactionMgmtEnrichmentPort`) bound an ad-hoc wire record
+whose field names did NOT match transaction-mgmt's real `GET /v1/transactions/refunded` output, so
+Jackson silently produced nulls — refund `refundAmountKrw`/`merchantId`/`qrCodeId` (IR-1, ZP0021/ZP0066)
+were never enriched even when the upstream returned real values.
+
+### Changed
+- Replaced the ad-hoc `RefundedTxnView` record (`refundSchemeTxnRef`/`originalSchemeTxnRef` — names the
+  producer never emits) with the canonical **`com.gme.pay.contracts.RefundedTransactionView`** from
+  `lib-api-contracts`, which mirrors the producer's real field names (`txnRef`, `originalPaymentTxnRef`,
+  `refundAmountKrw`, `merchantId`, `qrCodeId`, `schemeTxnRef`, `refundedAt`).
+- Refund map keying now uses `schemeTxnRef` → `originalPaymentTxnRef` → `txnRef` (the refund leg's
+  scheme-side ref matches `zp_committed_txns.zeropayTxnRef`).
+- Settlement value date unchanged — still read from `GET /v1/transactions/fx-committed` `settlementDate`
+  (it is NOT emitted on `/refunded`).
+
+### Added
+- `lib-api-contracts` dependency in `build.gradle` (canonical read DTO).
+- Tests: refund enrichment now binds canonical producer JSON and asserts the previously-null
+  `refundAmountKrw`/`merchantId`/`qrCodeId` are populated; plus `originalPaymentTxnRef` key-fallback.
+
 ## 2026-06-30 — Phase 2: cross-service batch enrichment (refund amount/merchant, settlement value date)
 
 Enriches the locally-captured batch records from transaction-management committed/refund data,

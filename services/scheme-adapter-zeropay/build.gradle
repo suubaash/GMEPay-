@@ -12,6 +12,9 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Wave-3 reconcile: canonical /refunded read DTO (RefundedTransactionView) so the refund
+    // enrichment consumer binds the producer's real field names instead of ad-hoc names → null.
+    implementation project(':libs:lib-api-contracts')
 
     // Flyway 10.x ships PostgreSQL support as a separate module (needed by the
     // postgres:16 Testcontainers ITs and production); H2 support stays in flyway-core.
