@@ -23,6 +23,10 @@ dependencies {
     // spring.kafka.bootstrap-servers is set (docker-compose: SPRING_KAFKA_BOOTSTRAP_SERVERS);
     // without it the outbox keeps draining to LogEventPublisher — safe local default.
     implementation project(':libs:lib-events-kafka')
+    // payment.approved consumer (async revenue capture) lives in src/main, so the Kafka
+    // listener API must be on the main classpath. The @KafkaListener container is still gated
+    // on spring.kafka.bootstrap-servers, so no broker is required for the local default.
+    implementation 'org.springframework.kafka:spring-kafka'
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'

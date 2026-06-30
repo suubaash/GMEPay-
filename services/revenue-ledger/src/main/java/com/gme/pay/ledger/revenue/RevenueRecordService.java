@@ -1,5 +1,6 @@
 package com.gme.pay.ledger.revenue;
 
+import com.gme.pay.ledger.domain.ledger.JournalStore;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -13,10 +14,15 @@ import java.util.Objects;
 @Service
 public class RevenueRecordService {
 
-    private final RevenueRecordStore store;
+    /** USD is the settlement/reporting currency the rounding total is reported in (see {@link #getRoundingTotalUsd}). */
+    private static final String REPORTING_CCY = "USD";
 
-    public RevenueRecordService(RevenueRecordStore store) {
+    private final RevenueRecordStore store;
+    private final JournalStore journalStore;
+
+    public RevenueRecordService(RevenueRecordStore store, JournalStore journalStore) {
         this.store = Objects.requireNonNull(store);
+        this.journalStore = Objects.requireNonNull(journalStore);
     }
 
     /**
@@ -47,6 +53,19 @@ public class RevenueRecordService {
     public BigDecimal getServiceChargeByScheme(long schemeId, LocalDate start, LocalDate end) {
         validateRange(start, end);
         return coalesce(store.sumServiceChargeBySchemeAndDateRange(schemeId, start, end));
+    }
+
+    /**
+     * Net rounding gain/loss (USD) posted to {@code REVENUE_ROUNDING} over the date range. Positive =
+     * net rounding gain, negative = net loss; reconciles to the sum of the period's posted residuals
+     * (T27). Rounding journals key off transaction reference, not partner, so this is a service-wide
+     * figure for the period rather than a per-partner one.
+     *
+     * @throws IllegalArgumentException if start > end
+     */
+    public BigDecimal getRoundingTotalUsd(LocalDate start, LocalDate end) {
+        validateRange(start, end);
+        return coalesce(journalStore.sumRoundingByDateRange(start, end, REPORTING_CCY));
     }
 
     private static void validateRange(LocalDate start, LocalDate end) {

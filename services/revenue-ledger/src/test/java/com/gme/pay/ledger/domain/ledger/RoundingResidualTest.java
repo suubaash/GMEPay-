@@ -25,6 +25,9 @@ class RoundingResidualTest {
             return saved.stream().filter(j -> j.journalId().equals(id)).findFirst();
         }
         public List<Journal> findByReference(String ref) { return saved; }
+        public BigDecimal sumRoundingByDateRange(java.time.LocalDate s, java.time.LocalDate e, String ccy) {
+            return BigDecimal.ZERO; // not exercised here; see RoundingAggregationTest
+        }
     }
 
     private LedgerPostingService service() {

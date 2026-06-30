@@ -1,9 +1,13 @@
 package com.gme.pay.ledger.persistence;
 
 import com.gme.pay.ledger.domain.ledger.JournalStore;
+import com.gme.pay.ledger.domain.model.EntryType;
 import com.gme.pay.ledger.domain.model.Journal;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,5 +49,20 @@ public class InMemoryJournalStore implements JournalStore {
         return insertionOrder.stream()
                 .filter(j -> j.entries().stream().anyMatch(e -> reference.equals(e.reference())))
                 .toList();
+    }
+
+    @Override
+    public BigDecimal sumRoundingByDateRange(LocalDate start, LocalDate end, String currency) {
+        return insertionOrder.stream()
+                .filter(j -> {
+                    LocalDate d = j.postedAt().atZone(ZoneOffset.UTC).toLocalDate();
+                    return !d.isBefore(start) && !d.isAfter(end);
+                })
+                .flatMap(j -> j.entries().stream())
+                .filter(e -> ChartOfAccounts.REVENUE_ROUNDING.equals(e.account()))
+                .filter(e -> currency.equals(e.currency()))
+                // CREDIT adds (gain), DEBIT subtracts (loss) — signed net per MONEY_CONVENTION.md.
+                .map(e -> e.type() == EntryType.CREDIT ? e.amount() : e.amount().negate())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 }

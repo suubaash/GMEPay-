@@ -9,7 +9,10 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -122,6 +125,20 @@ public class JpaJournalStore implements JournalStore {
         }
         List<LedgerEntryEntity> lines = entries.findByJournalIdOrderByIdAsc(journalId);
         return Optional.of(rehydrate(head.get(), lines));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public BigDecimal sumRoundingByDateRange(LocalDate start, LocalDate end, String currency) {
+        Objects.requireNonNull(start, "start required");
+        Objects.requireNonNull(end, "end required");
+        Objects.requireNonNull(currency, "currency required");
+        // [start 00:00 UTC, end+1 00:00 UTC) — inclusive of both endpoint dates.
+        Instant from = start.atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant toExclusive = end.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+        BigDecimal total = entries.sumSignedByAccountAndCurrencyAndPostedAtBetween(
+                ChartOfAccounts.REVENUE_ROUNDING, currency, from, toExclusive);
+        return total == null ? BigDecimal.ZERO : total;
     }
 
     @Override
