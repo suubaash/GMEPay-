@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.contracts.CommittedFxView;
 import com.gme.pay.txn.api.dto.CreateTransactionRequest;
 import com.gme.pay.txn.api.dto.CreateTransactionResponse;
+import com.gme.pay.txn.api.dto.RefundedTransactionResponse;
 import com.gme.pay.txn.api.dto.StatusPatchRequest;
 import com.gme.pay.txn.api.dto.TransactionQueryPageResponse;
 import com.gme.pay.txn.api.dto.TransactionResponse;
@@ -110,6 +112,46 @@ public class TransactionController {
     public ResponseEntity<TransactionResponse> getById(@PathVariable String txnRef) {
         Transaction txn = transactionService.getByTxnRef(txnRef);
         return ResponseEntity.ok(TransactionResponse.from(txn));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /v1/transactions/fx-committed  (committed-FX projection — Phase 2)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the committed cross-border transactions in the date window as the canonical
+     * {@link CommittedFxView} projection — the rate-locked FX fields captured at commit
+     * (offerRateColl = BOK FX1015 #14, crossRate, margins, USD amount). Consumed by
+     * reporting-compliance (FX1015), settlement-reconciliation (netting) and scheme-adapter.
+     *
+     * <p>Query params: {@code from} / {@code to} (inclusive ISO dates, optional) and
+     * {@code partnerId} (optional). A literal path segment, so it never collides with
+     * {@code GET /{txnRef}}.
+     */
+    @GetMapping("/fx-committed")
+    public ResponseEntity<List<CommittedFxView>> fxCommitted(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Long partnerId) {
+        return ResponseEntity.ok(transactionService.findCommittedFx(from, to, partnerId));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /v1/transactions/refunded?refundedOn=YYYY-MM-DD  (refund query — Phase 2)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the transactions refunded on the given calendar day, as the
+     * {@link RefundedTransactionResponse} projection (incl. the original payment txnRef + refund
+     * enrichment). settlement-reconciliation uses this for cross-date refund netting.
+     */
+    @GetMapping("/refunded")
+    public ResponseEntity<List<RefundedTransactionResponse>> refunded(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate refundedOn) {
+        List<RefundedTransactionResponse> body = transactionService.findRefundedOn(refundedOn).stream()
+                .map(RefundedTransactionResponse::from)
+                .toList();
+        return ResponseEntity.ok(body);
     }
 
     // -------------------------------------------------------------------------

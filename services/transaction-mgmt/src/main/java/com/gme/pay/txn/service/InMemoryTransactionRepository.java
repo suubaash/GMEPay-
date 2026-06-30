@@ -85,4 +85,30 @@ public class InMemoryTransactionRepository implements TransactionRepository {
                 .map(TransactionEntityMapper::toDomain)
                 .collect(Collectors.toList());
     }
+
+    @Override
+    public List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
+        // Default to a wide-open window when a bound is omitted: epoch start .. far future.
+        var fromInstant = from != null
+                ? from.atStartOfDay().toInstant(ZoneOffset.UTC)
+                : Instant.EPOCH;
+        // 'to' is inclusive on the date: advance to start of the next day for the < bound.
+        var toInstant = to != null
+                ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                : LocalDate.of(9999, 12, 31).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return jpaRepository.findCommittedFx(fromInstant, toInstant, partnerId)
+                .stream()
+                .map(TransactionEntityMapper::toDomain)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Transaction> findRefundedOn(LocalDate refundedOn) {
+        var fromInstant = refundedOn.atStartOfDay().toInstant(ZoneOffset.UTC);
+        var toInstant = refundedOn.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        return jpaRepository.findRefundedOn(fromInstant, toInstant)
+                .stream()
+                .map(TransactionEntityMapper::toDomain)
+                .collect(Collectors.toList());
+    }
 }

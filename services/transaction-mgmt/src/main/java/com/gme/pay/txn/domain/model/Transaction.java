@@ -68,6 +68,25 @@ public class Transaction {
     // captured at creation — the rate that applied then. Nullable on legacy / pre-resolution rows.
     private BigDecimal merchantFeeRate;
 
+    // V007: committed-FX projection — rate-locked fields captured best-effort at commit
+    // (APPROVED). Drives GET /v1/transactions/fx-committed and the transaction.committed event.
+    // All nullable: a same-currency txn leaves the rate fields null; a legacy / pre-wiring txn
+    // leaves the whole block null. NEVER set on the create path.
+    private BigDecimal offerRateColl;
+    private BigDecimal crossRate;
+    private BigDecimal collectionMarginUsd;
+    private BigDecimal payoutMarginUsd;
+    private BigDecimal usdAmount;
+    private Boolean sameCcyShortcircuit;
+    private java.time.LocalDate settlementDate;
+    private Instant committedAt;
+
+    // V007: refund enrichment — populated when a refund is recorded against the txn.
+    private BigDecimal refundAmountKrw;
+    private String qrCodeId;
+    private Instant refundedAt;
+    private String originalPaymentTxnRef;
+
     /**
      * Creates a new transaction in {@link TransactionStatus#CREATED} state
      * using the legacy 5-field signature (kept for backward compat with unit tests).
@@ -408,6 +427,100 @@ public class Transaction {
     }
 
     /**
+     * Captures the committed-FX projection fields at commit-time (V007). Called from the commit
+     * path (APPROVED) and replayed during rehydration; all arguments are nullable so a
+     * same-currency short-circuit or a pre-wiring txn can be persisted with partial data. Does
+     * NOT bump {@code updatedAt} — it is a commit-time snapshot, also replayed on rehydration.
+     */
+    public void applyCommittedFx(BigDecimal offerRateColl, BigDecimal crossRate,
+                                 BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd,
+                                 BigDecimal usdAmount, Boolean sameCcyShortcircuit,
+                                 java.time.LocalDate settlementDate, Instant committedAt) {
+        this.offerRateColl = offerRateColl;
+        this.crossRate = crossRate;
+        this.collectionMarginUsd = collectionMarginUsd;
+        this.payoutMarginUsd = payoutMarginUsd;
+        this.usdAmount = usdAmount;
+        this.sameCcyShortcircuit = sameCcyShortcircuit;
+        this.settlementDate = settlementDate;
+        this.committedAt = committedAt;
+    }
+
+    /**
+     * Derives and captures the committed-FX projection from data already on the aggregate, the
+     * moment the txn commits (APPROVED). Best-effort: when the inputs needed for the FX rates are
+     * absent (no collection amount, or a same-currency leg) the rate fields stay null but the
+     * commit still records {@code usdAmount}/{@code committedAt}/{@code sameCcyShortcircuit}.
+     *
+     * <p>Per subash-fx (calculation-model.md), with {@code send_amount = collectionAmount} (the
+     * service charge is already carved out upstream by payment-executor) and {@code collection_usd}
+     * approximated by the {@code prefundDeductedUsd} USD pool:
+     * <ul>
+     *   <li>{@code offerRateColl = send_amount / (collection_usd - collection_margin_usd)} (FX1015 #14)</li>
+     *   <li>{@code crossRate     = target_payout / send_amount}</li>
+     * </ul>
+     * Margins are not in the PATCH commit contract, so they default to ZERO when absent (then
+     * {@code offerRateColl} collapses to {@code send_amount / collection_usd}). This method never throws.
+     *
+     * @param collectionMarginUsd nullable; treated as 0 when null
+     * @param payoutMarginUsd     nullable; treated as 0 when null
+     */
+    public void captureCommittedFxAtCommit(BigDecimal collectionMarginUsd,
+                                           BigDecimal payoutMarginUsd,
+                                           Instant committedAt) {
+        boolean sameCcy = sendCcy != null && sendCcy.equals(targetCcy);
+        BigDecimal usd = prefundDeductedUsd;   // USD pool actually moved == margin base proxy
+        BigDecimal collMargin = collectionMarginUsd != null ? collectionMarginUsd : BigDecimal.ZERO;
+        BigDecimal payMargin = payoutMarginUsd != null ? payoutMarginUsd : BigDecimal.ZERO;
+
+        BigDecimal offer = computeOfferRateColl(sendAmount, usd, collMargin, sameCcy);
+        BigDecimal cross = computeCrossRate(sendAmount, targetPayout, sameCcy);
+
+        applyCommittedFx(offer, cross,
+                collectionMarginUsd, payoutMarginUsd, usd,
+                sameCcy, null, committedAt != null ? committedAt : Instant.now());
+    }
+
+    /**
+     * FX1015 #14: {@code offerRateColl = send_amount / (collection_usd - collection_margin_usd)}.
+     * Returns null for a same-currency short-circuit or when an input is missing / would divide
+     * by a non-positive denominator (best-effort — the projection field is explicitly nullable).
+     */
+    public static BigDecimal computeOfferRateColl(BigDecimal sendAmount, BigDecimal collectionUsd,
+                                                  BigDecimal collectionMarginUsd, boolean sameCcy) {
+        if (sameCcy || sendAmount == null || collectionUsd == null) return null;
+        BigDecimal margin = collectionMarginUsd != null ? collectionMarginUsd : BigDecimal.ZERO;
+        BigDecimal denom = collectionUsd.subtract(margin);
+        if (denom.signum() <= 0) return null;
+        return sendAmount.divide(denom, 8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * {@code crossRate = target_payout / send_amount}. Null for a same-currency short-circuit or
+     * when an input is missing / send_amount is zero.
+     */
+    public static BigDecimal computeCrossRate(BigDecimal sendAmount, BigDecimal targetPayout,
+                                              boolean sameCcy) {
+        if (sameCcy || sendAmount == null || targetPayout == null || sendAmount.signum() == 0) {
+            return null;
+        }
+        return targetPayout.divide(sendAmount, 8, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Records refund enrichment (V007) so the committed/refund projection carries the fields
+     * scheme-adapter / settlement read. All nullable; does not change status (the FSM owns that).
+     */
+    public void applyRefundEnrichment(BigDecimal refundAmountKrw, String qrCodeId,
+                                      Instant refundedAt, String originalPaymentTxnRef) {
+        this.refundAmountKrw = refundAmountKrw;
+        this.qrCodeId = qrCodeId;
+        this.refundedAt = refundedAt;
+        this.originalPaymentTxnRef = originalPaymentTxnRef;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
      * Applies the status-patch lock fields from the PATCH /v1/transactions/{ref}/status
      * endpoint. These fields are set once when the payment-executor commits the scheme result.
      */
@@ -461,4 +574,18 @@ public class Transaction {
     public Instant approvedAt()          { return approvedAt; }
     public String failureReason()        { return failureReason; }
     public BigDecimal merchantFeeRate()  { return merchantFeeRate; }
+
+    // V007 committed-FX accessors
+    public BigDecimal offerRateColl()       { return offerRateColl; }
+    public BigDecimal crossRate()           { return crossRate; }
+    public BigDecimal collectionMarginUsd() { return collectionMarginUsd; }
+    public BigDecimal payoutMarginUsd()     { return payoutMarginUsd; }
+    public BigDecimal usdAmount()           { return usdAmount; }
+    public Boolean sameCcyShortcircuit()    { return sameCcyShortcircuit; }
+    public java.time.LocalDate settlementDate() { return settlementDate; }
+    public Instant committedAt()            { return committedAt; }
+    public BigDecimal refundAmountKrw()     { return refundAmountKrw; }
+    public String qrCodeId()                { return qrCodeId; }
+    public Instant refundedAt()             { return refundedAt; }
+    public String originalPaymentTxnRef()   { return originalPaymentTxnRef; }
 }

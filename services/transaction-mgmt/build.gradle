@@ -15,6 +15,8 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Phase-2: canonical committed-FX projection + event payload contracts.
+    implementation project(':libs:lib-api-contracts')
     // Kafka transport for the outbox drain (17.4-G02). Auto-config registers a
     // @Primary KafkaEventPublisher only when spring.kafka.bootstrap-servers is set.
     implementation project(':libs:lib-events-kafka')
