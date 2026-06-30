@@ -150,7 +150,7 @@ class RestPrefundingClientTest {
     @Test
     @DisplayName("reserveCpm: POSTs the canonical reserve request and binds the reserve response")
     void reserveCpm_bindsResponse() {
-        server.expect(requestTo("http://prefunding:8080/v1/prefunding/7/reservations"))
+        server.expect(requestTo("http://prefunding:8080/internal/v1/prefunding/7/reserve"))
                 .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess(
                         "{\"partnerId\":7,\"reservationId\":\"RSV-1\",\"reservedAmountUsd\":\"40.00\","
@@ -168,7 +168,7 @@ class RestPrefundingClientTest {
     @Test
     @DisplayName("reserveCpm: 402 Payment Required maps to InsufficientPrefundingException")
     void reserveCpm_paymentRequiredMapsToInsufficient() {
-        server.expect(requestTo("http://prefunding:8080/v1/prefunding/7/reservations"))
+        server.expect(requestTo("http://prefunding:8080/internal/v1/prefunding/7/reserve"))
                 .andRespond(withStatus(HttpStatus.PAYMENT_REQUIRED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"code\":\"INSUFFICIENT_PREFUNDING\",\"available\":5.00}"));
@@ -179,10 +179,10 @@ class RestPrefundingClientTest {
     }
 
     @Test
-    @DisplayName("releaseCpm: DELETEs the reservation with the canonical release request")
+    @DisplayName("releaseCpm: POSTs /release with the canonical release request")
     void releaseCpm_deletesReservation() {
-        server.expect(requestTo("http://prefunding:8080/v1/prefunding/7/reservations"))
-                .andExpect(method(HttpMethod.DELETE))
+        server.expect(requestTo("http://prefunding:8080/internal/v1/prefunding/7/release"))
+                .andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess());
 
         client.releaseCpm(7L, "RSV-1", "idem-1", "EXPIRED");

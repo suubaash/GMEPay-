@@ -71,12 +71,6 @@ public class PaymentController {
     /** KST — the revenue (KST business-calendar) date carried on the payment.approved event. */
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     /**
-     * Scheme id carried on the canonical payment.approved event. The orchestrator carries the scheme
-     * CODE (e.g. "zeropay"), not config-registry's numeric id, so this rides as 0 — exactly as the
-     * per-transaction revenue capture records it (PaymentOrchestrator.REVENUE_SCHEME_ID_UNSET).
-     */
-    private static final long EVENT_SCHEME_ID_UNSET = 0L;
-    /**
      * Default fee-share fraction recorded as metadata on the event. The authoritative two-sided split
      * is computed in revenue-ledger; this is record metadata only (mirrors
      * PaymentOrchestrator.DEFAULT_FEE_SHARE_PCT).
@@ -263,7 +257,7 @@ public class PaymentController {
                 a.getMerchantId(), a.getMerchantName(), a.getTargetPayout(), a.getPayoutCurrency(),
                 a.getCollectionAmount(), a.getCollectionCurrency(), a.getReservedUsd(), null,
                 a.getCollectionMarginUsd(), a.getPayoutMarginUsd(), a.getServiceCharge(),
-                a.getDirection(), a.getMerchantFeeRate(), a.getCreatedAt());
+                a.getDirection(), a.getMerchantFeeRate(), a.getCreatedAt(), a.getCollectionUsd());
     }
 
     private static AuthorizeResponse toAuthorizeResponse(PaymentAuthorizationEntity e) {
@@ -471,9 +465,9 @@ public class PaymentController {
     /**
      * Emits the canonical {@code payment.approved} event (the revenue-bearing one consumed by
      * revenue-ledger + notification-webhook). The revenue fields are the ones snapshotted at authorize
-     * on the authorization (margins, service charge) replayed here; {@code schemeId} rides as 0 because
-     * the orchestrator carries the scheme CODE not config-registry's numeric id (matches the per-txn
-     * revenue capture, which also records 0 — see PaymentOrchestrator.REVENUE_SCHEME_ID_UNSET).
+     * on the authorization (margins, service charge) replayed here; {@code schemeId} is the numeric id
+     * resolved from the carried scheme CODE via {@link com.gme.pay.payment.domain.SchemeId} (0 only when
+     * the code is outside the platform roster).
      * {@code feeSharePct} is the default record-metadata share (the authoritative split is computed in
      * revenue-ledger). The carried {@link PaymentEvents.PaymentApproved} maps to {@code
      * PaymentApprovedPayload} for the wire via {@code payload()}.
@@ -486,9 +480,12 @@ public class PaymentController {
         BigDecimal svcCharge = auth.getServiceCharge() != null
                 ? auth.getServiceCharge() : BigDecimal.ZERO;
         LocalDate revenueDate = auth.getCreatedAt().atZone(KST).toLocalDate();
+        // Resolve the numeric scheme id from the carried scheme CODE (was 0 — orchestrator/txn carry
+        // the code, not config-registry's numeric id; see SchemeId).
+        long schemeId = com.gme.pay.payment.domain.SchemeId.resolve(auth.getSchemeId());
         eventPublisher.publish(new PaymentEvents.PaymentApproved(
                 r.paymentId(), Instant.now(), revenueDate, auth.getPartnerId(),
-                EVENT_SCHEME_ID_UNSET, auth.getPartnerTxnRef(), auth.getTxnRef(),
+                schemeId, auth.getPartnerTxnRef(), auth.getTxnRef(),
                 collMargin, payMargin, svcCharge, auth.getCollectionCurrency(),
                 DEFAULT_FEE_SHARE_PCT));
     }

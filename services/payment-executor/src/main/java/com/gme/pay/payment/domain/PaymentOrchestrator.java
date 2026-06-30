@@ -38,14 +38,6 @@ public class PaymentOrchestrator {
     /** KST — the revenue date booked on a capture is the Korea business-calendar date of the commit. */
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     /**
-     * Sentinel scheme id for revenue capture. The orchestrator carries the scheme CODE (e.g.
-     * "zeropay"), not config-registry's numeric scheme id, so the per-transaction revenue row stores
-     * 0 here. The per-partner revenue aggregate ({@code GET /v1/revenue}) does not key on scheme, so
-     * this does not affect reported figures; a numeric scheme id is a follow-on once the scheme
-     * catalog is numerically keyed.
-     */
-    private static final long REVENUE_SCHEME_ID_UNSET = 0L;
-    /**
      * Default scheme fee-share fraction recorded as metadata on revenue rows. The fee-share split is
      * computed elsewhere (revenue-ledger's postFeeShareSplit); this is record metadata only and is
      * not surfaced by the per-partner aggregate.
@@ -241,7 +233,12 @@ public class PaymentOrchestrator {
                         cmd.partnerId(), cmd.partnerTxnRef(), cmd.schemeId(), cmd.direction(),
                         PaymentMode.MPM.name(), quote.targetPayout(), quote.payoutCurrency(),
                         quote.collectionAmount(), quote.collectionCurrency(), merchant.merchantId(),
-                        cmd.quoteId(), merchantFeeRate));
+                        cmd.quoteId(), merchantFeeRate,
+                        // Wave-3: carry the rate-lock pool from the locked quote so transaction-mgmt
+                        // persists real margins (FX1015). Cost rates are not on the quote view → null.
+                        quote.offerRateColl(), quote.crossRate(), null, null,
+                        quote.collectionUsd(), quote.payoutUsdCost(),
+                        quote.collectionMarginUsd(), quote.payoutMarginUsd()));
 
         // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
         // SETTLEMENT_FLOW_SPEC §D10/§7.4: the hold must equal payout-cost + FX-margin +
@@ -344,7 +341,12 @@ public class PaymentOrchestrator {
                 new TransactionClient.StatusPatch(
                         PaymentStatus.APPROVED, schemeResponse.schemeTxnRef(),
                         schemeResponse.schemeApprovalCode(), capturedUsd, schemeResponse.approvedAt(),
-                        bookedAmount, roundingModeName, residual));
+                        bookedAmount, roundingModeName, residual,
+                        // Wave-3: carry the locked-quote margins on the APPROVED commit so
+                        // transaction-mgmt persists real margins (fixes FX1015 zero-margin). Cost
+                        // rates are not snapshotted on the authorization → null.
+                        ctx.collectionMarginUsd(), ctx.payoutMarginUsd(), ctx.collectionUsd(),
+                        null, null));
 
         if (booking != null && revenueLedgerClient != null) {
             revenueLedgerClient.postRoundingResidual(ctx.txnRef(), booking.residual(), booking.currency());
@@ -354,8 +356,9 @@ public class PaymentOrchestrator {
             BigDecimal payMargin = ctx.payoutMarginUsd() != null ? ctx.payoutMarginUsd() : BigDecimal.ZERO;
             BigDecimal svcCharge = ctx.serviceCharge() != null ? ctx.serviceCharge() : BigDecimal.ZERO;
             LocalDate revenueDate = ctx.createdAt().atZone(KST).toLocalDate();
+            long schemeId = SchemeId.resolve(ctx.schemeId());
             revenueLedgerClient.postRevenueCapture(
-                    ctx.txnRef(), ctx.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
+                    ctx.txnRef(), ctx.partnerId(), schemeId, revenueDate,
                     collMargin, payMargin, svcCharge, ctx.collectionCurrency(), DEFAULT_FEE_SHARE_PCT);
             postCommissionSplit(ctx, revenueDate);
         }
@@ -389,7 +392,7 @@ public class PaymentOrchestrator {
                 .ifPresent(cfg -> {
                     long payoutKrw = ctx.targetPayout().setScale(0, RoundingMode.FLOOR).longValueExact();
                     revenueLedgerClient.postCommissionSplit(
-                            ctx.txnRef(), ctx.partnerId(), REVENUE_SCHEME_ID_UNSET, revenueDate,
+                            ctx.txnRef(), ctx.partnerId(), SchemeId.resolve(ctx.schemeId()), revenueDate,
                             payoutKrw, ctx.merchantFeeRate(), cfg.vanFeePct(),
                             cfg.gmeSharePct(), cfg.partnerSharePct());
                 });
@@ -450,7 +453,26 @@ public class PaymentOrchestrator {
             BigDecimal reservedUsd, BigDecimal offerRate,
             BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd, BigDecimal serviceCharge,
             String direction, BigDecimal merchantFeeRate,
-            Instant createdAt) {}
+            Instant createdAt, BigDecimal collectionUsd) {
+
+        /** Backwards-compatible ctor (no collectionUsd) — defaults the pool collection USD to null. */
+        public ConfirmContext(
+                long partnerId, PartnerType partnerType, String partnerCode, String partnerTxnRef,
+                String txnRef, String paymentId, String schemeId, String merchantQr,
+                String merchantId, String merchantName,
+                BigDecimal targetPayout, String payoutCurrency,
+                BigDecimal collectionAmount, String collectionCurrency,
+                BigDecimal reservedUsd, BigDecimal offerRate,
+                BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd, BigDecimal serviceCharge,
+                String direction, BigDecimal merchantFeeRate,
+                Instant createdAt) {
+            this(partnerId, partnerType, partnerCode, partnerTxnRef, txnRef, paymentId, schemeId,
+                    merchantQr, merchantId, merchantName, targetPayout, payoutCurrency,
+                    collectionAmount, collectionCurrency, reservedUsd, offerRate,
+                    collectionMarginUsd, payoutMarginUsd, serviceCharge, direction, merchantFeeRate,
+                    createdAt, null);
+        }
+    }
 
     /**
      * Executes a CPM (Consumer-Presented Mode) payment end-to-end.
@@ -491,12 +513,20 @@ public class PaymentOrchestrator {
         // (the customer is present), but it rides the same money-safety spine as MPM (Step 4): the
         // float is only held until the scheme confirms the charge, never debited before the
         // irreversible submit. A failed reserve compensates the orphan PENDING txn.
+        //
+        // The CPM hold uses the canonical idempotent reserve contract (prefunding's
+        // POST /internal/v1/prefunding/{partner}/reserve, keyed on idempotencyKey == txnRef) so a
+        // retried CPM authorize never double-holds; the returned reservationId is carried so a
+        // decline can RELEASE the exact hold via releaseCpm.
         BigDecimal reservedUsd = null;
+        String reservationId = null;
         if (partnerType == PartnerType.OVERSEAS) {
             try {
-                PrefundingClient.ReservationResult res =
-                        prefundingClient.reserve(cmd.partnerId(), txn.txnRef(), cmd.collectionUsd());
-                reservedUsd = res.reservedUsd();
+                com.gme.pay.contracts.PrefundingReserveResponse res =
+                        prefundingClient.reserveCpm(
+                                cmd.partnerId(), cmd.collectionUsd(), txn.txnRef(), txn.txnRef());
+                reservedUsd = res.reservedAmountUsd();
+                reservationId = res.reservationId();
             } catch (RuntimeException ex) {
                 safeFailTxn(txn.txnRef());
                 throw ex;
@@ -526,9 +556,10 @@ public class PaymentOrchestrator {
                     )
             );
         } catch (SchemeDeclinedException ex) {
-            // Decline: RELEASE the hold (never captured), fail the txn.
+            // Decline: RELEASE the CPM hold (never captured), fail the txn. Idempotent on the reserve
+            // key (== txnRef), so a retried release is a no-op.
             if (partnerType == PartnerType.OVERSEAS) {
-                prefundingClient.release(cmd.partnerId(), txn.txnRef());
+                prefundingClient.releaseCpm(cmd.partnerId(), reservationId, txn.txnRef(), "SCHEME_DECLINED");
             }
             transactionClient.commitStatus(txn.txnRef(),
                     new TransactionClient.StatusPatch(

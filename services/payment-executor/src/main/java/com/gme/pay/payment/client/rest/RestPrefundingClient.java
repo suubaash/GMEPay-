@@ -278,7 +278,7 @@ public class RestPrefundingClient implements PrefundingClient {
                                                 String idempotencyKey, String txnRef) {
         try {
             PrefundingReserveResponse body = restClient.post()
-                    .uri("/v1/prefunding/{partner}/reservations", partnerId)
+                    .uri("/internal/v1/prefunding/{partner}/reserve", partnerId)
                     .body(new PrefundingReserveRequest(partnerId, amountUsd, idempotencyKey, txnRef))
                     .retrieve()
                     .body(PrefundingReserveResponse.class);
@@ -293,13 +293,13 @@ public class RestPrefundingClient implements PrefundingClient {
                         nonNull(parseAvailable(ex)), nonNull(amountUsd));
             }
             throw new PaymentException(
-                    "prefunding POST /v1/prefunding/" + partnerId + "/reservations failed: "
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/reserve failed: "
                             + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
         } catch (PaymentException ex) {
             throw ex;
         } catch (RuntimeException ex) {
             throw new PaymentException(
-                    "prefunding POST /v1/prefunding/" + partnerId + "/reservations failed: "
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/reserve failed: "
                             + ex.getMessage(), ex);
         }
     }
@@ -307,20 +307,20 @@ public class RestPrefundingClient implements PrefundingClient {
     @Override
     public void releaseCpm(long partnerId, String reservationId, String idempotencyKey, String reason) {
         try {
-            restClient.method(org.springframework.http.HttpMethod.DELETE)
-                    .uri("/v1/prefunding/{partner}/reservations", partnerId)
+            restClient.post()
+                    .uri("/internal/v1/prefunding/{partner}/release", partnerId)
                     .body(new PrefundingReleaseRequest(partnerId, reservationId, idempotencyKey, reason))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException ex) {
             throw new PaymentException(
-                    "prefunding DELETE /v1/prefunding/" + partnerId + "/reservations failed: "
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/release failed: "
                             + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
         } catch (PaymentException ex) {
             throw ex;
         } catch (RuntimeException ex) {
             throw new PaymentException(
-                    "prefunding DELETE /v1/prefunding/" + partnerId + "/reservations failed: "
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/release failed: "
                             + ex.getMessage(), ex);
         }
     }
