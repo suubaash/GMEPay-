@@ -3,6 +3,7 @@ package com.gme.pay.payment.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.events.RecordingEventPublisher;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
 import com.gme.pay.payment.domain.PaymentStatus;
@@ -42,6 +43,7 @@ class PaymentControllerIdempotencyTest {
     private PartnerConfigClient partnerConfigClient;
     private PaymentAuthorizationRepository authorizationRepository;
     private PaymentAuthorizationService authorizationService;
+    private RecordingEventPublisher eventPublisher;
     private MockMvc mvc;
 
     private static PaymentResult sampleResult(String paymentId) {
@@ -79,11 +81,13 @@ class PaymentControllerIdempotencyTest {
         partnerConfigClient = mock(PartnerConfigClient.class);
         authorizationRepository = mock(PaymentAuthorizationRepository.class);
         authorizationService = mock(PaymentAuthorizationService.class);
+        eventPublisher = new RecordingEventPublisher();
         ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         PaymentController controller = new PaymentController(
-                orchestrator, partnerConfigClient, authorizationRepository, authorizationService);
+                orchestrator, partnerConfigClient, authorizationRepository, authorizationService,
+                eventPublisher);
         mvc = standaloneSetup(controller)
                 .setControllerAdvice(new PaymentExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
@@ -105,6 +109,8 @@ class PaymentControllerIdempotencyTest {
 
         // The non-negotiable: a lost claim must NEVER reach the scheme.
         verify(orchestrator, never()).confirmMpm(any());
+        // ...and emits no lifecycle event (no approved/failed for a rejected claim).
+        org.assertj.core.api.Assertions.assertThat(eventPublisher.published()).isEmpty();
     }
 
     @Test
@@ -124,5 +130,11 @@ class PaymentControllerIdempotencyTest {
         verify(orchestrator).confirmMpm(any());
         verify(authorizationService).markOutcome(eq("AUTH-1"),
                 eq(PaymentAuthorizationEntity.STATUS_CONFIRMED), eq("WCR1"), any());
+        // A successful confirm EXPOSES exactly one payment.approved event keyed by payment_id.
+        org.assertj.core.api.Assertions.assertThat(eventPublisher.published()).hasSize(1);
+        org.assertj.core.api.Assertions.assertThat(eventPublisher.published().get(0).eventType())
+                .isEqualTo("payment.approved");
+        org.assertj.core.api.Assertions.assertThat(eventPublisher.published().get(0).aggregateId())
+                .isEqualTo("pay_1");
     }
 }

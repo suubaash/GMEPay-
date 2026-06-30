@@ -18,6 +18,13 @@ public interface PaymentAuthorizationRepository
     Optional<PaymentAuthorizationEntity> findByPartnerIdAndPartnerTxnRef(long partnerId, String partnerTxnRef);
 
     /**
+     * Owner-scoped status lookup for GET /v1/payments/{id} (5.2-T16). Keying on BOTH paymentId and
+     * partnerId means a payment owned by another partner returns empty here — the caller maps that to
+     * 404 (not 403) so ownership is never leaked.
+     */
+    Optional<PaymentAuthorizationEntity> findByPaymentIdAndPartnerId(String paymentId, long partnerId);
+
+    /**
      * Authorizations in {@code status} whose window lapsed before {@code cutoff} — the expiry
      * sweeper's work-list. Filtering on status AUTHORIZED means in-flight (CONFIRMING) and
      * already-terminal (CONFIRMED/UNCERTAIN/...) rows are never swept. Bounded via {@code pageable}.
