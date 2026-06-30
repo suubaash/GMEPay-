@@ -1,0 +1,11 @@
+{{/*
+The ONLY place services are enumerated: range the .Values.services map and
+delegate each entry to the gmepay.deployment helper (Deployment + Service).
+Adding a service = adding a value entry; no new template file.
+*/}}
+{{- range $key, $svc := .Values.services }}
+{{- if $svc.enabled | default true }}
+---
+{{ include "gmepay.deployment" (dict "key" $key "svc" $svc "root" $) }}
+{{- end }}
+{{- end }}

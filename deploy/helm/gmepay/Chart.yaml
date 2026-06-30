@@ -1,0 +1,22 @@
+apiVersion: v2
+name: gmepay
+description: >-
+  Cloud-agnostic umbrella chart for the GMEPay+ platform. One portable chart
+  renders a Deployment + Service for every deployable (16 backend services +
+  ops-partner-bff is one of them, plus the two Next.js UIs). Every backing
+  dependency (Postgres, Redis, Kafka, Mongo, S3-compatible object store, OIDC,
+  OTLP telemetry) is injected purely through env (the "portability ABI"), so the
+  same images deploy to on-prem / AWS / Azure differing only by a value overlay.
+type: application
+# Chart version is independent of the platform app version.
+version: 0.1.0
+# Tracks the platform; bump on coordinated releases.
+appVersion: "1.0.0"
+keywords:
+  - gmepay
+  - payments
+  - cloud-agnostic
+  - kubernetes
+maintainers:
+  - name: GMEPay+ Platform Team
+home: https://github.com/gmeremit/gmepay-plus
