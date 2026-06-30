@@ -67,7 +67,8 @@ class GetPaymentControllerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         PaymentController controller = new PaymentController(
                 mock(PaymentOrchestrator.class), mock(PartnerConfigClient.class),
-                authorizationRepository, mock(PaymentAuthorizationService.class));
+                authorizationRepository, mock(PaymentAuthorizationService.class),
+                new com.gme.pay.events.RecordingEventPublisher());
         mvc = standaloneSetup(controller)
                 .setControllerAdvice(new PaymentExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))

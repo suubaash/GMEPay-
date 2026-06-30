@@ -13,6 +13,8 @@ import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.PartnerConfigClient;
+import com.gme.pay.payment.domain.event.PaymentEvents;
+import com.gme.pay.events.EventPublisher;
 import com.gme.pay.payment.persistence.PaymentAuthorizationEntity;
 import com.gme.pay.payment.persistence.PaymentAuthorizationRepository;
 import com.gme.pay.payment.service.PaymentAuthorizationService;
@@ -69,20 +71,24 @@ public class PaymentController {
     private final PartnerConfigClient partnerConfigClient;
     private final PaymentAuthorizationRepository authorizationRepository;
     private final PaymentAuthorizationService authorizationService;
+    private final EventPublisher eventPublisher;
 
     /**
      * Constructor injection. {@code partnerConfigClient} resolves the partner type from
      * config-registry; the authorization repository + service back the two-phase authorize/confirm
-     * state machine.
+     * state machine; {@code eventPublisher} emits the lifecycle events this service EXPOSES
+     * (payment.approved / payment.failed / payment.cancelled).
      */
     public PaymentController(PaymentOrchestrator orchestrator,
                              PartnerConfigClient partnerConfigClient,
                              PaymentAuthorizationRepository authorizationRepository,
-                             PaymentAuthorizationService authorizationService) {
+                             PaymentAuthorizationService authorizationService,
+                             EventPublisher eventPublisher) {
         this.orchestrator = orchestrator;
         this.partnerConfigClient = partnerConfigClient;
         this.authorizationRepository = authorizationRepository;
         this.authorizationService = authorizationService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -175,11 +181,13 @@ public class PaymentController {
             PaymentResult result = orchestrator.confirmMpm(ctx);
             authorizationService.markOutcome(authId,
                     PaymentAuthorizationEntity.STATUS_CONFIRMED, walletChargeRef, Instant.now());
+            publishApproved(auth, result);
             return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(result));
         } catch (SchemeDeclinedException ex) {
             // Scheme declined (no payment); confirmMpm already released the hold + FAILED the txn.
             authorizationService.markOutcome(authId,
                     PaymentAuthorizationEntity.STATUS_FAILED, walletChargeRef, null);
+            publishFailed(auth, ex.getMessage());
             throw ex;
         } catch (SchemeTimeoutException ex) {
             // Outcome unknown. Do NOT revert to AUTHORIZED — a retry must never re-submit to the
@@ -320,6 +328,9 @@ public class PaymentController {
         CancelResult result = orchestrator.cancelPayment(
                 paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
 
+        eventPublisher.publish(new PaymentEvents.PaymentCancelled(
+                result.paymentId(), Instant.now(), partnerId, reason, result.prefundReturnedUsd()));
+
         return ResponseEntity.ok(new CancelPaymentResponse(
                 result.paymentId(),
                 "cancelled",
@@ -437,6 +448,20 @@ public class PaymentController {
             }
         }
         return PartnerType.valueOf(headerFallback.toUpperCase());
+    }
+
+    // ---- event emission (payment.approved / payment.failed / payment.cancelled) ----
+
+    private void publishApproved(PaymentAuthorizationEntity auth, PaymentResult r) {
+        eventPublisher.publish(new PaymentEvents.PaymentApproved(
+                r.paymentId(), Instant.now(), auth.getPartnerId(), auth.getPartnerTxnRef(),
+                r.schemeTxnId(), r.merchantId(), r.targetPayout(), r.payoutCurrency(),
+                r.collectionAmount(), r.collectionCurrency()));
+    }
+
+    private void publishFailed(PaymentAuthorizationEntity auth, String reason) {
+        eventPublisher.publish(new PaymentEvents.PaymentFailed(
+                auth.getPaymentId(), Instant.now(), auth.getPartnerId(), auth.getPartnerTxnRef(), reason));
     }
 
     // ---- mapping ----
