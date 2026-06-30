@@ -50,7 +50,7 @@ class QuoteIssueServiceTest {
         when(rates.resolve("USD")).thenReturn(null);          // identity leg
         when(rates.resolve("KRW")).thenReturn(new BigDecimal("1380"));
 
-        QuoteIssueService svc = new QuoteIssueService(port, rates, null);
+        QuoteIssueService svc = new QuoteIssueService(port, rates, null, null);
         RateInput in = svc.buildRateInput(new PartnerQuoteRequest(
                 "GMEREMIT", "zeropay", "INBOUND", new BigDecimal("50000"), "KRW"));
 
@@ -85,7 +85,7 @@ class QuoteIssueServiceTest {
         CostRateResolver rates = mock(CostRateResolver.class);
         when(rates.resolve("KRW")).thenReturn(new BigDecimal("1380"));
 
-        QuoteIssueService svc = new QuoteIssueService(port, rates, null);
+        QuoteIssueService svc = new QuoteIssueService(port, rates, null, null);
         RateInput in = svc.buildRateInput(new PartnerQuoteRequest(
                 "PTNR", "zeropay", "INBOUND", new BigDecimal("50000"), "KRW"));
 
@@ -110,7 +110,7 @@ class QuoteIssueServiceTest {
         when(rates.resolve("USD")).thenReturn(null);
         when(rates.resolve("KRW")).thenReturn(new BigDecimal("1380"));
 
-        QuoteIssueService svc = new QuoteIssueService(port, rates, null);
+        QuoteIssueService svc = new QuoteIssueService(port, rates, null, null);
 
         // exact (zeropay, INBOUND) beats the (*, *) wildcard → mA = 0.01
         RateInput in = svc.buildRateInput(new PartnerQuoteRequest(
@@ -119,7 +119,7 @@ class QuoteIssueServiceTest {
 
         // a scheme with no applicable rule is a hard error (partner not priced for that corridor).
         PartnerConfigPort empty = port(new PartnerCurrencies("USD", "USD", "USD"), List.of());
-        QuoteIssueService svc2 = new QuoteIssueService(empty, rates, null);
+        QuoteIssueService svc2 = new QuoteIssueService(empty, rates, null, null);
         ApiException ex = assertThrows(ApiException.class, () -> svc2.buildRateInput(
                 new PartnerQuoteRequest("PTNR", "zeropay", "INBOUND", new BigDecimal("50000"), "KRW")));
         assertTrue(ex.getMessage().contains("no pricing rule"));
