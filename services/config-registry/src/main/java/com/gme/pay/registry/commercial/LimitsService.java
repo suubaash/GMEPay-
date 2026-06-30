@@ -11,6 +11,7 @@ import com.gme.pay.contracts.LimitsView;
 import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
+import com.gme.pay.registry.prefunding.push.CreditLimitPusher;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -62,13 +63,16 @@ public class LimitsService {
     private final LimitsRepository limitsRepository;
     private final PartnerRepository partnerRepository;
     private final ObjectProvider<AuditLogService> auditLogProvider;
+    private final CreditLimitPusher creditLimitPusher;
 
     public LimitsService(LimitsRepository limitsRepository,
                          PartnerRepository partnerRepository,
-                         ObjectProvider<AuditLogService> auditLogProvider) {
+                         ObjectProvider<AuditLogService> auditLogProvider,
+                         CreditLimitPusher creditLimitPusher) {
         this.limitsRepository = limitsRepository;
         this.partnerRepository = partnerRepository;
         this.auditLogProvider = auditLogProvider;
+        this.creditLimitPusher = creditLimitPusher;
     }
 
     /**
@@ -110,6 +114,9 @@ public class LimitsService {
         publishAudit(partnerCode, actor,
                 priorOpt.map(CommercialJson::canonicalLimits).orElse(null),
                 CommercialJson.canonicalLimits(saved));
+        // Wave-3 (IR-pf-2): the AML caps just changed — push the merged
+        // credit-limit + AML caps to prefunding (gated; no-op by default).
+        creditLimitPusher.pushFor(partner);
         return saved.toView();
     }
 

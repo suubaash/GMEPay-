@@ -185,6 +185,29 @@ public class PartnerSchemeService {
     }
 
     /**
+     * Wave-3 location-resolution read (smart-router consumes this): every
+     * CURRENT scheme enablement, each carrying its owning partner's operating
+     * country plus the derived {@code supportsCpm}/{@code supportsMpm} +
+     * {@code status} fields, optionally filtered to one ISO-3166 alpha-2
+     * country.
+     *
+     * <p>A {@code null}/blank {@code countryCode} returns every current
+     * enablement; a country code returns only the rows whose partner operates
+     * there (rows whose partner has no operating country never match a country
+     * filter). The list is ordered by partner id then scheme id.
+     *
+     * @param countryCode optional ISO-3166 alpha-2 filter; {@code null}/blank =
+     *                    no filter.
+     */
+    @Transactional(readOnly = true)
+    public List<PartnerSchemeView> resolveByLocation(String countryCode) {
+        String filter = countryCode == null || countryCode.isBlank() ? null : countryCode;
+        return schemeRepository.findCurrentForLocation(filter).stream()
+                .map(row -> ((PartnerSchemeEntity) row[0]).toLocationView((String) row[1]))
+                .toList();
+    }
+
+    /**
      * The weekly operating schedule for one scheme (V024 reference data),
      * Monday(0) .. Sunday(6).
      *

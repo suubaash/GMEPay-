@@ -75,18 +75,24 @@ public class KybService {
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
     private static final String DEFAULT_ACTOR = "system";
 
+    /** Audit verb for a full verify run landing on the row. */
+    public static final String EVENT_TYPE_VERIFIED = "PARTNER_KYB_VERIFIED";
+
     private final KybRepository kybRepository;
     private final PartnerRepository partnerRepository;
     private final KybScreeningClient screeningClient;
+    private final KybVerifyClient verifyClient;
     private final ObjectProvider<AuditLogService> auditLogProvider;
 
     public KybService(KybRepository kybRepository,
                       PartnerRepository partnerRepository,
                       KybScreeningClient screeningClient,
+                      KybVerifyClient verifyClient,
                       ObjectProvider<AuditLogService> auditLogProvider) {
         this.kybRepository = kybRepository;
         this.partnerRepository = partnerRepository;
         this.screeningClient = screeningClient;
+        this.verifyClient = verifyClient;
         this.auditLogProvider = auditLogProvider;
     }
 
@@ -155,6 +161,48 @@ public class KybService {
 
         KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor, EVENT_TYPE_SCREENED,
+                priorOpt.map(KybJson::canonical).orElse(null), KybJson.canonical(saved));
+        return saved.toView();
+    }
+
+    /**
+     * Wave-3 — run a FULL KYB verification for the partner via the kyb-adapter
+     * verify seam ({@code POST /v1/kyb/verify}) and store the collapsed decision
+     * (+ provider ref + screening status) on a fresh SCD-6 row. The
+     * document-aware counterpart to {@link #runScreening}: the wizard's KYB step
+     * calls this when the operator has attached the onboarding document pack.
+     *
+     * <p>The subject is assembled from the stored aggregate (callers cannot
+     * verify a subject that differs from what the registry holds); the supplied
+     * document types are passed through so kyb-adapter can downgrade a clean run
+     * to MANUAL_REVIEW when a required document is missing.
+     *
+     * @param suppliedDocuments document types the operator attached; may be null.
+     * @throws ResponseStatusException 404 when no current partner row matches;
+     *         upstream 4xx/502 from {@link RestKybVerifyClient} pass through.
+     */
+    @Transactional
+    public KybView runVerification(String partnerCode, List<String> suppliedDocuments,
+                                   boolean force, String actor) {
+        PartnerEntity partner = requirePartner(partnerCode);
+        Optional<KybEntity> priorOpt = kybRepository.findCurrentByPartnerId(partner.getId());
+
+        KybVerificationResult result = verifyClient.verify(new KybVerificationRequest(
+                toSubject(partner, priorOpt.orElse(null)), suppliedDocuments, force));
+
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        KybEntity fresh = new KybEntity();
+        fresh.setPartnerId(partner.getId());
+        priorOpt.ifPresent(prior -> copyStep3Fields(prior, fresh));
+        fresh.setScreeningStatus(result.screeningStatus());
+        fresh.setScreeningProviderRef(result.providerRef());
+        fresh.setScreenedAt(result.screenedAt() == null
+                ? now : result.screenedAt().truncatedTo(ChronoUnit.MICROS));
+        fresh.setVerificationDecision(result.decision());
+        fresh.setVerificationDecisionReason(result.decisionReason());
+
+        KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
+        publishAudit(partnerCode, actor, EVENT_TYPE_VERIFIED,
                 priorOpt.map(KybJson::canonical).orElse(null), KybJson.canonical(saved));
         return saved.toView();
     }
@@ -247,11 +295,16 @@ public class KybService {
         to.setCbddqDocId(from.getCbddqDocId());
     }
 
-    /** Copy the screening verdict between rows (step-3 saves keep screening state). */
+    /**
+     * Copy the screening + verify verdict between rows (step-3 saves keep
+     * screening/verification state — a wizard save must never erase a verdict).
+     */
     private static void carryForwardScreening(KybEntity from, KybEntity to) {
         to.setScreeningStatus(from.getScreeningStatus());
         to.setScreeningProviderRef(from.getScreeningProviderRef());
         to.setScreenedAt(from.getScreenedAt());
+        to.setVerificationDecision(from.getVerificationDecision());
+        to.setVerificationDecisionReason(from.getVerificationDecisionReason());
     }
 
     /** Project the stored aggregate into the vendor-agnostic screening subject. */

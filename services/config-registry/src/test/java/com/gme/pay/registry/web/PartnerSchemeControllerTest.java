@@ -52,6 +52,9 @@ class PartnerSchemeControllerTest {
     @Autowired
     private PartnerStore partnerStore;
 
+    @Autowired
+    private com.gme.pay.registry.persistence.PartnerRepository partnerRepository;
+
     private MockMvc mvc;
 
     @TestConfiguration
@@ -73,7 +76,8 @@ class PartnerSchemeControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new PartnerSchemeController(schemeService))
+        mvc = standaloneSetup(new PartnerSchemeController(schemeService),
+                        new SchemeResolutionController(schemeService))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
@@ -227,6 +231,38 @@ class PartnerSchemeControllerTest {
                 .andExpect(status().isNotFound());
 
         mvc.perform(get("/v1/admin/schemes/{schemeId}/operating-hours", "QRIS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /v1/schemes/resolve?country= carries country + derived fields, filters")
+    void resolveByLocation_returnsLocationViews() throws Exception {
+        seedPartner("sch_loc_ctrl");
+        // Stamp operating country so the cross-partner read joins it on.
+        var p = partnerRepository.findCurrentByPartnerCode("sch_loc_ctrl").orElseThrow();
+        p.setOperatingCountry("KR");
+        partnerRepository.saveAndFlush(p);
+
+        mvc.perform(patch("/v1/admin/partners/draft/{code}/step-7/schemes", "sch_loc_ctrl")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(STEP7_SCHEMES_BODY))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/v1/schemes/resolve").param("country", "KR"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].countryCode").value("KR"))
+                .andExpect(jsonPath("$[0].schemeId").value("ZEROPAY"))
+                .andExpect(jsonPath("$[0].supportsCpm").value(true))
+                .andExpect(jsonPath("$[0].supportsMpm").value(true))
+                .andExpect(jsonPath("$[0].status").value("ACTIVE"))
+                // BAKONG declares no approval method → supports neither mode.
+                .andExpect(jsonPath("$[1].schemeId").value("BAKONG"))
+                .andExpect(jsonPath("$[1].supportsCpm").value(false));
+
+        // Unknown country → empty list (no 404).
+        mvc.perform(get("/v1/schemes/resolve").param("country", "ZZ"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
     }

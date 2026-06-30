@@ -93,6 +93,18 @@ public class KybEntity {
     @Column(name = "screened_at")
     private Instant screenedAt;
 
+    /**
+     * Wave-3 (V036): the collapsed KYB-verify verdict from kyb-adapter
+     * ({@code APPROVED}/{@code MANUAL_REVIEW}/{@code REJECTED}); NULL before any
+     * verify run. Opaque String — the decision roster is owned by kyb-adapter.
+     */
+    @Column(name = "verification_decision", length = 20)
+    private String verificationDecision;
+
+    /** Wave-3 (V036): one-line explanation accompanying {@link #verificationDecision}; NULL when unset. */
+    @Column(name = "verification_decision_reason", length = 500)
+    private String verificationDecisionReason;
+
     /** Business-time lower bound (inclusive), ADR-010. */
     @Column(name = "valid_from", nullable = false)
     private Instant validFrom;
@@ -256,6 +268,22 @@ public class KybEntity {
 
     public void setScreenedAt(Instant screenedAt) {
         this.screenedAt = screenedAt;
+    }
+
+    public String getVerificationDecision() {
+        return verificationDecision;
+    }
+
+    public void setVerificationDecision(String verificationDecision) {
+        this.verificationDecision = verificationDecision;
+    }
+
+    public String getVerificationDecisionReason() {
+        return verificationDecisionReason;
+    }
+
+    public void setVerificationDecisionReason(String verificationDecisionReason) {
+        this.verificationDecisionReason = verificationDecisionReason;
     }
 
     public Instant getValidFrom() {

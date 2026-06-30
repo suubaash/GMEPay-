@@ -123,7 +123,13 @@ final class KybJson {
         sb.append("\"screeningStatus\":").append(jsonString(k.getScreeningStatus())).append(',');
         sb.append("\"screeningProviderRef\":").append(jsonString(k.getScreeningProviderRef())).append(',');
         sb.append("\"screenedAt\":").append(jsonString(
-                k.getScreenedAt() == null ? null : k.getScreenedAt().toString()));
+                k.getScreenedAt() == null ? null : k.getScreenedAt().toString())).append(',');
+        // Wave-3 (V036) verify verdict — appended so the audit AFTER snapshot
+        // seals it too; NULL on rows that only ever screened.
+        sb.append("\"verificationDecision\":")
+                .append(jsonString(k.getVerificationDecision())).append(',');
+        sb.append("\"verificationDecisionReason\":")
+                .append(jsonString(k.getVerificationDecisionReason()));
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

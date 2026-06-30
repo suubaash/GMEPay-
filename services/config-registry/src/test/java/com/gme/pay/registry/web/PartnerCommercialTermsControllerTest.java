@@ -53,7 +53,9 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import({PartnerCommercialTermsControllerTest.TestConfig.class, CommercialTermsService.class,
         FeeScheduleService.class, FxConfigService.class, LimitsService.class,
         ContractService.class, PartnerCommissionShareService.class, AuditLogService.class,
-        PartnerStore.class, CacheConfig.class})
+        PartnerStore.class, CacheConfig.class,
+        com.gme.pay.registry.prefunding.push.CreditLimitPusher.class,
+        com.gme.pay.registry.prefunding.push.NoOpPrefundingCreditLimitClient.class})
 class PartnerCommercialTermsControllerTest {
 
     @Autowired
