@@ -40,5 +40,11 @@ public record CpmGenerateRequest(
          */
         @DecimalMin(value = "0", inclusive = false,
                     message = "prefund_reserve_usd must be greater than 0")
-        BigDecimal prefundReserveUsd
+        BigDecimal prefundReserveUsd,
+
+        /**
+         * Partner whose prefunding balance backs an OVERSEAS reservation. Required (positive) only
+         * for {@code outbound} direction when prefunding reservation is enabled; ignored otherwise.
+         */
+        Long partnerId
 ) {}

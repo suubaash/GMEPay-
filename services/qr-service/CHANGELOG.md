@@ -1,5 +1,35 @@
 # qr-service — CHANGELOG
 
+## 2026-06-30 — Phase 2: prefunding reservation wiring (OVERSEAS CPM)
+
+### Added
+- **Prefunding reservation port** (`PrefundingReservationPort`, `reserve`/`release` + `Reservation`
+  record) — the seam for the OVERSEAS soft-hold (IR-qr-3).
+- **Gated REST client** (`RestPrefundingReservationClient`, `@ConditionalOnProperty
+  gmepay.prefunding.reserve.enabled=true`): calls prefunding
+  `POST /internal/v1/prefunding/{partnerId}/reserve|release` via `RestClient`
+  (`PrefundingReserveRequest`→`PrefundingReserveResponse`, `PrefundingReleaseRequest`). 402 overdraw →
+  `QRErrorCode.INSUFFICIENT_PREFUNDING` (→402); release is best-effort + idempotent (never fails the sweep).
+- **In-memory fallback** (`InMemoryPrefundingReservationFixture`, `@ConditionalOnMissingBean`) so
+  tests + no-prefunding runs work unchanged.
+- Flyway `V004`: `prefund_partner_id` + `prefund_reservation_id` columns on `cpm_prepare_session`
+  (both nullable) so the expiry sweep can release the hold.
+- Tests: `RestPrefundingReservationClientTest` (MockRestServiceServer: reserve, 402→INSUFFICIENT_PREFUNDING,
+  release, release swallows 5xx), `CpmTokenExpirySchedulerTest` (release keyed on cpm_token_id, idempotent,
+  empty sweep no-op), plus reserve-at-generate + overdraw cases in `CpmGenerateServiceTest` and an OVERSEAS
+  persistence case in `CpmSessionPersistenceH2SliceTest` (66 tests total, green on H2).
+
+### Changed
+- `CpmGenerateService.createSession` now takes `prefundReserveUsd` + `partnerId`; for `outbound`
+  (OVERSEAS) it reserves prefunding (idempotencyKey = the CPM token id) before persisting and stores the
+  reservation handle on the session. LOCAL/inbound unchanged (no reserve).
+- `CpmTokenExpiryScheduler` releases the prefunding hold for expired OVERSEAS sessions.
+- `CpmSessionStorePort.save` carries a `PrefundReservation`; `expireOverdue` returns `ExpiredSession`
+  records (cpmTokenId + partnerId + reservationId).
+- `CpmGenerateRequest` gains optional `partnerId`.
+- The scheme-issued `PrepareTokenIssuancePort` (IR-qr-1) stays the existing local fallback — the real
+  `schemePrepareTokenIssuancePort` bean remains scheme-adapter/KFTC-cert-gated (external).
+
 ## 2026-06-30 — CPM prepare-token issuance, persistence, lifecycle & CPM parse
 
 ### Added

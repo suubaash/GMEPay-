@@ -36,7 +36,7 @@ class CpmControllerTest {
     @Test
     void validRequestReturns201WithToken() throws Exception {
         Instant now = Instant.now();
-        when(generateService.createSession(any(), any(), any(), any(), any()))
+        when(generateService.createSession(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new CpmToken("TOK", "PMT-1", "ZP-CPM-ABC", "QR:ZP-CPM-ABC",
                         "ZEROPAY", "SENDMN-CPM-0042", now, now.plusSeconds(60)));
 
@@ -49,7 +49,7 @@ class CpmControllerTest {
 
     @Test
     void duplicatePartnerTxnRefReturns409() throws Exception {
-        when(generateService.createSession(any(), any(), any(), any(), any()))
+        when(generateService.createSession(any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new DuplicatePartnerTxnRefException("SENDMN-CPM-0042"));
 
         mvc.perform(post("/v1/qr/cpm/generate").contentType(MediaType.APPLICATION_JSON).content(BODY))
@@ -59,7 +59,7 @@ class CpmControllerTest {
 
     @Test
     void noSchemeForLocationReturns422() throws Exception {
-        when(generateService.createSession(any(), any(), any(), any(), any()))
+        when(generateService.createSession(any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new QRParseException(QRErrorCode.NO_SCHEME_FOR_LOCATION, "no scheme"));
 
         mvc.perform(post("/v1/qr/cpm/generate").contentType(MediaType.APPLICATION_JSON).content(BODY))

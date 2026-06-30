@@ -49,7 +49,9 @@ public class CpmController {
                 request.direction(),
                 request.customerRef(),
                 request.partnerTxnRef(),
-                request.countryCode()
+                request.countryCode(),
+                request.prefundReserveUsd(),
+                request.partnerId()
         );
         return ResponseEntity.status(201).body(toResponse(token));
     }
