@@ -6,9 +6,9 @@ import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.contracts.CommittedFxView;
+import com.gme.pay.contracts.RefundedTransactionView;
 import com.gme.pay.txn.api.dto.CreateTransactionRequest;
 import com.gme.pay.txn.api.dto.CreateTransactionResponse;
-import com.gme.pay.txn.api.dto.RefundedTransactionResponse;
 import com.gme.pay.txn.api.dto.StatusPatchRequest;
 import com.gme.pay.txn.api.dto.TransactionQueryPageResponse;
 import com.gme.pay.txn.api.dto.TransactionResponse;
@@ -141,17 +141,39 @@ public class TransactionController {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns the transactions refunded on the given calendar day, as the
-     * {@link RefundedTransactionResponse} projection (incl. the original payment txnRef + refund
-     * enrichment). settlement-reconciliation uses this for cross-date refund netting.
+     * Returns the transactions refunded on the given calendar day, as the canonical shared
+     * {@link RefundedTransactionView} (lib-api-contracts). transaction-mgmt is the AUTHORITATIVE
+     * producer; the canonical view mirrors this projection's field names verbatim, so
+     * settlement-reconciliation (cross-date refund netting) and scheme-adapter-zeropay (refund
+     * detail enrichment) bind one type and stop silently null-binding their divergent ad-hoc
+     * records. {@code settlementDate} is sourced from the committed settlement-window data (the
+     * value date the refund nets onto); null when no settlement window has been booked yet.
      */
     @GetMapping("/refunded")
-    public ResponseEntity<List<RefundedTransactionResponse>> refunded(
+    public ResponseEntity<List<RefundedTransactionView>> refunded(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate refundedOn) {
-        List<RefundedTransactionResponse> body = transactionService.findRefundedOn(refundedOn).stream()
-                .map(RefundedTransactionResponse::from)
+        List<RefundedTransactionView> body = transactionService.findRefundedOn(refundedOn).stream()
+                .map(TransactionController::toRefundedView)
                 .toList();
         return ResponseEntity.ok(body);
+    }
+
+    /** Maps a refunded aggregate to the canonical {@link RefundedTransactionView}. */
+    private static RefundedTransactionView toRefundedView(Transaction txn) {
+        return new RefundedTransactionView(
+                txn.txnRef(),
+                txn.originalPaymentTxnRef(),
+                txn.partnerId(),
+                txn.status() != null ? txn.status().name() : null,
+                txn.merchantId(),
+                txn.qrCodeId(),
+                txn.schemeTxnRef(),
+                txn.refundAmountKrw(),
+                txn.targetCcy(),
+                txn.merchantFeeRate(),
+                txn.refundedAt(),
+                txn.approvedAt(),
+                txn.settlementDate());
     }
 
     // -------------------------------------------------------------------------
@@ -199,7 +221,13 @@ public class TransactionController {
                 req.collectionCurrency(),
                 req.merchantId(),
                 req.quoteId(),
-                req.merchantFeeRate());
+                req.merchantFeeRate(),
+                req.collectionMarginUsd(),
+                req.payoutMarginUsd(),
+                req.collectionUsd(),
+                req.costRateColl(),
+                req.costRatePay(),
+                req.payoutUsdCost());
         return CreateTransactionResponse.from(txn);
     }
 
@@ -242,7 +270,12 @@ public class TransactionController {
                 req.approvedAt(),
                 req.bookedSettlementAmount(),
                 req.settlementRoundingMode(),
-                req.roundingResidual());
+                req.roundingResidual(),
+                req.collectionMarginUsd(),
+                req.payoutMarginUsd(),
+                req.collectionUsd(),
+                req.costRateColl(),
+                req.costRatePay());
         return ResponseEntity.noContent().build();
     }
 

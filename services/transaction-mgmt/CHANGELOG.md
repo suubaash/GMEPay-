@@ -1,5 +1,39 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-06-30 — Wave-3: margin-accurate FX1015 + canonical /refunded (producer)
+
+Wires the Wave-3 shared contracts (commit a36997e). Edits confined to
+`services/transaction-mgmt/`; lib contracts reused unchanged.
+
+### Added
+- Flyway `V008__rate_lock_pool.sql` — nullable rate-lock pool columns `collection_usd`,
+  `cost_rate_coll`, `cost_rate_pay`, `payout_usd_cost` (`collection_margin_usd` /
+  `payout_margin_usd` already existed in V007).
+- `CreateTransactionRequest` / `StatusPatchRequest` pool fields now persisted: new
+  `Transaction.applyRateLockPool(...)` + extended `applyStatusPatch(...)` overload, mapped
+  in `TransactionEntity` / `TransactionEntityMapper`, threaded through
+  `TransactionService.createFromPaymentExecutor` + `patchStatus` and the controller.
+
+### Changed
+- **Margin-accurate FX1015 #14.** `captureCommittedFxAtCommit` now derives
+  `offerRateColl = send_amount / (collection_usd − collection_margin_usd)` from the REAL
+  persisted `collectionMarginUsd` and the REAL `collectionUsd` (preferred over the
+  `prefundDeductedUsd` proxy). Zero-margin fallback retained only when margins/collectionUsd
+  are absent (older rows). `patchStatus` now applies the lock fields (incl. pool) BEFORE the
+  APPROVED transition so the commit-time capture sees the margins.
+- **Canonical `/refunded`.** `GET /v1/transactions/refunded` now returns the shared
+  `com.gme.pay.contracts.RefundedTransactionView` (producer-authoritative field names) instead
+  of the local `RefundedTransactionResponse`, so settlement-reconciliation + scheme-adapter
+  bind one type and stop silently null-binding their divergent ad-hoc records. `settlementDate`
+  is sourced from the aggregate's settlement-window field; null until a window is booked.
+
+### Tests
+- `CommittedFxMathTest`: persisted margin + real `collectionUsd` → margin-accurate
+  `offerRateColl` (16282.82959861, non-zero margin); legacy-row zero-margin fallback.
+- `TransactionContractIT`: PATCH carrying margin+collectionUsd → margin-accurate
+  `offerRateColl`/`usdAmount` on `/fx-committed`; `/refunded` returns the canonical view shape
+  (asserts the ad-hoc divergent names are absent).
+
 ## 2026-06-30 — Phase 2: committed-FX projection (producer)
 
 Wires transaction-mgmt as the producer of the committed-FX projection consumed by

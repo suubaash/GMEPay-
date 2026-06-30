@@ -99,8 +99,11 @@ public class TransactionStateMachine {
 
             // Phase-2: at commit, capture the rate-locked FX projection (best-effort) and emit
             // transaction.committed so reporting-compliance/settlement/scheme-adapter can project
-            // the committed cross-border txn without reading this DB. Margins are not on the PATCH
-            // contract, so the capture derives offerRateColl from the USD pool with zero margin.
+            // the committed cross-border txn without reading this DB. Wave-3: passing null margins
+            // makes captureCommittedFxAtCommit fall back to the margins/collectionUsd ALREADY
+            // persisted on the aggregate (the service applies the status-patch lock fields, incl.
+            // the rate-lock pool, BEFORE this transition) → margin-accurate offerRateColl. When no
+            // margins were carried (older rows) it collapses to the zero-margin approximation.
             // Wrapped so a projection/event failure NEVER fails the commit path.
             try {
                 txn.captureCommittedFxAtCommit(null, null, Instant.now());

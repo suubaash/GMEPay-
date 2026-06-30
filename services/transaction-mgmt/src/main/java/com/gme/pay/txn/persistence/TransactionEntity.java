@@ -159,6 +159,20 @@ public class TransactionEntity {
     @Column(name = "original_payment_txn_ref", length = 128)
     private String originalPaymentTxnRef;
 
+    // --- V008: Wave-3 rate-lock pool columns (margin-accurate FX1015) ---
+
+    @Column(name = "collection_usd", precision = 20, scale = 8)
+    private BigDecimal collectionUsd;
+
+    @Column(name = "cost_rate_coll", precision = 20, scale = 8)
+    private BigDecimal costRateColl;
+
+    @Column(name = "cost_rate_pay", precision = 20, scale = 8)
+    private BigDecimal costRatePay;
+
+    @Column(name = "payout_usd_cost", precision = 20, scale = 8)
+    private BigDecimal payoutUsdCost;
+
     /** Required no-arg constructor for JPA. */
     public TransactionEntity() {}
 
@@ -293,4 +307,18 @@ public class TransactionEntity {
 
     public String getOriginalPaymentTxnRef() { return originalPaymentTxnRef; }
     public void setOriginalPaymentTxnRef(String originalPaymentTxnRef) { this.originalPaymentTxnRef = originalPaymentTxnRef; }
+
+    // --- V008 accessors ---
+
+    public BigDecimal getCollectionUsd() { return collectionUsd; }
+    public void setCollectionUsd(BigDecimal collectionUsd) { this.collectionUsd = collectionUsd; }
+
+    public BigDecimal getCostRateColl() { return costRateColl; }
+    public void setCostRateColl(BigDecimal costRateColl) { this.costRateColl = costRateColl; }
+
+    public BigDecimal getCostRatePay() { return costRatePay; }
+    public void setCostRatePay(BigDecimal costRatePay) { this.costRatePay = costRatePay; }
+
+    public BigDecimal getPayoutUsdCost() { return payoutUsdCost; }
+    public void setPayoutUsdCost(BigDecimal payoutUsdCost) { this.payoutUsdCost = payoutUsdCost; }
 }
