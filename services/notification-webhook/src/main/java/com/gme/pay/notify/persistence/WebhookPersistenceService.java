@@ -1,6 +1,9 @@
 package com.gme.pay.notify.persistence;
 
+import com.gme.pay.notify.alert.WebhookAlertService;
 import com.gme.pay.notify.domain.RetryPolicy;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,14 +38,36 @@ public class WebhookPersistenceService {
     private final RetryPolicy retryPolicy;
     private final Clock clock;
 
+    /**
+     * Optional Phase-1 alerting collaborator (WBS 8.6-T24). When present, a DLQ
+     * promotion fires a P2 {@code WEBHOOK_DLQ} alert. Resolved lazily via
+     * {@link ObjectProvider} so {@code @DataJpaTest} slices (which don't load the
+     * {@code @Service}) stay green — the alert is simply skipped there.
+     */
+    private final ObjectProvider<WebhookAlertService> alertServiceProvider;
+
+    /**
+     * Backwards-compatible constructor — no alerting. Used by unit tests that
+     * construct this service directly.
+     */
     public WebhookPersistenceService(WebhookDeliveryRepository deliveryRepository,
                                      WebhookDlqRepository dlqRepository,
                                      RetryPolicy retryPolicy,
                                      Clock clock) {
+        this(deliveryRepository, dlqRepository, retryPolicy, clock, emptyProvider());
+    }
+
+    @Autowired
+    public WebhookPersistenceService(WebhookDeliveryRepository deliveryRepository,
+                                     WebhookDlqRepository dlqRepository,
+                                     RetryPolicy retryPolicy,
+                                     Clock clock,
+                                     ObjectProvider<WebhookAlertService> alertServiceProvider) {
         this.deliveryRepository = Objects.requireNonNull(deliveryRepository);
         this.dlqRepository = Objects.requireNonNull(dlqRepository);
         this.retryPolicy = Objects.requireNonNull(retryPolicy);
         this.clock = Objects.requireNonNull(clock);
+        this.alertServiceProvider = alertServiceProvider;
     }
 
     /**
@@ -138,7 +163,41 @@ public class WebhookPersistenceService {
         dlq.setPayload(originating.getPayload());
         dlq.setReason(reason);
         dlq.setAddedAt(Instant.now(clock));
-        return dlqRepository.save(dlq);
+        WebhookDlqEntity saved = dlqRepository.save(dlq);
+
+        // WBS 8.6-T24: P2 alert on every DLQ promotion. Never let alerting break the
+        // DLQ write — the alert service swallows its own persistence errors.
+        WebhookAlertService alertService = alertServiceProvider.getIfAvailable();
+        if (alertService != null) {
+            alertService.fireDlqAlertForPayload(
+                    originating.getPayload(), originating.getId(), originating.getEventType());
+        }
+        return saved;
+    }
+
+    /** No-op {@link ObjectProvider} for the alert-free constructor (unit tests). */
+    private static ObjectProvider<WebhookAlertService> emptyProvider() {
+        return new ObjectProvider<>() {
+            @Override
+            public WebhookAlertService getObject(Object... args) {
+                throw new UnsupportedOperationException("no WebhookAlertService configured");
+            }
+
+            @Override
+            public WebhookAlertService getObject() {
+                throw new UnsupportedOperationException("no WebhookAlertService configured");
+            }
+
+            @Override
+            public WebhookAlertService getIfAvailable() {
+                return null;
+            }
+
+            @Override
+            public WebhookAlertService getIfUnique() {
+                return null;
+            }
+        };
     }
 
     /**
