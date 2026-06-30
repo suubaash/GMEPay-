@@ -64,12 +64,18 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     }
 
     /**
-     * Sweepable (non-terminal) statuses that can legally transition to FAILED.
-     * APPROVED/FAILED/CANCELLED are terminal and must never be swept.
+     * Sweepable (in-flight) statuses that can legally transition to FAILED on approval timeout.
+     * APPROVED/FAILED/CANCELLED/REVERSED/REFUNDED are terminal and must never be swept.
+     *
+     * <p>UNCERTAIN is deliberately excluded: a scheme timeout holds the prefunding deduction and
+     * the transaction is resolved only by batch reconciliation (resolveUncertain), never by the
+     * approval-timeout sweeper. SCHEME_SENT IS included — a dispatch that never gets a response
+     * and is not reclassified as UNCERTAIN must still fail out rather than linger forever.
      */
     private static final List<String> SWEEPABLE_STATUSES = List.of(
             TransactionStatus.CREATED.name(),
-            TransactionStatus.PENDING_DEBIT.name()
+            TransactionStatus.PENDING_DEBIT.name(),
+            TransactionStatus.SCHEME_SENT.name()
     );
 
     @Override

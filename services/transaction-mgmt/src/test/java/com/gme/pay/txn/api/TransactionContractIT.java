@@ -168,6 +168,60 @@ class TransactionContractIT {
                 "schemeApprovalCode must be exposed on GET after APPROVED");
     }
 
+    @Test
+    @DisplayName("PATCH status: PENDING_DEBIT → SCHEME_SENT → UNCERTAIN performs real FSM transitions")
+    void patchStatus_drivesSchemeSentAndUncertain() throws Exception {
+        String createBody = """
+                {
+                  "partnerId": 11,
+                  "partnerTxnRef": "PE-UNCERTAIN-001",
+                  "schemeId": "zeropay_kr",
+                  "direction": "INBOUND",
+                  "paymentMode": "QR",
+                  "targetPayout": "45000.00000000",
+                  "payoutCurrency": "KRW",
+                  "collectionAmount": "33.88000000",
+                  "collectionCurrency": "USD",
+                  "merchantId": null,
+                  "quoteId": "Q-UNCERTAIN-001"
+                }
+                """;
+        MvcResult createResult = mockMvc.perform(post("/v1/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String txnRef = objectMapper.readTree(
+                createResult.getResponse().getContentAsString()).get("txnRef").asText();
+
+        // CREATED → PENDING_DEBIT (PENDING maps to PENDING_DEBIT)
+        patchStatus(txnRef, "PENDING");
+        assertEquals("PENDING_DEBIT", readStatus(txnRef));
+
+        // PENDING_DEBIT → SCHEME_SENT
+        patchStatus(txnRef, "SCHEME_SENT");
+        assertEquals("SCHEME_SENT", readStatus(txnRef));
+
+        // SCHEME_SENT → UNCERTAIN (scheme timeout) — previously a no-op, now a real transition
+        patchStatus(txnRef, "UNCERTAIN");
+        assertEquals("UNCERTAIN", readStatus(txnRef));
+    }
+
+    private void patchStatus(String txnRef, String newStatus) throws Exception {
+        String body = "{\"newStatus\":\"" + newStatus + "\"}";
+        mockMvc.perform(patch("/v1/transactions/{ref}/status", txnRef)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isNoContent());
+    }
+
+    private String readStatus(String txnRef) throws Exception {
+        MvcResult result = mockMvc.perform(get("/v1/transactions/{ref}", txnRef))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("status").asText();
+    }
+
     // =========================================================================
     // 3. GET /v1/transactions — filters + pagination
     // =========================================================================

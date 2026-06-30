@@ -24,12 +24,21 @@ class TransactionTransitionsTest {
     @ParameterizedTest(name = "{0} → {1} should be ALLOWED")
     @CsvSource({
             "CREATED, PENDING_DEBIT",
+            "CREATED, SCHEME_SENT",
             "CREATED, APPROVED",
             "CREATED, FAILED",
             "CREATED, CANCELLED",
+            "PENDING_DEBIT, SCHEME_SENT",
             "PENDING_DEBIT, APPROVED",
             "PENDING_DEBIT, FAILED",
             "PENDING_DEBIT, CANCELLED",
+            // Scheme dispatch → synchronous outcomes / timeout
+            "SCHEME_SENT, APPROVED",
+            "SCHEME_SENT, FAILED",
+            "SCHEME_SENT, UNCERTAIN",
+            // Batch reconciliation resolves an UNCERTAIN transaction
+            "UNCERTAIN, APPROVED",
+            "UNCERTAIN, FAILED",
             // P1-2: APPROVED is reversible (same-day cancel) / refundable
             "APPROVED, REVERSED",
             "APPROVED, REFUNDED",
@@ -64,6 +73,15 @@ class TransactionTransitionsTest {
             "CANCELLED,  PENDING_DEBIT",
             // Backward transitions
             "PENDING_DEBIT, CREATED",
+            "SCHEME_SENT,   PENDING_DEBIT",
+            "SCHEME_SENT,   CREATED",
+            "UNCERTAIN,     SCHEME_SENT",
+            // New-state self-transitions and disallowed pairs
+            "SCHEME_SENT,   SCHEME_SENT",
+            "UNCERTAIN,     UNCERTAIN",
+            "UNCERTAIN,     CANCELLED",
+            "SCHEME_SENT,   CANCELLED",
+            "SCHEME_SENT,   REVERSED",
     })
     @DisplayName("Forbidden transitions are rejected")
     void forbiddenTransitions(TransactionStatus from, TransactionStatus to) {
@@ -111,10 +129,23 @@ class TransactionTransitionsTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("CREATED and PENDING_DEBIT are not terminal")
+    @DisplayName("CREATED, PENDING_DEBIT, SCHEME_SENT, UNCERTAIN are not terminal")
     void nonTerminalStatuses() {
         assertFalse(TransactionStatus.CREATED.isTerminal(),      "CREATED must not be terminal");
         assertFalse(TransactionStatus.PENDING_DEBIT.isTerminal(),"PENDING_DEBIT must not be terminal");
+        assertFalse(TransactionStatus.SCHEME_SENT.isTerminal(),  "SCHEME_SENT must not be terminal");
+        assertFalse(TransactionStatus.UNCERTAIN.isTerminal(),    "UNCERTAIN must not be terminal");
+    }
+
+    @Test
+    @DisplayName("SCHEME_SENT and UNCERTAIN have the expected outgoing edges")
+    void schemeSentAndUncertainOutgoing() {
+        assertEquals(
+                Set.of(TransactionStatus.APPROVED, TransactionStatus.FAILED, TransactionStatus.UNCERTAIN),
+                TransactionTransitions.allowedFrom(TransactionStatus.SCHEME_SENT));
+        assertEquals(
+                Set.of(TransactionStatus.APPROVED, TransactionStatus.FAILED),
+                TransactionTransitions.allowedFrom(TransactionStatus.UNCERTAIN));
     }
 
     @Test
