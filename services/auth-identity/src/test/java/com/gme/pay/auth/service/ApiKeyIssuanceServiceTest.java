@@ -149,6 +149,87 @@ class ApiKeyIssuanceServiceTest {
         assertThat(a.secretPlaintext()).isNotEqualTo(b.secretPlaintext());
     }
 
+    @Test
+    void rotate_revokesPriorActiveKeys_thenIssuesFreshOne() {
+        IssueKeyResponse first = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        IssueKeyResponse rotated = service.rotate(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+
+        assertThat(rotated.keyId()).isNotEqualTo(first.keyId());
+
+        // The old key is revoked; the new key is the only ACTIVE one.
+        ApiKeyEntity oldRow = apiKeyRepository.findByApiKey(first.keyId()).orElseThrow();
+        ApiKeyEntity newRow = apiKeyRepository.findByApiKey(rotated.keyId()).orElseThrow();
+        assertThat(oldRow.getStatus()).isEqualTo(ApiKeyEntity.Status.REVOKED);
+        assertThat(oldRow.getRevokedAt()).isNotNull();
+        assertThat(newRow.getStatus()).isEqualTo(ApiKeyEntity.Status.ACTIVE);
+
+        PrincipalEntity principal = principalRepository
+                .findByUsername("partner:GMEREMIT:SANDBOX").orElseThrow();
+        long activeCount = apiKeyRepository.findByPrincipalId(principal.getId()).stream()
+                .filter(k -> k.getStatus() == ApiKeyEntity.Status.ACTIVE)
+                .count();
+        assertThat(activeCount).isEqualTo(1L);
+    }
+
+    @Test
+    void rotate_withNoExistingPrincipal_behavesLikeIssue() {
+        IssueKeyResponse rotated = service.rotate(
+                request("NEWPARTNER", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        assertThat(rotated.keyId()).startsWith("pk_test_");
+        assertThat(apiKeyRepository.findByApiKey(rotated.keyId()).orElseThrow().getStatus())
+                .isEqualTo(ApiKeyEntity.Status.ACTIVE);
+    }
+
+    @Test
+    void resolve_returnsFoundActiveAndPartnerId_forIssuedKey() {
+        IssueKeyResponse issued = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+
+        var lookup = service.resolve(issued.keyId());
+        assertThat(lookup.found()).isTrue();
+        assertThat(lookup.active()).isTrue();
+        assertThat(lookup.partnerId()).isEqualTo(42L);
+    }
+
+    @Test
+    void resolve_unknownKey_isNotFound() {
+        var lookup = service.resolve("pk_test_neverIssued");
+        assertThat(lookup.found()).isFalse();
+        assertThat(lookup.active()).isFalse();
+        assertThat(lookup.partnerId()).isNull();
+    }
+
+    @Test
+    void resolve_blankOrNull_isNotFound() {
+        assertThat(service.resolve(null).found()).isFalse();
+        assertThat(service.resolve("  ").found()).isFalse();
+    }
+
+    @Test
+    void resolve_revokedKey_isFoundButInactive() {
+        IssueKeyResponse issued = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        service.revoke(issued.keyId());
+
+        var lookup = service.resolve(issued.keyId());
+        assertThat(lookup.found()).isTrue();
+        assertThat(lookup.active()).isFalse();
+        assertThat(lookup.partnerId()).isEqualTo(42L);
+    }
+
+    @Test
+    void resolve_expiredKey_isFoundButInactive() {
+        Instant past = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MICROS);
+        IssueKeyResponse issued = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", past));
+
+        var lookup = service.resolve(issued.keyId());
+        assertThat(lookup.found()).isTrue();
+        assertThat(lookup.active()).isFalse();
+    }
+
     private void assertBadRequest(IssueKeyRequest request) {
         assertThatThrownBy(() -> service.issue(request))
                 .isInstanceOfSatisfying(ResponseStatusException.class,

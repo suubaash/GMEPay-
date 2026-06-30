@@ -1,5 +1,7 @@
 package com.gme.pay.auth.web;
 
+import com.gme.pay.auth.dto.CredentialLookupRequest;
+import com.gme.pay.auth.dto.CredentialLookupResponse;
 import com.gme.pay.auth.dto.IssueKeyRequest;
 import com.gme.pay.auth.dto.IssueKeyResponse;
 import com.gme.pay.auth.service.ApiKeyIssuanceService;
@@ -19,6 +21,10 @@ import org.springframework.web.bind.annotation.RestController;
  *       plaintext; only the salted hash is stored (SEC-09 §4).</li>
  *   <li>{@code POST /internal/auth/keys/{keyId}/revoke} — revoke by public
  *       key identifier; idempotent.</li>
+ *   <li>{@code POST /internal/auth/keys/rotate} — revoke the principal's active
+ *       keys and issue a fresh replacement (returns the new one-time plaintext).</li>
+ *   <li>{@code POST /internal/auth/keys/resolve} — DB-backed lookup the
+ *       api-gateway uses to validate an {@code X-API-Key} (no secret returned).</li>
  * </ul>
  *
  * <p>Mounted under {@code /internal/auth} — the machine-credential surface
@@ -49,5 +55,17 @@ public class ApiKeyAdminController {
     public ResponseEntity<Void> revoke(@PathVariable("keyId") String keyId) {
         issuanceService.revoke(keyId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/rotate")
+    public ResponseEntity<IssueKeyResponse> rotate(@RequestBody IssueKeyRequest request) {
+        return ResponseEntity.ok(issuanceService.rotate(request));
+    }
+
+    @PostMapping("/resolve")
+    public ResponseEntity<CredentialLookupResponse> resolve(
+            @RequestBody CredentialLookupRequest request) {
+        String apiKey = request == null ? null : request.apiKey();
+        return ResponseEntity.ok(issuanceService.resolve(apiKey));
     }
 }
