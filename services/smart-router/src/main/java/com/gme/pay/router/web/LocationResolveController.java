@@ -1,15 +1,13 @@
 package com.gme.pay.router.web;
 
+import com.gme.pay.errors.ApiException;
+import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.router.resolve.LocationSchemeQuery;
 import com.gme.pay.router.resolve.LocationSchemeResolver;
 import com.gme.pay.router.resolve.PaymentMode;
-import com.gme.pay.router.resolve.ResolutionError;
 import com.gme.pay.router.resolve.SchemeResolution;
-import com.gme.pay.router.resolve.SchemeResolutionException;
 import java.util.List;
 import java.util.Locale;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -18,8 +16,10 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * {@code GET /v1/route/resolve?country=KR&mode=MPM&direction=INBOUND} — the
  * data-driven scheme-for-location endpoint qr-service consumes in place of its
- * config-driven country allow-list. Emits each {@link ResolutionError} branch
- * as the matching HTTP status + a stable {@code code} string.
+ * config-driven country allow-list. Failures throw the canonical
+ * {@link ApiException} ({@link ErrorCode}) and are rendered as the unified
+ * API-05 {@code ApiError} envelope by {@link RouterApiExceptionHandler}
+ * (409 for mode/direction, 404 for no-scheme, 400 for validation).
  */
 @RestController
 @RequestMapping("/v1/route/resolve")
@@ -38,10 +38,6 @@ public class LocationResolveController {
         }
     }
 
-    /** Error body mirroring the canonical API-05 {@code {code,message}} shape. */
-    public record ResolveError(String code, String message) {
-    }
-
     @GetMapping
     public ResolveResponse resolve(
             @RequestParam("country") String country,
@@ -55,21 +51,13 @@ public class LocationResolveController {
 
     private static PaymentMode parseMode(String mode) {
         if (mode == null || mode.isBlank()) {
-            throw new SchemeResolutionException(ResolutionError.VALIDATION_ERROR,
-                    "mode (CPM/MPM) required");
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "mode (CPM/MPM) required");
         }
         try {
             return PaymentMode.valueOf(mode.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ex) {
-            throw new SchemeResolutionException(ResolutionError.VALIDATION_ERROR,
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
                     "unknown payment mode: " + mode + " (expected CPM or MPM)");
         }
-    }
-
-    @ExceptionHandler(SchemeResolutionException.class)
-    public ResponseEntity<ResolveError> onResolutionError(SchemeResolutionException ex) {
-        ResolutionError err = ex.error();
-        return ResponseEntity.status(err.httpStatus())
-                .body(new ResolveError(err.wireCode(), ex.getMessage()));
     }
 }

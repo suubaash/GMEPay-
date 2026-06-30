@@ -16,7 +16,7 @@ package com.gme.pay.router.resolve;
  * <p>A scheme "supports" a mode when the matching {@code approvalMethod*}
  * column on its enabled {@code partner_scheme} row is populated; an unpopulated
  * column means that scheme is not wired for that presentment mode and the
- * resolver raises {@link ResolutionError#PAYMENT_MODE_NOT_SUPPORTED}.
+ * resolver raises {@link com.gme.pay.errors.ErrorCode#PAYMENT_MODE_NOT_SUPPORTED}.
  */
 public enum PaymentMode {
     CPM,
