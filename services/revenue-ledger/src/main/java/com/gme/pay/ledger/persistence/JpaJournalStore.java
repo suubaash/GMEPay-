@@ -43,13 +43,16 @@ public class JpaJournalStore implements JournalStore {
 
     private final JournalEntityRepository journals;
     private final LedgerEntryEntityRepository entries;
+    private final RoundingResidualKeyRepository roundingKeys;
     private final OutboxWriter outboxWriter;
 
     public JpaJournalStore(JournalEntityRepository journals,
                            LedgerEntryEntityRepository entries,
+                           RoundingResidualKeyRepository roundingKeys,
                            OutboxWriter outboxWriter) {
         this.journals = Objects.requireNonNull(journals, "journals repo required");
         this.entries = Objects.requireNonNull(entries, "entries repo required");
+        this.roundingKeys = Objects.requireNonNull(roundingKeys, "roundingKeys repo required");
         this.outboxWriter = Objects.requireNonNull(outboxWriter, "outboxWriter required");
     }
 
@@ -64,6 +67,13 @@ public class JpaJournalStore implements JournalStore {
 
         // Derive a stable reference from the first entry (every line in a journal carries the same reference).
         String reference = journal.entries().isEmpty() ? null : journal.entries().get(0).reference();
+
+        // Rounding-residual idempotency backstop: insert the guard key in the SAME transaction. A
+        // concurrent double-post of the same reference (racing LedgerPostingService's pre-check) trips
+        // the PK on rounding_residual_keys and rolls back, so the residual is booked exactly once.
+        if (reference != null && isRoundingJournal(journal)) {
+            roundingKeys.save(new RoundingResidualKeyEntity(reference, journal.journalId(), journal.postedAt()));
+        }
 
         journals.save(new JournalEntity(journal.journalId(), reference, journal.postedAt()));
 
@@ -139,6 +149,20 @@ public class JpaJournalStore implements JournalStore {
         BigDecimal total = entries.sumSignedByAccountAndCurrencyAndPostedAtBetween(
                 ChartOfAccounts.REVENUE_ROUNDING, currency, from, toExclusive);
         return total == null ? BigDecimal.ZERO : total;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Journal> findRoundingResidualByReference(String reference) {
+        Objects.requireNonNull(reference, "reference required");
+        return roundingKeys.findById(reference)
+                .flatMap(k -> findById(k.getJournalId()));
+    }
+
+    /** True when this journal posts to {@code REVENUE_ROUNDING} — i.e. it is a rounding-residual journal. */
+    private static boolean isRoundingJournal(Journal journal) {
+        return journal.entries().stream()
+                .anyMatch(e -> ChartOfAccounts.REVENUE_ROUNDING.equals(e.account()));
     }
 
     @Override

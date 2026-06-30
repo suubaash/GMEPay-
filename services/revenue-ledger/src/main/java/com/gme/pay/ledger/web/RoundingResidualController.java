@@ -29,8 +29,15 @@ import java.util.Objects;
  *       settlement-reconciliation's per-batch aggregate residual ({@code batch.roundingResidual}).</li>
  * </ul>
  * Both callers map to the same {@code postRoundingResidual(reference, residual, currency)} contract;
- * the key is simply the audit handle of whatever unit produced the residual. No per-key uniqueness is
- * enforced here (posting is not idempotent on {@code reference}); callers must post each residual once.
+ * the key is simply the audit handle of whatever unit produced the residual.
+ *
+ * <p><b>Idempotent on {@code reference}.</b> Posting is now idempotent: a repeat post with a
+ * {@code reference} that already has a rounding journal is a no-op — it returns the existing journal
+ * (200 OK, same id) and does NOT create a second line. So a settlement-reconciliation / payment-executor
+ * retry is safe regardless of whether the caller also guards on its side. The guard is scoped to the
+ * {@code REVENUE_ROUNDING} account (key table {@code rounding_residual_keys}, Flyway V006), so the
+ * per-TXN and per-batch keying schemes coexist and never collide with revenue-capture / fee-share /
+ * reversal journals that carry the same {@code reference} on other accounts.
  *
  * <p>Per {@code docs/INTER_SERVICE_CONTRACTS.md} revenue-ledger owns its DB; callers reach it
  * only via this endpoint.

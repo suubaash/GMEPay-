@@ -173,6 +173,60 @@ class JournalPersistenceIT {
         assertFalse(countAfterSecond == 0, "expected at least one stored line");
     }
 
+    @Test
+    void postRoundingResidual_doublePostSameReference_isIdempotent() {
+        String ref = "ZP0061-20260630-AM-" + UUID.randomUUID();
+
+        Journal first = ledgerPostingService.postRoundingResidual(ref, new BigDecimal("0.050"), "USD");
+        // A retry (settlement-reconciliation re-runs the batch) with the SAME reference.
+        Journal second = ledgerPostingService.postRoundingResidual(ref, new BigDecimal("0.050"), "USD");
+
+        // Same journal id returned — the second call is a no-op, not a new journal.
+        assertEquals(first.journalId(), second.journalId(),
+                "repeat post with same reference must return the existing journal id");
+
+        // Exactly one REVENUE_ROUNDING line for this reference (2 lines total: the balanced gain pair).
+        List<LedgerEntryEntity> lines = entryRepo.findByReferenceOrderByIdAsc(ref);
+        assertEquals(2, lines.size(), "double-post must NOT create a second journal (still 2 lines)");
+        assertEquals(1, lines.stream().filter(l ->
+                ChartOfAccounts.REVENUE_ROUNDING.equals(l.getAccount())).count(),
+                "exactly one REVENUE_ROUNDING line for the reference");
+    }
+
+    @Test
+    void postRoundingResidual_differentReferences_postDistinctJournals() {
+        String refA = "ZP0061-20260630-AM-" + UUID.randomUUID();
+        String refB = "ZP0061-20260630-PM-" + UUID.randomUUID();
+
+        Journal a = ledgerPostingService.postRoundingResidual(refA, new BigDecimal("0.050"), "USD");
+        Journal b = ledgerPostingService.postRoundingResidual(refB, new BigDecimal("0.030"), "USD");
+
+        assertFalse(a.journalId().equals(b.journalId()),
+                "distinct references must produce distinct journals");
+        assertEquals(2, entryRepo.findByReferenceOrderByIdAsc(refA).size());
+        assertEquals(2, entryRepo.findByReferenceOrderByIdAsc(refB).size());
+    }
+
+    @Test
+    void postRoundingResidual_retry_doesNotDoubleCountAggregate() {
+        // Use a far-future window unique to this test so other tests' residuals don't bleed in.
+        java.time.LocalDate day = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        String ref = "ZP0063-AGG-" + UUID.randomUUID();
+
+        BigDecimal before = jpaJournalStore.sumRoundingByDateRange(day, day, "USD");
+
+        ledgerPostingService.postRoundingResidual(ref, new BigDecimal("0.012"), "USD");
+        BigDecimal afterFirst = jpaJournalStore.sumRoundingByDateRange(day, day, "USD");
+        // Retry the same reference — aggregate must not move a second time.
+        ledgerPostingService.postRoundingResidual(ref, new BigDecimal("0.012"), "USD");
+        BigDecimal afterRetry = jpaJournalStore.sumRoundingByDateRange(day, day, "USD");
+
+        assertEquals(0, afterFirst.subtract(before).compareTo(new BigDecimal("0.012")),
+                "first post adds the residual once");
+        assertEquals(0, afterRetry.compareTo(afterFirst),
+                "retry must NOT add the residual again to total_rounding_usd");
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
