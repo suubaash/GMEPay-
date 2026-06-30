@@ -29,4 +29,12 @@ public interface ReconExceptionRepository extends JpaRepository<ReconExceptionEn
 
     List<ReconExceptionEntity> findByExceptionStatusAndMatchStatus(
             ExceptionStatus exceptionStatus, MatchStatus matchStatus);
+
+    /**
+     * Remove all exception rows for a recon batch so a re-run of the SAME settlement window is
+     * idempotent (one row per merchant-discrepancy, never duplicated across re-processing of the
+     * same ZP0062/ZP0064 file). See backlog 7.1-T17 acceptance: "Processing ZP0062 twice for the
+     * same batch_id is idempotent (no duplicate reconciliation_item rows)".
+     */
+    void deleteByBatchId(String batchId);
 }
