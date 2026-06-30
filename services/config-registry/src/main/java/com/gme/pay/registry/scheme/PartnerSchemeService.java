@@ -60,9 +60,14 @@ public class PartnerSchemeService {
     /** Audit verb for the step-7 bulk replace. */
     public static final String EVENT_TYPE_REPLACED = "PARTNER_SCHEMES_REPLACED";
 
-    /** V022 CHECK roster for scheme_id (the Slice 7 scheme registry). */
-    static final Set<String> SCHEMES = Set.of(
-            "ZEROPAY", "BAKONG", "NAPAS_247", "PROMPT_PAY", "FAST_SG", "QRIS", "KHQR");
+    /**
+     * V022 CHECK roster for scheme_id (the Slice 7 scheme registry). Derived from the
+     * {@link SchemeCatalogService} catalog — the single source of truth — so the
+     * {@code GET /v1/schemes} picker can never offer a scheme this enablement endpoint
+     * would reject with a 400. {@code SchemeCatalogServiceTest} pins this equal to the
+     * V022 {@code ck_partner_scheme_scheme} DB CHECK roster.
+     */
+    static final Set<String> SCHEMES = SchemeCatalogService.schemeIds();
 
     /** V022 CHECK roster for direction (same as V017). */
     static final Set<String> DIRECTIONS = Set.of("INBOUND", "OUTBOUND", "BOTH");
