@@ -1,5 +1,33 @@
 # smart-router CHANGELOG
 
+## [Unreleased] — w3/smart-router — 2026-06-30
+
+### Added (Wave-3 — data-driven scheme resolution over config-registry)
+- **`RestPartnerSchemeRegistry`** — the production `PartnerSchemeRegistry`
+  adapter backing `LocationSchemeResolver` with LIVE config-registry data
+  (V022 `partner_scheme`). Reads the partner directory (`GET /v1/partners`),
+  keeps routable partners operating in the requested country, fans out to each
+  one's `GET /v1/admin/partners/{partnerCode}/schemes` and maps the returned
+  `PartnerSchemeView` rows → the resolver's `PartnerSchemeRecord`. Mirrors
+  `RestPartnerSchemeResolver`: Spring 6 RestClient, `gmepay.config-registry.base-url`
+  property, two-constructor `@Autowired` trap, and `SCHEME_UNAVAILABLE` (503) on
+  any upstream failure (never a silent empty fallback); a 404 on one partner's
+  scheme read is treated as a write-race and contributes nothing.
+- **Gating**: `@ConditionalOnProperty("gmepay.config-registry.enabled"=true)` so
+  the default `InMemoryPartnerSchemeRegistry` fixture stays in place for tests
+  and local runs; the in-memory bean remains `@Profile("!config-registry")`.
+- **Mapping rules**: drops disabled (`enabled=false`) and non-`ACTIVE` status
+  rows; filters by the view's `countryCode` when populated; derives
+  CPM/MPM support from `supportsCpm`/`supportsMpm`, falling back to
+  `approvalMethodCpm`/`Mpm` presence when the flags are still null; sorts by
+  `priority` (null → last). The resolver's `NO_SCHEME_FOR_LOCATION` /
+  `DIRECTION_NOT_ENABLED` / `PAYMENT_MODE_NOT_SUPPORTED` branches now run over
+  this fetched data unchanged.
+- Tests: `RestPartnerSchemeRegistryTest` (MockRestServiceServer, config-registry
+  NOT running) — view→record mapping, success resolution, all three data
+  branches, and the approval-method fallback. `./gradlew :services:smart-router:test`
+  green (37 tests).
+
 ## [Unreleased] — p2/smart-router — 2026-06-30
 
 ### Changed (Phase 2 — canonical error wiring)
