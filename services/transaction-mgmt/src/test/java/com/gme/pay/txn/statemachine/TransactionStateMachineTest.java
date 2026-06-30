@@ -115,6 +115,52 @@ class TransactionStateMachineTest {
         assertEquals(TransactionStatus.CANCELLED, txn.status());
     }
 
+    @Test
+    @DisplayName("Full OVERSEAS lifecycle CREATED → PENDING_DEBIT → SCHEME_SENT → APPROVED")
+    void overseasLifecycleToApproved() {
+        Transaction txn = newTransaction();
+        stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        assertEquals(TransactionStatus.SCHEME_SENT, txn.status());
+        stateMachine.transition(txn, TransactionStatus.APPROVED);
+        assertEquals(TransactionStatus.APPROVED, txn.status());
+    }
+
+    @Test
+    @DisplayName("SCHEME_SENT → UNCERTAIN (timeout) → APPROVED (reconciliation) succeeds")
+    void schemeSentTimeoutThenReconciledApproved() {
+        Transaction txn = newTransaction();
+        stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        stateMachine.transition(txn, TransactionStatus.UNCERTAIN);
+        assertEquals(TransactionStatus.UNCERTAIN, txn.status());
+        stateMachine.transition(txn, TransactionStatus.APPROVED);
+        assertEquals(TransactionStatus.APPROVED, txn.status());
+    }
+
+    @Test
+    @DisplayName("UNCERTAIN → FAILED (reconciliation failure) succeeds")
+    void uncertainToFailed() {
+        Transaction txn = newTransaction();
+        stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        stateMachine.transition(txn, TransactionStatus.UNCERTAIN);
+        stateMachine.transition(txn, TransactionStatus.FAILED);
+        assertEquals(TransactionStatus.FAILED, txn.status());
+    }
+
+    @Test
+    @DisplayName("UNCERTAIN → CANCELLED is blocked (only reconciliation may resolve UNCERTAIN)")
+    void uncertainToCancelledBlocked() {
+        Transaction txn = newTransaction();
+        stateMachine.transition(txn, TransactionStatus.PENDING_DEBIT);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        stateMachine.transition(txn, TransactionStatus.UNCERTAIN);
+        assertThrows(TransitionBlockedException.class,
+                () -> stateMachine.transition(txn, TransactionStatus.CANCELLED));
+        assertEquals(TransactionStatus.UNCERTAIN, txn.status());
+    }
+
     // ------------------------------------------------------------------
     // Illegal transitions
     // ------------------------------------------------------------------

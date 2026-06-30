@@ -147,8 +147,11 @@ public class TransactionService {
         Transaction txn = getByTxnRef(txnRef);
 
         // Map from PaymentStatus (payment-executor) → TransactionStatus (this service).
+        // Skip the transition when the target equals the current status: a PATCH that merely
+        // re-asserts the same status (idempotent retry) must still apply the lock fields, but
+        // a self-edge is not legal in the FSM and would raise TransitionBlockedException.
         TransactionStatus target = mapPaymentStatus(newStatus);
-        if (target != null) {
+        if (target != null && target != txn.status()) {
             stateMachine.transition(txn, target);
         }
 
@@ -159,19 +162,29 @@ public class TransactionService {
 
     /**
      * Maps a PaymentStatus name (from payment-executor) to TransactionStatus.
-     * Returns {@code null} for statuses that have no equivalent (PENDING, UNCERTAIN, etc.)
-     * so the lock fields can still be applied without a state transition.
+     *
+     * <p>Every payment-executor status now maps to a real {@link TransactionStatus} so the
+     * PATCH endpoint performs an actual FSM transition (P1 gap: cancel/refund/uncertain were
+     * previously applied as lock-field-only updates with no state change). Returns {@code null}
+     * only for an unknown / unmapped status string, so the lock fields can still be applied
+     * without an (illegal) transition.
+     *
+     * <p>{@code SCHEME_SENT} maps to itself; {@code UNCERTAIN} maps to {@link TransactionStatus#UNCERTAIN}
+     * (scheme timeout — held pending reconciliation). When the current status already equals the
+     * target the caller skips the transition (re-applying the same status is not a legal self-edge).
      */
     private TransactionStatus mapPaymentStatus(String paymentStatus) {
         if (paymentStatus == null) return null;
         return switch (paymentStatus) {
-            case "APPROVED"  -> TransactionStatus.APPROVED;
-            case "FAILED"    -> TransactionStatus.FAILED;
-            case "CANCELLED" -> TransactionStatus.CANCELLED;
-            case "REVERSED"  -> TransactionStatus.REVERSED;
-            case "REFUNDED"  -> TransactionStatus.REFUNDED;
-            case "PENDING"   -> TransactionStatus.PENDING_DEBIT;
-            default          -> null; // UNCERTAIN — no direct mapping (lock fields applied without a transition)
+            case "APPROVED"    -> TransactionStatus.APPROVED;
+            case "FAILED"      -> TransactionStatus.FAILED;
+            case "CANCELLED"   -> TransactionStatus.CANCELLED;
+            case "REVERSED"    -> TransactionStatus.REVERSED;
+            case "REFUNDED"    -> TransactionStatus.REFUNDED;
+            case "PENDING"     -> TransactionStatus.PENDING_DEBIT;
+            case "SCHEME_SENT" -> TransactionStatus.SCHEME_SENT;
+            case "UNCERTAIN"   -> TransactionStatus.UNCERTAIN;
+            default            -> null; // unknown status — lock fields applied without a transition
         };
     }
 
@@ -235,6 +248,57 @@ public class TransactionService {
     public Transaction toCancelled(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.CANCELLED);
+        return repository.save(txn);
+    }
+
+    /**
+     * Transitions a transaction to {@link TransactionStatus#SCHEME_SENT}.
+     * Called when the scheme adapter dispatch is about to be issued; recorded
+     * <em>before</em> the HTTP call so a crash mid-flight leaves a reconcilable row.
+     */
+    @Transactional
+    public Transaction toSchemeSent(String txnRef) {
+        Transaction txn = getByTxnRef(txnRef);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        return repository.save(txn);
+    }
+
+    /**
+     * Transitions a transaction to {@link TransactionStatus#UNCERTAIN}.
+     * Typical caller: scheme adapter timeout (no response within SLA). The prefunding
+     * deduction is held — reversal happens only on a FAILED reconciliation outcome.
+     */
+    @Transactional
+    public Transaction toUncertain(String txnRef) {
+        Transaction txn = getByTxnRef(txnRef);
+        stateMachine.transition(txn, TransactionStatus.UNCERTAIN);
+        return repository.save(txn);
+    }
+
+    /**
+     * Resolves an {@link TransactionStatus#UNCERTAIN} transaction via batch reconciliation
+     * (ZP0012 / ZP0022 from ZeroPay, ~05:00 KST). Idempotent: if the transaction is no longer
+     * UNCERTAIN (already resolved by a prior call), this is a no-op and returns the row unchanged.
+     *
+     * @param txnRef  the transaction reference
+     * @param outcome the resolved terminal status — must be {@link TransactionStatus#APPROVED}
+     *                or {@link TransactionStatus#FAILED}
+     * @throws ApiException with {@link ErrorCode#VALIDATION_ERROR} if {@code outcome} is not
+     *                      APPROVED or FAILED
+     */
+    @Transactional
+    public Transaction resolveUncertain(String txnRef, TransactionStatus outcome) {
+        if (outcome != TransactionStatus.APPROVED && outcome != TransactionStatus.FAILED) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "resolveUncertain outcome must be APPROVED or FAILED, was: " + outcome);
+        }
+        Transaction txn = getByTxnRef(txnRef);
+        // Idempotency guard: only an UNCERTAIN transaction can be resolved. A second call
+        // (already APPROVED/FAILED) is a no-op so the reconciliation job can re-run safely.
+        if (txn.status() != TransactionStatus.UNCERTAIN) {
+            return txn;
+        }
+        stateMachine.transition(txn, outcome);
         return repository.save(txn);
     }
 }
