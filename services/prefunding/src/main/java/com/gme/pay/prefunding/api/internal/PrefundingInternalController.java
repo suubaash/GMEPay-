@@ -9,6 +9,7 @@ import com.gme.pay.prefunding.service.PrefundingService;
 import java.math.BigDecimal;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -135,6 +136,55 @@ public class PrefundingInternalController {
     /** Result of a CPM release: amount freed, resulting balance + total reserved, echoed reservation handle. */
     public record ReleaseHoldResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance,
                                       BigDecimal reservedUsd, String currency, String reservationId) { }
+
+    /**
+     * Idempotent upsert of the per-partner limits config-registry pushes (IR-pf-2): the credit headroom
+     * {@code creditLimitUsd} plus the AML daily/monthly/annual amount caps and the daily transaction-count
+     * cap. Stored on the partner row so the deduct/reserve gate (available = balance + credit_limit −
+     * reserved) and the AML cap gate read them instead of receiving them per-request. Re-PUT overwrites
+     * with the latest config; a {@code null} cap clears that period's cap. If the partner has no balance
+     * row yet (config push can precede provisioning) one is created with a zero opening balance so the
+     * limits are not lost. Returns the stored limits + the resulting available + balance.
+     */
+    @PutMapping("/{partnerId}/credit-limit")
+    public CreditLimitPushResponse pushCreditLimit(@PathVariable String partnerId,
+                                                   @RequestBody CreditLimitPushRequest req) {
+        if (req == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "request body is required");
+        }
+        rejectNegative(req.creditLimitUsd(), "creditLimitUsd");
+        rejectNegative(req.amlDailyCapUsd(), "amlDailyCapUsd");
+        rejectNegative(req.amlMonthlyCapUsd(), "amlMonthlyCapUsd");
+        rejectNegative(req.amlAnnualCapUsd(), "amlAnnualCapUsd");
+        if (req.amlDailyTxnCountCap() != null && req.amlDailyTxnCountCap() < 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "amlDailyTxnCountCap must be >= 0");
+        }
+        PrefundingService.PartnerLimits r = service.pushPartnerLimits(partnerId,
+                req.creditLimitUsd(), req.amlDailyCapUsd(), req.amlMonthlyCapUsd(),
+                req.amlAnnualCapUsd(), req.amlDailyTxnCountCap());
+        return new CreditLimitPushResponse(partnerId, r.creditLimitUsd(), r.amlDailyCapUsd(),
+                r.amlMonthlyCapUsd(), r.amlAnnualCapUsd(), r.amlDailyTxnCountCap(), r.available(),
+                r.balance(), CURRENCY);
+    }
+
+    private static void rejectNegative(BigDecimal v, String field) {
+        if (v != null && v.signum() < 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, field + " must be >= 0");
+        }
+    }
+
+    /**
+     * Per-partner limit push from config-registry. Money fields arrive as decimal strings (Jackson binds
+     * string → {@link BigDecimal} losslessly per MONEY_CONVENTION). Any cap may be {@code null} = no cap.
+     */
+    public record CreditLimitPushRequest(BigDecimal creditLimitUsd, BigDecimal amlDailyCapUsd,
+                                         BigDecimal amlMonthlyCapUsd, BigDecimal amlAnnualCapUsd,
+                                         Integer amlDailyTxnCountCap) { }
+
+    public record CreditLimitPushResponse(String partnerId, BigDecimal creditLimitUsd,
+                                          BigDecimal amlDailyCapUsd, BigDecimal amlMonthlyCapUsd,
+                                          BigDecimal amlAnnualCapUsd, Integer amlDailyTxnCountCap,
+                                          BigDecimal available, BigDecimal balance, String currency) { }
 
     private static String firstNonBlank(String a, String b) {
         if (a != null && !a.isBlank()) {

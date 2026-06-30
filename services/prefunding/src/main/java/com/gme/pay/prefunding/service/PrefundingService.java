@@ -192,7 +192,21 @@ public class PrefundingService {
     public CumulativeChargeResult chargeCumulative(String partnerId, String txnRef, BigDecimal amountUsd,
                                                    BigDecimal dailyCap, BigDecimal monthlyCap, BigDecimal annualCap,
                                                    Integer dailyTxnCountLimit) {
-        lockOrThrow(partnerId);   // serialise with reserve/capture/release + concurrent cumulative charges
+        PartnerBalanceEntity row = lockOrThrow(partnerId);   // serialise with reserve/capture/release + concurrent cumulative charges
+        // Fall back to the caps pushed from config-registry (V007) when the caller does not supply them
+        // per-request; a non-null per-request cap still overrides the stored one (additive, no behaviour change).
+        if (dailyCap == null) {
+            dailyCap = row.getAmlDailyCapUsd();
+        }
+        if (monthlyCap == null) {
+            monthlyCap = row.getAmlMonthlyCapUsd();
+        }
+        if (annualCap == null) {
+            annualCap = row.getAmlAnnualCapUsd();
+        }
+        if (dailyTxnCountLimit == null) {
+            dailyTxnCountLimit = row.getAmlDailyTxnCountCap();
+        }
         Instant now = Instant.now();
         String dKey = DAILY_FMT.format(now.atZone(KST));
         String mKey = MONTHLY_FMT.format(now.atZone(KST));
@@ -383,6 +397,54 @@ public class PrefundingService {
 
     /** Outcome of setting the credit limit: the new limit, available funds, and balance. */
     public record CreditLimitResult(BigDecimal creditLimit, BigDecimal available, BigDecimal balance) {}
+
+    /**
+     * Idempotent upsert of the per-partner credit limit AND AML caps pushed from config-registry
+     * (IR-pf-2): {@code credit_limit_usd} plus the daily/monthly/annual amount caps and the daily
+     * transaction-count cap. These are STORED on the partner row so the deduct/reserve gate
+     * (available = balance + credit_limit − reserved) and the AML cap gate read them without a
+     * per-request argument. Re-pushing simply overwrites with the latest config.
+     *
+     * <p>Upsert semantics: if the partner has no balance row yet (config push can arrive before
+     * provisioning), one is created with a zero opening balance so the limits are not lost; a later
+     * {@code /provision} for an existing row is still rejected by its own 409 guard. A {@code null}
+     * cap means "no cap for that period"; a {@code null} {@code creditLimitUsd} resets the headroom to 0.
+     */
+    @Transactional
+    public PartnerLimits pushPartnerLimits(String partnerId, BigDecimal creditLimitUsd,
+                                           BigDecimal amlDailyCapUsd, BigDecimal amlMonthlyCapUsd,
+                                           BigDecimal amlAnnualCapUsd, Integer amlDailyTxnCountCap) {
+        PartnerBalanceEntity row = balances.lockByPartnerId(partnerId).orElse(null);
+        if (row == null) {
+            row = new PartnerBalanceEntity(partnerId, "USD", BigDecimal.ZERO, null, Instant.now());
+        }
+        row.setCreditLimit(creditLimitUsd == null ? BigDecimal.ZERO : creditLimitUsd);
+        row.setAmlDailyCapUsd(amlDailyCapUsd);
+        row.setAmlMonthlyCapUsd(amlMonthlyCapUsd);
+        row.setAmlAnnualCapUsd(amlAnnualCapUsd);
+        row.setAmlDailyTxnCountCap(amlDailyTxnCountCap);
+        row.setUpdatedAt(Instant.now());
+        balances.save(row);
+        PrefundingAccount account = toDomain(row);
+        return new PartnerLimits(row.getCreditLimit(), row.getAmlDailyCapUsd(), row.getAmlMonthlyCapUsd(),
+                row.getAmlAnnualCapUsd(), row.getAmlDailyTxnCountCap(), account.available(), row.getBalance());
+    }
+
+    /** Reads the stored per-partner credit limit + AML caps. Throws if the partner is unknown. */
+    @Transactional(readOnly = true)
+    public PartnerLimits getPartnerLimits(String partnerId) {
+        PartnerBalanceEntity row = balances.findById(partnerId)
+                .orElseThrow(() -> new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "unknown partnerId " + partnerId));
+        PrefundingAccount account = toDomain(row);
+        return new PartnerLimits(row.getCreditLimit(), row.getAmlDailyCapUsd(), row.getAmlMonthlyCapUsd(),
+                row.getAmlAnnualCapUsd(), row.getAmlDailyTxnCountCap(), account.available(), row.getBalance());
+    }
+
+    /** Stored per-partner limits (credit headroom + AML caps) plus derived available + balance. */
+    public record PartnerLimits(BigDecimal creditLimitUsd, BigDecimal amlDailyCapUsd,
+                                BigDecimal amlMonthlyCapUsd, BigDecimal amlAnnualCapUsd,
+                                Integer amlDailyTxnCountCap, BigDecimal available, BigDecimal balance) {}
 
     // ---- CPM reserve/release (overseas QR token issuance, Phase-2 cross-service wiring) ----
 
