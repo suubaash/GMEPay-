@@ -5,6 +5,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — Phase 2: REST committed-FX adapter sourcing FX1015 #14 from real data (2026-06-30)
+
+Phase 1 populated BOK FX1015 field #14 (`offer_rate_coll`) via an in-process fixture
+behind `CommittedFxTransactionPort`. This change swaps the fixture for a real REST
+adapter so #14 + `cross_rate` flow from transaction-mgmt's committed-FX projection.
+
+- **`RestCommittedFxTransactionPort`** — production REST adapter for
+  `CommittedFxTransactionPort`. Calls transaction-mgmt
+  `GET /v1/transactions/fx-committed?from&to[&partnerId]` (returns
+  `List<com.gme.pay.contracts.CommittedFxView>`) and maps each view to the domain
+  `CommittedTransaction`. The wire `direction` is a String → mapped via
+  `TransactionDirection.valueOf` (upper-cased; unknown/blank directions are skipped,
+  not fatal). All rate-locked fields — `offerRateColl` (FX1015 #14), `crossRate`,
+  margins, USD amount, partnerId — are carried verbatim. Two-constructor Spring-6
+  wiring with `@Autowired` on the `@Value` ctor (test ctor takes a pre-built `RestClient`).
+- **Gating:** `@ConditionalOnProperty(gmepay.transaction-mgmt.fx-committed.enabled=true)`
+  (default false in `application.yml`). When off, the in-process
+  `FixtureCommittedFxTransactionPort` (`@ConditionalOnMissingBean`) remains the
+  default/test fallback, so local boots and tests stay offline.
+- **End-to-end:** `CommittedFxView.offerRateColl/crossRate` now flow through the
+  adapter into the existing `BokRecordPersistenceService`, persisting `offer_rate_coll`
+  + `cross_rate` on `bok_report_record` from real projection data.
+- **Tests (mock HTTP via `MockRestServiceServer`, transaction-mgmt NOT running):**
+  `RestCommittedFxTransactionPortTest` asserts URI, `CommittedFxView` JSON
+  deserialisation, String-direction `valueOf` mapping, verbatim FX1015 #14, partnerId
+  query param, and unknown-direction skip. `CommittedFxEndToEndPersistenceTest`
+  (`@DataJpaTest`) asserts FX1015 #14 + `cross_rate` persisted end-to-end from the JSON.
+
 ### Added — owned-datastore persistence + FX1015 #14 (2026-06-30)
 
 The service previously generated BOK/KoFIU files in-memory with no persisted
