@@ -218,6 +218,70 @@ class MerchantSyncServiceTest {
     }
 
     // ------------------------------------------------------------------
+    // Full-list orphan reconciliation (gmepay.merchant-sync.reconcile-orphans)
+    // ------------------------------------------------------------------
+
+    @Test
+    void processZP0051_reconcileOn_deactivatesOrphanMerchantAbsentFromFile() throws Exception {
+        clearDemoSeeds();
+        // Seed an ACTIVE merchant whose id is NOT in the ZP0051 fixture (an orphan).
+        repository.put(new Merchant("M9999999999", "QR_ORPHAN___________",
+                "Vanished Shop", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5411"));
+
+        MerchantSyncService reconciling = new MerchantSyncService(
+                new ZeroPayMerchantFileParser(), new ZeroPayQrFileParser(), repository, true);
+
+        SyncResult result = reconciling.processFile(fixtureFile("ZP0051_20260615.dat"));
+
+        assertTrue(result.success());
+        assertEquals(6, result.upserted(), "6 file rows still upserted");
+        assertEquals(1, result.deactivated(), "the orphan absent from the file must be deactivated");
+
+        Optional<Merchant> orphan = repository.findByQrCodeId("QR_ORPHAN___________");
+        assertTrue(orphan.isPresent());
+        assertFalse(orphan.get().active(), "orphan merchant must be soft-deleted");
+        assertEquals("DEACTIVATED", orphan.get().status());
+    }
+
+    @Test
+    void processZP0051_reconcileOff_leavesOrphanMerchantActive() throws Exception {
+        repository.put(new Merchant("M9999999999", "QR_ORPHAN___________",
+                "Vanished Shop", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5411"));
+
+        // Default (3-arg) service has reconcile-orphans OFF.
+        SyncResult result = syncService.processFile(fixtureFile("ZP0051_20260615.dat"));
+
+        assertTrue(result.success());
+        assertEquals(0, result.deactivated(), "no orphan deactivation when reconcile is off");
+        assertTrue(repository.findByQrCodeId("QR_ORPHAN___________").orElseThrow().active(),
+                "orphan stays active when reconcile is off");
+    }
+
+    @Test
+    void processZP0053_reconcileOn_deactivatesOrphanQrAbsentFromFile() throws Exception {
+        clearDemoSeeds();
+        // Seed an ACTIVE QR whose qr_code is NOT in the ZP0053 fixture.
+        repository.put(new Merchant("M0000000010", "QR_ORPHAN_QR________",
+                "Some Shop", "RETAIL", "DOMESTIC", "ACTIVE", true,
+                "KRW", "ZEROPAY", "Seoul", "5411"));
+
+        MerchantSyncService reconciling = new MerchantSyncService(
+                new ZeroPayMerchantFileParser(), new ZeroPayQrFileParser(), repository, true);
+
+        SyncResult result = reconciling.processFile(fixtureFile("ZP0053_20260615.dat"));
+
+        assertTrue(result.success());
+        assertEquals(1, result.deactivated(), "orphan QR absent from full list must be deactivated");
+
+        Optional<Merchant> orphan = repository.findByQrCodeId("QR_ORPHAN_QR________");
+        assertTrue(orphan.isPresent());
+        assertFalse(orphan.get().active(), "orphan QR must be soft-deleted");
+        assertEquals("DEACTIVATED", orphan.get().status());
+    }
+
+    // ------------------------------------------------------------------
     // Unrecognised filename
     // ------------------------------------------------------------------
 
@@ -247,5 +311,11 @@ class MerchantSyncServiceTest {
         return Paths.get(getClass().getClassLoader()
                 .getResource("fixtures/zeropay/" + name)
                 .toURI());
+    }
+
+    /** Removes the two EMVCo demo seeds the constructor adds beyond the 4 cleared in setUp(). */
+    private void clearDemoSeeds() {
+        repository.remove("00020101021129260011com.zeropay0107ZP-M0015204581253034105802KR5918Seoul Noodle House6005Seoul63040B08");
+        repository.remove("00020101021229330011com.zeropay0114SMOKE_MERCH_015204599953034105405100005802KR5914Smoke Merchant6005Seoul6304E765");
     }
 }

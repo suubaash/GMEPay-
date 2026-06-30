@@ -3,9 +3,12 @@ package com.gme.pay.merchant.sync;
 import com.gme.pay.merchant.domain.InMemoryMerchantRepository;
 import com.gme.pay.merchant.domain.Merchant;
 import com.gme.pay.merchant.domain.MerchantRepository;
+import com.gme.pay.merchant.domain.ReconcilableMerchantRepository;
 import com.gme.pay.merchant.persistence.MongoBackedMerchantRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.FileReader;
@@ -15,8 +18,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Domain service that orchestrates ZeroPay merchant/QR file ingest.
@@ -41,13 +46,32 @@ public class MerchantSyncService {
     private final ZeroPayMerchantFileParser merchantParser;
     private final ZeroPayQrFileParser qrParser;
     private final MerchantRepository merchantRepository;
+    private final boolean reconcileOrphans;
 
+    /**
+     * Primary constructor used by Spring. {@code @Autowired} is required because this
+     * class has multiple constructors (Spring 6 / Boot 3.x does not infer a single
+     * candidate when 2+ ctors are present).
+     *
+     * @param reconcileOrphans when {@code true}, full-list files (ZP0051/ZP0053)
+     *        soft-delete active records absent from the authoritative list
+     */
+    @Autowired
     public MerchantSyncService(ZeroPayMerchantFileParser merchantParser,
                                 ZeroPayQrFileParser qrParser,
-                                MerchantRepository merchantRepository) {
+                                MerchantRepository merchantRepository,
+                                @Value("${gmepay.merchant-sync.reconcile-orphans:false}") boolean reconcileOrphans) {
         this.merchantParser = merchantParser;
         this.qrParser = qrParser;
         this.merchantRepository = merchantRepository;
+        this.reconcileOrphans = reconcileOrphans;
+    }
+
+    /** Backwards-compatible constructor (orphan reconciliation off) for unit tests. */
+    public MerchantSyncService(ZeroPayMerchantFileParser merchantParser,
+                                ZeroPayQrFileParser qrParser,
+                                MerchantRepository merchantRepository) {
+        this(merchantParser, qrParser, merchantRepository, false);
     }
 
     /**
@@ -99,8 +123,10 @@ public class MerchantSyncService {
         int upserted = 0;
         int deactivated = 0;
         List<String> persistErrors = new ArrayList<>();
+        Set<String> seenMerchantIds = new HashSet<>();
 
         for (ParsedMerchantRow row : parsed.rows()) {
+            seenMerchantIds.add(row.merchantId());
             try {
                 if (row.isDelete()) {
                     // MD record — deactivate the merchant by QR lookup isn't available here;
@@ -152,6 +178,15 @@ public class MerchantSyncService {
             }
         }
 
+        // Full-list reconciliation: deactivate active merchants absent from the
+        // authoritative list (ZP0051). Gated on gmepay.merchant-sync.reconcile-orphans
+        // and only when the backing store can enumerate its records.
+        if (reconcileOrphans
+                && fileType.syncMode == ZeroPayFileType.SyncMode.FULL_LIST
+                && merchantRepository instanceof ReconcilableMerchantRepository reconcilable) {
+            deactivated += deactivateOrphanMerchants(reconcilable, seenMerchantIds, persistErrors);
+        }
+
         List<String> allErrors = new ArrayList<>(parsed.errors());
         allErrors.addAll(persistErrors);
         int totalErrors = parsed.errors().size() + persistErrors.size();
@@ -164,6 +199,39 @@ public class MerchantSyncService {
         log.info("Completed {}: upserted={}, deactivated={}, skipped={}, errors={}",
                 filename, upserted, deactivated, parsed.skipped(), totalErrors);
         return result;
+    }
+
+    /**
+     * Soft-deletes active merchants whose id is absent from a full-list (ZP0051) file.
+     * Returns the number of records deactivated.
+     */
+    private int deactivateOrphanMerchants(ReconcilableMerchantRepository reconcilable,
+                                          Set<String> seenMerchantIds,
+                                          List<String> persistErrors) {
+        int deactivated = 0;
+        for (Merchant m : reconcilable.findAll()) {
+            if (!m.isOperational() || seenMerchantIds.contains(m.merchantId())) {
+                continue;
+            }
+            try {
+                upsertMerchant(new Merchant(m.merchantId(), m.qrCodeId(),
+                        m.name(), m.merchantType(), m.feeType(),
+                        "DEACTIVATED", false,
+                        m.payoutCurrency(), m.schemeId(), m.city(), m.mcc()));
+                deactivated++;
+            } catch (Exception e) {
+                String msg = "Failed to deactivate orphan merchant_id=" + m.merchantId()
+                             + ": " + e.getMessage();
+                log.warn(msg, e);
+                if (persistErrors.size() < MAX_ERROR_DETAILS) {
+                    persistErrors.add(msg);
+                }
+            }
+        }
+        if (deactivated > 0) {
+            log.info("Full-list reconciliation deactivated {} orphan merchant(s)", deactivated);
+        }
+        return deactivated;
     }
 
     // ------------------------------------------------------------------
@@ -182,8 +250,10 @@ public class MerchantSyncService {
         int upserted = 0;
         int deactivated = 0;
         List<String> persistErrors = new ArrayList<>();
+        Set<String> seenQrCodes = new HashSet<>();
 
         for (ParsedQrRow row : parsed.rows()) {
+            seenQrCodes.add(row.qrCode());
             try {
                 if (row.isDeactivation()) {
                     // Deactivate by upserting the existing merchant record with active=false.
@@ -232,6 +302,14 @@ public class MerchantSyncService {
             }
         }
 
+        // Full-list reconciliation: deactivate active QR codes absent from the
+        // authoritative list (ZP0053).
+        if (reconcileOrphans
+                && fileType.syncMode == ZeroPayFileType.SyncMode.FULL_LIST
+                && merchantRepository instanceof ReconcilableMerchantRepository reconcilable) {
+            deactivated += deactivateOrphanQrs(reconcilable, seenQrCodes, persistErrors);
+        }
+
         List<String> allErrors = new ArrayList<>(parsed.errors());
         allErrors.addAll(persistErrors);
         int totalErrors = parsed.errors().size() + persistErrors.size();
@@ -244,6 +322,39 @@ public class MerchantSyncService {
         log.info("Completed {}: upserted={}, deactivated={}, skipped={}, errors={}",
                 filename, upserted, deactivated, parsed.skipped(), totalErrors);
         return result;
+    }
+
+    /**
+     * Soft-deletes active QR records whose qr_code is absent from a full-list (ZP0053)
+     * file. Returns the number of records deactivated.
+     */
+    private int deactivateOrphanQrs(ReconcilableMerchantRepository reconcilable,
+                                    Set<String> seenQrCodes,
+                                    List<String> persistErrors) {
+        int deactivated = 0;
+        for (Merchant m : reconcilable.findAll()) {
+            if (!m.isOperational() || seenQrCodes.contains(m.qrCodeId())) {
+                continue;
+            }
+            try {
+                upsertMerchant(new Merchant(m.merchantId(), m.qrCodeId(),
+                        m.name(), m.merchantType(), m.feeType(),
+                        "DEACTIVATED", false,
+                        m.payoutCurrency(), m.schemeId(), m.city(), m.mcc()));
+                deactivated++;
+            } catch (Exception e) {
+                String msg = "Failed to deactivate orphan qr_code=" + m.qrCodeId()
+                             + ": " + e.getMessage();
+                log.warn(msg, e);
+                if (persistErrors.size() < MAX_ERROR_DETAILS) {
+                    persistErrors.add(msg);
+                }
+            }
+        }
+        if (deactivated > 0) {
+            log.info("Full-list reconciliation deactivated {} orphan QR code(s)", deactivated);
+        }
+        return deactivated;
     }
 
     // ------------------------------------------------------------------

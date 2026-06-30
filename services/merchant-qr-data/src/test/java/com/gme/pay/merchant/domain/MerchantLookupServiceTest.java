@@ -86,6 +86,49 @@ class MerchantLookupServiceTest {
                 "Suspended merchant must not be operational");
     }
 
+    // ------------------------------------------------------------------
+    // Strict mode — reject non-operational merchants (lenient-bypass removal)
+    // ------------------------------------------------------------------
+
+    @Test
+    void strictMode_deactivatedMerchant_isRejected() {
+        repository.put(new Merchant(
+                "M0000000060", "QR_DEACTIVATED_______",
+                "Closed Shop", "RETAIL", "DOMESTIC", "DEACTIVATED", false));
+
+        MerchantLookupService strict = new MerchantLookupService(repository, true);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> strict.getByQrCodeId("QR_DEACTIVATED_______"),
+                "strict mode must reject a non-operational merchant");
+        assertEquals(ErrorCode.MERCHANT_NOT_FOUND, ex.errorCode());
+        assertTrue(ex.getMessage().contains("not operational"));
+        assertTrue(strict.isStrictMode());
+    }
+
+    @Test
+    void strictMode_activeMerchant_isReturned() {
+        MerchantLookupService strict = new MerchantLookupService(repository, true);
+
+        Merchant result = strict.getByQrCodeId(KNOWN_QR);
+        assertEquals("M0000000099", result.merchantId());
+        assertTrue(result.isOperational());
+    }
+
+    @Test
+    void lenientMode_deactivatedMerchant_stillReturned() {
+        repository.put(new Merchant(
+                "M0000000061", "QR_DEACTIVATED_2_____",
+                "Closed Shop", "RETAIL", "DOMESTIC", "DEACTIVATED", false));
+
+        // Default service is lenient (strictMode=false).
+        Merchant result = service.getByQrCodeId("QR_DEACTIVATED_2_____");
+        assertEquals("M0000000061", result.merchantId());
+        assertFalse(result.isOperational(),
+                "lenient mode returns the inactive merchant (legacy bypass)");
+        assertFalse(service.isStrictMode());
+    }
+
     @Test
     void getByQrCodeId_nullQr_throwsMerchantNotFound() {
         ApiException ex = assertThrows(
