@@ -57,7 +57,8 @@ public class RevenueController {
                 agg.txnCount(),
                 agg.totalFxMarginUsd(),
                 agg.totalServiceChargeAmount(),
-                agg.serviceChargeCcy()
+                agg.serviceChargeCcy(),
+                service.getRoundingTotalUsd(startDate, endDate)
         );
 
         return ResponseEntity.ok(response);

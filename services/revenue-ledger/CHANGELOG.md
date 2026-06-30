@@ -2,6 +2,19 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-06-30 — surface REVENUE_ROUNDING in GET /v1/revenue (7.3-T27)
+
+### Added
+- `JournalStore.sumRoundingByDateRange(start, end, currency)` — signed net rounding gain/loss over a
+  date range (CREDIT adds = gain, DEBIT subtracts = loss). Implemented in both `JpaJournalStore`
+  (JPQL aggregate joining `ledger_entries`→`journals` on the `posted_at` window, end-exclusive UTC)
+  and `InMemoryJournalStore` (stream fold). Reconciles to the sum of the period's posted residuals.
+- `RevenueRecordService.getRoundingTotalUsd(start, end)` and a new `total_rounding_usd` field on the
+  `GET /v1/revenue` response (`RevenueSummaryResponse`). `REVENUE_ROUNDING` was already in the chart
+  of accounts; this completes T27 by surfacing it in the revenue report.
+- `RoundingAggregationTest` — 4 tests (signed reconciliation, currency isolation, out-of-range
+  exclusion, zero-not-null) driving the real `LedgerPostingService` + `InMemoryJournalStore`.
+
 ## 2026-06-30 — async payment.approved revenue capture (agent/revenue-ledger)
 
 ### Added
