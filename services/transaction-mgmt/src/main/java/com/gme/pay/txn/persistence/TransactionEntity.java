@@ -119,6 +119,46 @@ public class TransactionEntity {
     @Column(name = "failure_reason", length = 64)
     private String failureReason;
 
+    // --- V007: committed-FX projection columns (captured best-effort at commit) ---
+
+    @Column(name = "offer_rate_coll", precision = 20, scale = 8)
+    private BigDecimal offerRateColl;
+
+    @Column(name = "cross_rate", precision = 20, scale = 8)
+    private BigDecimal crossRate;
+
+    @Column(name = "collection_margin_usd", precision = 20, scale = 8)
+    private BigDecimal collectionMarginUsd;
+
+    @Column(name = "payout_margin_usd", precision = 20, scale = 8)
+    private BigDecimal payoutMarginUsd;
+
+    @Column(name = "usd_amount", precision = 20, scale = 8)
+    private BigDecimal usdAmount;
+
+    @Column(name = "same_ccy_shortcircuit")
+    private Boolean sameCcyShortcircuit;
+
+    @Column(name = "settlement_date")
+    private java.time.LocalDate settlementDate;
+
+    @Column(name = "committed_at")
+    private Instant committedAt;
+
+    // --- V007: refund enrichment columns ---
+
+    @Column(name = "refund_amount_krw", precision = 20, scale = 8)
+    private BigDecimal refundAmountKrw;
+
+    @Column(name = "qr_code_id", length = 64)
+    private String qrCodeId;
+
+    @Column(name = "refunded_at")
+    private Instant refundedAt;
+
+    @Column(name = "original_payment_txn_ref", length = 128)
+    private String originalPaymentTxnRef;
+
     /** Required no-arg constructor for JPA. */
     public TransactionEntity() {}
 
@@ -215,4 +255,42 @@ public class TransactionEntity {
 
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+
+    // --- V007 accessors ---
+
+    public BigDecimal getOfferRateColl() { return offerRateColl; }
+    public void setOfferRateColl(BigDecimal offerRateColl) { this.offerRateColl = offerRateColl; }
+
+    public BigDecimal getCrossRate() { return crossRate; }
+    public void setCrossRate(BigDecimal crossRate) { this.crossRate = crossRate; }
+
+    public BigDecimal getCollectionMarginUsd() { return collectionMarginUsd; }
+    public void setCollectionMarginUsd(BigDecimal collectionMarginUsd) { this.collectionMarginUsd = collectionMarginUsd; }
+
+    public BigDecimal getPayoutMarginUsd() { return payoutMarginUsd; }
+    public void setPayoutMarginUsd(BigDecimal payoutMarginUsd) { this.payoutMarginUsd = payoutMarginUsd; }
+
+    public BigDecimal getUsdAmount() { return usdAmount; }
+    public void setUsdAmount(BigDecimal usdAmount) { this.usdAmount = usdAmount; }
+
+    public Boolean getSameCcyShortcircuit() { return sameCcyShortcircuit; }
+    public void setSameCcyShortcircuit(Boolean sameCcyShortcircuit) { this.sameCcyShortcircuit = sameCcyShortcircuit; }
+
+    public java.time.LocalDate getSettlementDate() { return settlementDate; }
+    public void setSettlementDate(java.time.LocalDate settlementDate) { this.settlementDate = settlementDate; }
+
+    public Instant getCommittedAt() { return committedAt; }
+    public void setCommittedAt(Instant committedAt) { this.committedAt = committedAt; }
+
+    public BigDecimal getRefundAmountKrw() { return refundAmountKrw; }
+    public void setRefundAmountKrw(BigDecimal refundAmountKrw) { this.refundAmountKrw = refundAmountKrw; }
+
+    public String getQrCodeId() { return qrCodeId; }
+    public void setQrCodeId(String qrCodeId) { this.qrCodeId = qrCodeId; }
+
+    public Instant getRefundedAt() { return refundedAt; }
+    public void setRefundedAt(Instant refundedAt) { this.refundedAt = refundedAt; }
+
+    public String getOriginalPaymentTxnRef() { return originalPaymentTxnRef; }
+    public void setOriginalPaymentTxnRef(String originalPaymentTxnRef) { this.originalPaymentTxnRef = originalPaymentTxnRef; }
 }

@@ -1,0 +1,27 @@
+GMEPay+ deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Deployables rendered (Deployment + Service each):
+{{- range $k, $svc := .Values.services }}
+{{- if $svc.enabled | default true }}
+  - {{ $k }}
+{{- end }}
+{{- end }}
+
+Public entrypoints (via Ingress {{ if .Values.ingress.enabled }}ENABLED{{ else }}DISABLED{{ end }}):
+{{- range .Values.ingress.hosts }}
+  - https://{{ .host }}
+{{- end }}
+
+Credentials Secret: {{ include "gmepay.secretName" . }} ({{ if .Values.secrets.create }}rendered by chart — replace placeholders!{{ else }}expected to be provisioned out-of-band{{ end }})
+ABI ConfigMap:      {{ include "gmepay.configMapName" . }}
+
+Portability ABI (override per target via an overlay — never bake into images):
+  Postgres : SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD  (per service)
+  Redis    : SPRING_DATA_REDIS_HOST / _PORT / _PASSWORD
+  Kafka    : SPRING_KAFKA_BOOTSTRAP_SERVERS
+  Mongo    : SPRING_DATA_MONGODB_URI
+  Object   : GMEPAY_VAULT_ENDPOINT / _REGION / _ACCESSKEY / _SECRETKEY / _PATH_STYLE
+  OIDC     : SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI (alias OIDC_ISSUER_URI)
+  Telemetry: OTEL_EXPORTER_OTLP_ENDPOINT
+
+Next: see docs/DEPLOYMENT.md for the per-target (on-prem / AWS / Azure) runbook.

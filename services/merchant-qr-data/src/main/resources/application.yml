@@ -9,14 +9,29 @@ server:
 # Merchant/QR daily sync ingest (UC-07-01 / UC-07-02)
 # -------------------------------------------------------------------
 gmepay:
+  merchant:
+    # When true, GET /v1/merchants/{qr} rejects non-operational merchants
+    # (status != ACTIVE or active=false) with MERCHANT_NOT_FOUND instead of
+    # returning them with HTTP 200 (removes the lenient fake-merchant bypass).
+    # Default: false to preserve the legacy golden-path behaviour.
+    strict-mode: false
   merchant-sync:
     # Set to true to enable the @Scheduled daily sync bean.
     # Default: false so the scheduler is NOT active in local dev / test.
     enabled: false
-    # Inbound directory scanned by MerchantSyncScheduler.
+    # Inbound directory scanned by the LocalDirectoryFileSource (default transport).
     # Drop ZP0041/0043/0045/0047/0051/0053 fixture files here for local testing.
-    # NO real ZeroPay SFTP credentials — local dir only.
+    # NO real ZeroPay SFTP credentials — local dir only. A real SFTP-backed
+    # MerchantFileSource can replace this transport without code changes here.
     inbound-dir: ./data/zeropay-inbound
-    # Cron schedule in UTC (02:00 KST = 17:00 UTC previous day).
-    # zone is set to Asia/Seoul in the @Scheduled annotation.
+    # Directory files are moved into after successful processing ({archive-dir}/{date}/).
+    # Blank (default) disables archiving — files remain and idempotent upserts make
+    # re-ingest safe.
+    archive-dir: ""
+    # When true, full-list files (ZP0051/ZP0053) deactivate active records that are
+    # ABSENT from the authoritative list (orphan reconciliation). Default false =
+    # upsert-only (no orphan soft-delete). Only effective when the backing store can
+    # enumerate records (ReconcilableMerchantRepository).
+    reconcile-orphans: false
+    # Cron schedule. zone is set to Asia/Seoul in the @Scheduled annotation.
     cron: "0 0 2 * * *"

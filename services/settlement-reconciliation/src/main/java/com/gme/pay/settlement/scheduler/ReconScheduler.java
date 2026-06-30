@@ -3,6 +3,8 @@ package com.gme.pay.settlement.scheduler;
 import com.gme.pay.settlement.parser.ZP0062Parser;
 import com.gme.pay.settlement.parser.ZP0064Parser;
 import com.gme.pay.settlement.parser.ZeroPayResultRecord;
+import com.gme.pay.settlement.persistence.SettlementBatchEntity;
+import com.gme.pay.settlement.persistence.SettlementBatchRepository;
 import com.gme.pay.settlement.recon.ReconDiffEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,18 +52,21 @@ public class ReconScheduler {
     private final ZP0062Parser zp0062Parser;
     private final ZP0064Parser zp0064Parser;
     private final ReconDiffEngine diffEngine;
+    private final SettlementBatchRepository batchRepository;
 
     public ReconScheduler(
             @Value("${gmepay.settlement.recon.enabled:false}") boolean enabled,
             @Value("${gmepay.settlement.recon.inbox-dir:}") String inboxDir,
             ZP0062Parser zp0062Parser,
             ZP0064Parser zp0064Parser,
-            ReconDiffEngine diffEngine) {
+            ReconDiffEngine diffEngine,
+            SettlementBatchRepository batchRepository) {
         this.enabled = enabled;
         this.inboxDir = inboxDir;
         this.zp0062Parser = zp0062Parser;
         this.zp0064Parser = zp0064Parser;
         this.diffEngine = diffEngine;
+        this.batchRepository = batchRepository;
     }
 
     /**
@@ -114,8 +119,7 @@ public class ReconScheduler {
         }
         try {
             List<ZeroPayResultRecord> records = zp0062Parser.parse(lines);
-            String batchId = "ZP0062-" + date.format(DATE_FMT);
-            diffEngine.runDiff(batchId, date, records);
+            reconcileAgainstRequestBatch("ZP0061", "MORNING", date, records, "ZP0062");
         } catch (Exception e) {
             log.error("ReconScheduler: ZP0062 processing failed for date={}: {}", date, e.getMessage(), e);
         }
@@ -133,11 +137,32 @@ public class ReconScheduler {
         }
         try {
             List<ZeroPayResultRecord> records = zp0064Parser.parse(lines);
-            String batchId = "ZP0064-" + date.format(DATE_FMT);
-            diffEngine.runDiff(batchId, date, records);
+            reconcileAgainstRequestBatch("ZP0063", "AFTERNOON", date, records, "ZP0064");
         } catch (Exception e) {
             log.error("ReconScheduler: ZP0064 processing failed for date={}: {}", date, e.getMessage(), e);
         }
+    }
+
+    /**
+     * Reconcile a parsed result file against the persisted outbound request batch it confirms (ZP0062
+     * ↔ ZP0061 morning, ZP0064 ↔ ZP0063 afternoon). When the request batch exists, the authoritative
+     * batch-tied recon runs (net per merchant from the persisted lines, idempotent, advances batch
+     * lifecycle). When it does not exist — e.g. a result file arrived before the request batch was
+     * generated — fall back to the legacy live-txn diff so the scheme records are still inspected and
+     * any MISSING_INTERNAL is surfaced.
+     */
+    private void reconcileAgainstRequestBatch(String requestFileType, String window, LocalDate date,
+                                              List<ZeroPayResultRecord> records, String resultFileType) {
+        SettlementBatchEntity batch = batchRepository
+                .findByFileTypeAndBusinessDateAndSettlementWindow(requestFileType, date, window)
+                .orElse(null);
+        if (batch == null) {
+            log.warn("ReconScheduler: no {} request batch for {} — {} processed via fallback live-txn diff",
+                    requestFileType, date, resultFileType);
+            diffEngine.runDiff(resultFileType + "-" + date.format(DATE_FMT), date, records);
+            return;
+        }
+        diffEngine.runDiffForBatch(batch, records);
     }
 
     /**

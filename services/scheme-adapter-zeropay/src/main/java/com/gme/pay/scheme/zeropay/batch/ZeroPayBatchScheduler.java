@@ -4,6 +4,7 @@ import com.gme.pay.scheme.zeropay.adapter.ZeroPayAdapterProperties;
 import com.gme.pay.scheme.zeropay.adapter.ZeroPaySchemeAdapter;
 import com.gme.pay.scheme.zeropay.adapter.model.BatchFile;
 import com.gme.pay.scheme.zeropay.adapter.model.BatchType;
+import com.gme.pay.scheme.zeropay.adapter.model.TransferResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -11,8 +12,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 
 /**
  * KST batch-window scheduler for ZeroPay ZP00xx files.
@@ -46,11 +49,49 @@ public class ZeroPayBatchScheduler {
 
     private final ZeroPaySchemeAdapter adapter;
     private final ZeroPayAdapterProperties properties;
+    /** Persists the batch-file registry around generate/transfer; null in unit slices. */
+    private final ZpBatchRegistrar registrar;
+    /** Source of the day's records, used to stage ZP0011 detail lines; null in unit slices. */
+    private final ZpBatchDataPort batchDataPort;
 
+    /** Production constructor (Spring picks this — annotated per the two-ctor convention). */
+    @org.springframework.beans.factory.annotation.Autowired
     public ZeroPayBatchScheduler(ZeroPaySchemeAdapter adapter,
-                                 ZeroPayAdapterProperties properties) {
+                                 ZeroPayAdapterProperties properties,
+                                 ZpBatchRegistrar registrar,
+                                 ZpBatchDataPort batchDataPort) {
         this.adapter    = adapter;
         this.properties = properties;
+        this.registrar  = registrar;
+        this.batchDataPort = batchDataPort;
+    }
+
+    /** Test/legacy constructor without registry wiring. */
+    public ZeroPayBatchScheduler(ZeroPaySchemeAdapter adapter,
+                                 ZeroPayAdapterProperties properties) {
+        this(adapter, properties, null, null);
+    }
+
+    /**
+     * Registers the generated file (GENERATED), transfers it, then marks it TRANSMITTED.
+     * Registry writes are best-effort — a registry failure never blocks the transfer.
+     *
+     * @param file          the generated batch file
+     * @param zp0011Records ZP0011 detail records to stage, or null for non-ZP0011 types
+     */
+    private void registerTransferAndMark(BatchFile file, List<Zp0011Record> zp0011Records) {
+        Long registryId = null;
+        if (registrar != null) {
+            String fileName = file.fileType().name()
+                    + "_" + file.businessDate().toString().replace("-", "")
+                    + "_" + String.format("%03d", file.sequenceNo()) + ".dat";
+            registryId = registrar.registerGenerated(
+                    file, fileName, Instant.now(), Instant.now().plusSeconds(3600), zp0011Records);
+        }
+        TransferResult result = adapter.transferOutbound(file, null);
+        if (registrar != null && result != null && result.success()) {
+            registrar.markTransmitted(registryId, Instant.now());
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -72,7 +113,9 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0011 start for {}", businessDate);
         try {
             BatchFile file = adapter.generatePaymentResultFile(BatchType.ZP0011, businessDate);
-            adapter.transferOutbound(file, null);
+            List<Zp0011Record> staged = batchDataPort != null
+                    ? batchDataPort.fetchPaymentRecords(businessDate) : null;
+            registerTransferAndMark(file, staged);
             log.info("[Scheduler] ZP0011 complete: {} records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0011 failed for {}: {}", businessDate, e.getMessage(), e);
@@ -94,7 +137,7 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0021 start for {}", businessDate);
         try {
             BatchFile file = adapter.generateRefundResultFile(BatchType.ZP0021, businessDate);
-            adapter.transferOutbound(file, null);
+            registerTransferAndMark(file, null);
             log.info("[Scheduler] ZP0021 complete: {} records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0021 failed for {}: {}", businessDate, e.getMessage(), e);
@@ -120,7 +163,7 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0061 start for {}", businessDate);
         try {
             BatchFile file = adapter.generateSettlementRequestFile(BatchType.ZP0061, businessDate);
-            adapter.transferOutbound(file, null);
+            registerTransferAndMark(file, null);
             log.info("[Scheduler] ZP0061 complete: {} merchant records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0061 failed for {}: {}", businessDate, e.getMessage(), e);
@@ -146,7 +189,7 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0063 start for {}", businessDate);
         try {
             BatchFile file = adapter.generateSettlementRequestFile(BatchType.ZP0063, businessDate);
-            adapter.transferOutbound(file, null);
+            registerTransferAndMark(file, null);
             log.info("[Scheduler] ZP0063 complete: {} merchant records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0063 failed for {}: {}", businessDate, e.getMessage(), e);
@@ -172,7 +215,7 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0065 start for {}", businessDate);
         try {
             BatchFile file = adapter.generatePaymentResultFile(BatchType.ZP0065, businessDate);
-            adapter.transferOutbound(file, null);
+            registerTransferAndMark(file, null);
             log.info("[Scheduler] ZP0065 complete: {} records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0065 failed for {}: {}", businessDate, e.getMessage(), e);
@@ -194,7 +237,7 @@ public class ZeroPayBatchScheduler {
         log.info("[Scheduler] ZP0066 start for {}", businessDate);
         try {
             BatchFile file = adapter.generateRefundResultFile(BatchType.ZP0066, businessDate);
-            adapter.transferOutbound(file, null);
+            registerTransferAndMark(file, null);
             log.info("[Scheduler] ZP0066 complete: {} records", file.recordCount());
         } catch (Exception e) {
             log.error("[Scheduler] ZP0066 failed for {}: {}", businessDate, e.getMessage(), e);

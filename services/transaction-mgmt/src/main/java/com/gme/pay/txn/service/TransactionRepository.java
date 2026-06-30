@@ -49,4 +49,17 @@ public interface TransactionRepository {
      * @param expiryBefore  cutoff instant (exclusive); rows older than this are candidates
      */
     List<Transaction> findExpiredNonTerminal(Instant expiryBefore);
+
+    /**
+     * V007: committed-FX projection feed. Returns committed transactions whose {@code committedAt}
+     * falls in {@code [from, to)} (instant window for the requested date range), optionally for one
+     * partner. Used by GET /v1/transactions/fx-committed.
+     */
+    List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId);
+
+    /**
+     * V007: refund query. Returns transactions refunded on the given calendar day
+     * ({@code refundedAt} in that day's instant window). Used by GET /v1/transactions/refunded.
+     */
+    List<Transaction> findRefundedOn(LocalDate refundedOn);
 }

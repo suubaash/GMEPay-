@@ -1,0 +1,67 @@
+# ============================================================================
+# OVERLAY: on-prem / self-hosted (in-cluster or external on-prem hosts).
+# Backing stores run in the cluster (or on fixed on-prem hosts you name here).
+# Object storage = MinIO (S3-compatible, path-style). OIDC = self-hosted Keycloak.
+#
+#   helm upgrade --install gmepay deploy/helm/gmepay \
+#     -f deploy/helm/gmepay/values-onprem.yaml \
+#     -f my-onprem-secrets.yaml          # private, NOT committed
+#
+# All endpoints below are in-cluster Service DNS placeholders — repoint at your
+# real on-prem hosts (e.g. an external Postgres VM) as needed.
+# ============================================================================
+
+global:
+  imageRegistry: registry.onprem.local/gmepay   # private on-prem registry (placeholder)
+  imageTag: "1.0.0"
+  imagePullPolicy: IfNotPresent
+
+abi:
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: "6379"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  GMEPAY_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+  SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/merchant
+  # MinIO — S3-compatible, PATH-STYLE addressing required.
+  GMEPAY_VAULT_ENDPOINT: http://minio:9000
+  GMEPAY_VAULT_REGION: us-east-1
+  GMEPAY_VAULT_PATH_STYLE: "true"
+  # Self-hosted Keycloak (realm gmepay).
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  OIDC_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+
+# Credentials — PLACEHOLDERS. For real on-prem, prefer secrets.create=false and
+# a sealed-secret / Vault-backed Secret named <release>-credentials.
+secrets:
+  create: true
+  data:
+    SPRING_DATASOURCE_USERNAME: gmepay
+    SPRING_DATASOURCE_PASSWORD: REPLACE_WITH_ONPREM_PG_PASSWORD
+    SPRING_DATA_REDIS_PASSWORD: ""
+    GMEPAY_VAULT_ACCESS_KEY: gmepay
+    GMEPAY_VAULT_SECRET_KEY: REPLACE_WITH_MINIO_SECRET
+    GMEPAY_RBAC_SECRET: REPLACE_WITH_RBAC_SECRET
+    GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_WITH_INTERNAL_SECRET
+    GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_WITH_WEBHOOK_SECRET
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+  hosts:
+    - host: api.gmepay.local
+      paths: [{ path: /, pathType: Prefix, service: api-gateway, port: 8080 }]
+    - host: admin.gmepay.local
+      paths: [{ path: /, pathType: Prefix, service: admin-ui, port: 3000 }]
+    - host: partner.gmepay.local
+      paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
+
+# Per-service datasource URLs keep the in-cluster Postgres-per-service defaults
+# from base values.yaml — nothing to override on-prem. Point them at external
+# on-prem Postgres hosts here only if you do NOT run Postgres in-cluster, e.g.:
+# services:
+#   transaction-mgmt:
+#     env:
+#       SPRING_DATASOURCE_URL: jdbc:postgresql://pg-prod.onprem.local:5432/txndb

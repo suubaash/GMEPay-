@@ -338,5 +338,15 @@ class ExpirySweeperServiceTest {
                                                Pageable pageable) {
             throw new UnsupportedOperationException("not needed in sweeper tests");
         }
+
+        @Override
+        public List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
+            throw new UnsupportedOperationException("not needed in sweeper tests");
+        }
+
+        @Override
+        public List<Transaction> findRefundedOn(LocalDate refundedOn) {
+            throw new UnsupportedOperationException("not needed in sweeper tests");
+        }
     }
 }

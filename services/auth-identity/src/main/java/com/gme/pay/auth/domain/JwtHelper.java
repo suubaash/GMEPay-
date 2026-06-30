@@ -53,8 +53,23 @@ public final class JwtHelper {
      * @return compact serialized JWT string
      */
     public String issue(String subject, Map<String, Object> extraClaims) {
+        return issue(subject, extraClaims, accessTokenTtlSeconds);
+    }
+
+    /**
+     * Issues a signed HS256 JWT with an explicit TTL (overriding the default).
+     *
+     * @param subject     principal identifier
+     * @param extraClaims additional claims
+     * @param ttlSeconds  token lifetime in seconds (must be positive)
+     * @return compact serialized JWT string
+     */
+    public String issue(String subject, Map<String, Object> extraClaims, long ttlSeconds) {
+        if (subject == null || subject.isBlank()) {
+            throw new IllegalArgumentException("subject must not be null or blank");
+        }
         long now = Instant.now().getEpochSecond();
-        long exp = now + accessTokenTtlSeconds;
+        long exp = now + ttlSeconds;
         String jti = UUID.randomUUID().toString();
 
         StringBuilder json = new StringBuilder("{");
@@ -62,7 +77,8 @@ public final class JwtHelper {
         json.append("\"jti\":").append(jsonString(jti)).append(",");
         json.append("\"iat\":").append(now).append(",");
         json.append("\"exp\":").append(exp);
-        for (Map.Entry<String, Object> e : extraClaims.entrySet()) {
+        Map<String, Object> claims = extraClaims == null ? Map.of() : extraClaims;
+        for (Map.Entry<String, Object> e : claims.entrySet()) {
             json.append(",").append(jsonString(e.getKey())).append(":")
                 .append(toJsonValue(e.getValue()));
         }
@@ -105,6 +121,68 @@ public final class JwtHelper {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Verifies a token and reports <em>why</em> it failed, so callers can map
+     * the outcome to a precise error code ({@code INVALID_TOKEN} vs
+     * {@code EXPIRED_TOKEN}). A valid token yields {@link Outcome#valid}.
+     *
+     * <p>This complements {@link #verify(String)} (which collapses all failures
+     * to {@code null}); both share the same signature/expiry logic.
+     *
+     * @param token compact JWT
+     * @return a {@link VerificationResult} — never {@code null}.
+     */
+    public VerificationResult verifyDetailed(String token) {
+        if (token == null || token.isBlank()) {
+            return VerificationResult.invalid();
+        }
+        String[] parts = token.split("\\.", -1);
+        if (parts.length != 3) {
+            return VerificationResult.invalid();
+        }
+
+        String signingInput = parts[0] + "." + parts[1];
+        byte[] actualSig = hmacSha256(signingInput.getBytes(StandardCharsets.UTF_8));
+        byte[] expectedSig;
+        try {
+            expectedSig = base64urlDecode(parts[2]);
+        } catch (IllegalArgumentException e) {
+            return VerificationResult.invalid();
+        }
+        if (!java.security.MessageDigest.isEqual(expectedSig, actualSig)) {
+            return VerificationResult.invalid();
+        }
+
+        try {
+            String payloadJson = new String(base64urlDecode(parts[1]), StandardCharsets.UTF_8);
+            long exp = extractLong(payloadJson, "exp");
+            String sub = extractString(payloadJson, "sub");
+            String jti = extractString(payloadJson, "jti");
+            JwtClaims claims = new JwtClaims(sub, jti, exp, payloadJson);
+            if (Instant.now().getEpochSecond() > exp) {
+                return VerificationResult.expired(claims);
+            }
+            return VerificationResult.valid(claims);
+        } catch (Exception e) {
+            return VerificationResult.invalid();
+        }
+    }
+
+    /** Outcome category for {@link #verifyDetailed(String)}. */
+    public enum Outcome { VALID, EXPIRED, INVALID }
+
+    /**
+     * Result of {@link #verifyDetailed(String)}. {@code claims} is populated for
+     * {@link Outcome#VALID} and {@link Outcome#EXPIRED} (signature was good),
+     * and {@code null} for {@link Outcome#INVALID}.
+     */
+    public record VerificationResult(Outcome outcome, JwtClaims claims) {
+        static VerificationResult valid(JwtClaims c)   { return new VerificationResult(Outcome.VALID, c); }
+        static VerificationResult expired(JwtClaims c) { return new VerificationResult(Outcome.EXPIRED, c); }
+        static VerificationResult invalid()            { return new VerificationResult(Outcome.INVALID, null); }
+        public boolean isValid() { return outcome == Outcome.VALID; }
     }
 
     /** Parsed claims returned by {@link #verify(String)}. */

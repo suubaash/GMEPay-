@@ -2,6 +2,10 @@ package com.gme.pay.merchant.domain;
 
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -9,14 +13,52 @@ import org.springframework.stereotype.Service;
  *
  * <p>Throws {@link ApiException} with {@link ErrorCode#MERCHANT_NOT_FOUND} when the
  * requested QR code has no associated merchant record.
+ *
+ * <p><strong>Strict mode (lenient-bypass removal):</strong> historically this service
+ * returned <em>any</em> matched merchant — including SUSPENDED / DEACTIVATED records —
+ * with HTTP 200, leaving the payment path to decide whether the merchant was usable
+ * (the "lenient fake-merchant bypass"). When
+ * {@code gmepay.merchant.strict-mode=true} (see {@code application.yml}) a non-operational
+ * merchant (status != ACTIVE or {@code active=false}) is rejected at lookup time with a
+ * precise 422 code describing why, so the QR-pay flow cannot proceed against an inactive
+ * merchant. Default ({@code false}) preserves the legacy lenient behaviour for the existing
+ * golden path; flip the flag on to enforce.
+ *
+ * <p>Strict-mode rejection codes (Phase 2 wiring — lib-errors now carries the precise codes):
+ * a SUSPENDED merchant maps to {@link ErrorCode#MERCHANT_SUSPENDED} (422); any other
+ * non-operational merchant (DEACTIVATED, or {@code active=false}) maps to
+ * {@link ErrorCode#MERCHANT_DEACTIVATED} (422). A genuinely-unknown QR code still yields
+ * {@link ErrorCode#MERCHANT_NOT_FOUND} (404).
  */
 @Service
 public class MerchantLookupService {
 
-    private final MerchantRepository merchantRepository;
+    private static final Logger log = LoggerFactory.getLogger(MerchantLookupService.class);
 
-    public MerchantLookupService(MerchantRepository merchantRepository) {
+    private final MerchantRepository merchantRepository;
+    private final boolean strictMode;
+
+    /**
+     * Primary constructor used by Spring. {@code @Autowired} is required because this
+     * class has multiple constructors (Spring 6 / Boot 3.x does not infer a single
+     * candidate when 2+ ctors are present).
+     *
+     * @param merchantRepository the backing repository (Mongo / in-memory)
+     * @param strictMode         when {@code true}, reject non-operational merchants
+     */
+    @Autowired
+    public MerchantLookupService(MerchantRepository merchantRepository,
+                                 @Value("${gmepay.merchant.strict-mode:false}") boolean strictMode) {
         this.merchantRepository = merchantRepository;
+        this.strictMode = strictMode;
+    }
+
+    /**
+     * Backwards-compatible constructor (lenient mode) for unit tests and callers
+     * that do not configure strict mode.
+     */
+    public MerchantLookupService(MerchantRepository merchantRepository) {
+        this(merchantRepository, false);
     }
 
     /**
@@ -24,12 +66,32 @@ public class MerchantLookupService {
      *
      * @param qrCodeId the QR code identifier (ZeroPay CHAR(20))
      * @return the {@link Merchant} record
-     * @throws ApiException with {@link ErrorCode#MERCHANT_NOT_FOUND} if not found
+     * @throws ApiException with {@link ErrorCode#MERCHANT_NOT_FOUND} if not found, or
+     *         (in strict mode) if the matched merchant is not operational
      */
     public Merchant getByQrCodeId(String qrCodeId) {
-        return merchantRepository.findByQrCodeId(qrCodeId)
+        Merchant merchant = merchantRepository.findByQrCodeId(qrCodeId)
                 .orElseThrow(() -> new ApiException(
                         ErrorCode.MERCHANT_NOT_FOUND,
                         "No merchant found for QR code: " + qrCodeId));
+
+        if (strictMode && !merchant.isOperational()) {
+            log.warn("Strict-mode lookup rejected non-operational merchant: qr={}, merchantId={}, status={}, active={}",
+                    qrCodeId, merchant.merchantId(), merchant.status(), merchant.active());
+            ErrorCode code = "SUSPENDED".equalsIgnoreCase(merchant.status())
+                    ? ErrorCode.MERCHANT_SUSPENDED
+                    : ErrorCode.MERCHANT_DEACTIVATED;
+            throw new ApiException(
+                    code,
+                    "Merchant for QR code " + qrCodeId + " is not operational (status="
+                            + merchant.status() + ", active=" + merchant.active() + ")");
+        }
+
+        return merchant;
+    }
+
+    /** Returns whether strict (inactive-rejecting) mode is enabled. */
+    public boolean isStrictMode() {
+        return strictMode;
     }
 }

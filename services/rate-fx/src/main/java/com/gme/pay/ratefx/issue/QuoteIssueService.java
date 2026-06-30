@@ -6,6 +6,8 @@ import com.gme.pay.ratefx.RateInput;
 import com.gme.pay.ratefx.client.PartnerConfigPort;
 import com.gme.pay.ratefx.client.PartnerConfigPort.PartnerCurrencies;
 import com.gme.pay.ratefx.client.PartnerConfigPort.PartnerRule;
+import com.gme.pay.ratefx.partnerb.PartnerBQuote;
+import com.gme.pay.ratefx.partnerb.PartnerBQuotePort;
 import com.gme.pay.ratefx.quote.QuoteService;
 import com.gme.pay.ratefx.quote.StoredQuote;
 import java.math.BigDecimal;
@@ -40,13 +42,16 @@ public class QuoteIssueService {
 
     private final PartnerConfigPort configPort;
     private final CostRateResolver costRateResolver;
+    private final PartnerBQuotePort partnerBQuotePort;
     private final QuoteService quoteService;
 
     public QuoteIssueService(PartnerConfigPort configPort,
                              CostRateResolver costRateResolver,
+                             PartnerBQuotePort partnerBQuotePort,
                              QuoteService quoteService) {
         this.configPort = configPort;
         this.costRateResolver = costRateResolver;
+        this.partnerBQuotePort = partnerBQuotePort;
         this.quoteService = quoteService;
     }
 
@@ -79,8 +84,11 @@ public class QuoteIssueService {
         PartnerRule rule = pickRule(configPort.getRules(req.partnerCode()),
                 req.schemeId(), req.direction());
 
-        BigDecimal costRateColl = costRateResolver.resolve(settleACurrency);
-        BigDecimal costRatePay = costRateResolver.resolve(settleBCurrency);
+        RateSource collSource = RateSource.fromNullable(rule.rateCollSource());
+        RateSource paySource = RateSource.fromNullable(rule.ratePaySource());
+
+        BigDecimal costRateColl = resolveLeg(collSource, settleACurrency, req.schemeId());
+        BigDecimal costRatePay = resolveLeg(paySource, settleBCurrency, req.schemeId());
 
         // The rule fee is USD-denominated; the engine adds serviceCharge to sendAmount (in settle-A
         // currency), so convert the USD fee into settle-A unless settle-A is already USD.
@@ -101,6 +109,55 @@ public class QuoteIssueService {
                 nz(rule.mA()),
                 nz(rule.mB()),
                 serviceCharge);
+    }
+
+    /**
+     * Resolve a single leg's cost rate by its configured {@link RateSource}. {@code IDENTITY} and a
+     * USD currency both yield {@code null} (the engine forces 1.0). {@code PARTNER} is quoted by
+     * Partner B (WBS 4.6); {@code LIVE}/{@code MANUAL} are served from the treasury snapshot store.
+     */
+    private BigDecimal resolveLeg(RateSource source, String currency, String schemeId) {
+        if (currency == null || USD.equalsIgnoreCase(currency)) {
+            return null; // IDENTITY leg — engine forces 1.0 regardless of configured source
+        }
+        if (source.isPartner()) {
+            return partnerBQuotePort.fetchQuote(schemeId, currency).rate();
+        }
+        // LIVE and MANUAL both read the snapshot store; the configured cost-rate-source selects which
+        // snapshot rows the CostRateResolver considers.
+        return costRateResolver.resolve(currency);
+    }
+
+    /**
+     * Commit-time PARTNER deviation guard (RATE-04 §7.3, WBS 4.6). A PARTNER-source leg is re-quoted
+     * at {@code POST /payments} time; if the new rate has drifted from the rate locked into the quote
+     * by more than {@code tolerance} (fraction; default 1%), the commit is rejected with
+     * {@link ErrorCode#PARTNER_B_QUOTE_DEVIATION}. Within tolerance, the (fresh) commit rate is
+     * returned for the caller to settle against.
+     *
+     * @param schemeId      scheme/corridor the leg is for
+     * @param settlementCcy the PARTNER leg's settlement currency
+     * @param quotedRate    the rate locked into the issued quote (units of settlement ccy per USD)
+     * @return the fresh commit-time Partner B rate (within tolerance)
+     * @throws ApiException PARTNER_B_QUOTE_DEVIATION (commit drift exceeds tolerance) or
+     *                      PARTNER_B_QUOTE_UNAVAILABLE (no commit-time quote)
+     */
+    public BigDecimal resolvePartnerCommitRate(String schemeId, String settlementCcy,
+                                               BigDecimal quotedRate, BigDecimal tolerance) {
+        if (quotedRate == null || quotedRate.signum() <= 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "quotedRate must be positive for a PARTNER commit deviation check");
+        }
+        PartnerBQuote commit = partnerBQuotePort.fetchQuote(schemeId, settlementCcy);
+        BigDecimal commitRate = commit.rate();
+        BigDecimal deviation = commitRate.subtract(quotedRate).abs()
+                .divide(quotedRate, java.math.MathContext.DECIMAL64);
+        if (deviation.compareTo(tolerance) > 0) {
+            throw new ApiException(ErrorCode.PARTNER_B_QUOTE_DEVIATION,
+                    "PARTNER quote drifted " + deviation + " (> tolerance " + tolerance + ") for "
+                            + settlementCcy + ": quoted=" + quotedRate + " commit=" + commitRate);
+        }
+        return commitRate;
     }
 
     /**

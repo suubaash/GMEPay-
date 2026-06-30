@@ -6,10 +6,14 @@ import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.outbox.OutboxAppender;
 import com.gme.pay.txn.outbox.PaymentApprovedEvent;
+import com.gme.pay.txn.outbox.TransactionCommittedEvent;
 import com.gme.pay.txn.outbox.TransactionStatusChangedEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -28,6 +32,8 @@ import java.util.Objects;
  */
 @Component
 public class TransactionStateMachine {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactionStateMachine.class);
 
     private final EventPublisher eventPublisher;
 
@@ -61,6 +67,20 @@ public class TransactionStateMachine {
 
         txn.applyStatus(to);
 
+        // Phase-2: stamp refundedAt the moment a txn enters REFUNDED, so the refund query
+        // (GET /v1/transactions/refunded?refundedOn) can find it by refund date. The PATCH
+        // contract carries no refund-date field, so this is the authoritative refund timestamp.
+        // Best-effort: never let it block the transition.
+        if (to == TransactionStatus.REFUNDED && txn.refundedAt() == null) {
+            try {
+                txn.applyRefundEnrichment(txn.refundAmountKrw(), txn.qrCodeId(),
+                        Instant.now(), txn.originalPaymentTxnRef());
+            } catch (RuntimeException ex) {
+                log.warn("refund-enrichment stamp failed for txn {} (transition proceeds): {}",
+                        txn.txnRef(), ex.toString());
+            }
+        }
+
         // Publish domain event to the outbox (same logical transaction in callers).
         DomainEvent event = new TransactionStatusChangedEvent(txn.txnRef(), from, to);
         eventPublisher.publish(event);
@@ -76,6 +96,19 @@ public class TransactionStateMachine {
         if (to == TransactionStatus.APPROVED && txn.partnerId() != null) {
             eventPublisher.publish(new PaymentApprovedEvent(
                     txn.txnRef(), txn.partnerId(), txn.partnerTxnRef(), to));
+
+            // Phase-2: at commit, capture the rate-locked FX projection (best-effort) and emit
+            // transaction.committed so reporting-compliance/settlement/scheme-adapter can project
+            // the committed cross-border txn without reading this DB. Margins are not on the PATCH
+            // contract, so the capture derives offerRateColl from the USD pool with zero margin.
+            // Wrapped so a projection/event failure NEVER fails the commit path.
+            try {
+                txn.captureCommittedFxAtCommit(null, null, Instant.now());
+                eventPublisher.publish(TransactionCommittedEvent.from(txn));
+            } catch (RuntimeException ex) {
+                log.warn("committed-FX capture/publish failed for txn {} (commit proceeds): {}",
+                        txn.txnRef(), ex.toString());
+            }
         }
 
         return txn;

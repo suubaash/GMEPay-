@@ -4,11 +4,14 @@ import com.gme.pay.reporting.domain.BokFxMapper;
 import com.gme.pay.reporting.domain.BokFxRecord;
 import com.gme.pay.reporting.domain.CommittedTransaction;
 import com.gme.pay.reporting.domain.TransactionDirection;
+import com.gme.pay.reporting.service.BokRecordPersistenceService;
+import com.gme.pay.reporting.service.CommittedFxTransactionPort;
 import com.gme.pay.reporting.service.TransactionClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -51,20 +54,49 @@ public class BokReportScheduler {
     private final boolean enabled;
 
     /**
-     * Spring constructor. {@code @Autowired} is declared explicitly (defensive; safe
-     * if a second constructor is ever added — Spring 6 requires it when multiple
-     * constructors exist). Tests may call this constructor directly since {@code @Value}
-     * is just metadata; Java does not enforce it at instantiation time.
+     * Rate-locked committed-FX source (carries {@code offerRateColl}, FX1015 #14).
+     * Preferred over {@link #transactionClient} for file/record content when present;
+     * may be null in unit tests that exercise only the file path.
+     */
+    @Nullable
+    private final CommittedFxTransactionPort fxPort;
+
+    /** Owned-datastore persistence of filings + bok_report_record rows; null in unit tests. */
+    @Nullable
+    private final BokRecordPersistenceService persistenceService;
+
+    /**
+     * Spring constructor. {@code @Autowired} is declared explicitly because this
+     * {@code @Component} has more than one constructor (Spring 6 requires it).
+     *
+     * <p>The {@link CommittedFxTransactionPort} and {@link BokRecordPersistenceService}
+     * carry the rate-locked FX fields and owned-datastore persistence respectively.
      */
     @Autowired
     public BokReportScheduler(
             TransactionClient transactionClient,
             BokFxFileBuilder fileBuilder,
+            CommittedFxTransactionPort fxPort,
+            BokRecordPersistenceService persistenceService,
             @Value("${gmepay.reporting.bok.enabled:false}") boolean enabled) {
         this.transactionClient = transactionClient;
         this.fileBuilder = fileBuilder;
+        this.fxPort = fxPort;
+        this.persistenceService = persistenceService;
         this.mapper = new BokFxMapper();
         this.enabled = enabled;
+    }
+
+    /**
+     * Lightweight constructor for unit tests that exercise only file generation
+     * (no FX port, no persistence). {@code @Value} metadata is not enforced at
+     * instantiation, so {@code enabled} is passed directly.
+     */
+    public BokReportScheduler(
+            TransactionClient transactionClient,
+            BokFxFileBuilder fileBuilder,
+            boolean enabled) {
+        this(transactionClient, fileBuilder, null, null, enabled);
     }
 
     /**
@@ -94,9 +126,16 @@ public class BokReportScheduler {
         log.info("BOK FX daily report starting for reportDate={}", reportDate);
 
         try {
-            // Fetch all transactions for the report date (null = all partners)
-            List<CommittedTransaction> transactions =
-                    transactionClient.fetchCommitted(reportDate, reportDate, null);
+            // Prefer the rate-locked committed-FX source (carries offerRateColl, FX1015 #14)
+            // when wired; fall back to the canonical GET client otherwise.
+            List<CommittedTransaction> transactions = (fxPort != null)
+                    ? fxPort.fetchCommittedFx(reportDate, reportDate, null)
+                    : transactionClient.fetchCommitted(reportDate, reportDate, null);
+
+            // Persist filings + bok_report_record rows (idempotent) when persistence is wired.
+            if (persistenceService != null) {
+                persistenceService.persistForDate(transactions, reportDate);
+            }
 
             // Map cross-border transactions; skip domestic/same-currency
             List<BokFxRecord> records = new ArrayList<>();

@@ -147,6 +147,37 @@ class PrefundingServiceIT {
 
     @Test
     @Transactional
+    void deductIdempotentReplayDoesNotDoubleChargeAndReportsLedgerId() {
+        PrefundingService.DeductResult first =
+                service.deductIdempotent(PARTNER, "idem-1", new BigDecimal("250.00000000"));
+        assertEquals(false, first.replayed());
+        assertEquals(0, first.balanceAfter().compareTo(new BigDecimal("750.00000000")));
+        org.junit.jupiter.api.Assertions.assertNotNull(first.ledgerEntryId());
+
+        // Replay with the same key: no second debit, same ledger entry id, replayed=true.
+        PrefundingService.DeductResult replay =
+                service.deductIdempotent(PARTNER, "idem-1", new BigDecimal("250.00000000"));
+        assertEquals(true, replay.replayed());
+        assertEquals(first.ledgerEntryId(), replay.ledgerEntryId());
+        assertEquals(0, replay.balanceAfter().compareTo(new BigDecimal("750.00000000")));
+        assertEquals(1, ledger.findByPartnerIdAndTxnRef(PARTNER, "idem-1").size(),
+                "replay must not write a second DEBIT");
+    }
+
+    @Test
+    @Transactional
+    void reverseReportsTheCreditLedgerEntryId() {
+        PrefundingService.DeductResult d =
+                service.deductIdempotent(PARTNER, "idem-rev", new BigDecimal("100.00000000"));
+        PrefundingService.ReverseResult r = service.reverse(PARTNER, "idem-rev");
+        org.junit.jupiter.api.Assertions.assertNotNull(r.ledgerEntryId(),
+                "reverse must report the CREDIT entry id");
+        org.junit.jupiter.api.Assertions.assertNotEquals(d.ledgerEntryId(), r.ledgerEntryId(),
+                "the reversal credit is a distinct ledger entry from the original debit");
+    }
+
+    @Test
+    @Transactional
     void reverseUnknownTxnRefIsZeroNoOp() {
         PrefundingService.ReverseResult r = service.reverse(PARTNER, "never-deducted");
         assertEquals(0, r.reversedAmount().compareTo(BigDecimal.ZERO));

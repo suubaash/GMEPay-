@@ -75,14 +75,21 @@ function Invoke-WithRetry([scriptblock]$call, [int]$tries = 20) {
 }
 
 # ---- 1) build jars (if missing or -Build) ----
+# Services are root subprojects (:services:<name>:bootJar). Simulators are SEPARATE Gradle builds
+# (own settings.gradle) so they build via `-p simulators\<name> bootJar`, matching run-fleet.ps1.
 $needBuild = $Build -or ($comps | Where-Object { -not (Resolve-Jar $_) })
 if ($needBuild) {
     Write-Host '=== Building boot jars ===' -ForegroundColor Cyan
-    $tasks = ($comps | ForEach-Object {
-        if ($_.kind -eq 'sim') { ":simulators:$($_.name):bootJar" } else { ":services:$($_.name):bootJar" }
-    })
-    & .\gradlew.bat @tasks --console=plain
-    if ($LASTEXITCODE -ne 0) { Write-Host 'Build FAILED' -ForegroundColor Red; exit 1 }
+    $svcTasks = @($comps | Where-Object { $_.kind -eq 'service' } | ForEach-Object { ":services:$($_.name):bootJar" })
+    if ($svcTasks.Count) {
+        & .\gradlew.bat -p $root @svcTasks --console=plain
+        if ($LASTEXITCODE -ne 0) { Write-Host 'Service jar build FAILED' -ForegroundColor Red; exit 1 }
+    }
+    foreach ($s in ($comps | Where-Object { $_.kind -eq 'sim' })) {
+        Write-Host "  building sim: $($s.name)" -ForegroundColor DarkGray
+        & .\gradlew.bat -p (Join-Path $root "simulators\$($s.name)") bootJar --console=plain
+        if ($LASTEXITCODE -ne 0) { Write-Host "Sim jar build FAILED: $($s.name)" -ForegroundColor Red; exit 1 }
+    }
 }
 
 $procs = @()

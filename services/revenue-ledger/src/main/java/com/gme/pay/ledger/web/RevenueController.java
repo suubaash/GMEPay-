@@ -1,5 +1,6 @@
 package com.gme.pay.ledger.web;
 
+import com.gme.pay.contracts.RevenueSummaryView;
 import com.gme.pay.ledger.revenue.RevenueAggregate;
 import com.gme.pay.ledger.revenue.RevenueRecordService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -16,6 +17,12 @@ import java.util.Map;
  * GET /v1/revenue — exposes revenue aggregates (FX margin + service charge) for the Admin Portal.
  *
  * <p>This is the public contract this service exposes per INTER_SERVICE_CONTRACTS.md.
+ *
+ * <p><b>Phase 2 wire shape.</b> The 200 body is the canonical shared {@link RevenueSummaryView}
+ * (lib-api-contracts), so ops-partner-bff and the reporting revenue board bind ONE type — including
+ * the {@code totalRoundingUsd} column (revenue-ledger IR-3). Money rides as decimal strings per
+ * {@code docs/MONEY_CONVENTION.md} via the DTO's {@code @JsonFormat(STRING)} fields. The former
+ * service-local {@link RevenueSummaryResponse} is retained only as the source of the aggregate values.
  */
 @RestController
 @RequestMapping("/v1/revenue")
@@ -33,7 +40,7 @@ public class RevenueController {
      * @param partnerId  required; the partner whose revenue is queried
      * @param startDate  start of the range (inclusive, YYYY-MM-DD)
      * @param endDate    end of the range (inclusive, YYYY-MM-DD)
-     * @return HTTP 200 with {@link RevenueSummaryResponse}, or HTTP 400 if startDate > endDate
+     * @return HTTP 200 with {@link RevenueSummaryView}, or HTTP 400 if startDate > endDate
      */
     @GetMapping
     public ResponseEntity<?> getRevenue(
@@ -49,7 +56,7 @@ public class RevenueController {
 
         RevenueAggregate agg = service.getRevenueByPartner(partnerId, startDate, endDate);
 
-        RevenueSummaryResponse response = new RevenueSummaryResponse(
+        RevenueSummaryView response = new RevenueSummaryView(
                 agg.partnerId(),
                 agg.schemeId(),
                 startDate,
@@ -57,7 +64,8 @@ public class RevenueController {
                 agg.txnCount(),
                 agg.totalFxMarginUsd(),
                 agg.totalServiceChargeAmount(),
-                agg.serviceChargeCcy()
+                agg.serviceChargeCcy(),
+                service.getRoundingTotalUsd(startDate, endDate)
         );
 
         return ResponseEntity.ok(response);

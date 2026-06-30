@@ -1,9 +1,6 @@
 package com.gme.pay.ledger.web;
 
-import com.gme.pay.ledger.revenue.RevenueRecord;
-import com.gme.pay.ledger.revenue.RevenueRecordStore;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.gme.pay.ledger.revenue.RevenueCaptureService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -13,7 +10,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 /**
  * {@code POST /v1/revenue/capture} — records one committed transaction's revenue (FX margin +
@@ -34,12 +30,10 @@ import java.util.Optional;
 @RequestMapping("/v1/revenue")
 public class RevenueCaptureController {
 
-    private static final Logger log = LoggerFactory.getLogger(RevenueCaptureController.class);
+    private final RevenueCaptureService captureService;
 
-    private final RevenueRecordStore store;
-
-    public RevenueCaptureController(RevenueRecordStore store) {
-        this.store = Objects.requireNonNull(store, "store required");
+    public RevenueCaptureController(RevenueCaptureService captureService) {
+        this.captureService = Objects.requireNonNull(captureService, "captureService required");
     }
 
     @PostMapping("/capture")
@@ -62,15 +56,9 @@ public class RevenueCaptureController {
                     "collectionMarginUsd, payoutMarginUsd, serviceChargeAmount and feeSharePct are required");
         }
 
-        // Idempotent replay: an already-captured txn returns 200 with the existing record.
-        Optional<RevenueRecord> existing = store.findByTxnRef(body.txnRef());
-        if (existing.isPresent()) {
-            return ResponseEntity.ok(RevenueCaptureResponse.from(existing.get()));
-        }
-
-        RevenueRecord record;
+        RevenueCaptureService.Result result;
         try {
-            record = RevenueRecord.of(
+            result = captureService.capture(
                     body.txnRef(), body.partnerId(), body.schemeId(), body.revenueDate(),
                     body.collectionMarginUsd(), body.payoutMarginUsd(),
                     body.serviceChargeAmount(), body.serviceChargeCcy(), body.feeSharePct());
@@ -78,11 +66,12 @@ public class RevenueCaptureController {
             return badRequest("INVALID_REVENUE_RECORD", e.getMessage());
         }
 
-        RevenueRecord saved = store.save(record);
-        log.info("revenue captured: txnRef={} partnerId={} fxMarginUsd={} serviceCharge={} {}",
-                saved.txnRef(), saved.partnerId(), saved.fxMarginUsd(),
-                saved.serviceChargeAmount(), saved.serviceChargeCcy());
-        return ResponseEntity.status(HttpStatus.CREATED).body(RevenueCaptureResponse.from(saved));
+        // Idempotent replay: an already-captured txn returns 200 with the existing record;
+        // a fresh capture returns 201 Created.
+        RevenueCaptureResponse payload = RevenueCaptureResponse.from(result.record());
+        return result.created()
+                ? ResponseEntity.status(HttpStatus.CREATED).body(payload)
+                : ResponseEntity.ok(payload);
     }
 
     private static ResponseEntity<?> badRequest(String code, String message) {

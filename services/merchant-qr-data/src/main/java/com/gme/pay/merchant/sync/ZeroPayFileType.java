@@ -68,9 +68,10 @@ public enum ZeroPayFileType {
      * column — every row is an authoritative merchant record. Rows absent from
      * the full list compared to the local store are deactivated (soft-delete).
      *
-     * <p>NOTE: Full-list reconciliation (deactivating orphaned records) is not
-     * performed in the current MVP; the full list is used for upsert-only sync.
-     * Orphan deactivation is tracked as TODO(reconcile-orphans).
+     * <p>Full-list reconciliation (deactivating orphaned records absent from the list)
+     * is performed by {@link MerchantSyncService} when
+     * {@code gmepay.merchant-sync.reconcile-orphans=true}; otherwise the full list is
+     * applied as upsert-only.
      */
     ZP0051("ZP0051", SyncMode.FULL_LIST, RecordDomain.MERCHANT),
 
@@ -78,8 +79,8 @@ public enum ZeroPayFileType {
      * ZP0053 — Full QR code list (periodic reconciliation).
      *
      * <p>Same pipe-delimited layout as ZP0043 without a record_type column.
-     * Every row is treated as an active QR registration; QRs absent from the
-     * list are candidates for deactivation (TODO(reconcile-orphans)).
+     * Every row is treated as an active QR registration; QRs absent from the list
+     * are deactivated when {@code gmepay.merchant-sync.reconcile-orphans=true}.
      */
     ZP0053("ZP0053", SyncMode.FULL_LIST, RecordDomain.QR);
 

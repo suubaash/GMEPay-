@@ -75,7 +75,32 @@ public class PrefundingService {
      */
     @Transactional
     public BigDecimal deduct(String partnerId, String txnRef, BigDecimal amount) {
+        return deductIdempotent(partnerId, txnRef, amount).balanceAfter();
+    }
+
+    /**
+     * Idempotent atomic deduction for the internal (transaction-mgmt) channel. Identical to
+     * {@link #deduct(String, String, BigDecimal)} but reports both the resulting balance AND the id of
+     * the DEBIT ledger entry, and is a safe replay: under the per-partner row lock, if a DEBIT for this
+     * {@code idempotencyKey} (recorded in {@code txn_ref}) already exists, NO new debit is applied — the
+     * original entry's id + the current balance are returned and {@code replayed=true}. This lets
+     * transaction-mgmt drive PENDING_DEBIT→DEBITED at-least-once without double-charging. Throws
+     * {@link ErrorCode#INSUFFICIENT_PREFUNDING} on a fresh deduction that would overdraw.
+     *
+     * @param idempotencyKey the caller's idempotency key; persisted as the ledger {@code txn_ref}.
+     */
+    @Transactional
+    public DeductResult deductIdempotent(String partnerId, String idempotencyKey, BigDecimal amount) {
         PartnerBalanceEntity row = lockOrThrow(partnerId);
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            LedgerEntryEntity existing = ledger.findByPartnerIdAndTxnRef(partnerId, idempotencyKey).stream()
+                    .filter(e -> ENTRY_DEBIT.equals(e.getEntryType()))
+                    .findFirst().orElse(null);
+            if (existing != null) {
+                // Replay: the deduction already happened under this key — do NOT debit again.
+                return new DeductResult(row.getBalance(), existing.getId(), true);
+            }
+        }
         BigDecimal previousBalance = row.getBalance();
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.deduct(amount); // throws INSUFFICIENT_PREFUNDING if too low
@@ -83,11 +108,14 @@ public class PrefundingService {
         row.setBalance(newBalance);
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_DEBIT, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
+                ENTRY_DEBIT, amount, row.getCurrency(), now));
         tierAlerts.afterBalanceChange(saved, previousBalance);
-        return newBalance;
+        return new DeductResult(newBalance, entry.getId(), false);
     }
+
+    /** Outcome of an idempotent deduct: the balance after, the DEBIT ledger entry id, and whether this was a replay. */
+    public record DeductResult(BigDecimal balanceAfter, Long ledgerEntryId, boolean replayed) {}
 
     /** Atomically credit {@code amount} onto the partner's balance and append a CREDIT entry. */
     @Transactional
@@ -127,7 +155,12 @@ public class PrefundingService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         if (alreadyReversed || debited.signum() == 0) {
             // Idempotent no-op: nothing to reverse (or already reversed). Report zero reversed.
-            return new ReverseResult(BigDecimal.ZERO, row.getBalance());
+            // On a replay, surface the existing reversal CREDIT entry id (null if there was nothing to reverse).
+            Long existingReversalId = entries.stream()
+                    .filter(e -> ENTRY_CREDIT.equals(e.getEntryType()))
+                    .map(LedgerEntryEntity::getId)
+                    .findFirst().orElse(null);
+            return new ReverseResult(BigDecimal.ZERO, row.getBalance(), existingReversalId);
         }
         BigDecimal previousBalance = row.getBalance();
         PrefundingAccount account = toDomain(row);
@@ -136,14 +169,14 @@ public class PrefundingService {
         row.setBalance(newBalance);
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT, debited,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT,
+                debited, row.getCurrency(), now));
         tierAlerts.afterBalanceChange(saved, previousBalance);
-        return new ReverseResult(debited, newBalance);
+        return new ReverseResult(debited, newBalance, entry.getId());
     }
 
-    /** Outcome of a reverse: the amount credited back and the balance after. */
-    public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter) {}
+    /** Outcome of a reverse: the amount credited back, the balance after, and the reversal CREDIT ledger entry id. */
+    public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter, Long ledgerEntryId) {}
 
     // ---- cumulative usage caps (AML daily/monthly/annual, V006) ----
 
@@ -350,6 +383,95 @@ public class PrefundingService {
 
     /** Outcome of setting the credit limit: the new limit, available funds, and balance. */
     public record CreditLimitResult(BigDecimal creditLimit, BigDecimal available, BigDecimal balance) {}
+
+    // ---- CPM reserve/release (overseas QR token issuance, Phase-2 cross-service wiring) ----
+
+    /**
+     * Soft-hold {@code amount} of available funds at OVERSEAS CPM token issuance, idempotent on
+     * {@code idempotencyKey} (qr-service's CPM token / session id, persisted as the ledger {@code txn_ref}).
+     * Identical lock + invariant to {@link #reserve(String, String, BigDecimal)} — available = balance +
+     * credit_limit − reserved, throws {@link ErrorCode#INSUFFICIENT_PREFUNDING} if the hold would overdraw —
+     * but additionally surfaces the RESERVE ledger entry id as the {@code reservationId} handle the matching
+     * {@link #releaseForCpm(String, String)} (or a hard capture) references, plus the partner's total
+     * reserved. A replay for a key that still has an active hold is a no-op reporting the existing reservation.
+     *
+     * @param idempotencyKey the reserve key (also the release key); persisted as the ledger {@code txn_ref}.
+     */
+    @Transactional
+    public CpmReserveResult reserveForCpm(String partnerId, String idempotencyKey, BigDecimal amount) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        BigDecimal active = activeReservation(partnerId, idempotencyKey);
+        if (active.signum() > 0) {
+            // Idempotent replay: surface the existing RESERVE entry id + current balances, no new hold.
+            Long existingId = ledger.findByPartnerIdAndTxnRef(partnerId, idempotencyKey).stream()
+                    .filter(e -> ENTRY_RESERVE.equals(e.getEntryType()))
+                    .map(LedgerEntryEntity::getId)
+                    .findFirst().orElse(null);
+            PrefundingAccount existing = toDomain(row);
+            return new CpmReserveResult(existingId, active, existing.available(),
+                    row.getReserved(), true);
+        }
+        PrefundingAccount account = toDomain(row);
+        account.reserve(amount); // throws INSUFFICIENT_PREFUNDING if available < amount
+        Instant now = Instant.now();
+        row.setReserved(account.reserved());
+        row.setUpdatedAt(now);
+        balances.save(row);
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
+                ENTRY_RESERVE, amount, row.getCurrency(), now));
+        return new CpmReserveResult(entry.getId(), amount, account.available(),
+                account.reserved(), false);
+    }
+
+    /**
+     * Free the active CPM hold for {@code idempotencyKey} on token expiry / decline — idempotent: no active
+     * hold (already released or captured) ⇒ a 0 no-op. Delegates to the same RELEASE-ledger machinery as
+     * {@link #release(String, String)} and additionally reports the partner's total reserved after release.
+     */
+    @Transactional
+    public CpmReleaseResult releaseForCpm(String partnerId, String idempotencyKey) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        BigDecimal amount = activeReservation(partnerId, idempotencyKey);
+        if (amount.signum() == 0) {
+            return new CpmReleaseResult(BigDecimal.ZERO, row.getBalance(), row.getReserved());
+        }
+        PrefundingAccount account = toDomain(row);
+        account.release(amount);
+        Instant now = Instant.now();
+        row.setReserved(account.reserved());
+        row.setUpdatedAt(now);
+        balances.save(row);
+        ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey, ENTRY_RELEASE, amount,
+                row.getCurrency(), now));
+        return new CpmReleaseResult(amount, row.getBalance(), account.reserved());
+    }
+
+    /** Outcome of a CPM reserve: the reservation (RESERVE ledger) id, amount held, available + total reserved after, replay flag. */
+    public record CpmReserveResult(Long reservationId, BigDecimal reservedAmount, BigDecimal available,
+                                   BigDecimal reservedTotal, boolean replayed) {}
+
+    /** Outcome of a CPM release: the amount released, the (unchanged) balance, and total reserved after. */
+    public record CpmReleaseResult(BigDecimal releasedAmount, BigDecimal balance, BigDecimal reservedTotal) {}
+
+    // ---- deduction history (IR-pe-2: payment-executor balance ?include_history=true) ----
+
+    /**
+     * Most-recent-first DEBIT history for a partner, capped at {@code limit} (clamped to 1..500; a non-positive
+     * limit falls back to 20). Read-only — no lock. Each row maps to a {@code (amountUsd, at, txnRef)} tuple
+     * mirroring the canonical {@code BalanceDeductionEntry} shape (the controller adapts to the lib DTO).
+     */
+    @Transactional(readOnly = true)
+    public List<DeductionHistoryRow> recentDeductions(String partnerId, int limit) {
+        int capped = limit <= 0 ? 20 : Math.min(limit, 500);
+        return ledger.findByPartnerIdAndEntryTypeOrderByCreatedAtDescIdDesc(
+                        partnerId, ENTRY_DEBIT, org.springframework.data.domain.PageRequest.of(0, capped))
+                .stream()
+                .map(e -> new DeductionHistoryRow(e.getAmount(), e.getCreatedAt(), e.getTxnRef()))
+                .toList();
+    }
+
+    /** One deduction-history row: USD amount, the instant applied, and the originating txnRef. */
+    public record DeductionHistoryRow(BigDecimal amountUsd, Instant at, String txnRef) {}
 
     /** Net active hold for a (partner, txnRef) = sum RESERVE - sum CAPTURE - sum RELEASE. */
     private BigDecimal activeReservation(String partnerId, String txnRef) {

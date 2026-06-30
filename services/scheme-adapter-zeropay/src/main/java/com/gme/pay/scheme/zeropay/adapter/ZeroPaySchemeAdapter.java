@@ -32,6 +32,7 @@ import com.gme.pay.scheme.zeropay.batch.Zp0065Record;
 import com.gme.pay.scheme.zeropay.batch.Zp0066FileFormatter;
 import com.gme.pay.scheme.zeropay.batch.Zp0066Record;
 import com.gme.pay.scheme.zeropay.batch.ZpBatchDataPort;
+import com.gme.pay.scheme.zeropay.batch.ZpCommittedTxnRecorder;
 import com.gme.pay.scheme.zeropay.batch.ZpSettlementRequestFormatter;
 import com.gme.pay.scheme.zeropay.batch.ZpSettlementRequestRecord;
 import com.gme.pay.scheme.zeropay.batch.ZpSettlementResultParser;
@@ -84,17 +85,40 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
     private final ZeroPaySchemeApiClient schemeApiClient;
     private final SftpTransport sftpTransport;
     private final ZpBatchDataPort batchDataPort;
+    /**
+     * Captures committed payments/refunds into {@code zp_committed_txns} so the daily batch
+     * files carry real records. May be {@code null} in unit-test slices that exercise only the
+     * real-time or formatter paths and do not wire persistence.
+     */
+    private final ZpCommittedTxnRecorder committedTxnRecorder;
     /** Lazily built when {@code adapter.zeropay.transport=TCP}; null on the default REST/sim path. */
     private volatile ZeroPayTcpTransport tcpTransport;
 
+    /**
+     * Production constructor (Spring picks this one — annotated {@code @Autowired} per the
+     * project's two-constructor wiring convention).
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public ZeroPaySchemeAdapter(ZeroPayAdapterProperties properties,
                                 ZeroPaySchemeApiClient schemeApiClient,
                                 SftpTransport sftpTransport,
-                                ZpBatchDataPort batchDataPort) {
+                                ZpBatchDataPort batchDataPort,
+                                ZpCommittedTxnRecorder committedTxnRecorder) {
         this.properties    = properties;
         this.schemeApiClient = schemeApiClient;
         this.sftpTransport = sftpTransport;
         this.batchDataPort = batchDataPort;
+        this.committedTxnRecorder = committedTxnRecorder;
+    }
+
+    /**
+     * Test/legacy constructor without committed-txn capture (recorder defaults to {@code null}).
+     */
+    public ZeroPaySchemeAdapter(ZeroPayAdapterProperties properties,
+                                ZeroPaySchemeApiClient schemeApiClient,
+                                SftpTransport sftpTransport,
+                                ZpBatchDataPort batchDataPort) {
+        this(properties, schemeApiClient, sftpTransport, batchDataPort, null);
     }
 
     // -----------------------------------------------------------------------
@@ -240,6 +264,9 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
         ZeroPaySchemeApiClient.CommitResponse commitResp =
                 schemeApiClient.commit(authResp.authId());
 
+        captureCommittedPayment(request.partnerTxnRef(), commitResp.schemeTxnRef(),
+                request.merchantId(), request.qrCodeId(), request.amountKrw(), authResp.authId());
+
         return new CpmAuthResponse(
                 authResp.authId(),          // approvalCode = authId from scheme
                 commitResp.schemeTxnRef(),   // zeroPayTxnRef = final schemeTxnRef
@@ -297,6 +324,9 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
         ZeroPaySchemeApiClient.CommitResponse commitResp =
                 schemeApiClient.commit(authResp.authId());
 
+        captureCommittedPayment(request.partnerTxnRef(), commitResp.schemeTxnRef(),
+                request.merchantId(), null, authorizeAmount, authResp.authId());
+
         return new MpmSubmitResponse(
                 commitResp.schemeTxnRef(),
                 "00",
@@ -304,6 +334,16 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
                 authResp.authId(),
                 commitResp.committedAt()
         );
+    }
+
+    /** Best-effort committed-payment capture for the daily batch files (never fails the path). */
+    private void captureCommittedPayment(String gmeTxnId, String schemeTxnRef, String merchantId,
+                                         String qrCodeId, BigDecimal amountKrw, String approvalCode) {
+        if (committedTxnRecorder == null) {
+            return;
+        }
+        committedTxnRecorder.recordPayment(gmeTxnId, schemeTxnRef, merchantId, qrCodeId,
+                amountKrw, BigDecimal.ZERO, BigDecimal.ZERO, "D", approvalCode);
     }
 
     /**
@@ -397,6 +437,17 @@ public class ZeroPaySchemeAdapter implements SchemeAdapter {
     public CancelResult cancelPayment(String authId) {
         ZeroPaySchemeApiClient.RefundResponse refundResp =
                 schemeApiClient.refund(authId, null);
+
+        if (committedTxnRecorder != null && "REFUNDED".equals(refundResp.status())) {
+            // Amount/merchant are not available at this layer (only the original authId is passed
+            // through the /cancel contract). We capture the refund linkage (refundId + original
+            // approval code = authId) so the ZP0021/ZP0066 files carry the refund leg; amount
+            // enrichment is gated on the transaction-management contract (see INTEGRATION REQUESTS).
+            committedTxnRecorder.recordRefund(null, refundResp.refundId(), null, null,
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "D",
+                    refundResp.refundId(), authId);
+        }
+
         return new CancelResult(
                 "REFUNDED".equals(refundResp.status()),
                 refundResp.status(),
