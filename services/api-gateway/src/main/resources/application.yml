@@ -61,7 +61,28 @@ gmepay:
 gateway:
   replay-protection:
     fail-open: true
+    # nonce store backend: 'memory' (default, single-instance) or 'redis' (shared)
+    store: memory
   trust-proxy: false
+
+  # Per-partner rate limiting (API-05 §3.5). Disabled by default so local dev and the
+  # existing test suite are unthrottled; switch on per environment. Limits are per second.
+  rate-limit:
+    enabled: false
+    fail-open: true
+    store: memory            # 'memory' (default, per-instance) or 'redis' (shared)
+    global-per-second: 100
+    rates-per-second: 20
+    payments-per-second: 50
+
+  # Partner credential source: 'stub' (default, hard-coded test partners) or 'config'
+  # (externalised table below — operators add rows without recompiling). A live
+  # config-registry/DB-backed implementation (T18) can replace this behind the same
+  # PartnerCredentialService interface. hmac-secret MUST be a placeholder/env var in real
+  # deployments, never a literal.
+  partner-credentials:
+    source: stub
+    partners: []
 
 # HMAC signature verification settings
 security:

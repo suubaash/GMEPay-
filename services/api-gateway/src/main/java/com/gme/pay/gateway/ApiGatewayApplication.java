@@ -1,7 +1,10 @@
 package com.gme.pay.gateway;
 
+import com.gme.pay.gateway.partner.ConfigPartnerCredentialProperties;
+import com.gme.pay.gateway.ratelimit.RateLimitProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 /**
  * Entry point for the GMEPay+ API Gateway.
@@ -12,6 +15,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * verified traffic to downstream microservices via Spring Cloud Gateway.
  */
 @SpringBootApplication
+@EnableConfigurationProperties({RateLimitProperties.class, ConfigPartnerCredentialProperties.class})
 public class ApiGatewayApplication {
 
     public static void main(String[] args) {
