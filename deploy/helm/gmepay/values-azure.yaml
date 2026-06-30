@@ -1,0 +1,97 @@
+# ============================================================================
+# OVERLAY: Azure (AKS). Same images; only the ABI env changes.
+#   Postgres -> Azure DB for PostgreSQL Flexible Server
+#   Kafka    -> Event Hubs (Kafka-protocol endpoint, SASL/PLAIN over TLS)
+#   Redis    -> Azure Cache for Redis
+#   Object   -> S3-compatible via MinIO-gateway / Blob S3 proxy (PATH_STYLE=true)
+#   OIDC     -> Keycloak-on-AKS or Microsoft Entra ID issuer
+#   Registry -> ACR
+#
+#   helm upgrade --install gmepay deploy/helm/gmepay \
+#     -f deploy/helm/gmepay/values-azure.yaml \
+#     -f azure-secrets.yaml      # private; or use CSI + Azure Key Vault
+#
+# ALL hostnames / keys are PLACEHOLDERS — substitute your subscription values.
+# ============================================================================
+
+global:
+  imageRegistry: gmepayacr.azurecr.io/gmepay   # ACR placeholder
+  imageTag: "1.0.0"
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []   # AKS-managed identity attached to ACR usually covers pulls
+
+abi:
+  # Azure Cache for Redis (SSL on 6380 in prod; 6379 shown for non-TLS test caches).
+  SPRING_DATA_REDIS_HOST: gmepay.redis.cache.windows.net
+  SPRING_DATA_REDIS_PORT: "6380"
+  # Event Hubs Kafka endpoint (namespace.servicebus.windows.net:9093, SASL/SSL).
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: gmepay-eventhub.servicebus.windows.net:9093
+  GMEPAY_SCHEMA_REGISTRY_URL: https://gmepay-eventhub.servicebus.windows.net/$schemagroups
+  # Cosmos DB for MongoDB (vCore) connection string placeholder.
+  SPRING_DATA_MONGODB_URI: mongodb://gmepay-mongo.mongo.cosmos.azure.com:10255/merchant?ssl=true&retrywrites=false
+  # Object store via S3-compatible gateway (MinIO gateway / Blob S3 proxy) -> PATH-STYLE.
+  GMEPAY_VAULT_ENDPOINT: https://gmepay-minio-gateway.gmepay.internal:9000
+  GMEPAY_VAULT_REGION: koreacentral
+  GMEPAY_VAULT_PATH_STYLE: "true"
+  # OIDC — Keycloak-on-AKS (shown) OR Entra ID issuer:
+  #   https://login.microsoftonline.com/<tenantId>/v2.0
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
+  OIDC_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4317
+
+# Prefer Secrets Store CSI driver backed by Azure Key Vault: set create:false
+# and provision <release>-credentials. Placeholders shown for bootstrap only.
+secrets:
+  create: true
+  data:
+    SPRING_DATASOURCE_USERNAME: gmepay
+    SPRING_DATASOURCE_PASSWORD: REPLACE_FROM_KEY_VAULT
+    SPRING_DATA_REDIS_PASSWORD: REPLACE_WITH_REDIS_ACCESS_KEY
+    GMEPAY_VAULT_ACCESSKEY: REPLACE_GATEWAY_ACCESS_KEY
+    GMEPAY_VAULT_SECRETKEY: REPLACE_GATEWAY_SECRET_KEY
+    GMEPAY_RBAC_SECRET: REPLACE_FROM_KEY_VAULT
+    GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_FROM_KEY_VAULT
+    GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_FROM_KEY_VAULT
+
+ingress:
+  enabled: true
+  className: azure-application-gateway
+  annotations:
+    appgw.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: api.gmepay.example.com
+      paths: [{ path: /, pathType: Prefix, service: api-gateway, port: 8080 }]
+    - host: admin.gmepay.example.com
+      paths: [{ path: /, pathType: Prefix, service: admin-ui, port: 3000 }]
+    - host: partner.gmepay.example.com
+      paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
+
+# DB-per-service -> Azure DB for PostgreSQL Flexible Server (placeholders).
+services:
+  config-registry:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-config.postgres.database.azure.com:5432/configreg?sslmode=require" }
+  prefunding:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-prefunding.postgres.database.azure.com:5432/prefunding?sslmode=require" }
+  auth-identity:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-authid.postgres.database.azure.com:5432/authid?sslmode=require" }
+  transaction-mgmt:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-txn.postgres.database.azure.com:5432/txndb?sslmode=require" }
+  scheme-adapter-zeropay:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-scheme.postgres.database.azure.com:5432/zpadapter?sslmode=require" }
+  notification-webhook:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-notify.postgres.database.azure.com:5432/notify?sslmode=require" }
+  settlement-reconciliation:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-settlement.postgres.database.azure.com:5432/settlement?sslmode=require" }
+  revenue-ledger:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-ledger.postgres.database.azure.com:5432/ledger?sslmode=require" }
+  admin-ui:
+    env:
+      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
+  partner-portal-ui:
+    env:
+      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay-partners
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

@@ -1,0 +1,17 @@
+{{/*
+Non-secret slice of the portability ABI: every backing-dependency ENDPOINT,
+region, flag and OIDC issuer that is safe to commit per-environment. Credentials
+live in the Secret (secret.yaml), never here. Mounted into every pod via
+`envFrom.configMapRef`, so the exact env-var names below are what the services
+read.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gmepay.configMapName" . }}
+  labels:
+    {{- include "gmepay.commonLabels" . | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.abi }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

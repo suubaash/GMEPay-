@@ -1,0 +1,303 @@
+# ============================================================================
+# GMEPay+ umbrella chart — BASE values (provider-neutral defaults).
+#
+# This file defines the SCHEMA and sane in-cluster defaults. A per-target
+# overlay (values-onprem.yaml / values-aws.yaml / values-azure.yaml) overrides
+# only the thin "where do the backing stores live" layer:
+#   - global.imageRegistry / imageTag      (ECR / ACR / local registry)
+#   - abi.*                                 (non-secret endpoints, regions, flags)
+#   - secrets.data.*                        (credentials — PLACEHOLDERS only)
+#   - services.<svc>.env.SPRING_DATASOURCE_URL   (DB-per-service connection URLs)
+#   - ingress.hosts / className / annotations
+#
+# PORTABILITY RULE: every backing dependency is injected as ENV here, never
+# baked into an image. The env-var NAMES below are the exact ones the services
+# read (harvested from docker-compose.yml + each module's application.*).
+# ============================================================================
+
+global:
+  # Image registry prefix used when a service.image is a bare repo (no "/").
+  # Overlays point this at ECR / ACR / a private on-prem registry.
+  imageRegistry: gmepay
+  imageTag: dev
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []        # e.g. [{ name: ecr-pull }] / [{ name: acr-pull }]
+  defaultPort: 8080
+  defaultReplicas: 1
+  # Spring actuator health path (only api-gateway + auth-identity ship actuator;
+  # all other services use a tcp probe, set per-service below).
+  healthPath: /actuator/health
+  defaultResources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 640Mi
+
+# ---------------------------------------------------------------------------
+# NON-SECRET portability ABI — rendered into one ConfigMap, mounted into EVERY
+# pod via envFrom. Endpoints/regions/flags only; credentials go in `secrets`.
+# Defaults below are in-cluster on-prem (self-hosted) service DNS names.
+# ---------------------------------------------------------------------------
+abi:
+  # Redis (api-gateway reads SPRING_DATA_REDIS_*).
+  SPRING_DATA_REDIS_HOST: redis
+  SPRING_DATA_REDIS_PORT: "6379"
+  # Kafka (transaction-mgmt, revenue-ledger, notification-webhook).
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  GMEPAY_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+  # Mongo (merchant-qr-data).
+  SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/merchant
+  # Object store / partner vault (lib-vault binds gmepay.vault.* — relaxed
+  # binding maps ACCESSKEY/SECRETKEY to accessKey/secretKey). REGION + PATH_STYLE
+  # are part of the declared ABI; carried for forward-compat / S3 clients.
+  GMEPAY_VAULT_ENDPOINT: http://minio:9000
+  GMEPAY_VAULT_REGION: us-east-1
+  GMEPAY_VAULT_PATH_STYLE: "true"
+  # OIDC issuer (api-gateway resource-server). Provider-neutral var name kept as
+  # an alias; the binding var is the Spring property name.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  OIDC_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  # Telemetry (OTLP, vendor-neutral).
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+
+# ---------------------------------------------------------------------------
+# SECRET portability ABI. `create: true` renders a chart-managed Secret from
+# the PLACEHOLDER data below — fine for on-prem bootstrap, NOT for real prod.
+# In prod set create:false and provision <release>-credentials out-of-band
+# (External Secrets Operator / CSI / sealed-secrets) with the same keys.
+# ---------------------------------------------------------------------------
+secrets:
+  create: true
+  data:
+    # Shared Postgres credential (DB-per-service, same role in self-host default).
+    SPRING_DATASOURCE_USERNAME: gmepay
+    SPRING_DATASOURCE_PASSWORD: CHANGE_ME_PG_PASSWORD
+    # Redis (empty = no auth on self-host default).
+    SPRING_DATA_REDIS_PASSWORD: ""
+    # Object store keys (lib-vault gmepay.vault.accessKey/secretKey).
+    GMEPAY_VAULT_ACCESSKEY: gmepay
+    GMEPAY_VAULT_SECRETKEY: CHANGE_ME_VAULT_SECRET
+    # Cross-service signing / internal-auth secrets (#90 RBAC + webhook).
+    GMEPAY_RBAC_SECRET: CHANGE_ME_RBAC_EDGE_SECRET
+    GMEPAY_INTERNAL_AUTH_SECRET: CHANGE_ME_INTERNAL_SVC_SECRET
+    GMEPAY_WEBHOOK_SIGNING_SECRET: CHANGE_ME_WEBHOOK_SECRET
+
+# ---------------------------------------------------------------------------
+# Ingress — fronts api-gateway + the two UIs. Hosts/class/annotations are
+# overridden per target (nginx / ALB / App Gateway).
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  tls: []
+  hosts:
+    - host: api.gmepay.local
+      paths:
+        - { path: /, pathType: Prefix, service: api-gateway, port: 8080 }
+    - host: admin.gmepay.local
+      paths:
+        - { path: /, pathType: Prefix, service: admin-ui, port: 3000 }
+    - host: partner.gmepay.local
+      paths:
+        - { path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }
+
+# ===========================================================================
+# SERVICES MAP — the single source of deployables. deployments.yaml ranges
+# over this and renders one Deployment + Service per entry via _deployment.tpl.
+#
+# envSecretKeys: keys pulled from the credentials Secret as env (exact names).
+# env:           literal per-service env (base URLs, datasource URL, flags).
+#                SPRING_DATASOURCE_URL is per-service because GMEPay+ runs
+#                DB-per-service (docs/INTER_SERVICE_CONTRACTS.md). Overlays
+#                rewrite these URLs to point at RDS / Azure Flexible Server.
+# probe.type:    http (actuator) for api-gateway/auth-identity; tcp elsewhere.
+# ===========================================================================
+services:
+
+  config-registry:
+    image: config-registry
+    containerPort: 8080
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    GMEPAY_VAULT_ACCESSKEY, GMEPAY_VAULT_SECRETKEY]
+    envSecretAliases:
+      GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-config:5432/configreg
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  rate-fx:
+    image: rate-fx
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+
+  prefunding:
+    image: prefunding
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-prefunding:5432/prefunding
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  smart-router:
+    image: smart-router
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+
+  qr-service:
+    image: qr-service
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+
+  auth-identity:
+    image: auth-identity
+    probe: { type: http }     # ships spring-boot-starter-actuator
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    GMEPAY_INTERNAL_AUTH_SECRET]
+    envSecretAliases:
+      GMEPAY_RBAC_VERIFY_SECRET: GMEPAY_RBAC_SECRET
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-authid:5432/authid
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      GME_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_RBAC_ENABLED: "true"
+      GMEPAY_INTERNAL_AUTH_ENABLED: "true"
+
+  transaction-mgmt:
+    image: transaction-mgmt
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-txn:5432/txndb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  payment-executor:
+    image: payment-executor
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+      GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://scheme-adapter-zeropay:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+
+  merchant-qr-data:
+    image: merchant-qr-data
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      # Mongo URI comes from the shared ABI ConfigMap (SPRING_DATA_MONGODB_URI).
+
+  scheme-adapter-zeropay:
+    image: scheme-adapter-zeropay
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/zpadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+
+  notification-webhook:
+    image: notification-webhook
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    GMEPAY_WEBHOOK_SIGNING_SECRET]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notify:5432/notify
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      GMEPAY_WEBHOOK_DISPATCHER_ENABLED: "true"
+
+  settlement-reconciliation:
+    image: settlement-reconciliation
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-settlement:5432/settlement
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  revenue-ledger:
+    image: revenue-ledger
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ledger:5432/ledger
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  reporting-compliance:
+    image: reporting-compliance
+    probe: { type: tcp }
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+
+  ops-partner-bff:
+    image: ops-partner-bff
+    probe: { type: tcp }
+    envSecretAliases:
+      GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+
+  api-gateway:
+    image: api-gateway
+    component: edge
+    probe: { type: http }     # the one module with actuator + real /actuator/health
+    envSecretKeys: [GMEPAY_INTERNAL_AUTH_SECRET, SPRING_DATA_REDIS_PASSWORD]
+    envSecretAliases:
+      GMEPAY_RBAC_STAMP_SECRET: GMEPAY_RBAC_SECRET
+    env:
+      SERVER_PORT: "8080"
+      GMEPAY_RBAC_STAMP_ENABLED: "true"
+      GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+
+  # ---- Human UIs (Next.js). NEXT_PUBLIC_* are read at runtime by npm start. ----
+  admin-ui:
+    image: admin-ui
+    component: ui
+    containerPort: 3000
+    probe: { type: tcp }
+    env:
+      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay
+      NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
+
+  partner-portal-ui:
+    image: partner-portal-ui
+    component: ui
+    containerPort: 3001
+    probe: { type: tcp }
+    env:
+      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay-partners
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

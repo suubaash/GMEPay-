@@ -1,0 +1,9 @@
+# Patterns to ignore when packaging the chart.
+.DS_Store
+.git/
+*.swp
+*.tmp
+*.bak
+# Private secret overlays must never be packaged.
+*-secrets.yaml
+secrets.local.yaml
