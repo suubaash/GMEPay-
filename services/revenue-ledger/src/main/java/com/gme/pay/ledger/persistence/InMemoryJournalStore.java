@@ -52,6 +52,15 @@ public class InMemoryJournalStore implements JournalStore {
     }
 
     @Override
+    public Optional<Journal> findRoundingResidualByReference(String reference) {
+        return insertionOrder.stream()
+                .filter(j -> j.entries().stream().anyMatch(e ->
+                        reference.equals(e.reference())
+                                && ChartOfAccounts.REVENUE_ROUNDING.equals(e.account())))
+                .findFirst();
+    }
+
+    @Override
     public BigDecimal sumRoundingByDateRange(LocalDate start, LocalDate end, String currency) {
         return insertionOrder.stream()
                 .filter(j -> {

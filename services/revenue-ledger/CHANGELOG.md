@@ -2,6 +2,32 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-06-30 — Wave-3: idempotent rounding-residual posting (w3/revenue-ledger)
+
+### Changed
+- **`postRoundingResidual(reference, residual, currency)` is now IDEMPOTENT on `reference`.** A repeat
+  post with a reference that already has a rounding journal is a no-op: it returns the existing journal
+  (same id) and creates NO second line, so the running `total_rounding_usd` aggregate counts the residual
+  exactly once. settlement-reconciliation (per settlement batch id) and payment-executor (per TXN ref)
+  can both retry safely regardless of caller-side guards. `LedgerPostingService` pre-checks via the new
+  port method `JournalStore.findRoundingResidualByReference`; on a hit it short-circuits before posting.
+- Guard is **scoped to the `REVENUE_ROUNDING` account only** — revenue-capture / fee-share / reversal
+  journals that carry the SAME `reference` on other accounts are unaffected, so the per-TXN and per-batch
+  keying schemes coexist without collision.
+
+### Added
+- **Flyway `V006__rounding_residual_idempotency.sql`** — `rounding_residual_keys(reference PRIMARY KEY,
+  journal_id, posted_at)` as the DATABASE backstop against a concurrent double-post racing the app-level
+  pre-check (the PK trips and rolls back the second writer). A dedicated key table (not a partial /
+  expression UNIQUE INDEX) is used because H2 in PostgreSQL MODE — the no-Docker `@DataJpaTest` engine —
+  supports neither; a plain PK is portable across H2 and PostgreSQL. `JpaJournalStore.save` inserts the
+  guard row in the SAME transaction when (and only when) the journal posts to `REVENUE_ROUNDING`.
+
+### Tests
+- `JournalPersistenceIT` (+3, H2): double-post same reference → exactly one journal + same id returned;
+  distinct references → distinct journals; retry does NOT double-count the `total_rounding_usd` aggregate.
+- `RoundingResidualTest` (+1, unit): repeat post returns the existing journal id.
+
 ## 2026-06-30 — Phase 2 cross-service wiring (p2/revenue-ledger)
 
 ### Changed
