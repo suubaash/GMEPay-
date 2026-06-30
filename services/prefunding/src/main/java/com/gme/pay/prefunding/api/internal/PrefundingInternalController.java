@@ -1,5 +1,8 @@
 package com.gme.pay.prefunding.api.internal;
 
+import com.gme.pay.contracts.PrefundingReleaseRequest;
+import com.gme.pay.contracts.PrefundingReserveRequest;
+import com.gme.pay.contracts.PrefundingReserveResponse;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.prefunding.service.PrefundingService;
@@ -83,6 +86,55 @@ public class PrefundingInternalController {
         return new ReverseResponse(partnerId, r.reversedAmount(), r.balanceAfter(), CURRENCY,
                 r.ledgerEntryId());
     }
+
+    /**
+     * Soft-hold {@code amountUsd} of the partner's available funds at OVERSEAS CPM token issuance
+     * (qr-service IR-qr-3). Idempotent on {@code idempotencyKey} (the CPM token / session id); the
+     * matching {@link #release} reuses it. Atomic per-partner {@code SELECT FOR UPDATE}, non-negative
+     * invariant honoured against (balance + credit_limit − reserved) → 402 INSUFFICIENT_PREFUNDING on
+     * overdraw. Returns the {@code reservationId} handle plus available + total reserved after the hold.
+     */
+    @PostMapping("/{partnerId}/reserve")
+    public PrefundingReserveResponse reserve(@PathVariable String partnerId,
+                                             @RequestBody PrefundingReserveRequest req,
+                                             @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String key = firstNonBlank(req == null ? null : req.idempotencyKey(),
+                firstNonBlank(req == null ? null : req.txnRef(), headerKey));
+        if (key == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "idempotencyKey/txnRef (body) or Idempotency-Key (header) is required");
+        }
+        if (req == null || req.amountUsd() == null || req.amountUsd().signum() <= 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "amountUsd is required and must be > 0");
+        }
+        PrefundingService.CpmReserveResult r = service.reserveForCpm(partnerId, key, req.amountUsd());
+        String reservationId = r.reservationId() == null ? null : String.valueOf(r.reservationId());
+        return new PrefundingReserveResponse(req.partnerId(), reservationId,
+                r.reservedAmount(), r.available(), r.reservedTotal());
+    }
+
+    /**
+     * Free the CPM hold taken by {@link #reserve} on token expiry / decline. Idempotent on
+     * {@code idempotencyKey} (reuse the reserve key); a release that already ran — or for which no active
+     * hold exists — is a 0 no-op. Returns the resulting balance + total reserved after release.
+     */
+    @PostMapping("/{partnerId}/release")
+    public ReleaseHoldResponse release(@PathVariable String partnerId,
+                                       @RequestBody PrefundingReleaseRequest req,
+                                       @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String key = firstNonBlank(req == null ? null : req.idempotencyKey(), headerKey);
+        if (key == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "idempotencyKey (body) or Idempotency-Key (header) is required");
+        }
+        PrefundingService.CpmReleaseResult r = service.releaseForCpm(partnerId, key);
+        return new ReleaseHoldResponse(partnerId, r.releasedAmount(), r.balance(), r.reservedTotal(),
+                CURRENCY, req == null ? null : req.reservationId());
+    }
+
+    /** Result of a CPM release: amount freed, resulting balance + total reserved, echoed reservation handle. */
+    public record ReleaseHoldResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance,
+                                      BigDecimal reservedUsd, String currency, String reservationId) { }
 
     private static String firstNonBlank(String a, String b) {
         if (a != null && !a.isBlank()) {
