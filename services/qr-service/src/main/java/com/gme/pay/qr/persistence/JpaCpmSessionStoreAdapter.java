@@ -35,7 +35,7 @@ public class JpaCpmSessionStoreAdapter implements CpmSessionStorePort {
     @Override
     @Transactional
     public void save(CpmToken token, String direction, String countryCode, String customerRef,
-                     boolean schemeIssued) {
+                     boolean schemeIssued, PrefundReservation reservation) {
         Instant now = Instant.now();
         repository.save(new CpmPrepareSessionEntity(
                 token.cpmTokenId(),
@@ -49,7 +49,9 @@ public class JpaCpmSessionStoreAdapter implements CpmSessionStorePort {
                 token.qrContent(),
                 STATUS_ISSUED,
                 schemeIssued,
-                null,           // prefund_reserved_usd owned by prefunding service (INTEGRATION REQUEST)
+                reservation == null ? null : reservation.reservedUsd(),
+                reservation == null ? null : reservation.partnerId(),
+                reservation == null ? null : reservation.reservationId(),
                 token.issuedAt(),
                 token.expiresAt(),
                 now));
@@ -63,15 +65,16 @@ public class JpaCpmSessionStoreAdapter implements CpmSessionStorePort {
 
     @Override
     @Transactional
-    public List<String> expireOverdue(Instant cutoff) {
+    public List<ExpiredSession> expireOverdue(Instant cutoff) {
         List<CpmPrepareSessionEntity> overdue =
                 repository.findByStatusAndExpiresAtBefore(STATUS_ISSUED, cutoff);
-        List<String> expired = new ArrayList<>(overdue.size());
+        List<ExpiredSession> expired = new ArrayList<>(overdue.size());
         Instant now = Instant.now();
         for (CpmPrepareSessionEntity e : overdue) {
             e.setStatus(STATUS_EXPIRED);
             e.setUpdatedAt(now);
-            expired.add(e.getCpmTokenId());
+            expired.add(new ExpiredSession(
+                    e.getCpmTokenId(), e.getPrefundPartnerId(), e.getPrefundReservationId()));
         }
         repository.saveAll(overdue);
         return expired;

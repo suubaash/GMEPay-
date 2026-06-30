@@ -17,6 +17,16 @@ internal:
   api:
     token: changeme-internal-token
 
+# Phase 2: prefunding reserve/release for OVERSEAS (outbound) CPM issuance (IR-qr-3).
+# Disabled by default so unit/slice tests + no-prefunding runs use the in-memory fixture
+# (InMemoryPrefundingReservationFixture). Set enabled=true + base-url in deployments where
+# prefunding is reachable to wire the real RestPrefundingReservationClient.
+gmepay:
+  prefunding:
+    reserve:
+      enabled: false
+    base-url: http://prefunding:8080
+
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:
   api-docs:

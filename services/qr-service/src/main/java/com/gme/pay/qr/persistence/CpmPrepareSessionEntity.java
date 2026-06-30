@@ -55,6 +55,12 @@ public class CpmPrepareSessionEntity {
     @Column(name = "prefund_reserved_usd", precision = 20, scale = 8)
     private BigDecimal prefundReservedUsd;
 
+    @Column(name = "prefund_partner_id")
+    private Long prefundPartnerId;
+
+    @Column(name = "prefund_reservation_id", length = 64)
+    private String prefundReservationId;
+
     @Column(name = "issued_at", nullable = false)
     private Instant issuedAt;
 
@@ -72,22 +78,25 @@ public class CpmPrepareSessionEntity {
                                    String direction, String countryCode, String customerRef,
                                    String partnerTxnRef, String prepareToken, String qrContent,
                                    String status, boolean schemeIssued, BigDecimal prefundReservedUsd,
+                                   Long prefundPartnerId, String prefundReservationId,
                                    Instant issuedAt, Instant expiresAt, Instant updatedAt) {
-        this.cpmTokenId         = cpmTokenId;
-        this.paymentId          = paymentId;
-        this.schemeId           = schemeId;
-        this.direction          = direction;
-        this.countryCode        = countryCode;
-        this.customerRef        = customerRef;
-        this.partnerTxnRef      = partnerTxnRef;
-        this.prepareToken       = prepareToken;
-        this.qrContent          = qrContent;
-        this.status             = status;
-        this.schemeIssued       = schemeIssued;
-        this.prefundReservedUsd = prefundReservedUsd;
-        this.issuedAt           = issuedAt;
-        this.expiresAt          = expiresAt;
-        this.updatedAt          = updatedAt;
+        this.cpmTokenId           = cpmTokenId;
+        this.paymentId            = paymentId;
+        this.schemeId             = schemeId;
+        this.direction            = direction;
+        this.countryCode          = countryCode;
+        this.customerRef          = customerRef;
+        this.partnerTxnRef        = partnerTxnRef;
+        this.prepareToken         = prepareToken;
+        this.qrContent            = qrContent;
+        this.status               = status;
+        this.schemeIssued         = schemeIssued;
+        this.prefundReservedUsd   = prefundReservedUsd;
+        this.prefundPartnerId     = prefundPartnerId;
+        this.prefundReservationId = prefundReservationId;
+        this.issuedAt             = issuedAt;
+        this.expiresAt            = expiresAt;
+        this.updatedAt            = updatedAt;
     }
 
     public String getCpmTokenId()          { return cpmTokenId; }
@@ -102,6 +111,8 @@ public class CpmPrepareSessionEntity {
     public String getStatus()              { return status; }
     public boolean isSchemeIssued()        { return schemeIssued; }
     public BigDecimal getPrefundReservedUsd() { return prefundReservedUsd; }
+    public Long getPrefundPartnerId()      { return prefundPartnerId; }
+    public String getPrefundReservationId() { return prefundReservationId; }
     public Instant getIssuedAt()           { return issuedAt; }
     public Instant getExpiresAt()          { return expiresAt; }
     public Instant getUpdatedAt()          { return updatedAt; }
