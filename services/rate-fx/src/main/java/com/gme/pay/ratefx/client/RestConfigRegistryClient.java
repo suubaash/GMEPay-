@@ -36,7 +36,7 @@ public class RestConfigRegistryClient implements PartnerConfigPort {
     }
 
     /** Test constructor — pre-built RestClient (e.g. backed by MockRestServiceServer). */
-    RestConfigRegistryClient(RestClient restClient) {
+    public RestConfigRegistryClient(RestClient restClient) {
         this.restClient = restClient;
     }
 

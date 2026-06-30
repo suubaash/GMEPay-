@@ -1,5 +1,25 @@
 # rate-fx — CHANGELOG
 
+## 2026-06-30 — Wave-3: consume config-registry rule rate-source (w3/rate-fx)
+
+### Changed
+- **Rate-source is now data-driven from config-registry** (closes Wave-3 IR-1). The new
+  `RuleView.rateCollSource`/`ratePaySource` contract fields (commit a36997e) are deserialized by
+  `RestConfigRegistryClient` off `GET /v1/partners/{code}/rules` and mapped onto the per-leg
+  `RateSource`. A leg whose rule says `PARTNER` is dispatched to `PartnerBQuotePort`;
+  `MANUAL`/`IDENTITY`/`LIVE` and null/absent (⇒ LIVE, back-compat) take the treasury-snapshot /
+  identity paths. Previously every leg defaulted LIVE because the source field was never consumed.
+  (Field mapping already existed in `RestConfigRegistryClient`/`PartnerRule`; this commit proves and
+  guards the end-to-end wire→leg routing.)
+- `RestConfigRegistryClient(RestClient)` test-seam constructor widened to `public` so the wiring
+  test can drive the real client over `MockRestServiceServer`.
+
+### Tests
+- `issue/ConfigRegistryRuleSourceWiringTest` (7 tests, MockRestServiceServer; config-registry NOT
+  running): `getRules` deserializes the wire source strings and they resolve onto `RateSource`;
+  end-to-end a `PARTNER` leg routes through Partner B (treasury never queried), `LIVE`/`MANUAL` read
+  the snapshot store, `IDENTITY` USD legs yield null (engine forces 1.0), and absent ⇒ LIVE.
+
 ## 2026-06-30 — PARTNER source (WBS 4.6), durable TTL, manual override (agent/rate-fx)
 
 ### Added
