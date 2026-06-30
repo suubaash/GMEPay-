@@ -1,6 +1,7 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.RevenueLedgerClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -13,8 +14,15 @@ import java.util.Map;
  * Phase-1 in-memory stub of {@link RevenueLedgerClient}. Returns a fixed daily
  * total so the Admin dashboard renders a non-zero value; the range and
  * breakdown variants scale the daily figure by the (inclusive) day count.
+ *
+ * <p>Default bean: wired unless {@code gmepay.revenue-ledger.client=rest} selects
+ * the live {@link com.gme.pay.bff.client.rest.RestRevenueLedgerClient}.
  */
 @Component
+@ConditionalOnProperty(
+        name = "gmepay.revenue-ledger.client",
+        havingValue = "stub",
+        matchIfMissing = true)
 public class StubRevenueLedgerClient implements RevenueLedgerClient {
 
     /** The fixed daily revenue triple used by both summary variants. */
