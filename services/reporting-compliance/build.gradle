@@ -6,7 +6,15 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.flywaydb:flyway-core'
+    // Flyway 10.x ships PostgreSQL support as a separate module (needed by the postgres:16
+    // Testcontainers ITs + production; flyway-core alone throws "Unsupported Database: PostgreSQL 16").
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
