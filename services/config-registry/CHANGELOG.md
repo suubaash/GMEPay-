@@ -2,6 +2,19 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-06-30 — Cloud-agnostic vault config (agent/cloud-audit)
+
+### Added
+- **Document vault (ADR-006) is now fully config-driven across S3 providers.**
+  lib-vault's `VaultProperties` gains `region` (`GMEPAY_VAULT_REGION`, default
+  `us-east-1`) and `path-style` (`GMEPAY_VAULT_PATH_STYLE`, default `true`). The same
+  `io.minio` S3-API client (NOT a cloud SDK) now works against self-hosted MinIO
+  (on-prem default, path-style), AWS S3 (virtual-host, real region), or an
+  Azure-via-S3 gateway by varying only env. Credential env names normalized to
+  `GMEPAY_VAULT_ACCESS_KEY` / `GMEPAY_VAULT_SECRET_KEY` (Spring relaxed binding).
+  application.properties comment block updated with the full env contract. Additive;
+  MinIO + path-style remain the local/compose default — docker-compose flow unchanged.
+
 ## 2026-06-30 — Scheme roster drift fix (agent/config-registry)
 
 ### Fixed

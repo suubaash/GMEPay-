@@ -14,3 +14,12 @@ Partner onboarding requires durable storage of: KYB documents (certificate of in
 - Cross-border PII transfers: `<partner_code>` paths must be encrypted at rest; Vault holds keys per-partner so a partner offboarding lets us crypto-shred their vault entries (PIPA Art. 21 disposal obligation) while satisfying the 10-year retention requirement — the row keeps existing but is unreadable.
 - Document upload flow is via the BFF, never direct-to-MinIO from the browser (preserves audit + virus scan hook).
 - 10-year object-lock means an accidental delete is impossible — operational discipline change.
+
+## Addendum (2026-06-30) — cloud-agnostic storage seam
+The vault wrapper (`lib-vault`) talks the **S3 API over HTTP via the `io.minio` client — not a cloud-provider SDK** — so the same code runs against self-hosted MinIO (on-prem, the default), AWS S3, or an Azure-fronting S3 gateway. Everything is env-injected; nothing is baked:
+- `GMEPAY_VAULT_ENDPOINT` — S3 API URL (also the master switch; unset ⇒ in-memory dev vault).
+- `GMEPAY_VAULT_REGION` (default `us-east-1`) — Sig-V4 signing region; MinIO ignores it, AWS/Azure-gateway buckets set their real region.
+- `GMEPAY_VAULT_PATH_STYLE` (default `true`) — `true` = path-style (MinIO/on-prem), `false` = virtual-host (AWS S3). The `io.minio` client auto-selects the wire style from the endpoint host (AWS hosts → virtual-host, all others → path-style); the flag is the declared contract and is asserted against that detection at boot.
+- `GMEPAY_VAULT_ACCESS_KEY` / `GMEPAY_VAULT_SECRET_KEY`.
+
+A build-time portability guard (`./gradlew check` → `portabilityGuard`) fails if any AWS/Azure/GCP SDK ever lands on a runtime classpath, so the open-protocol seam cannot silently regress.
