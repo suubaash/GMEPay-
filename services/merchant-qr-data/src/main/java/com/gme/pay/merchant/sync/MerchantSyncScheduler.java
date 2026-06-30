@@ -2,45 +2,34 @@ package com.gme.pay.merchant.sync;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * Scheduled daily merchant/QR sync ingest (UC-07-01 / UC-07-02).
  *
- * <p>Scans the configurable inbound directory for ZeroPay batch files, delegates
- * processing to {@link MerchantSyncService}, and logs a summary of each run.
+ * <p>Pulls available ZeroPay batch files from a {@link MerchantFileSource} (transport
+ * port), delegates processing to {@link MerchantSyncService}, acknowledges each
+ * successfully-processed file back to the source, and logs a per-run summary.
+ *
+ * <p><strong>Transport abstraction:</strong> the scheduler no longer scans the
+ * filesystem directly — it depends on the {@link MerchantFileSource} port. The default
+ * {@link LocalDirectoryFileSource} reads a local directory (no SFTP credentials needed);
+ * a real SFTP-backed source can be dropped in without changing this class.
  *
  * <p><strong>Activation gate:</strong> this bean is only registered when
  * {@code gmepay.merchant-sync.enabled=true} (default: {@code false}).
  * Set the property in {@code application.yml} or via an environment variable
  * ({@code GMEPAY_MERCHANT_SYNC_ENABLED=true}) to activate.
  *
- * <p><strong>Schedule:</strong> runs daily at 02:00 KST (UTC+9), i.e. 17:00 UTC
- * the previous day. Override via {@code gmepay.merchant-sync.cron} if needed.
- * Default cron: {@code 0 0 17 * * *} (UTC).
- *
- * <p><strong>Inbound directory:</strong> configured via
- * {@code gmepay.merchant-sync.inbound-dir} (default: {@code ./data/zeropay-inbound}).
- * For local development and tests, drop fixture files (e.g. {@code ZP0041_20260615.dat})
- * into this directory — NO real ZeroPay SFTP credentials are required.
- *
- * <p><strong>Spring 6 multi-constructor note:</strong> This component has two
- * constructors (primary DI + {@code @Value} variant). The {@code @Value}-annotated
- * constructor carries {@code @Autowired} so Spring Boot's component scan selects
- * it correctly (Spring 6 requires explicit {@code @Autowired} when 2+ constructors
- * are present on a {@code @Component}).
+ * <p><strong>Schedule:</strong> runs daily at 02:00 KST (UTC+9). Override via
+ * {@code gmepay.merchant-sync.cron} if needed. Default cron: {@code 0 0 2 * * *}
+ * with {@code zone=Asia/Seoul}.
  */
 @Component
 @ConditionalOnProperty(name = "gmepay.merchant-sync.enabled", havingValue = "true")
@@ -48,56 +37,38 @@ public class MerchantSyncScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(MerchantSyncScheduler.class);
 
-    /** File extensions accepted as ZeroPay inbound batch files. */
-    private static final List<String> ACCEPTED_EXTENSIONS = List.of(".dat", ".txt", ".csv");
-
     private final MerchantSyncService syncService;
-    private final String inboundDir;
-    private final String cron;
+    private final MerchantFileSource fileSource;
 
-    /**
-     * Primary constructor used by Spring when {@code @Value} injection is needed.
-     * {@code @Autowired} is required here because this class has multiple constructors
-     * (Spring 6 / Boot 3.x does not infer a single candidate when 2+ ctors exist).
-     */
-    @Autowired
-    public MerchantSyncScheduler(
-            MerchantSyncService syncService,
-            @Value("${gmepay.merchant-sync.inbound-dir:./data/zeropay-inbound}") String inboundDir,
-            @Value("${gmepay.merchant-sync.cron:0 0 17 * * *}") String cron) {
+    public MerchantSyncScheduler(MerchantSyncService syncService, MerchantFileSource fileSource) {
         this.syncService = syncService;
-        this.inboundDir = inboundDir;
-        this.cron = cron;
+        this.fileSource = fileSource;
     }
 
     /**
      * Runs the merchant/QR sync on the configured KST daily schedule.
      *
-     * <p>Scans {@code gmepay.merchant-sync.inbound-dir} for files whose names
-     * start with a recognised ZeroPay prefix (ZP0041/0043/0045/0047/0051/0053).
-     * Each file is processed in alphabetical order (incremental deltas before
-     * full lists when both are present). Results are logged; processing continues
-     * on a per-file basis even when individual files fail.
-     *
-     * <p>Cron expression is fixed at declaration time; the {@code cron} field is
-     * retained for observability/logging only. To change the schedule at runtime
-     * use a {@code ScheduledTaskRegistrar} instead (future enhancement).
+     * <p>Lists available files via the {@link MerchantFileSource} (incremental deltas
+     * before full lists when both are present), processes each, and acknowledges
+     * successfully-processed files. Processing continues on a per-file basis even
+     * when individual files fail.
      */
-    @Scheduled(cron = "${gmepay.merchant-sync.cron:0 0 17 * * *}",
+    @Scheduled(cron = "${gmepay.merchant-sync.cron:0 0 2 * * *}",
                zone = "Asia/Seoul")
     public void runDailySync() {
-        log.info("MerchantSyncScheduler: starting daily sync from dir={}, cron={}", inboundDir, cron);
+        log.info("MerchantSyncScheduler: starting daily sync from source={}", fileSource.describe());
 
-        Path dir = Paths.get(inboundDir);
-        if (!Files.isDirectory(dir)) {
-            log.warn("MerchantSyncScheduler: inbound-dir does not exist or is not a directory: {}",
-                    dir.toAbsolutePath());
+        List<Path> files;
+        try {
+            files = fileSource.listAvailableFiles();
+        } catch (IOException e) {
+            log.error("MerchantSyncScheduler: failed to list files from {}: {}",
+                    fileSource.describe(), e.getMessage(), e);
             return;
         }
 
-        List<Path> files = listInboundFiles(dir);
         if (files.isEmpty()) {
-            log.info("MerchantSyncScheduler: no inbound files found in {}", dir.toAbsolutePath());
+            log.info("MerchantSyncScheduler: no inbound files found in {}", fileSource.describe());
             return;
         }
 
@@ -117,6 +88,7 @@ public class MerchantSyncScheduler {
                 totalErrors += result.errors();
                 if (result.success()) {
                     filesProcessed++;
+                    acknowledge(file);
                 } else {
                     filesFailed++;
                 }
@@ -136,32 +108,12 @@ public class MerchantSyncScheduler {
                 filesProcessed, filesFailed, totalUpserted, totalDeactivated, totalErrors);
     }
 
-    /**
-     * Lists all ZeroPay inbound files in the given directory in sorted (alphabetical) order.
-     * Only files whose name starts with a recognised ZeroPay prefix are included.
-     */
-    List<Path> listInboundFiles(Path dir) {
-        try (Stream<Path> stream = Files.list(dir)) {
-            return stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> isAcceptedExtension(p.getFileName().toString()))
-                    .filter(p -> ZeroPayFileType.fromFilename(p.getFileName().toString()) != null)
-                    .sorted()
-                    .toList();
+    private void acknowledge(Path file) {
+        try {
+            fileSource.markProcessed(file);
         } catch (IOException e) {
-            log.error("MerchantSyncScheduler: failed to list inbound dir {}: {}",
-                    dir.toAbsolutePath(), e.getMessage(), e);
-            return List.of();
+            log.warn("MerchantSyncScheduler: failed to acknowledge processed file {}: {}",
+                    file.getFileName(), e.getMessage());
         }
-    }
-
-    private static boolean isAcceptedExtension(String filename) {
-        String lower = filename.toLowerCase();
-        return ACCEPTED_EXTENSIONS.stream().anyMatch(lower::endsWith);
-    }
-
-    /** Returns the resolved absolute path of the configured inbound directory. */
-    public Path getInboundDirPath() {
-        return Paths.get(inboundDir).toAbsolutePath();
     }
 }
