@@ -5,16 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.gme.pay.errors.ApiException;
+import com.gme.pay.errors.ErrorCode;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Data-driven scheme-for-location resolution — every {@link ResolutionError}
+ * Data-driven scheme-for-location resolution — every canonical {@link ErrorCode}
  * branch and the priority disambiguation, over an in-process
- * {@link PartnerSchemeRegistry} fixture. Mirrors the cross-service contract
- * qr-service binds to: VALIDATION_ERROR / NO_SCHEME_FOR_LOCATION /
- * DIRECTION_NOT_ENABLED / PAYMENT_MODE_NOT_SUPPORTED.
+ * {@link PartnerSchemeRegistry} fixture. Phase 2: asserts the canonical
+ * {@link ApiException}/{@link ErrorCode} surface (VALIDATION_ERROR /
+ * NO_SCHEME_FOR_LOCATION / DIRECTION_NOT_ENABLED / PAYMENT_MODE_NOT_SUPPORTED)
+ * with its HTTP status (409 for mode/direction), mirroring the cross-service
+ * contract qr-service binds to.
  */
 class LocationSchemeResolverTest {
 
@@ -29,9 +33,9 @@ class LocationSchemeResolverTest {
         };
     }
 
-    private static SchemeResolutionException resolveExpectingError(
+    private static ApiException resolveExpectingError(
             PartnerSchemeRegistry registry, LocationSchemeQuery query) {
-        return assertThrows(SchemeResolutionException.class,
+        return assertThrows(ApiException.class,
                 () -> new LocationSchemeResolver(registry).resolve(query));
     }
 
@@ -70,60 +74,61 @@ class LocationSchemeResolverTest {
 
     @Test
     void blankCountryIsValidationError() {
-        SchemeResolutionException ex = resolveExpectingError(registryOf(),
+        ApiException ex = resolveExpectingError(registryOf(),
                 new LocationSchemeQuery("  ", PaymentMode.CPM, "DOMESTIC"));
-        assertEquals(ResolutionError.VALIDATION_ERROR, ex.error());
+        assertEquals(ErrorCode.VALIDATION_ERROR, ex.errorCode());
     }
 
     @Test
     void nullModeIsValidationError() {
-        SchemeResolutionException ex = resolveExpectingError(registryOf(),
+        ApiException ex = resolveExpectingError(registryOf(),
                 new LocationSchemeQuery("KR", null, "DOMESTIC"));
-        assertEquals(ResolutionError.VALIDATION_ERROR, ex.error());
+        assertEquals(ErrorCode.VALIDATION_ERROR, ex.errorCode());
     }
 
     @Test
     void unknownDirectionIsValidationError() {
-        SchemeResolutionException ex = resolveExpectingError(
+        ApiException ex = resolveExpectingError(
                 registryOf(new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0)),
                 new LocationSchemeQuery("KR", PaymentMode.CPM, "SIDEWAYS"));
-        assertEquals(ResolutionError.VALIDATION_ERROR, ex.error());
+        assertEquals(ErrorCode.VALIDATION_ERROR, ex.errorCode());
     }
 
     // --------------------------- branch: NO_SCHEME_FOR_LOCATION ---------------
 
     @Test
-    @DisplayName("country with zero wired rows -> NO_SCHEME_FOR_LOCATION")
+    @DisplayName("country with zero wired rows -> NO_SCHEME_FOR_LOCATION (404)")
     void unwiredCountryIsNoScheme() {
-        SchemeResolutionException ex = resolveExpectingError(
+        ApiException ex = resolveExpectingError(
                 registryOf(new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0)),
                 new LocationSchemeQuery("JP", PaymentMode.MPM, "INBOUND"));
-        assertEquals(ResolutionError.NO_SCHEME_FOR_LOCATION, ex.error());
-        assertEquals(404, ex.error().httpStatus());
+        assertEquals(ErrorCode.NO_SCHEME_FOR_LOCATION, ex.errorCode());
+        assertEquals(404, ex.errorCode().httpStatus());
     }
 
     // --------------------------- branch: DIRECTION_NOT_ENABLED ----------------
 
     @Test
-    @DisplayName("rows exist but only inbound, asked outbound -> DIRECTION_NOT_ENABLED")
+    @DisplayName("rows exist but only inbound, asked outbound -> DIRECTION_NOT_ENABLED (409)")
     void wrongDirectionIsDirectionNotEnabled() {
-        SchemeResolutionException ex = resolveExpectingError(
+        ApiException ex = resolveExpectingError(
                 registryOf(new PartnerSchemeRecord("NAPAS_247", "VN", "INBOUND", false, true, 0)),
                 new LocationSchemeQuery("VN", PaymentMode.MPM, "OUTBOUND"));
-        assertEquals(ResolutionError.DIRECTION_NOT_ENABLED, ex.error());
+        assertEquals(ErrorCode.DIRECTION_NOT_ENABLED, ex.errorCode());
+        assertEquals(409, ex.errorCode().httpStatus());
     }
 
     // --------------------------- branch: PAYMENT_MODE_NOT_SUPPORTED -----------
 
     @Test
-    @DisplayName("direction matches but scheme not wired for the mode -> PAYMENT_MODE_NOT_SUPPORTED")
+    @DisplayName("direction matches but scheme not wired for the mode -> PAYMENT_MODE_NOT_SUPPORTED (409)")
     void wrongModeIsPaymentModeNotSupported() {
         // KHQR is MPM-only; ask for CPM.
-        SchemeResolutionException ex = resolveExpectingError(
+        ApiException ex = resolveExpectingError(
                 registryOf(new PartnerSchemeRecord("KHQR", "KH", "INBOUND", false, true, 0)),
                 new LocationSchemeQuery("KH", PaymentMode.CPM, "INBOUND"));
-        assertEquals(ResolutionError.PAYMENT_MODE_NOT_SUPPORTED, ex.error());
-        assertEquals(409, ex.error().httpStatus());
+        assertEquals(ErrorCode.PAYMENT_MODE_NOT_SUPPORTED, ex.errorCode());
+        assertEquals(409, ex.errorCode().httpStatus());
     }
 
     @Test
@@ -132,11 +137,11 @@ class LocationSchemeResolverTest {
         // Inbound CPM-incapable scheme + an outbound CPM-capable one: asking
         // INBOUND/CPM must surface PAYMENT_MODE_NOT_SUPPORTED (direction matched,
         // mode didn't) rather than collapsing to NO_SCHEME.
-        SchemeResolutionException ex = resolveExpectingError(
+        ApiException ex = resolveExpectingError(
                 registryOf(
                         new PartnerSchemeRecord("KHQR", "KH", "INBOUND", false, true, 0),
                         new PartnerSchemeRecord("FAST_SG", "KH", "OUTBOUND", true, false, 1)),
                 new LocationSchemeQuery("KH", PaymentMode.CPM, "INBOUND"));
-        assertEquals(ResolutionError.PAYMENT_MODE_NOT_SUPPORTED, ex.error());
+        assertEquals(ErrorCode.PAYMENT_MODE_NOT_SUPPORTED, ex.errorCode());
     }
 }
