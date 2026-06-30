@@ -5,6 +5,8 @@ import com.gme.pay.settlement.parser.ZP0062Parser;
 import com.gme.pay.settlement.parser.ZeroPayResultRecord;
 import com.gme.pay.settlement.persistence.ReconExceptionEntity;
 import com.gme.pay.settlement.persistence.ReconExceptionRepository;
+import com.gme.pay.settlement.persistence.SettlementBatchRepository;
+import com.gme.pay.settlement.persistence.SettlementLineRepository;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +49,12 @@ class ReconDiffEngineTest {
     @Mock
     private ReconExceptionRepository reconExceptionRepository;
 
+    @Mock
+    private SettlementBatchRepository batchRepository;
+
+    @Mock
+    private SettlementLineRepository lineRepository;
+
     private LineMatcher lineMatcher;
     private ReconDiffEngine engine;
     private ZP0062Parser zp0062Parser;
@@ -56,7 +64,8 @@ class ReconDiffEngineTest {
     @BeforeEach
     void setUp() {
         lineMatcher = new LineMatcher();
-        engine = new ReconDiffEngine(transactionQueryPort, lineMatcher, reconExceptionRepository);
+        engine = new ReconDiffEngine(transactionQueryPort, lineMatcher, reconExceptionRepository,
+                batchRepository, lineRepository);
         zp0062Parser = new ZP0062Parser();
         // lenient: some tests never trigger save (allMatched, fieldNameContract)
         lenient().when(reconExceptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
