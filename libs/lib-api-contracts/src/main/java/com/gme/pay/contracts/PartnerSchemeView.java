@@ -25,6 +25,22 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *       routes nothing.</li>
  * </ul>
  *
+ * <h2>Wave-3 location-resolution fields (additive)</h2>
+ *
+ * <p>Appended for smart-router's data-driven scheme-for-location resolution
+ * (it consumes this DTO via REST). All nullable/additive so config-registry can
+ * populate them incrementally without breaking existing readers:
+ * <ul>
+ *   <li>{@code countryCode} — ISO-3166 alpha-2 the enablement covers; nullable.</li>
+ *   <li>{@code supportsCpm} / {@code supportsMpm} — capability flags for the two
+ *       presentment modes (derived from {@code approvalMethodCpm}/{@code Mpm}
+ *       presence + a future modes column); nullable while underived.</li>
+ *   <li>{@code priority} — selection order when several rows match a location;
+ *       lower wins. Nullable.</li>
+ *   <li>{@code status} — enablement lifecycle string (e.g. {@code ACTIVE} /
+ *       {@code SUSPENDED}); orthogonal to {@code enabled}. Nullable.</li>
+ * </ul>
+ *
  * <p>{@code @JsonInclude(ALWAYS)} so {@code null} fields stay on the wire —
  * same contract as {@link PartnerView} / {@link RuleView}.
  */
@@ -41,5 +57,34 @@ public record PartnerSchemeView(
         String vaultSecretId,
         String approvalMethodCpm,
         String approvalMethodMpm,
-        Boolean enabled) {
+        Boolean enabled,
+        String countryCode,
+        Boolean supportsCpm,
+        Boolean supportsMpm,
+        Integer priority,
+        String status) {
+
+    /**
+     * Backwards-compatible 12-arg constructor (pre-Wave-3 shape). Delegates the
+     * five location-resolution fields to {@code null} so existing producers
+     * (config-registry {@code PartnerSchemeEntity.toView}) and readers keep
+     * compiling unchanged.
+     */
+    public PartnerSchemeView(
+            Long partnerId,
+            String schemeId,
+            String direction,
+            String role,
+            String zeropayMerchantId,
+            String zeropaySubMerchantId,
+            String kftcInstitutionCode,
+            String partnerTypeChar,
+            String vaultSecretId,
+            String approvalMethodCpm,
+            String approvalMethodMpm,
+            Boolean enabled) {
+        this(partnerId, schemeId, direction, role, zeropayMerchantId, zeropaySubMerchantId,
+                kftcInstitutionCode, partnerTypeChar, vaultSecretId, approvalMethodCpm,
+                approvalMethodMpm, enabled, null, null, null, null, null);
+    }
 }

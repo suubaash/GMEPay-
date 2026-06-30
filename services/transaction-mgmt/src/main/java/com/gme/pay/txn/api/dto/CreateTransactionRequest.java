@@ -25,6 +25,20 @@ import java.math.BigDecimal;
  *       creation (e.g. 0.0080 = 0.80%), snapshotted onto the txn (nullable — null leaves
  *       the snapshot empty and settlement treats it as 0)</li>
  * </ul>
+ *
+ * <h2>Wave-3 rate-lock pool fields (additive, IR-txn-2 / FX1015)</h2>
+ *
+ * <p>Appended so the rate-locked pool can be persisted at creation for
+ * margin-accurate FX1015 and event re-emit. All nullable; existing callers that
+ * omit them keep current behaviour. Money/rate values ride as decimal strings.
+ * <ul>
+ *   <li>{@code offerRateColl} – locked offer rate on the collection leg (nullable)</li>
+ *   <li>{@code crossRate}     – target_payout / send_amount (nullable)</li>
+ *   <li>{@code costRateColl} / {@code costRatePay} – per-leg cost rates (nullable)</li>
+ *   <li>{@code collectionUsd}        – collection-leg USD amount (nullable)</li>
+ *   <li>{@code payoutUsdCost}        – payout-leg USD cost (nullable)</li>
+ *   <li>{@code collectionMarginUsd} / {@code payoutMarginUsd} – per-leg USD margins (nullable)</li>
+ * </ul>
  */
 public record CreateTransactionRequest(
         long partnerId,
@@ -38,5 +52,32 @@ public record CreateTransactionRequest(
         String collectionCurrency,
         String merchantId,
         String quoteId,
-        BigDecimal merchantFeeRate
-) {}
+        BigDecimal merchantFeeRate,
+        BigDecimal offerRateColl,
+        BigDecimal crossRate,
+        BigDecimal costRateColl,
+        BigDecimal costRatePay,
+        BigDecimal collectionUsd,
+        BigDecimal payoutUsdCost,
+        BigDecimal collectionMarginUsd,
+        BigDecimal payoutMarginUsd
+) {
+    /** Backwards-compatible 12-arg constructor (pre-Wave-3 shape); pool fields default null. */
+    public CreateTransactionRequest(
+            long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            BigDecimal targetPayout,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId,
+            BigDecimal merchantFeeRate) {
+        this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                merchantFeeRate, null, null, null, null, null, null, null, null);
+    }
+}
