@@ -11,6 +11,9 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // Phase 2 cross-service contracts: canonical PaymentApprovedPayload (event wire form) +
+    // Prefunding reserve/release/deduction-history DTOs bound by the REST clients.
+    implementation project(':libs:lib-api-contracts')
 
     runtimeOnly 'org.postgresql:postgresql'
     // Flyway 10 ships PostgreSQL support as a separate artifact; required when the

@@ -1,5 +1,8 @@
 package com.gme.pay.payment.domain.client;
 
+import com.gme.pay.contracts.PrefundingDeductionHistoryView;
+import com.gme.pay.contracts.PrefundingReserveResponse;
+
 import java.math.BigDecimal;
 
 /**
@@ -91,6 +94,40 @@ public interface PrefundingClient {
      */
     default BalanceSnapshot balance(String partnerCode) {
         throw new UnsupportedOperationException("balance not implemented in this PrefundingClient");
+    }
+
+    /**
+     * Read the partner's recent prefunding deduction history (GET /v1/prefunding/{code}/deductions?limit=N,
+     * IR-pe-2) so the balance inquiry can answer {@code ?include_history=true}. Read-only; bounded by
+     * {@code limit}, most-recent-first. Returns the canonical {@link PrefundingDeductionHistoryView}.
+     *
+     * <p>Default throws {@link UnsupportedOperationException} so existing hand-written test fakes remain
+     * valid; {@code RestPrefundingClient} provides the real implementation.
+     */
+    default PrefundingDeductionHistoryView deductionHistory(String partnerCode, int limit) {
+        throw new UnsupportedOperationException("deductionHistory not implemented in this PrefundingClient");
+    }
+
+    /**
+     * RESERVE (soft-hold) a slice of the partner's float at OVERSEAS CPM token issuance, keyed/idempotent
+     * on {@code idempotencyKey} (the canonical {@code PrefundingReserveRequest}/{@code Response} contract).
+     * Distinct from the txnRef-keyed {@link #reserve(long, String, BigDecimal)} hold used by the MPM
+     * authorize path: this is the CPM-token reserve qr-service/payment-executor binds for the
+     * consumer-presented flow.
+     *
+     * @throws com.gme.pay.payment.domain.InsufficientPrefundingException if available funds &lt; amount
+     */
+    default PrefundingReserveResponse reserveCpm(long partnerId, BigDecimal amountUsd,
+                                                 String idempotencyKey, String txnRef) {
+        throw new UnsupportedOperationException("reserveCpm not implemented in this PrefundingClient");
+    }
+
+    /**
+     * RELEASE a CPM reservation taken by {@link #reserveCpm} on token expiry / decline / abandonment.
+     * Idempotent on {@code idempotencyKey} (reuse the reserve key); a release that already ran is a no-op.
+     */
+    default void releaseCpm(long partnerId, String reservationId, String idempotencyKey, String reason) {
+        throw new UnsupportedOperationException("releaseCpm not implemented in this PrefundingClient");
     }
 
     /** Result returned by a successful deduction. */
