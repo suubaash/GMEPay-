@@ -1,0 +1,68 @@
+spring:
+  application:
+    name: reporting-compliance
+  # Owned datastore (DAT-03 §8.1/§8.2). H2 in PostgreSQL mode locally + tests;
+  # override SPRING_DATASOURCE_* to point at the owned PostgreSQL in production.
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:reporting;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: true
+
+server:
+  port: 8087
+
+# Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true
+
+gmepay:
+  transaction-mgmt:
+    # Override in production/K8s via env var GMEPAY_TRANSACTION_MGMT_BASE_URL
+    base-url: http://transaction-mgmt:8080
+  config-registry:
+    # config-registry base URL — used by the production RegulatoryConfigClient.
+    base-url: http://config-registry:8086
+  hometax:
+    # Hometax NTS API base URL — used by the production HometaxClient.
+    base-url: https://api.hometax.go.kr
+    # lib-vault document id of the NTS mTLS issuer certificate.
+    cert-id: stub-cert-id
+  reporting:
+    # --- BOK FX reporting (Lane A, UC-04-03) ---
+    bok:
+      # Set to true in production to enable daily BOK FX1014/FX1015 file generation.
+      # Default false so tests and local boots are clean (no scheduler fires).
+      enabled: false
+      # Directory where BOK output files are written. Created if absent.
+      outbound-dir: ./build/bok-out
+      # GME entity identifier sent in col 3 of every BOK record line.
+      entity-id: GME_KR
+    # --- Hometax e-tax-invoice (Lane B, UC-04-04) ---
+    hometax:
+      # Master gate: false = job skips at runtime (no NTS calls); true = live submission.
+      enabled: false
+      # Merchant business code used to look up V029 partner_regulatory_config.
+      partner-code: GMEREMIT
+      # Decimal merchant fee rate applied to monthly KRW volume (e.g. 0.0150 = 1.5 %).
+      fee-rate: 0.0150
+    # --- KoFIU CTR/STR feed (Lane C, UC-04-05) ---
+    kofiu:
+      # Master gate: false = scheduler is a no-op; true = builds + submits daily feed.
+      enabled: false
+      # Directory where KoFIU daily feed files (KOFIU_YYYYMMDD.dat) are written.
+      output-dir: ./build/kofiu-out
+      # Fallback KoFIU reporting entity identifier (overridden per-partner from V029).
+      entity-id: GME_KR_KOFIU
