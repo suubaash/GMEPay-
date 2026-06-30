@@ -79,7 +79,27 @@ Concurrency: waves of 5. Reports: `outputs/agent/build_<svc>_2026-06-30.md`.
 **PHASE 1 COMPLETE: 17/17 services green on agent/* branches. ~48 tickets advanced.**
 **MERGE: all 17 → `integration/fleet-2026-06-30` CLEAN (0 conflicts). Compile-verify running.**
 
-## Phase 2 — Integration pass (cross-service wiring; modifies FROZEN libs)
+## ⚠️ Phase 2 reconcile-at-merge items (path/shape mismatches found)
+- PE↔prefunding RESERVE PATH: payment-executor client assumes `/reservations` POST/DELETE; prefunding built `/internal/v1/prefunding/{partnerId}/reserve` + `/release`. Shared DTOs match; align URL in payment-executor at merge. (qr-service was briefed with prefunding's real path.)
+- PE event `schemeId=0` (orchestrator carries scheme CODE not numeric id) — numeric mapping follow-on.
+- /refunded JSON shape: scheme-adapter (+settlement) coded their OWN wire DTOs for `GET /v1/transactions/refunded` (no lib type standardizes it). Field names (refundSchemeTxnRef/originalSchemeTxnRef/settlementDate) must match transaction-mgmt's actual projection — verify via integration test at merge. fx-committed uses shared CommittedFxView (safe).
+- FX1015 margin accuracy: transaction-mgmt derives offerRateColl with zero margin (margins not on frozen commit PATCH). Margin-accurate FX1015 needs PATCH/TransactionCreateRequest extended w/ pool fields (deferred IR-txn-2).
+- PE `reserveCpm/releaseCpm` bound+tested but not yet CALLED from executeCpm path — follow-on.
+
+## Phase 3 — CLOUD-AGNOSTIC (AWS / Azure / on-prem)
+Finding: platform was ALREADY provider-neutral (no AWS/Azure/GCP SDK; io.minio S3-API client; all endpoints env-injected; OTel/Keycloak/Kafka/S3 open protocols). Made it real + guaranteed:
+- **cloud/audit** (003372e): lib-vault storage seam now full S3-compat — added GMEPAY_VAULT_REGION + GMEPAY_VAULT_PATH_STYLE (one client → MinIO/AWS S3/Azure-gateway). OIDC issuer env-driven (OIDC_ISSUER_URI, any provider). `portabilityGuard` Gradle task wired into `check` — FAILS build if com.amazonaws/software.amazon.awssdk/com.azure/com.google.cloud appears (negative-tested). Build green.
+- **cloud/deploy** (8a28aee): `deploy/helm/gmepay/` umbrella chart — 1 _deployment.tpl over a services map → 18 Deployments+Services + Ingress + ConfigMap + Secret. Overlays values-{onprem,aws,azure}.yaml. helm lint PASS (helm 3.16.2), templates render for all 3. ADR-015 + docs/DEPLOYMENT.md (managed-service mapping table).
+- **reconcile (991d29d)**: aligned chart vault cred env names to lib-vault's GMEPAY_VAULT_ACCESS_KEY/SECRET_KEY (parallel-agent drift).
+Deploy ABI: same images everywhere; per-target = swap values-<target>.yaml. `helm upgrade --install gmepay deploy/helm/gmepay -f values-<target>.yaml -f my-secrets.yaml`.
+Remaining: kyb-adapter needs a Dockerfile to deploy; managed Kafka/Mongo need SASL/TLS service-side props per target; lib-vault binds region/path-style (✅ done in audit) — chart provides them.
+Live cluster provisioning (EKS/AKS) = ops step (needs cloud accounts). Terraform IaC NOT built (scope = portable-app-layer per user choice).
+
+## Phase 2 STATUS: ✅ Step1 contracts (5dbafd5) + 11 services wired, ALL merged clean into integration/fleet-2026-06-30. Compile-verify running.
+Phase-2 branches (all green per-service): p2/{transaction-mgmt,payment-executor,prefunding,revenue-ledger,reporting-compliance,notification-webhook,settlement-reconciliation,scheme-adapter-zeropay,qr-service,smart-router,merchant-qr-data}
+Themes delivered: payment.approved event (PE emits → revenue-ledger + notification-webhook consume canonical type) · committed-FX projection (txn-mgmt /fx-committed + /refunded → reporting FX1015 #14, settlement netting, scheme-adapter enrichment) · lib-errors 6 codes flipped (PE, smart-router, merchant-qr-data) · prefunding deductions+reserve/release (→ payment-executor, qr-service).
+
+## Phase 2 — original plan (for reference)
 Ordered by leverage:
 1. **lib-errors batch** (additive, safe): PAYMENT_NOT_FOUND, FORBIDDEN, MERCHANT_SUSPENDED, MERCHANT_DEACTIVATED, PAYMENT_MODE_NOT_SUPPORTED, DIRECTION_NOT_ENABLED → then flip the ~5 services off their String-literal workarounds.
 2. **payment.approved event contract** (lib-events + lib-api-contracts): define schema → payment-executor emits (replace LogEventPublisher) → revenue-ledger + notification-webhook consume real events. Unlocks revenue capture + webhook delivery end-to-end.
