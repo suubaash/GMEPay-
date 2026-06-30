@@ -30,6 +30,12 @@ adapter:
     # table populated at commit time, producing non-empty ZP00xx files; "stub" falls back to
     # the empty-file ZpStubBatchDataPort.
     batch-data-source: persistence
+    # Cross-service enrichment of batch records from transaction-management (IR-1 refund
+    # amount/merchant/qrCode; IR-3 settlement value date). Default OFF so local/CI runs (where
+    # transaction-management is not running) keep the in-process fallback (NoOpZpBatchEnrichmentPort).
+    enrichment:
+      enabled: false
+      transaction-mgmt-base-url: http://localhost:8080
 
 # ZeroPay scheme simulator + local-dir SFTP stub paths
 gmepay:

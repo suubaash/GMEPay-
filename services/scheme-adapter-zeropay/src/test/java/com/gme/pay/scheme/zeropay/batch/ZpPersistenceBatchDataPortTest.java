@@ -126,4 +126,91 @@ class ZpPersistenceBatchDataPortTest {
         assertEquals("AP-ZP1", records.get(0).originalApprovalCode());
         assertEquals('R', records.get(0).statusCode());
     }
+
+    // -- enrichment (IR-1 refund amount/merchant, IR-3 settlement value date) -------------------
+
+    /** A refund leg captured with no merchant and amount 0 (the pre-enrichment commit-path state). */
+    private static ZpCommittedTxnEntity bareRefund(String ref, String origAppr) {
+        return ZpCommittedTxnEntity.refund(
+                "GME-" + ref, ref, null, null, DATE, LocalTime.of(14, 0, 0),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                "D", "RF-" + ref, origAppr, null);
+    }
+
+    private static ZpBatchEnrichmentPort enrichmentWith(
+            java.util.Map<String, ZpBatchEnrichmentPort.RefundEnrichment> refunds,
+            java.util.Map<String, LocalDate> valueDates) {
+        return new ZpBatchEnrichmentPort() {
+            @Override
+            public java.util.Map<String, RefundEnrichment> refundEnrichment(LocalDate d) {
+                return refunds;
+            }
+
+            @Override
+            public java.util.Map<String, LocalDate> settlementValueDates(LocalDate d) {
+                return valueDates;
+            }
+        };
+    }
+
+    @Test
+    void refundEnrichment_fillsRealAmountAndMerchantInZp0021AndZp0066() {
+        ZpBatchEnrichmentPort enrichment = enrichmentWith(
+                java.util.Map.of("ZPR1", new ZpBatchEnrichmentPort.RefundEnrichment(
+                        new BigDecimal("33000"), "M9", "QR-REAL")),
+                java.util.Map.of());
+        ZpPersistenceBatchDataPort enriched = new ZpPersistenceBatchDataPort(repo, enrichment);
+        when(repo.findByBusinessDateAndTxnKindOrderByTxnTimeAscIdAsc(
+                eq(DATE), eq(ZpCommittedTxnEntity.KIND_REFUND)))
+                .thenReturn(List.of(bareRefund("ZPR1", "AP-ZP1")));
+
+        Zp0021Record r21 = enriched.fetchRefundRecords(DATE).get(0);
+        assertEquals(0, r21.refundAmountKrw().compareTo(new BigDecimal("33000")));
+        assertEquals("M9", r21.merchantId());
+        assertEquals("QR-REAL", r21.qrCodeId());
+
+        Zp0066Record r66 = enriched.fetchRefundDetailRecords(DATE).get(0);
+        assertEquals(0, r66.refundAmountKrw().compareTo(new BigDecimal("33000")));
+        assertEquals("M9", r66.merchantId());
+    }
+
+    @Test
+    void refundEnrichment_keepsCapturedValuesWhenNoUpstreamMatch() {
+        // No-arg ctor => empty no-op enrichment; captured row already has merchant + amount.
+        when(repo.findByBusinessDateAndTxnKindOrderByTxnTimeAscIdAsc(
+                eq(DATE), eq(ZpCommittedTxnEntity.KIND_REFUND)))
+                .thenReturn(List.of(refund("ZPR1", "M1", "50000", "AP-ZP1")));
+
+        Zp0021Record r21 = port.fetchRefundRecords(DATE).get(0);
+        assertEquals(0, r21.refundAmountKrw().compareTo(new BigDecimal("50000")));
+        assertEquals("M1", r21.merchantId());
+    }
+
+    @Test
+    void settlementValueDate_fromUpstreamUsedInZp0065AndZp0066() {
+        LocalDate valueDate = LocalDate.of(2026, 6, 11);     // T+2, differs from business date
+        ZpBatchEnrichmentPort enrichment = enrichmentWith(
+                java.util.Map.of(),
+                java.util.Map.of("ZP1", valueDate, "ZPR1", valueDate));
+        ZpPersistenceBatchDataPort enriched = new ZpPersistenceBatchDataPort(repo, enrichment);
+        when(repo.findByBusinessDateAndTxnKindOrderByTxnTimeAscIdAsc(
+                eq(DATE), eq(ZpCommittedTxnEntity.KIND_PAYMENT)))
+                .thenReturn(List.of(payment("ZP1", "M1", "50000", "250", "100", "D")));
+        when(repo.findByBusinessDateAndTxnKindOrderByTxnTimeAscIdAsc(
+                eq(DATE), eq(ZpCommittedTxnEntity.KIND_REFUND)))
+                .thenReturn(List.of(refund("ZPR1", "M1", "20000", "AP-ZP1")));
+
+        assertEquals(valueDate, enriched.fetchPaymentDetailRecords(DATE).get(0).settlementDate());
+        assertEquals(valueDate, enriched.fetchRefundDetailRecords(DATE).get(0).settlementDate());
+    }
+
+    @Test
+    void settlementValueDate_fallsBackToBusinessDateWhenNoUpstream() {
+        // No upstream value date -> business-date fallback (DATE), matching pre-enrichment behaviour.
+        when(repo.findByBusinessDateAndTxnKindOrderByTxnTimeAscIdAsc(
+                eq(DATE), eq(ZpCommittedTxnEntity.KIND_PAYMENT)))
+                .thenReturn(List.of(payment("ZP1", "M1", "50000", "250", "100", "D")));
+
+        assertEquals(DATE, port.fetchPaymentDetailRecords(DATE).get(0).settlementDate());
+    }
 }
