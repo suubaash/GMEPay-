@@ -2,6 +2,42 @@
 
 All notable changes to the ZeroPay scheme adapter. Newest first.
 
+## 2026-06-30 — Phase 2: cross-service batch enrichment (refund amount/merchant, settlement value date)
+
+Enriches the locally-captured batch records from transaction-management committed/refund data,
+behind a config gate. Resolves build-report INTEGRATION REQUESTS IR-1 (refund) and IR-3 (value date).
+
+### Added
+- **`ZpBatchEnrichmentPort`** — port for cross-service enrichment of batch records:
+  `refundEnrichment(date)` (real `refundAmountKrw`/`merchantId`/`qrCodeId` keyed by scheme txnRef,
+  IR-1) and `settlementValueDates(date)` (T+n settlement value date keyed by scheme txnRef, IR-3).
+  Best-effort contract: implementations return empty maps and never throw.
+- **`RestTransactionMgmtEnrichmentPort`** (`@ConditionalOnProperty adapter.zeropay.enrichment.enabled=true`)
+  — gated REST client (mirrors `ZeroPaySchemeApiClient` gating: config base URL + package-private
+  test ctor). Binds `GET /v1/transactions/refunded?refundedOn=` and
+  `GET /v1/transactions/fx-committed?committedOn=`. On disable/unreachable/error it logs and
+  degrades to pre-enrichment behaviour (the batch run never fails).
+- **`NoOpZpBatchEnrichmentPort`** — default `@ConditionalOnMissingBean` fallback returning empty
+  maps, so local/CI runs (transaction-management not running) keep the in-process behaviour.
+- Config block `adapter.zeropay.enrichment.{enabled,transaction-mgmt-base-url}` (default OFF,
+  base URL `http://localhost:8080`).
+- Tests: `RestTransactionMgmtEnrichmentPortTest` (MockRestServiceServer — maps real
+  amount/merchant/qrCode + value date by txnRef; empty-map fallback on upstream 5xx) and new
+  `ZpPersistenceBatchDataPortTest` cases (refund enrichment fills ZP0021/ZP0066; upstream value
+  date used in ZP0065/ZP0066; fallbacks preserved).
+
+### Changed
+- **`ZpPersistenceBatchDataPort`** now consumes `ZpBatchEnrichmentPort`: refund records
+  (ZP0021/ZP0066) and settlement netting use the enriched `refundAmountKrw`/`merchantId`/`qrCodeId`
+  when the captured row lacks them; ZP0065/ZP0066 settlement value date uses the committed
+  `settlementDate` from upstream, falling back to the captured row's date then the business date.
+  A package-private one-arg constructor (no-op enrichment) preserves existing unit-test slices.
+
+### Remaining INTEGRATION REQUEST
+- Per-txn **fee values** (`merchantFeeKrw`/`vanFeeKrw`) remain `0` — they belong to the
+  commission/config side (backlog #98), not this adapter. TODO recorded on
+  `ZpPersistenceBatchDataPort`; no fee table built here.
+
 ## 2026-06-30 — Real batch data source (non-empty ZP00xx files)
 
 Replaces the zero-record `ZpStubBatchDataPort` with a real, in-service data source so the
