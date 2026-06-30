@@ -17,6 +17,12 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
     List<WebhookDeliveryEntity> findByStatus(String status);
 
     /**
+     * Cheap backlog gauge (WBS 8.6-T24): count of rows in a status, used by the
+     * dispatcher to fire the queue-depth alert without materialising rows.
+     */
+    long countByStatus(String status);
+
+    /**
      * BOUNDED, FIFO drain query (#92): the oldest rows in a status, capped by
      * {@code pageable} so a backlog can never load the whole table into one drain's
      * heap. Oldest-first (createdAt) so no row is starved under a steady backlog.

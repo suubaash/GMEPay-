@@ -1,5 +1,6 @@
 package com.gme.pay.notify.dispatcher;
 
+import com.gme.pay.notify.alert.WebhookAlertService;
 import com.gme.pay.notify.domain.RetryPolicy;
 import com.gme.pay.notify.domain.WebhookSender;
 import com.gme.pay.notify.domain.WebhookSender.WebhookDeliveryResult;
@@ -17,8 +18,10 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,9 +43,10 @@ class WebhookDispatcherTest {
     private final WebhookDeliveryRepository repo = mock(WebhookDeliveryRepository.class);
     private final WebhookPersistenceService persistence = mock(WebhookPersistenceService.class);
     private final WebhookTargetResolver resolver = mock(WebhookTargetResolver.class);
+    private final WebhookAlertService alertService = mock(WebhookAlertService.class);
 
     private WebhookDispatcher dispatcher() {
-        return new WebhookDispatcher(sender, repo, persistence, resolver, retryPolicy, clock, 200);
+        return new WebhookDispatcher(sender, repo, persistence, resolver, retryPolicy, clock, 200, alertService);
     }
 
     private static WebhookDeliveryEntity pendingRow(int attempt, Instant lastAttemptedAt) {
@@ -111,6 +115,30 @@ class WebhookDispatcherTest {
         dispatcher().drainPending();
 
         verifyNoInteractions(resolver);
+        verifyNoInteractions(sender);
+    }
+
+    @Test
+    void eachDrain_firesQueueDepthAlertWithGlobalBacklog() {
+        // T24: every drain reports the global PENDING backlog to the alert service
+        // (suppression/threshold logic lives in WebhookAlertService, tested separately).
+        when(repo.countByStatus("PENDING")).thenReturn(742L);
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of());
+
+        dispatcher().drainPending();
+
+        verify(repo).countByStatus("PENDING");
+        verify(alertService).fireQueueDepthAlert(isNull(), eq(742L));
+    }
+
+    @Test
+    void queueDepthAlertCheckRunsEvenWhenBatchEmpty() {
+        when(repo.countByStatus("PENDING")).thenReturn(0L);
+        when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of());
+
+        dispatcher().drainPending();
+
+        verify(alertService).fireQueueDepthAlert(isNull(), anyLong());
         verifyNoInteractions(sender);
     }
 }
