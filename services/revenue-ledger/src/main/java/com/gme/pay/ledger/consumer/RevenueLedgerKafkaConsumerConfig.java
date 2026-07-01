@@ -107,4 +107,9 @@ public class RevenueLedgerKafkaConsumerConfig {
     public PaymentApprovedKafkaConsumer paymentApprovedKafkaConsumer(PaymentApprovedEventHandler handler) {
         return new PaymentApprovedKafkaConsumer(handler);
     }
+
+    @Bean
+    public PaymentReversedKafkaConsumer paymentReversedKafkaConsumer(PaymentReversedEventHandler handler) {
+        return new PaymentReversedKafkaConsumer(handler);
+    }
 }
