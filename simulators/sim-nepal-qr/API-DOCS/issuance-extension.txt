@@ -1,0 +1,137 @@
+
+===== PAGE 1 =====
+Khalti IssuanceExtensionAPIDocumentation
+ImplementationDocumentationfor thirdpartyvendors
+Last Updatedat 23thJune, 2022
+IntroductionTheRESTAPI documentationfor external ScanandPayAPI consumption.
+AuthorizationHTTPAuthorizationisdoneusingAuthKeysandNonceHeader.. AuthKeymust bepassedintheheader for authorizationinthefollowingformat:
+{ "Authorization": "Key<provided_api_key>","X-KhaltiNonce": "1234567890"}
+X-KhaltiNonceisthetimesignatureandit shouldcontaintheUNIXtimestampat thetimeofrequest made. Thenoncevalueshouldholdtruefor thefollowingconditionServerTimestamp- 100<=Nonce<=ServerTimestamp+200
+If theclient’sserver timestampisdeviatedmorethantheserver time(UTC+5:45) thentheclient needstoimplement TimeCorrectionat their endbeforesendingthenonceparameter.
+API Keywill beprovidedtothevendor for api testingandproduction.
+
+===== PAGE 2 =====
+API EndpointSeparateEndpointsshall beprovidedfor LiveandTest Environments.
+Live https://khalti.com/api
+Test https://a.khalti.com/api
+Test api domaincanvaryandwill beprovidedwhiletesting
+API Request
+Method: POST
+Format: application/json
+ParametersconstructionEachAPI request needstobesignedandconstructedastwoparametersonlyasdescribedbelow.
+Parameter Type Required Description
+data string Y Base64encodedJSONStringbasedonapirequest
+signature string Y Signatureof Base64encodeddatageneratedusingSHA256HashingAlgorithmwithRSA-2048andPKCS#1 scheme
+InvalidRequests
+Error HTTPCode Response
+InvalidAuthKey 401 {"detail":"Invalidtoken."}
+
+===== PAGE 3 =====
+InvaidEncryption
+400 {"detail":"Invalidencryption."}
+InvalidSignature
+400 {"detail":"Invalidencryption."}
+InvalidIP 403 {“detail”:“Notallowed”}
+Payment API
+API /qrscan-thirdparty/pay/
+Data { “nonce”:“1234567890”,"qs":"<decoded-QR>","amount":"<amount-in-paisa>","mobile":"<extension-mobile>","reference":"<unique-reference-for-each-pay>","purpose":"<purpose-of-transaction>","remarks":"<remarks>"}
+nonce:Thisvalueshouldbesameasthat sent inheader inkeyX-KhaltiNonce
+BuildingtheReferencevalue:TheReferenceshouldbegloballyUniquefor theparticular vendor. Anynewrequest withtheduplicatereferencegetsrejected. For abetter entropyanduniqueness, thereferencevaluecanbebuilt usinguniqueidgeneratedinvendor.
+SuccessResponse
+HTTPStatus: 200{ "idx":"<transaction-idx>","amount":"<amount-in-paisa>","type":"ScanandPay","detail":"<response-message>","meta":{
+
+===== PAGE 4 =====
+"balance":{"primary":"<amount-in-paisa>","secondary":"<amount-in-paisa>","on_hold":"<amount-in-paisa>",},},}
+ResponsesonError
+1 ) DataisEmpty[HTTPstatus- 400]
+{ "amount":["Thisfieldisrequired."],"purpose":["Thisfieldisrequired."],"nonce":["Thisfieldisrequired."],"error_key":"validation_error"}
+2) Nonceexpired
+[HTTPstatus- 400]{ "detail":"Noncealreadyexpired.","error_key":"validation_error"}
+3) Noncemismatch
+[HTTPstatus- 400]{ "detail":"Noncevaluenotmatched.","error_key":"validation_error"}
+4) Duplicatereference
+[HTTPstatus- 400]{
+
+===== PAGE 5 =====
+"reference":"Duplicatereference.<referencevalue>","error_key":"validation_error"}
+5) Error inPayment [HTTPstatus- 400]{ "detail":<Failedreason>,"error_key":khalti_error"}
+Example
+Payment Data{ “nonce”:“1234567890”,"qs":"00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni62060702316304d60f",
+"amount":"1000","mobile":"9800000000","reference":"Payment1","purpose":"ServicePayment","remarks":"NetTVPayment"}
+Request data:{"data":"eyJ1c2VyIjogOTg0MDA2NTM5OSwgImFtb3VudCI6IDEzMDAsICJyZWZlcmVuY2UiOiAiZGVwLXJlZi0yNCIsICJyZW1hcmtzIjogInRlc3QtbG9hZC00IiwgIm5vbmNlIjogMTYwOTc0NTc3NX0=","signature":"n8tfLxhRNSHNDYkXFHA8lCLVuWYq4KhgYvobeTjS71RutlWXtACJY9hX6u/hU8NRBcKgRufiH3OrDlvTh7pKKAonYkK73wi4oOrqtglL+xaIf8YZcMLnquFkg2pX+V0rsw8JYc3ByJFKko0ZqHGA8uVy54qZPa58W0rz+PMT7wSoWQF0ssEjaCcYMrGn/QIRCfzl0ul/jx8qpi8hU5nfKZxN5zQ7IRX8ypFiu0OWnUjRST93WI4wN/ByF4L6zFvLKVz9x3wkdUNzVT81NYAS2j3KJXLH11Z5yBsELjeigQula6JsXF9XPa6Wr0dA1yzSypYtHQSxgPxgA2rwaauutw=="}
+
+===== PAGE 6 =====
+ParseQRAPINote: Thepayloaddoesnot requiretobeencrypted.
+API /qrscan-thirdparty/parse/
+Data {
+“qs”:“<decoded-QR>”
+}
+SuccessResponse HTTPStatus200
+{
+"format":<string>,
+"initMethod":<string>,
+"merchantInfoExtra":<string>,
+"merchantCategoryCode":<string,
+"trxCurrency":<string>,
+"trxAmount":“<amount-in-rupees>”,
+"merchantCountry":<string>,
+"merchantName":<string>,
+"merchantCity":“<string>”,
+"merchantData":<json>
+}
+Error Response HTTPStatus400
+{
+"detail":"InvalidQR",
+"error_key":"khalti_error"
+}
+
+===== PAGE 7 =====
+Example
+Request data:{"qs":"00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni62060702316304d60f"}
+LookupStatusAPI
+API /qrscan-thirdparty/status/
+Data {
+“nonce”:“1234567890”,"amount":<mountinpaisa>,"reference":<uniquereferencepassedforpayment>}
+SuccessResponse HTTPStatus200{ “detail”:“Transactionhasbeenapproved”,"state":“APPROVED”}
+PendingResponse
+HTTPStatus200{ “detail”:“Transactionisinpendingstate”,"state":“PENDING”}
+ReferenceNotFound
+HTTPStatus200{ “detail”:“Transactiondoesnotexist”,"state":“Error”}
+
+===== PAGE 8 =====
+FailedResponse HTTPStatus200{ “detail”:“Transactionhasbeenrejected”,"state":“REJECTED”}
+RefundedResponse
+HTTPStatus200{ “detail”:“Transactionhasbeenreversed/refunded”,"state":“REVERSED”}
+Example
+Payment Data{
+“nonce”:“1234567890”,"amount": 1000,"reference":“Payment1”}
+Request data:{"data":"eyJ1c2VyIjogOTg0MDA2NTM5OSwgImFtb3VudCI6IDEzMDAsICJyZWZlcmVuY2UiOiAiZGVwLXJlZi0yNCIsICJyZW1hcmtzIjogInRlc3QtbG9hZC00IiwgIm5vbmNlIjogMTYwOTc0NTc3NX0=","signature":"n8tfLxhRNSHNDYkXFHA8lCLVuWYq4KhgYvobeTjS71RutlWXtACJY9hX6u/hU8NRBcKgRufiH3OrDlvTh7pKKAonYkK73wi4oOrqtglL+xaIf8YZcMLnquFkg2pX+V0rsw8JYc3ByJFKko0ZqHGA8uVy54qZPa58W0rz+PMT7wSoWQF0ssEjaCcYMrGn/QIRCfzl0ul/jx8qpi8hU5nfKZxN5zQ7IRX8ypFiu0OWnUjRST93WI4wN/ByF4L6zFvLKVz9x3wkdUNzVT81NYAS2j3KJXLH11Z5yBsELjeigQula6JsXF9XPa6Wr0dA1yzSypYtHQSxgPxgA2rwaauutw=="}
+SignjsondatausingSHA256
+Last Updatedat 11thMay, 2021
+
+===== PAGE 9 =====
+IntroductionDoctogeneratesha256hashedsigneddataof jsondata.
+Sample_data={“key1”: “value1”, “key2”: “value2”, ….}
+Steps:1. CreatenoncevalueNoncevalueisthecurrenttimestampofNepalTimezone(UTC+5:45)
+2. Addednoncevalueinjsondata{“key1”: “value1”, “key2”: “value2”, “nonce”: <timestamp>,….}
+3. Encodefinal jsondatatojsonstringformat
+4. Encodejsonstringdatausingbase64encodingb'eyJhIjogImFhIiwgImIiOiAiYmIiLCAibm9uY2UiOiAxMjM0NX0='
+5. CreateSHA256hashobject fromaboveencodedstringItwillreturncryptohashsha256object
+6. GeneratesignaturefromprivatekeyPrivatekeywillbeprovidedfromKhalti
+7. Signabovesha25bdatausingabovesignatureItwillreturnssignaturethatisusetomakesigneddata
+8. Encodeabovesignaturedatausingbase64encodingReturnsbase64encodedsignatureb’OrhKcc4uBtaHwUdQOKnPIvDZtYxFTuT4GQZoKqAWH9hBmbf/ljAEM2VM8iK22IXRv3j7jGGineD4LveIV7i4QwfamyPi3moVtpHs3iUB5HuJj2C/vmPZf1zmj4zrLgP9dmzmfqDYkVgb8H/0/0KQo8Ayd1XZoYMB3gZJLoxH5E1l7j1fzTpuHrEUdmJJugu8MFsMmBa9NfyOW7xuZaPcDyQJFk01UdgqjfycxjblVCWItE8B9hcs8TJbNLkg55TJ12/hDmKDE/3GL0+7u7Mpy//2wzuopH6OkN3mQgk0AV1nDCMl6a9whkavOjfkMvWw/7N8sewJbguAIttzx1eP2g==’
+9. DecodebothsignatureanddataandpassthemintokhaltiAPI
+
+===== PAGE 10 =====
+Final requiredsampledata:
+{ "data":"eyJhIjogImFhIiwgIm5vbmNlIjogMTYyMDgwMzczOH0=","signature":"OrhKcc4uBtaHwUdQOKnPIvDZtYxFTuT4GQZoKqAWH9hBmbf/ljAEM2VM8iK22IXRv3j7jGGineD4LveIV7i4QwfamyPi3moVtpHs3iUB5HuJj2C/vmPZf1zmj4zrLgP9dmzmfqDYkVgb8H/0/0KQo8Ayd1XZoYMB3gZJLoxH5E1l7j1fzTpuHrEUdmJJugu8MFsMmBa9NfyOW7xuZaPcDyQJFk01UdgqjfycxjblVCWItE8B9hcs8TJbNLkg55TJ12/hDmKDE/3GL0+7u7Mpy//2wzuopH6OkN3mQgk0AV1nDCMl6a9whkavOjfkMvWw/7N8sewJbguAIttzx1eP2g==}
+Samplepythoncodetogeneratesigneddata:
+importjsonfromdatetimeimportdatetimefrombase64importb64encode
+fromCrypto.PublicKeyimportRSAfromCrypto.HashimportSHA256fromCrypto.SignatureimportPKCS1_v1_5
+defsign_request(data):local_time=datetime.now()#timezoneshouldbeinAsia/Kathmandu(i.e.UTC+5:45)data['nonce']= int(local_time.timestamp())key_file_path= "/path/to/key/file/"withopen(key_file_path)asfkey:_key=fkey.read().replace("\\n","\n")private_key=RSA.importKey(_key)
+digest=SHA256.new()dump_data=json.dumps(data).encode()
+
+===== PAGE 11 =====
+b64data=b64encode(dump_data)digest.update(b64data)
+signer=PKCS1_v1_5.new(private_key)signature=signer.sign(digest)b64signature= b64encode(signature)response={"data":b64data.decode(),"signature":b64signature.decode()}
+returnjson.dumps(response),data['nonce']
