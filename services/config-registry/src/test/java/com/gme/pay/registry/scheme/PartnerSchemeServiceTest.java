@@ -435,4 +435,84 @@ class PartnerSchemeServiceTest {
                 .contains("\"schemeId\":\"FAST_SG\"")
                 .contains("\"zeropayMerchantId\":null");
     }
+
+    // ---------------------------------------------- ADR-016 network_identifier
+
+    /**
+     * ADR-016: a seeded ZEROPAY row exposes {@code com.zeropay} and a seeded
+     * NEPAL row exposes the full six-network CSV — through BOTH read surfaces
+     * (the partner-schemes list {@code toView} and the {@code /resolve}
+     * location read {@code toLocationView}). Derived from {@code scheme_id} on
+     * insert (the write command carries no networkIdentifier field).
+     */
+    @Test
+    void seededSchemes_exposeExpectedNetworkIdentifier_viaBothReadPaths() {
+        Long id = seedPartner("SCH_NET_SEED");
+        setOperatingCountry(id, "NP");
+        List<PartnerSchemeView> saved = service.replaceDraftSchemes("SCH_NET_SEED",
+                List.of(zeropay(true), scheme("NEPAL", "OUTBOUND", "ACQUIRER")), "maker");
+
+        // toView path (patch response + currentSchemes rehydrate).
+        assertThat(saved).filteredOn(v -> v.schemeId().equals("ZEROPAY"))
+                .singleElement()
+                .extracting(PartnerSchemeView::networkIdentifier)
+                .isEqualTo("com.zeropay");
+        assertThat(service.currentSchemes("SCH_NET_SEED"))
+                .filteredOn(v -> v.schemeId().equals("NEPAL"))
+                .singleElement()
+                .extracting(PartnerSchemeView::networkIdentifier)
+                .isEqualTo("fonepay.com,nepalpay,khalti,mobank,unionpay,smartqr");
+
+        // toLocationView path (GET /v1/schemes/resolve).
+        assertThat(service.resolveByLocation("NP"))
+                .filteredOn(v -> v.schemeId().equals("ZEROPAY"))
+                .singleElement()
+                .extracting(PartnerSchemeView::networkIdentifier)
+                .isEqualTo("com.zeropay");
+    }
+
+    /**
+     * ADR-016: a row serving a network is DISCOVERABLE by that network's GUID
+     * via CSV membership (the smart-router filter is a "contains", not
+     * equality) — the NEPAL row fronts six networks, each individually findable;
+     * a GUID it does not serve does not match.
+     */
+    @Test
+    void schemeServingNetwork_isDiscoverableByGuidMembership() {
+        Long id = seedPartner("SCH_NET_MEMBER");
+        setOperatingCountry(id, "NP");
+        service.replaceDraftSchemes("SCH_NET_MEMBER",
+                List.of(scheme("NEPAL", "OUTBOUND", "ACQUIRER")), "maker");
+
+        List<PartnerSchemeView> np = service.resolveByLocation("NP");
+        for (String guid : List.of("fonepay.com", "nepalpay", "khalti",
+                "mobank", "unionpay", "smartqr")) {
+            assertThat(np).as("network %s must be discoverable via CSV membership", guid)
+                    .anySatisfy(v -> assertThat(csvContains(v.networkIdentifier(), guid)).isTrue());
+        }
+        assertThat(np).noneSatisfy(v ->
+                assertThat(csvContains(v.networkIdentifier(), "com.zeropay")).isTrue());
+    }
+
+    /** A scheme with no network mapping keeps a null identifier (null-safe). */
+    @Test
+    void unmappedScheme_exposesNullNetworkIdentifier() {
+        seedPartner("SCH_NET_UNMAPPED");
+        List<PartnerSchemeView> saved = service.replaceDraftSchemes("SCH_NET_UNMAPPED",
+                List.of(scheme("BAKONG", "INBOUND", "ISSUER")), "maker");
+        assertThat(saved.get(0).networkIdentifier()).isNull();
+    }
+
+    /** Membership test mirroring smart-router's CSV "contains" (null-safe). */
+    private static boolean csvContains(String csv, String guid) {
+        if (csv == null) {
+            return false;
+        }
+        for (String token : csv.split(",")) {
+            if (token.trim().equals(guid)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
