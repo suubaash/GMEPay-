@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.gme.pay.events.DomainEvent;
 import com.gme.pay.events.EventPublisher;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -57,6 +58,8 @@ public class OutboxPublisher {
     }
 
     @Scheduled(fixedDelayString = "${gmepay.outbox.poll-ms:1000}")
+    @SchedulerLock(name = "OutboxPublisher_publishPending",
+                   lockAtMostFor = "PT1M", lockAtLeastFor = "PT0S")
     @Transactional
     public void publishPending() {
         List<OutboxEntity> batch = repository.findUnpublished(PageRequest.of(0, BATCH_SIZE));

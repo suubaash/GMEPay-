@@ -7,8 +7,11 @@ import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.domain.statemachine.TransactionStateMachine;
 import com.gme.pay.txn.outbox.OpsAlertEvent;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -116,6 +119,15 @@ class StuckTransactionAlertSweeperTest {
         sweeper.sweep();
 
         assertEquals(before, published.size(), "disabled sweeper must publish nothing");
+    }
+
+    @Test
+    @DisplayName("sweep() carries @SchedulerLock so replicas do not double-fire (#3)")
+    void sweepMethodIsSchedulerLocked() throws NoSuchMethodException {
+        Method sweep = StuckTransactionAlertSweeper.class.getMethod("sweep");
+        SchedulerLock lock = sweep.getAnnotation(SchedulerLock.class);
+        assertNotNull(lock, "sweep() must be annotated @SchedulerLock for distributed locking");
+        assertFalse(lock.name().isBlank(), "@SchedulerLock must carry a stable lock name");
     }
 
     private static final class FakeRepo implements TransactionRepository {

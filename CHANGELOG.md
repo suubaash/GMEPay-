@@ -1,5 +1,46 @@
 # Changelog
 
+## harden transaction-mgmt — event emission + ShedLock (branch `fix/transaction-mgmt`)
+
+Fixes defect #1 (money moves with no ledger impact on operator force-resolve) and
+adds distributed scheduler locking (#3). Edits scoped to `services/transaction-mgmt/`
+only; libs + other services frozen. Additive; new migration only.
+
+### Fixed
+- **Operator force-resolve → REVERSED now emits `payment.reversed` (defect #1).** The
+  FSM `REVERSED` transition previously emitted only the internal
+  `TransactionStatusChanged` event, so an operator reversal of an UNCERTAIN txn
+  released the held prefund float and booked no reversing journal — money moved with
+  ZERO ledger impact. `TransactionStateMachine` now also appends a
+  `PaymentReversedEvent` (new outbox event mirroring the canonical
+  `com.gme.pay.contracts.events.PaymentReversedPayload`, topic
+  `gmepay.payment.reversed`) from the txn snapshot: `txnRef`, `partnerId`, `schemeId`,
+  reversed collection amount + currency, **`reversedUsd`** (the `prefundDeductedUsd`
+  held at UNCERTAIN — so prefunding releases exactly what it held), `reason` (the
+  operator's resolution reason), `source=OPERATOR`, `occurredAt`. Guarded on non-null
+  `partnerId` (same as APPROVED); appended to the durable outbox so it is never
+  silently dropped. The FSM status event is still emitted (additive).
+- **Operator force-resolve → COMPLETED recognises revenue.** Confirmed + test-locked:
+  COMPLETED routes through `stateMachine.transition(..., APPROVED)`, which already
+  emits the revenue-bearing `PaymentApprovedEvent` + `TransactionCommittedEvent` a
+  normal commit emits — so revenue is recognised on the same signal.
+
+### Added
+- **ShedLock distributed scheduler locking (#3).** Added `shedlock-spring` +
+  `shedlock-provider-jdbc-template` (5.13.0); V010 `shedlock` table migration
+  (engine-neutral PG + H2 PG-mode); `ShedLockConfig` (`@EnableSchedulerLock`, a
+  `JdbcTemplateLockProvider` on the existing DataSource with `usingDbTime()`); and
+  `@SchedulerLock` on every `@Scheduled` method in the service —
+  `ExpirySweeperService.sweep`, `StuckTransactionAlertSweeper.sweep`,
+  `OutboxPublisher.publishPending` — so replicas do not double-fire.
+
+### Notes
+- Tests (H2 + mocks, no Docker): `ForceResolveEventEmissionTest` (REVERSED emits
+  `PaymentReversedPayload` with `reversedUsd`+`reason`; COMPLETED emits the
+  revenue-bearing events; idempotent replay emits once); `@SchedulerLock`
+  annotation assertion on the sweeper. Full `./gradlew :services:transaction-mgmt:test`
+  green (122 tests).
+
 ## Wave-3 — config-registry read-contract wiring (branch `w3/config-registry`)
 
 config-registry as the producer of the Wave-3 read contracts. Edits scoped to

@@ -5,6 +5,7 @@ import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.outbox.OpsAlertEvent;
 import com.gme.pay.txn.outbox.OutboxAppender;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -104,6 +105,8 @@ public class StuckTransactionAlertSweeper {
      */
     @Scheduled(fixedDelayString = "${gmepay.txn.stuck-alert.interval-ms:60000}",
                zone = "Asia/Seoul")
+    @SchedulerLock(name = "StuckTransactionAlertSweeper_sweep",
+                   lockAtMostFor = "PT5M", lockAtLeastFor = "PT5S")
     public void sweep() {
         if (!enabled) {
             return;
