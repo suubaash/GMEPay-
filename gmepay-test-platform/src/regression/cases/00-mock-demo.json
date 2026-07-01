@@ -1,0 +1,23 @@
+[
+  {
+    "id": "mock-fx-quote-1000",
+    "name": "DEMO · FX quote (send 1000) — works with no services running",
+    "group": "mock",
+    "target": "mock",
+    "readOnly": true,
+    "note": "Proves the loop end-to-end. Record 'before' (REG_MOCK_VERSION=1), restart with REG_MOCK_VERSION=2 as your 'publish', record 'after', compare.",
+    "steps": [
+      { "name": "quote", "method": "POST", "path": "/fx/quote", "body": { "sendAmount": 1000, "from": "KRW", "to": "USD" } }
+    ]
+  },
+  {
+    "id": "mock-fx-quote-50000",
+    "name": "DEMO · FX quote (send 50000)",
+    "group": "mock",
+    "target": "mock",
+    "readOnly": true,
+    "steps": [
+      { "name": "quote", "method": "POST", "path": "/fx/quote", "body": { "sendAmount": 50000, "from": "KRW", "to": "USD" } }
+    ]
+  }
+]

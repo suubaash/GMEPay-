@@ -1,0 +1,42 @@
+[
+  {
+    "_comment": "TEMPLATE. Rename this file to 10-real.json to activate. Fill in real paths/bodies for YOUR endpoints. 'target' is a service key from src/config.ts SERVICES (e.g. rate-fx, transaction-mgmt, ops-partner-bff) OR 'url:http://host:port'.",
+
+    "id": "contract-fx-quote",
+    "name": "CONTRACT · rate-fx quote endpoint",
+    "group": "contract",
+    "target": "rate-fx",
+    "readOnly": true,
+    "steps": [
+      {
+        "name": "quote",
+        "method": "POST",
+        "path": "/TODO/quote",
+        "headers": { "x-test-frozen-rate": "1330.50" },
+        "body": { "TODO": "put a real request body here" }
+      }
+    ]
+  },
+  {
+    "id": "flow-qr-pay",
+    "name": "FLOW · QR pay (wallet scan -> txn -> view) — the BFF-fakes-ref regression",
+    "group": "flow",
+    "target": "url:http://localhost:18095",
+    "readOnly": false,
+    "note": "Reuses FIXTURES.qrPayload. Chains steps with {{steps.<name>.<field>}}. This flow is where the ops BFF once faked schemeTxnRef/approval — scrubFields keeps the volatile ref out of the diff while still comparing the real values.",
+    "scrubFields": ["schemeTxnRef", "approvalCode", "walletTxnRef"],
+    "steps": [
+      {
+        "name": "scan",
+        "method": "POST",
+        "path": "/TODO/scan",
+        "body": { "qrPayload": "{{fixtures.qrPayload}}", "userId": "{{fixtures.gmeremitUser}}" }
+      },
+      {
+        "name": "view",
+        "method": "GET",
+        "path": "/TODO/transactions/{{steps.scan.transactionId}}"
+      }
+    ]
+  }
+]
