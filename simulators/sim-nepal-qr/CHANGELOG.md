@@ -2,6 +2,26 @@
 
 All notable changes to the Nepal QR partner simulator.
 
+## [Unreleased]
+
+### Added
+- **Operator console web UI** served at the sim root (`resources/static/index.html`
+  + `app.js`, mirroring the sim-merchant plain-HTML/CSS/JS style, Nepal-crimson theme).
+  So it can be iframed by the admin-ui Simulation Console. Three panels:
+  - **QR** — textarea prefilled with the sample Fonepay QR; **Decode** calls
+    `POST /qrscan-thirdparty/parse/` and renders network / merchantName / merchantId /
+    merchantCity / country / MCC / currency / amount (paisa→NPR).
+  - **Pay** — NPR amount (→ paisa), auto-generated unique reference, optional
+    mobile/purpose/remarks/outcome; shows idx, status, amount + full JSON response.
+  - **Records** — `GET /sim/nepal-qr/records` newest-first, expandable request +
+    decoded payload + response; auto-refreshes after a Pay.
+- **Same-origin UI convenience endpoint** `POST /sim/nepal-qr/ui/pay`
+  (`{qs,amountPaisa,reference,mobile?,purpose?,remarks?,outcome?}`) — runs the same
+  scan-and-pay logic as the signed `/qrscan-thirdparty/pay/` (reference dedup, outcome
+  approve|pending|reject) and **records** every request/response so UI actions land in
+  the inspection store. No signature/nonce required (same-origin, no CORS).
+- MockMvc test **T11** covering the UI pay endpoint (txn created + recorded).
+
 ## [0.0.1] - 2026-07-01
 
 ### Added

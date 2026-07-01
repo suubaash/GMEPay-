@@ -22,11 +22,13 @@ function renderPage() {
 }
 
 describe('SandboxPage', () => {
-  it('renders all three tab labels', () => {
+  it('renders all simulator tab labels', () => {
     renderPage();
     expect(screen.getByRole('tab', { name: /merchant terminal/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /gmeremit wallet/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /fx rate board/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /nepal qr/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /service trace/i })).toBeInTheDocument();
   });
 
   it('shows the Merchant Terminal iframe by default and other panels are not visible', () => {
@@ -63,6 +65,16 @@ describe('SandboxPage', () => {
     expect(within(visiblePanel).getByTestId('iframe-2')).toBeInTheDocument();
   });
 
+  it('switching to Nepal QR tab shows iframe-3', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /nepal qr/i }));
+
+    const visiblePanel = screen.getByRole('tabpanel', { hidden: false });
+    expect(within(visiblePanel).getByTestId('iframe-3')).toBeInTheDocument();
+  });
+
   it('each simulator caption and URL are visible when their tab is active', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -77,5 +89,9 @@ describe('SandboxPage', () => {
     // Rate tab
     await user.click(screen.getByRole('tab', { name: /fx rate board/i }));
     expect(screen.getByText(/localhost:9101/)).toBeInTheDocument();
+
+    // Nepal QR tab
+    await user.click(screen.getByRole('tab', { name: /nepal qr/i }));
+    expect(screen.getByText(/localhost:9103/)).toBeInTheDocument();
   });
 });
