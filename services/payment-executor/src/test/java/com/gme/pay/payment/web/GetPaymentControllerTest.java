@@ -68,7 +68,9 @@ class GetPaymentControllerTest {
         PaymentController controller = new PaymentController(
                 mock(PaymentOrchestrator.class), mock(PartnerConfigClient.class),
                 authorizationRepository, mock(PaymentAuthorizationService.class),
-                new com.gme.pay.events.RecordingEventPublisher());
+                new com.gme.pay.events.RecordingEventPublisher(),
+                new com.gme.pay.payment.domain.OperationalGate(
+                        com.gme.pay.contracts.OperationalStatusView::allClear));
         mvc = standaloneSetup(controller)
                 .setControllerAdvice(new PaymentExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))

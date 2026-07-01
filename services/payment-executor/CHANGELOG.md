@@ -2,6 +2,39 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [ops/payment-executor] — 2026-07-01 (Operations operational gate)
+
+### Added
+- **`OperationalGate`** (`domain/OperationalGate`) — checked at the START of every NEW payment
+  authorization to refuse new work while the platform is globally paused / in maintenance, or when
+  the partner / scheme / route resolved for THIS payment is individually suspended. Precedence:
+  `systemPaused` → `maintenanceMode` → partner → scheme → route; the first match throws
+  `OperationalGateException` with a stable canonical code. Case-insensitive, trimmed list matching;
+  `null` references skip their per-entity check (partial resolution at gate time).
+- **`OperationalStatusClient`** + `RestOperationalStatusClient` — reads config-registry's
+  `GET /v1/ops/operational-status` → `OperationalStatusView` (lib-api-contracts). Gated
+  `@ConditionalOnProperty(gmepay.config-registry.base-url)`, with a short in-memory cache
+  (`gmepay.ops.status.cache-ttl-millis`, default 3000ms) so the hot pay path does not round-trip
+  per payment. `FixtureOperationalStatusClient` (`@ConditionalOnMissingBean`) returns
+  `OperationalStatusView.allClear()` so tests / a no-config-registry sandbox proceed.
+- **Fail-open vs fail-closed** — `gmepay.ops.status.fail-open` (default **true** = fail-OPEN → allow
+  when status unreachable and no cached value). A last-known-good cached value is preferred over
+  either policy so a brief config-registry blip does not flip behaviour.
+- **Gate hooks** — wallet `POST /v1/pay` (covers the GMEREMIT/SENDMN inbound branches AND the
+  FailoverPaymentRouter outbound branch; gated by partner alias + classified network as route) and
+  the orchestrated `POST /v1/payments/authorize` (gated by partner code + scheme id + direction,
+  AFTER the idempotent-replay check so an in-flight replay is never gated). Confirm/capture, refund,
+  cancel and status lookups are NOT gated — in-flight payments complete even mid-pause.
+- **Error surfacing** — `OperationalGateException` → HTTP 503 (retryable) via `PaymentExceptionHandler`,
+  emitted with the stable codes `SYSTEM_PAUSED` / `PARTNER_SUSPENDED` / `SCHEME_SUSPENDED` /
+  `ROUTE_SUSPENDED` through the `ApiError(code, …)` string ctor (lib-errors is frozen).
+
+### Integration request
+- **lib-errors** does not yet carry `SYSTEM_PAUSED` / `PARTNER_SUSPENDED` / `SCHEME_SUSPENDED` /
+  `ROUTE_SUSPENDED` as `ErrorCode` enum members. They are emitted as literal codes via the
+  `ApiError(String code, …)` ctor for now; promote to `ErrorCode` (503, retryable) when lib-errors
+  next unfreezes so the codes are centrally documented.
+
 ## [fo/payment-executor] — 2026-07-01 (ADR-016 QR-classified failover routing)
 
 ### Added
