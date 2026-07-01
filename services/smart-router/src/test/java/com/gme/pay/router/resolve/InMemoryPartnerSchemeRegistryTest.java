@@ -21,10 +21,10 @@ class InMemoryPartnerSchemeRegistryTest {
     }
 
     @Test
-    @DisplayName("NP corridor resolves to NEPAL (single live NP scheme)")
-    void npResolvesToNepal() {
+    @DisplayName("NP corridor: NEPAL (priority 0) before the failover partner (priority 1)")
+    void npOrderedByPriority() {
         List<PartnerSchemeRecord> rows = registry.schemesForCountry("np");
-        assertEquals(List.of("NEPAL"),
+        assertEquals(List.of("NEPAL", "NEPAL_FONEPAY_DIRECT"),
                 rows.stream().map(PartnerSchemeRecord::schemeId).toList());
     }
 

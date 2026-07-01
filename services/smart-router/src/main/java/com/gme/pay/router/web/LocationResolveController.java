@@ -1,5 +1,6 @@
 package com.gme.pay.router.web;
 
+import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.router.resolve.LocationSchemeQuery;
@@ -38,15 +39,38 @@ public class LocationResolveController {
         }
     }
 
+    /**
+     * {@code GET /v1/route/resolve?network=&country=&mode=&direction=}.
+     *
+     * <p>Two shapes on one endpoint, selected by the OPTIONAL {@code network} param:
+     * <ul>
+     *   <li><b>network present</b> (ADR-016 QR-classified failover) — returns the
+     *       ORDERED candidate list ({@code List<PartnerSchemeView>}, ascending
+     *       priority, ACTIVE only) of partner_scheme rows whose
+     *       {@code networkIdentifier} CSV contains the network AND match
+     *       country/mode/direction. Element 0 is the primary; the rest are the
+     *       failover order.</li>
+     *   <li><b>network absent</b> — the pre-ADR-016 country-based
+     *       {@link ResolveResponse} (chosen scheme + candidate set + ambiguity),
+     *       unchanged.</li>
+     * </ul>
+     *
+     * @return {@code List<PartnerSchemeView>} when {@code network} is present, else
+     *         {@link ResolveResponse}.
+     */
     @GetMapping
-    public ResolveResponse resolve(
+    public Object resolve(
+            @RequestParam(value = "network", required = false) String network,
             @RequestParam("country") String country,
             @RequestParam("mode") String mode,
             @RequestParam("direction") String direction) {
         PaymentMode paymentMode = parseMode(mode);
-        SchemeResolution resolution =
-                resolver.resolve(new LocationSchemeQuery(country, paymentMode, direction));
-        return ResolveResponse.from(resolution);
+        LocationSchemeQuery query = new LocationSchemeQuery(country, paymentMode, direction);
+        if (network != null && !network.isBlank()) {
+            List<PartnerSchemeView> candidates = resolver.resolveCandidates(network, query);
+            return candidates;
+        }
+        return ResolveResponse.from(resolver.resolve(query));
     }
 
     private static PaymentMode parseMode(String mode) {

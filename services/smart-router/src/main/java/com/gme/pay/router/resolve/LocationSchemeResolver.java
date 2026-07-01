@@ -1,5 +1,6 @@
 package com.gme.pay.router.resolve;
 
+import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.domain.Direction;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
@@ -84,6 +85,53 @@ public class LocationSchemeResolver {
 
         // Success: priority-ordered winner + the ambiguity surface.
         return SchemeResolution.of(candidates);
+    }
+
+    /**
+     * ADR-016 QR-classified failover resolution: given the QR's own classified
+     * network GUID plus the same country/mode/direction filter context, return the
+     * ORDERED candidate list (ascending {@code priority}, ACTIVE only) of every
+     * {@code partner_scheme} row whose {@code networkIdentifier} CSV CONTAINS the
+     * requested network AND matches country + direction + presentment mode. This
+     * ordered list IS the failover order: the caller dispatches to element 0, and
+     * on a technical failure walks to the next.
+     *
+     * <p>Reuses the country/direction/mode axes of {@link #resolve(LocationSchemeQuery)};
+     * the only added axis is CSV network membership ({@link PartnerSchemeRecord#servesNetwork}).
+     * When several partners serve the same network in the same corridor, ALL are
+     * returned in priority order — the multi-candidate failover case.
+     *
+     * @param network the QR-classified network GUID (e.g. {@code fonepay.com},
+     *                {@code com.zeropay}); required.
+     * @param query   the country/mode/direction filter context.
+     * @return ordered candidate views (never empty on success).
+     * @throws ApiException {@link ErrorCode#VALIDATION_ERROR} for a blank network or
+     *         an invalid base query; {@link ErrorCode#NO_SCHEME_FOR_LOCATION} when no
+     *         ACTIVE row in the corridor serves the network for this mode+direction.
+     */
+    public List<PartnerSchemeView> resolveCandidates(String network, LocationSchemeQuery query) {
+        String country = validate(query);
+        if (network == null || network.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "network required");
+        }
+        String requestedDirection = query.direction().trim().toUpperCase(Locale.ROOT);
+
+        // Registry returns ACTIVE/enabled rows in priority order; narrow by the
+        // three QR axes (network CSV membership, direction, mode) and preserve
+        // that priority order as the failover order.
+        List<PartnerSchemeView> candidates = registry.schemesForCountry(country).stream()
+                .filter(r -> r.servesNetwork(network))
+                .filter(r -> r.enabledFor(requestedDirection))
+                .filter(r -> r.supports(query.mode()))
+                .map(PartnerSchemeRecord::toView)
+                .toList();
+
+        if (candidates.isEmpty()) {
+            throw new ApiException(ErrorCode.NO_SCHEME_FOR_LOCATION,
+                    "no ACTIVE scheme in " + country + " serves network " + network
+                            + " for " + query.mode() + "/" + query.direction());
+        }
+        return candidates;
     }
 
     /** Returns the normalized country code, or throws VALIDATION_ERROR. */

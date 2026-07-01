@@ -31,12 +31,24 @@ public class InMemoryPartnerSchemeRegistry implements PartnerSchemeRegistry {
 
     public InMemoryPartnerSchemeRegistry() {
         // KR domestic: ZeroPay, both presentment modes, the live corridor.
-        add(new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0));
+        // ADR-016: the ZeroPay QR network GUID is com.zeropay — a scan classified
+        // to com.zeropay resolves to this row.
+        add(new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0, 10L, "com.zeropay"));
         // NP domestic: NEPAL, the second live corridor (scheme-adapter-nepal).
         // Nepal pay is single-phase (submit = authorize+commit) and covers both
         // presentment modes, so the row is CPM+MPM / BOTH directions — a NP scan
-        // resolves to NEPAL regardless of mode. Priority 0 (sole NP scheme today).
-        add(new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0));
+        // resolves to NEPAL regardless of mode. ADR-016: Nepal fronts several QR
+        // networks, so its networkIdentifier is a CSV of the Nepal GUIDs; a scan
+        // classified to ANY of them (fonepay.com, nepalpay, …) matches. Priority 0
+        // (preferred NP partner).
+        add(new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0, 20L,
+                "fonepay.com,nepalpay,com.f1soft,connectips"));
+        // ADR-016 failover case: a SECOND NP partner also serves the fonepay.com
+        // network (e.g. a Fonepay-direct integration) at priority 1. A scan
+        // classified to fonepay.com must return BOTH rows in priority order
+        // [NEPAL, NEPAL_FONEPAY_DIRECT] — the failover order.
+        add(new PartnerSchemeRecord("NEPAL_FONEPAY_DIRECT", "NP", "BOTH", true, true, 1, 21L,
+                "fonepay.com"));
         // KH inbound: KHQR (MPM only) preferred, BAKONG (both) fallback.
         add(new PartnerSchemeRecord("KHQR", "KH", "INBOUND", false, true, 0));
         add(new PartnerSchemeRecord("BAKONG", "KH", "BOTH", true, true, 1));
