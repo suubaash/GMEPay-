@@ -25,7 +25,9 @@ class OpsAlertControllerTest {
     @BeforeEach
     void setUp() {
         store = new OpsAlertStore(200);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
         handler.handle("P_B", "{\"eventType\":\"ops.alert\",\"alertType\":\"FLOAT_LOW\","
                 + "\"severity\":\"WARN\",\"subjectRef\":\"P_B\",\"detail\":\"low\",\"occurredAt\":\"t1\"}");
         handler.handle("TXN-9", "{\"eventType\":\"ops.alert\",\"alertType\":\"STUCK_TXN\","

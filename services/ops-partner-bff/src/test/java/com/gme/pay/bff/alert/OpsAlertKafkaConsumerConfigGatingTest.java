@@ -17,6 +17,10 @@ class OpsAlertKafkaConsumerConfigGatingTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OpsAlertStore.class, () -> new OpsAlertStore(200))
+            .withBean(com.gme.pay.bff.alert.paging.OpsPagingDispatcher.class,
+                    () -> com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                            new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(),
+                            new OpsAlertStore(200)))
             .withBean(OpsAlertEventHandler.class)
             .withUserConfiguration(OpsAlertKafkaConsumerConfig.class);
 

@@ -24,7 +24,9 @@ class OpsAlertEventHandlerTest {
     @Test
     void consumesStoresAndReturnsNewestFirst() {
         OpsAlertStore store = new OpsAlertStore(200);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
 
         handler.handle("P_B", FLOAT_LOW);
         handler.handle("TXN-9", STUCK);
@@ -38,7 +40,9 @@ class OpsAlertEventHandlerTest {
     @Test
     void filtersBySeverityAndType() {
         OpsAlertStore store = new OpsAlertStore(200);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
         handler.handle("P_B", FLOAT_LOW);
         handler.handle("TXN-9", STUCK);
 
@@ -52,7 +56,9 @@ class OpsAlertEventHandlerTest {
     @Test
     void limitCaps() {
         OpsAlertStore store = new OpsAlertStore(200);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
         handler.handle("P_B", FLOAT_LOW);
         handler.handle("TXN-9", STUCK);
         assertThat(store.recent(null, null, 1)).hasSize(1);
@@ -61,7 +67,9 @@ class OpsAlertEventHandlerTest {
     @Test
     void capacityEvictsOldest() {
         OpsAlertStore store = new OpsAlertStore(1);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
         handler.handle("P_B", FLOAT_LOW);
         handler.handle("TXN-9", STUCK);
         assertThat(store.size()).isEqualTo(1);
@@ -72,7 +80,9 @@ class OpsAlertEventHandlerTest {
     @Test
     void rejectsPoison() {
         OpsAlertStore store = new OpsAlertStore(200);
-        OpsAlertEventHandler handler = new OpsAlertEventHandler(store);
+        OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
+                com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
+                        new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
         assertThatThrownBy(() -> handler.handle("k", "not-json"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> handler.handle("k", "{\"eventType\":\"wrong.type\"}"))

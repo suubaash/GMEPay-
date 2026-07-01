@@ -3,6 +3,7 @@ package com.gme.pay.bff.alert;
 import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gme.pay.bff.alert.paging.OpsPagingDispatcher;
 import com.gme.pay.contracts.events.OpsAlertPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,11 +30,13 @@ public class OpsAlertEventHandler {
     private static final Logger log = LoggerFactory.getLogger(OpsAlertEventHandler.class);
 
     private final OpsAlertStore store;
+    private final OpsPagingDispatcher paging;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-    public OpsAlertEventHandler(OpsAlertStore store) {
+    public OpsAlertEventHandler(OpsAlertStore store, OpsPagingDispatcher paging) {
         this.store = Objects.requireNonNull(store, "store required");
+        this.paging = Objects.requireNonNull(paging, "paging required");
     }
 
     /**
@@ -64,6 +67,8 @@ public class OpsAlertEventHandler {
         OpsAlertView stored = store.add(event);
         log.info("ops.alert consumed: type={} severity={} subjectRef={} (key={})",
                 event.alertType(), event.severity(), event.subjectRef(), recordKey);
-        return stored;
+        // After storing, page the on-call if severity meets the threshold (dedupe/cooldown
+        // applied inside). Never throws — paging must not wedge the consumer / DLT a record.
+        return paging.onStored(stored);
     }
 }
