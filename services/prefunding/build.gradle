@@ -19,11 +19,24 @@ dependencies {
     // tier alerts on topic gmepay.prefunding.alert (ADR-001).
     implementation project(':libs:lib-api-contracts')
     implementation project(':libs:lib-events')
+    // Kafka-backed EventPublisher + the payment.reversed consumer (release-on-reversal).
+    // The consumer wiring is @ConditionalOnProperty(spring.kafka.bootstrap-servers), so no
+    // broker is required for the local default / unit slices.
+    implementation project(':libs:lib-events-kafka')
+    implementation 'org.springframework.kafka:spring-kafka'
+
+    // ShedLock: distributed lock for the @Scheduled outbox drain across replicas.
+    // Not in the Spring Boot BOM, so versions are pinned (5.16.0 supports Boot 3.3 / Java 21).
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // kafka-clients (ConsumerRecord/Acknowledgment) on the test classpath for the
+    // release-on-reversal handler/consumer unit tests.
+    testImplementation 'org.springframework.kafka:spring-kafka'
 
     // Docker-backed ITs (@Tag("docker")): real PostgreSQL 16 via Testcontainers.
     // Excluded from the local `test` task; CI runs them via `integrationTest`.

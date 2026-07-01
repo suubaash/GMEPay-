@@ -90,13 +90,16 @@ class TierAlertEvaluatorTest {
         assertEquals(0, alert.getThresholdUsd().compareTo(new BigDecimal("1000.0000")));
         assertFalse(alert.isAcknowledged());
 
-        List<OutboxEntity> events = outbox.findAll();
-        assertEquals(1, events.size(), "one outbox event per raised alert");
-        assertEquals(TierAlertEvaluator.EVENT_TYPE_ALERT, events.get(0).getEventType());
-        assertEquals(PARTNER, events.get(0).getAggregateId());
-        assertTrue(events.get(0).getPayload().contains("\"tier\":\"TIER_70\""));
+        // Each raised alert now enqueues the per-partner prefunding.alert AND a converged
+        // ops.alert (#5). Assert on the prefunding.alert row specifically.
+        List<OutboxEntity> tierEvents = outbox.findAll().stream()
+                .filter(e -> TierAlertEvaluator.EVENT_TYPE_ALERT.equals(e.getEventType()))
+                .toList();
+        assertEquals(1, tierEvents.size(), "one prefunding.alert event per raised alert");
+        assertEquals(PARTNER, tierEvents.get(0).getAggregateId());
+        assertTrue(tierEvents.get(0).getPayload().contains("\"tier\":\"TIER_70\""));
         // partner_balance is NUMERIC(20,8), so the in-tx arithmetic carries scale 8.
-        assertTrue(events.get(0).getPayload().contains("\"balanceUsd\":\"680.00000000\""));
+        assertTrue(tierEvents.get(0).getPayload().contains("\"balanceUsd\":\"680.00000000\""));
     }
 
     @Test
@@ -112,7 +115,9 @@ class TierAlertEvaluatorTest {
         assertEquals(1, alerts.countByPartnerCodeAndTier(PARTNER, TierAlertEvaluator.TIER_70),
                 "latest TIER_70 alert is unacknowledged -> tier stays suppressed");
         assertEquals(1, alerts.count(), "no other tier crossed either");
-        assertEquals(1, outbox.count(), "no extra outbox event for the suppressed crossing");
+        assertEquals(1, outbox.findAll().stream()
+                        .filter(e -> TierAlertEvaluator.EVENT_TYPE_ALERT.equals(e.getEventType())).count(),
+                "no extra prefunding.alert event for the suppressed crossing");
     }
 
     @Test

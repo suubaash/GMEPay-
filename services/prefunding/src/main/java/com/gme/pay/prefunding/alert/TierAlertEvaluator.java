@@ -51,6 +51,17 @@ public class TierAlertEvaluator {
     /** Event type discriminator: KafkaEventPublisher maps it to topic {@code gmepay.prefunding.alert}. */
     public static final String EVENT_TYPE_ALERT = "prefunding.alert";
 
+    /**
+     * Ops control-tower alert event type (#5). Same outbox drain; KafkaEventPublisher maps it to the
+     * shared ops topic {@code gmepay.ops.alert} where the ops monitors converge. We CONVERGE onto this
+     * — every {@code prefunding.alert} that fires ALSO emits a {@code FLOAT_LOW} ops alert, so the
+     * existing per-partner tier stream is untouched while ops gets a unified low-float signal.
+     */
+    public static final String EVENT_TYPE_OPS_ALERT = com.gme.pay.contracts.events.OpsAlertPayload.EVENT_TYPE;
+
+    /** {@code alertType} raised on the ops topic for a low/breached partner float. */
+    public static final String OPS_ALERT_FLOAT_LOW = "FLOAT_LOW";
+
     public static final String TIER_95 = "TIER_95";
     public static final String TIER_85 = "TIER_85";
     public static final String TIER_70 = "TIER_70";
@@ -143,7 +154,41 @@ public class TierAlertEvaluator {
         payload.put("raisedAt", raisedAt.toString());
         outbox.enqueue(partnerCode, EVENT_TYPE_ALERT, payload.toString());
 
+        // #5 — converge onto the ops control tower: same crossing ALSO emits a FLOAT_LOW ops alert.
+        emitFloatLowOpsAlert(partnerCode, tier, balance, threshold, raisedAt);
+
         log.info("balance alert raised: partner={} tier={} balance={} threshold={}",
                 partnerCode, tier, balance.toPlainString(), threshold.toPlainString());
+    }
+
+    /**
+     * Enqueue an {@code OpsAlertPayload}(alertType=FLOAT_LOW) outbox row alongside the tier alert, so a
+     * low/breached partner float lands on {@code gmepay.ops.alert}. Severity scales with how far below
+     * the threshold the balance sits: TIER_95→INFO, TIER_85/TIER_70→WARN, BREACH→CRITICAL.
+     * {@code subjectRef} is the partner code; {@code detail} carries balance + threshold (decimal strings).
+     */
+    private void emitFloatLowOpsAlert(String partnerCode, String tier, BigDecimal balance,
+                                      BigDecimal threshold, Instant raisedAt) {
+        String severity = severityForTier(tier);
+        String detail = "partner=" + partnerCode + " tier=" + tier
+                + " balanceUsd=" + balance.toPlainString()
+                + " thresholdUsd=" + threshold.toPlainString();
+        ObjectNode ops = objectMapper.createObjectNode();
+        ops.put("eventType", EVENT_TYPE_OPS_ALERT);
+        ops.put("alertType", OPS_ALERT_FLOAT_LOW);
+        ops.put("severity", severity);
+        ops.put("subjectRef", partnerCode);
+        ops.put("detail", detail);
+        ops.put("occurredAt", raisedAt.toString());
+        outbox.enqueue(partnerCode, EVENT_TYPE_OPS_ALERT, ops.toString());
+    }
+
+    /** INFO (95%) → WARN (85%/70%) → CRITICAL (breach), by how far below threshold the float has fallen. */
+    private static String severityForTier(String tier) {
+        return switch (tier) {
+            case TIER_95 -> "INFO";
+            case BREACH -> "CRITICAL";
+            default -> "WARN"; // TIER_85, TIER_70
+        };
     }
 }
