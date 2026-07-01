@@ -20,6 +20,8 @@ import com.gme.pay.settlement.persistence.SettlementBatchRepository;
 import com.gme.pay.settlement.persistence.SettlementLineRepository;
 import com.gme.pay.settlement.port.PartnerConfigPort;
 import com.gme.pay.settlement.port.PartnerConfigPort.PartnerSettlementConfig;
+import com.gme.pay.settlement.port.RefundedTransactionPort;
+import com.gme.pay.settlement.port.RefundedTransactionPort.RefundLeg;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -38,6 +40,7 @@ import org.mockito.ArgumentCaptor;
 class SettlementBatchJobServiceTest {
 
     private final TransactionQueryPort txnPort = mock(TransactionQueryPort.class);
+    private final RefundedTransactionPort refundedPort = mock(RefundedTransactionPort.class);
     private final PartnerConfigPort partnerPort = mock(PartnerConfigPort.class);
     private final SettlementBookingService booking = new SettlementBookingService();
     private final SettlementBatchRepository batchRepo = mock(SettlementBatchRepository.class);
@@ -220,5 +223,61 @@ class SettlementBatchJobServiceTest {
         assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("34720")),
                 "net = gross 35000 − fee 280; the never-settled refund nets to zero (no clawback)");
         verify(lineRepo, times(1)).save(any());   // only the payment line; no clawback line
+    }
+
+    @Test
+    @DisplayName("cross-date refund: a prior-day payment refunded today reduces the netted settlement")
+    void crossDateRefundReducesNet() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        // Today's fresh payment for M001: net 50000 (fee rate 0).
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(
+                net("T1", "M001", 50000, "0")));
+        // No same-day (creation-date) refunds.
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        // A refund processed TODAY of a payment (PAY-OLD) settled on a PRIOR day → cross-date claw-back.
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-X", "PAY-OLD", "M001", new BigDecimal("8000"),
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        // PAY-OLD was settled in a prior batch (positive line) and RFND-X not yet clawed back.
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-OLD"), any())).thenReturn(true);
+        when(lineRepo.existsByTxnRefAndAmountLessThan(eq("RFND-X"), any())).thenReturn(false);
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        // net = 50000 (today's payment) − 8000 (cross-date claw-back) = 42000.
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("42000")),
+                "net = today's 50000 minus the 8000 cross-date refund clawed back from a prior settlement");
+        verify(lineRepo, times(2)).save(any());   // 1 payment line + 1 negative cross-date claw-back line
+    }
+
+    @Test
+    @DisplayName("cross-date refund: original payment never settled → not clawed back (no net change)")
+    void crossDateRefundNotClawedWhenOriginalUnsettled() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(net("T1", "M001", 50000, "0")));
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-Y", "PAY-NEVER", "M001", new BigDecimal("8000"),
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        // PAY-NEVER has no prior settled line → cross-date refund nets to zero.
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-NEVER"), any())).thenReturn(false);
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("50000")),
+                "net unchanged — the refund's original payment was never settled, so nothing to claw back");
+        verify(lineRepo, times(1)).save(any());   // only the payment line; no claw-back line
     }
 }

@@ -42,11 +42,24 @@ public interface PartnerConfigPort {
 
     /**
      * One pricing rule (partner_rule V017) for a {@code (schemeId, direction)}: the partner margins
-     * {@code mA} (collection-side) / {@code mB} (payout-side) as fractions, and the flat
-     * {@code serviceChargeUsd} per-transaction fee (USD). {@code direction} is INBOUND/OUTBOUND/BOTH
-     * (or null = all).
+     * {@code mA} (collection-side) / {@code mB} (payout-side) as fractions, the flat
+     * {@code serviceChargeUsd} per-transaction fee (USD), and the per-leg rate-source mode
+     * ({@code rateCollSource} / {@code ratePaySource}, RATE-04 §3.2). {@code direction} is
+     * INBOUND/OUTBOUND/BOTH (or null = all).
+     *
+     * <p>The source fields are nullable on the wire (config-registry may omit them); a null/blank
+     * value means {@code LIVE} (resolved via {@link com.gme.pay.ratefx.issue.RateSource#fromNullable}).
+     * Only {@code PARTNER} changes the resolution path — the pay leg is then quoted by Partner B
+     * instead of the treasury snapshot store (WBS 4.6).
      */
     record PartnerRule(String schemeId, String direction,
-                       BigDecimal mA, BigDecimal mB, BigDecimal serviceChargeUsd) {
+                       BigDecimal mA, BigDecimal mB, BigDecimal serviceChargeUsd,
+                       String rateCollSource, String ratePaySource) {
+
+        /** Back-compat 5-arg form: both legs default to {@code LIVE} (null sources). */
+        public PartnerRule(String schemeId, String direction,
+                           BigDecimal mA, BigDecimal mB, BigDecimal serviceChargeUsd) {
+            this(schemeId, direction, mA, mB, serviceChargeUsd, null, null);
+        }
     }
 }

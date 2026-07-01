@@ -19,6 +19,26 @@ import java.util.Objects;
  * ({@code precise - booked}) lands here so the difference is captured as a balanced
  * {@code REVENUE_ROUNDING} gain/loss journal rather than being silently absorbed.
  *
+ * <p><b>Reference-key shape (settlement-reconciliation IR-2, confirmed Phase 2).</b> The
+ * {@code reference} is an opaque, free-form audit key written verbatim onto each posted ledger line
+ * ({@code reference} column is {@code length=64}). It is NOT constrained to a per-transaction ref —
+ * it accepts EITHER:
+ * <ul>
+ *   <li>a per-transaction ref ({@code "TXN-00001"}) — payment-executor's per-payment residual, OR</li>
+ *   <li>a settlement <b>batch id</b> ({@code "ZP0061-YYYYMMDD-WINDOW"}, ≤25 chars) —
+ *       settlement-reconciliation's per-batch aggregate residual ({@code batch.roundingResidual}).</li>
+ * </ul>
+ * Both callers map to the same {@code postRoundingResidual(reference, residual, currency)} contract;
+ * the key is simply the audit handle of whatever unit produced the residual.
+ *
+ * <p><b>Idempotent on {@code reference}.</b> Posting is now idempotent: a repeat post with a
+ * {@code reference} that already has a rounding journal is a no-op — it returns the existing journal
+ * (200 OK, same id) and does NOT create a second line. So a settlement-reconciliation / payment-executor
+ * retry is safe regardless of whether the caller also guards on its side. The guard is scoped to the
+ * {@code REVENUE_ROUNDING} account (key table {@code rounding_residual_keys}, Flyway V006), so the
+ * per-TXN and per-batch keying schemes coexist and never collide with revenue-capture / fee-share /
+ * reversal journals that carry the same {@code reference} on other accounts.
+ *
  * <p>Per {@code docs/INTER_SERVICE_CONTRACTS.md} revenue-ledger owns its DB; callers reach it
  * only via this endpoint.
  *

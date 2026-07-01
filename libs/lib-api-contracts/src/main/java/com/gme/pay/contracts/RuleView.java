@@ -28,6 +28,17 @@ import java.time.Instant;
  *       time of this version).</li>
  * </ul>
  *
+ * <h2>Wave-3 rate-source fields (additive)</h2>
+ *
+ * <p>Appended so config-registry can emit the provenance of each leg's cost
+ * rate and rate-fx can read it when pricing a quote:
+ * <ul>
+ *   <li>{@code rateCollSource} / {@code ratePaySource} — wire STRING over the
+ *       roster {@code IDENTITY} | {@code LIVE} | {@code MANUAL} | {@code PARTNER}
+ *       (kept as String rather than a lib enum to avoid coupling consumers to a
+ *       particular enum). Nullable while a rule predates the column.</li>
+ * </ul>
+ *
  * <p>{@code @JsonInclude(ALWAYS)} so {@code null} fields stay on the wire —
  * same contract as {@link PartnerView}.
  */
@@ -41,5 +52,26 @@ public record RuleView(
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal serviceChargeUsd,
         Instant validFrom,
         Instant validTo,
-        Instant recordedAt) {
+        Instant recordedAt,
+        String rateCollSource,
+        String ratePaySource) {
+
+    /**
+     * Backwards-compatible 9-arg constructor (pre-Wave-3 shape). Delegates the
+     * two rate-source fields to {@code null} so existing producers
+     * (config-registry {@code RuleEntity.toView}) and tests keep compiling.
+     */
+    public RuleView(
+            Long id,
+            String schemeId,
+            String direction,
+            BigDecimal mA,
+            BigDecimal mB,
+            BigDecimal serviceChargeUsd,
+            Instant validFrom,
+            Instant validTo,
+            Instant recordedAt) {
+        this(id, schemeId, direction, mA, mB, serviceChargeUsd, validFrom, validTo, recordedAt,
+                null, null);
+    }
 }

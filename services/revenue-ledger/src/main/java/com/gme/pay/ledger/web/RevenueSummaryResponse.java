@@ -15,5 +15,6 @@ public record RevenueSummaryResponse(
         long txnCount,
         BigDecimal totalFxMarginUsd,
         BigDecimal totalServiceChargeAmount,
-        String serviceChargeCcy
+        String serviceChargeCcy,
+        BigDecimal totalRoundingUsd
 ) {}

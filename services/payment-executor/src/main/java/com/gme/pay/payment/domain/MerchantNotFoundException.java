@@ -1,15 +1,17 @@
 package com.gme.pay.payment.domain;
 
 /**
- * Thrown when merchant-qr-data answers {@code 404 MERCHANT_NOT_FOUND} for a scanned QR —
- * i.e. the merchant is definitively unknown (as opposed to merchant-qr-data being
- * unreachable). This is a normal business decline, NOT a server error: callers map it to a
- * declined wallet result with reason {@code MERCHANT_NOT_FOUND}, never to an HTTP 500.
- *
- * <p>Extends {@link PaymentException} so existing {@code catch (PaymentException)} sites and
- * tests keep working.
+ * Raised when a merchant cannot be resolved for a scanned QR — the merchant-qr-data lookup returned a
+ * miss (404) or was unreachable — and the service is in the default STRICT mode. Strict mode hard-fails
+ * rather than synthesizing an UNKNOWN merchant (the lenient bypass is now dev-only). Maps to the
+ * canonical {@link com.gme.pay.errors.ErrorCode#MERCHANT_NOT_FOUND} (404) via {@code
+ * PaymentExceptionHandler}.
  */
 public class MerchantNotFoundException extends PaymentException {
+
+    public MerchantNotFoundException(String message) {
+        super(message);
+    }
 
     public MerchantNotFoundException(String message, Throwable cause) {
         super(message, cause);

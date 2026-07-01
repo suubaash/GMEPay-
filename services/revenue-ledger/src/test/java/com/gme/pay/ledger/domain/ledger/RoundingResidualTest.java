@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 /** Unit tests for posting the per-partner rounding residual to the rounding ledger. */
 class RoundingResidualTest {
 
+    private static final String ACC_ROUNDING = "REVENUE_ROUNDING";
+
     /** Minimal in-memory JournalStore (revenue-ledger owns its DB; tests stub the port). */
     private static final class InMemoryStore implements JournalStore {
         final List<Journal> saved = new ArrayList<>();
@@ -25,6 +27,15 @@ class RoundingResidualTest {
             return saved.stream().filter(j -> j.journalId().equals(id)).findFirst();
         }
         public List<Journal> findByReference(String ref) { return saved; }
+        public Optional<Journal> findRoundingResidualByReference(String ref) {
+            return saved.stream()
+                    .filter(j -> j.entries().stream().anyMatch(e ->
+                            ref.equals(e.reference()) && ACC_ROUNDING.equals(e.account())))
+                    .findFirst();
+        }
+        public BigDecimal sumRoundingByDateRange(java.time.LocalDate s, java.time.LocalDate e, String ccy) {
+            return BigDecimal.ZERO; // not exercised here; see RoundingAggregationTest
+        }
     }
 
     private LedgerPostingService service() {
@@ -56,6 +67,27 @@ class RoundingResidualTest {
     @Test
     void zeroResidual_postsNothing() {
         assertNull(service().postRoundingResidual("TXN-3", BigDecimal.ZERO, "USD"));
+    }
+
+    @Test
+    void batchIdReference_postsAndIsAuditedVerbatim_settlementReconIR2() {
+        // settlement-reconciliation posts its per-batch aggregate residual keyed by the batch id
+        // ("ZP00NN-YYYYMMDD-WINDOW"), not a per-txn ref. The reference is opaque and written verbatim
+        // onto every ledger line so the residual ties back to the batch that produced it.
+        String batchId = "ZP0061-20260630-AM";
+        Journal j = service().postRoundingResidual(batchId, new BigDecimal("0.050"), "USD");
+        assertTrue(j.entries().stream().allMatch(e -> batchId.equals(e.reference())));
+        assertEquals(0, amountOn(j, "REVENUE_ROUNDING", EntryType.CREDIT).compareTo(new BigDecimal("0.050")));
+    }
+
+    @Test
+    void repeatPostSameReference_isIdempotent_returnsExistingJournal() {
+        LedgerPostingService svc = service();
+        String batchId = "ZP0061-20260630-AM";
+        Journal first = svc.postRoundingResidual(batchId, new BigDecimal("0.050"), "USD");
+        Journal second = svc.postRoundingResidual(batchId, new BigDecimal("0.050"), "USD");
+        // Same id back; the service short-circuits on the pre-existing rounding journal.
+        assertEquals(first.journalId(), second.journalId());
     }
 
     @Test

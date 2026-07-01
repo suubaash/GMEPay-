@@ -1,12 +1,17 @@
 package com.gme.pay.prefunding.api;
 
+import com.gme.pay.contracts.BalanceDeductionEntry;
+import com.gme.pay.contracts.PrefundingDeductionHistoryView;
 import com.gme.pay.prefunding.service.PrefundingService;
 import java.math.BigDecimal;
+import java.util.List;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -119,6 +124,24 @@ public class PrefundingController {
                                                        @RequestBody ReverseRequest req) {
         PrefundingService.CumulativeReverseResult r = service.reverseCumulative(partnerId, req.txnRef());
         return new CumulativeReverseResponse(partnerId, r.reversedAmount());
+    }
+
+    /**
+     * Recent prefunding deductions for {@code code}, most-recent-first, capped at {@code limit}
+     * (default 20, clamped 1..500). Unblocks payment-executor's balance {@code ?include_history=true}
+     * (IR-pe-2). Returns the canonical {@link PrefundingDeductionHistoryView} wrapping
+     * {@link BalanceDeductionEntry} rows ({@code amountUsd}, {@code at}, {@code txnRef}); money as
+     * decimal strings per docs/MONEY_CONVENTION.md. An unknown/empty partner yields an empty list.
+     */
+    @GetMapping("/{code}/deductions")
+    public PrefundingDeductionHistoryView deductions(
+            @PathVariable String code,
+            @RequestParam(name = "limit", defaultValue = "20") int limit) {
+        int capped = limit <= 0 ? 20 : Math.min(limit, 500);
+        List<BalanceDeductionEntry> entries = service.recentDeductions(code, capped).stream()
+                .map(r -> new BalanceDeductionEntry(r.amountUsd(), r.at(), r.txnRef()))
+                .toList();
+        return new PrefundingDeductionHistoryView(code, entries, capped);
     }
 
     public record DeductRequest(String txnRef, BigDecimal amount) { }

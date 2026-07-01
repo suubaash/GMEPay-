@@ -1,5 +1,6 @@
 package com.gme.pay.notify.dispatcher;
 
+import com.gme.pay.notify.alert.WebhookAlertService;
 import com.gme.pay.notify.domain.RetryPolicy;
 import com.gme.pay.notify.domain.WebhookSender;
 import com.gme.pay.notify.domain.WebhookSender.WebhookDeliveryResult;
@@ -10,6 +11,7 @@ import com.gme.pay.notify.persistence.WebhookDeliveryRepository;
 import com.gme.pay.notify.persistence.WebhookPersistenceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
@@ -57,13 +59,33 @@ public class WebhookDispatcher {
     /** Max PENDING rows pulled per drain (#92 — bound the fetch). */
     private final int batchSize;
 
+    /**
+     * Optional alerting collaborator (WBS 8.6-T24). When non-null, each drain checks the
+     * total PENDING backlog and fires a P2 queue-depth alert past the threshold. Nullable
+     * so the dispatcher unit test can construct it without an alert sink.
+     */
+    private final WebhookAlertService alertService;
+
+    /** Backwards-compatible constructor — no queue-depth alerting. */
     public WebhookDispatcher(WebhookSender sender,
                              WebhookDeliveryRepository deliveryRepository,
                              WebhookPersistenceService persistence,
                              WebhookTargetResolver targetResolver,
                              RetryPolicy retryPolicy,
                              Clock clock,
-                             @Value("${gmepay.webhook.dispatcher.batch-size:200}") int batchSize) {
+                             int batchSize) {
+        this(sender, deliveryRepository, persistence, targetResolver, retryPolicy, clock, batchSize, null);
+    }
+
+    @Autowired
+    public WebhookDispatcher(WebhookSender sender,
+                             WebhookDeliveryRepository deliveryRepository,
+                             WebhookPersistenceService persistence,
+                             WebhookTargetResolver targetResolver,
+                             RetryPolicy retryPolicy,
+                             Clock clock,
+                             @Value("${gmepay.webhook.dispatcher.batch-size:200}") int batchSize,
+                             WebhookAlertService alertService) {
         this.sender = Objects.requireNonNull(sender);
         this.deliveryRepository = Objects.requireNonNull(deliveryRepository);
         this.persistence = Objects.requireNonNull(persistence);
@@ -71,6 +93,7 @@ public class WebhookDispatcher {
         this.retryPolicy = Objects.requireNonNull(retryPolicy);
         this.clock = Objects.requireNonNull(clock);
         this.batchSize = batchSize > 0 ? batchSize : 200;
+        this.alertService = alertService; // optional: may be null
     }
 
     /**
@@ -82,6 +105,13 @@ public class WebhookDispatcher {
             fixedDelayString = "${gmepay.webhook.dispatcher.interval-ms:30000}",
             initialDelayString = "${gmepay.webhook.dispatcher.initial-delay-ms:5000}")
     public void drainPending() {
+        // WBS 8.6-T24: fire a P2 queue-depth alert if the global PENDING backlog has
+        // breached the threshold (deduped + suppressed inside the alert service).
+        if (alertService != null) {
+            long pendingTotal = deliveryRepository.countByStatus(WebhookPersistenceService.STATUS_PENDING);
+            alertService.fireQueueDepthAlert(null, pendingTotal);
+        }
+
         List<WebhookDeliveryEntity> pending = deliveryRepository.findByStatusOrderByCreatedAtAsc(
                 WebhookPersistenceService.STATUS_PENDING, PageRequest.of(0, batchSize));
         if (pending.isEmpty()) {

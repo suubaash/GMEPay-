@@ -93,6 +93,14 @@ public class SettlementBatchEntity {
     @Column(name = "error_detail", length = 1024)
     private String errorDetail;
 
+    /**
+     * Set once the batch's {@link #roundingResidual} has been POSTed to revenue-ledger
+     * ({@code /v1/journals/rounding-residual}). Once-per-batch guard (V009): a recon re-run that finds
+     * this non-null never re-posts. Null = not yet posted.
+     */
+    @Column(name = "residual_posted_at")
+    private Instant residualPostedAt;
+
     public SettlementBatchEntity() {
         // JPA no-arg constructor
     }
@@ -216,6 +224,9 @@ public class SettlementBatchEntity {
 
     public String getErrorDetail() { return errorDetail; }
     public void setErrorDetail(String errorDetail) { this.errorDetail = errorDetail; }
+
+    public Instant getResidualPostedAt() { return residualPostedAt; }
+    public void setResidualPostedAt(Instant residualPostedAt) { this.residualPostedAt = residualPostedAt; }
 
     @Override
     public boolean equals(Object o) {

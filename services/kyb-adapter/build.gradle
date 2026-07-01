@@ -11,10 +11,24 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Slice 3 persistence: kyb-adapter keeps its OWN durable record of every
+    // verification run (kyb_screening) so GET /v1/kyb/result/{ref} can serve it
+    // and a re-screen of an unchanged subject is idempotent. config-registry's
+    // partner_kyb stays the regulator-defensible partner-side record (ADR-007);
+    // this table is the adapter-side run log, keyed by the deterministic
+    // providerRef. H2 by default (no Docker for unit slices), Postgres in prod.
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-kyb')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
     implementation project(':libs:lib-events-kafka')
+
+    // Flyway 10.x ships PostgreSQL support as a separate module (prod); H2
+    // support stays in flyway-core for the in-memory unit-slice datasource.
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

@@ -1,5 +1,6 @@
 package com.gme.pay.txn.service;
 
+import com.gme.pay.contracts.CommittedFxView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.txn.domain.model.Transaction;
@@ -14,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -85,6 +87,37 @@ public class TransactionService {
                                                   String merchantId,
                                                   String quoteId,
                                                   BigDecimal merchantFeeRate) {
+        return createFromPaymentExecutor(partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                targetPayout, payoutCurrency, collectionAmount, collectionCurrency, merchantId,
+                quoteId, merchantFeeRate, null, null, null, null, null, null);
+    }
+
+    /**
+     * Wave-3 create path overload: additionally persists the rate-lock pool fields (margins,
+     * collection-leg USD, per-leg cost rates, payout USD cost) when payment-executor carries them
+     * at creation, so the committed-FX projection can later derive a margin-accurate
+     * {@code offerRateColl}. All pool args nullable — null leaves the snapshot empty (current
+     * behaviour). The commit-time PATCH may still supersede/fill these via its own pool fields.
+     */
+    @Transactional
+    public Transaction createFromPaymentExecutor(Long partnerId,
+                                                  String partnerTxnRef,
+                                                  String schemeId,
+                                                  String direction,
+                                                  String paymentMode,
+                                                  BigDecimal targetPayout,
+                                                  String payoutCurrency,
+                                                  BigDecimal collectionAmount,
+                                                  String collectionCurrency,
+                                                  String merchantId,
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate,
+                                                  BigDecimal collectionMarginUsd,
+                                                  BigDecimal payoutMarginUsd,
+                                                  BigDecimal collectionUsd,
+                                                  BigDecimal costRateColl,
+                                                  BigDecimal costRatePay,
+                                                  BigDecimal payoutUsdCost) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -113,6 +146,9 @@ public class TransactionService {
                 merchantId, quoteId);
         // V005: snapshot the gross merchant fee rate the caller resolved at creation.
         txn.applyMerchantFeeRate(merchantFeeRate);
+        // Wave-3: persist the rate-lock pool snapshot if carried at creation (margin-accurate FX1015).
+        txn.applyRateLockPool(collectionMarginUsd, payoutMarginUsd, collectionUsd,
+                costRateColl, costRatePay, payoutUsdCost);
         return repository.save(txn);
     }
 
@@ -143,35 +179,59 @@ public class TransactionService {
                                    Instant approvedAt,
                                    BigDecimal bookedSettlementAmount,
                                    String settlementRoundingMode,
-                                   BigDecimal roundingResidual) {
+                                   BigDecimal roundingResidual,
+                                   BigDecimal collectionMarginUsd,
+                                   BigDecimal payoutMarginUsd,
+                                   BigDecimal collectionUsd,
+                                   BigDecimal costRateColl,
+                                   BigDecimal costRatePay) {
         Transaction txn = getByTxnRef(txnRef);
 
+        // Apply the lock fields — incl. the Wave-3 rate-lock pool (margins, collectionUsd, cost
+        // rates) — BEFORE the FSM transition. The APPROVED transition captures the committed-FX
+        // projection from the aggregate, so the margins/collectionUsd must already be present for
+        // a margin-accurate offerRateColl (else it falls back to the zero-margin approximation).
+        txn.applyStatusPatch(schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                collectionMarginUsd, payoutMarginUsd, collectionUsd, costRateColl, costRatePay);
+
         // Map from PaymentStatus (payment-executor) → TransactionStatus (this service).
+        // Skip the transition when the target equals the current status: a PATCH that merely
+        // re-asserts the same status (idempotent retry) must still apply the lock fields, but
+        // a self-edge is not legal in the FSM and would raise TransitionBlockedException.
         TransactionStatus target = mapPaymentStatus(newStatus);
-        if (target != null) {
+        if (target != null && target != txn.status()) {
             stateMachine.transition(txn, target);
         }
 
-        txn.applyStatusPatch(schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
-                bookedSettlementAmount, settlementRoundingMode, roundingResidual);
         return repository.save(txn);
     }
 
     /**
      * Maps a PaymentStatus name (from payment-executor) to TransactionStatus.
-     * Returns {@code null} for statuses that have no equivalent (PENDING, UNCERTAIN, etc.)
-     * so the lock fields can still be applied without a state transition.
+     *
+     * <p>Every payment-executor status now maps to a real {@link TransactionStatus} so the
+     * PATCH endpoint performs an actual FSM transition (P1 gap: cancel/refund/uncertain were
+     * previously applied as lock-field-only updates with no state change). Returns {@code null}
+     * only for an unknown / unmapped status string, so the lock fields can still be applied
+     * without an (illegal) transition.
+     *
+     * <p>{@code SCHEME_SENT} maps to itself; {@code UNCERTAIN} maps to {@link TransactionStatus#UNCERTAIN}
+     * (scheme timeout — held pending reconciliation). When the current status already equals the
+     * target the caller skips the transition (re-applying the same status is not a legal self-edge).
      */
     private TransactionStatus mapPaymentStatus(String paymentStatus) {
         if (paymentStatus == null) return null;
         return switch (paymentStatus) {
-            case "APPROVED"  -> TransactionStatus.APPROVED;
-            case "FAILED"    -> TransactionStatus.FAILED;
-            case "CANCELLED" -> TransactionStatus.CANCELLED;
-            case "REVERSED"  -> TransactionStatus.REVERSED;
-            case "REFUNDED"  -> TransactionStatus.REFUNDED;
-            case "PENDING"   -> TransactionStatus.PENDING_DEBIT;
-            default          -> null; // UNCERTAIN — no direct mapping (lock fields applied without a transition)
+            case "APPROVED"    -> TransactionStatus.APPROVED;
+            case "FAILED"      -> TransactionStatus.FAILED;
+            case "CANCELLED"   -> TransactionStatus.CANCELLED;
+            case "REVERSED"    -> TransactionStatus.REVERSED;
+            case "REFUNDED"    -> TransactionStatus.REFUNDED;
+            case "PENDING"     -> TransactionStatus.PENDING_DEBIT;
+            case "SCHEME_SENT" -> TransactionStatus.SCHEME_SENT;
+            case "UNCERTAIN"   -> TransactionStatus.UNCERTAIN;
+            default            -> null; // unknown status — lock fields applied without a transition
         };
     }
 
@@ -192,6 +252,64 @@ public class TransactionService {
         PageRequest pageRequest = PageRequest.of(page, safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         return repository.findByFilters(from, to, status, partnerId, pageRequest);
+    }
+
+    /**
+     * Committed-FX projection feed (GET /v1/transactions/fx-committed). Maps each committed
+     * transaction to the canonical {@link CommittedFxView} contract — the rate-locked FX fields
+     * captured at commit. {@code from}/{@code to} are inclusive date bounds (nullable); a null
+     * partnerId returns all partners.
+     *
+     * <p>{@code direction} rides as the wire String per the contract. Same-currency short-circuit
+     * rows carry null offerRateColl/crossRate (no FX leg).
+     */
+    public List<CommittedFxView> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
+        return repository.findCommittedFx(from, to, partnerId).stream()
+                .map(TransactionService::toCommittedFxView)
+                .toList();
+    }
+
+    /** Maps a committed aggregate to the canonical {@link CommittedFxView}. */
+    static CommittedFxView toCommittedFxView(Transaction txn) {
+        return new CommittedFxView(
+                stableTxnId(txn.txnRef()),
+                txn.txnRef(),
+                txn.partnerId() != null ? txn.partnerId() : 0L,
+                txn.direction(),
+                Boolean.TRUE.equals(txn.sameCcyShortcircuit()),
+                txn.offerRateColl(),
+                txn.crossRate(),
+                txn.collectionAmount() != null ? txn.collectionAmount() : txn.sendAmount(),
+                txn.collectionCurrency() != null ? txn.collectionCurrency() : txn.sendCcy(),
+                txn.targetPayout(),
+                txn.payoutCurrency() != null ? txn.payoutCurrency() : txn.targetCcy(),
+                txn.usdAmount(),
+                txn.collectionMarginUsd(),
+                txn.payoutMarginUsd(),
+                txn.committedAt());
+    }
+
+    /**
+     * Derives a stable numeric txnId for the projection's {@code long txnId} slot. The aggregate's
+     * key is a UUID string; consumers (reporting-compliance CommittedTransaction) carry a long id,
+     * so we expose a deterministic non-negative hash of the txnRef. The authoritative key remains
+     * {@code txnRef}; this is purely the contract's numeric handle.
+     */
+    static long stableTxnId(String txnRef) {
+        return txnRef == null ? 0L : (txnRef.hashCode() & 0x7fffffffL);
+    }
+
+    /**
+     * Refund query (GET /v1/transactions/refunded?refundedOn). Returns the transactions refunded
+     * on the given calendar day, as domain aggregates (the controller maps to the refund DTO with
+     * the original payment txnRef). Settlement-reconciliation uses this for cross-date refund
+     * netting against the refund date rather than the original creation date.
+     */
+    public List<Transaction> findRefundedOn(LocalDate refundedOn) {
+        if (refundedOn == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "refundedOn is required");
+        }
+        return repository.findRefundedOn(refundedOn);
     }
 
     /**
@@ -235,6 +353,57 @@ public class TransactionService {
     public Transaction toCancelled(String txnRef) {
         Transaction txn = getByTxnRef(txnRef);
         stateMachine.transition(txn, TransactionStatus.CANCELLED);
+        return repository.save(txn);
+    }
+
+    /**
+     * Transitions a transaction to {@link TransactionStatus#SCHEME_SENT}.
+     * Called when the scheme adapter dispatch is about to be issued; recorded
+     * <em>before</em> the HTTP call so a crash mid-flight leaves a reconcilable row.
+     */
+    @Transactional
+    public Transaction toSchemeSent(String txnRef) {
+        Transaction txn = getByTxnRef(txnRef);
+        stateMachine.transition(txn, TransactionStatus.SCHEME_SENT);
+        return repository.save(txn);
+    }
+
+    /**
+     * Transitions a transaction to {@link TransactionStatus#UNCERTAIN}.
+     * Typical caller: scheme adapter timeout (no response within SLA). The prefunding
+     * deduction is held — reversal happens only on a FAILED reconciliation outcome.
+     */
+    @Transactional
+    public Transaction toUncertain(String txnRef) {
+        Transaction txn = getByTxnRef(txnRef);
+        stateMachine.transition(txn, TransactionStatus.UNCERTAIN);
+        return repository.save(txn);
+    }
+
+    /**
+     * Resolves an {@link TransactionStatus#UNCERTAIN} transaction via batch reconciliation
+     * (ZP0012 / ZP0022 from ZeroPay, ~05:00 KST). Idempotent: if the transaction is no longer
+     * UNCERTAIN (already resolved by a prior call), this is a no-op and returns the row unchanged.
+     *
+     * @param txnRef  the transaction reference
+     * @param outcome the resolved terminal status — must be {@link TransactionStatus#APPROVED}
+     *                or {@link TransactionStatus#FAILED}
+     * @throws ApiException with {@link ErrorCode#VALIDATION_ERROR} if {@code outcome} is not
+     *                      APPROVED or FAILED
+     */
+    @Transactional
+    public Transaction resolveUncertain(String txnRef, TransactionStatus outcome) {
+        if (outcome != TransactionStatus.APPROVED && outcome != TransactionStatus.FAILED) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "resolveUncertain outcome must be APPROVED or FAILED, was: " + outcome);
+        }
+        Transaction txn = getByTxnRef(txnRef);
+        // Idempotency guard: only an UNCERTAIN transaction can be resolved. A second call
+        // (already APPROVED/FAILED) is a no-op so the reconciliation job can re-run safely.
+        if (txn.status() != TransactionStatus.UNCERTAIN) {
+            return txn;
+        }
+        stateMachine.transition(txn, outcome);
         return repository.save(txn);
     }
 }

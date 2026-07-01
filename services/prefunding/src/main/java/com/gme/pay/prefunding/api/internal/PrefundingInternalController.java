@@ -1,0 +1,209 @@
+package com.gme.pay.prefunding.api.internal;
+
+import com.gme.pay.contracts.PrefundingReleaseRequest;
+import com.gme.pay.contracts.PrefundingReserveRequest;
+import com.gme.pay.contracts.PrefundingReserveResponse;
+import com.gme.pay.errors.ApiException;
+import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.prefunding.service.PrefundingService;
+import java.math.BigDecimal;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Internal (service-to-service) REST surface consumed by <b>transaction-mgmt</b> to drive a
+ * payment's prefunding leg WITHOUT cross-DB access (MSA rule: each service owns its own DB).
+ *
+ * <p>Two atomic, idempotent operations, each backed by a per-partner {@code SELECT FOR UPDATE}
+ * (see {@link PrefundingService}):
+ * <ul>
+ *   <li>{@code POST /internal/v1/prefunding/{partnerId}/deduct} — move PENDING_DEBIT → DEBITED.
+ *       Idempotent by the caller's idempotency key (body {@code idempotencyKey}, or the
+ *       {@code Idempotency-Key} header). A replay returns the original DEBIT ledger entry id and the
+ *       unchanged balance rather than double-charging. 402 INSUFFICIENT_PREFUNDING when a fresh
+ *       deduction would overdraw.</li>
+ *   <li>{@code POST /internal/v1/prefunding/{partnerId}/reverse} — undo a prior deduction (refund /
+ *       UNCERTAIN→FAILED). Idempotent by {@code txnRef}: a second reverse credits nothing and reports
+ *       {@code reversedUsd=0}. Restores the originally-debited amount onto the balance.</li>
+ * </ul>
+ *
+ * <p>Both return the resulting balance + the ledger entry id so transaction-mgmt can record the
+ * concrete ledger reference against its own transaction row. This path is internal-network only
+ * (not routed via the public gateway); network-level policy is the trust boundary.
+ */
+@RestController
+@RequestMapping("/internal/v1/prefunding")
+public class PrefundingInternalController {
+
+    static final String CURRENCY = "USD";
+
+    private final PrefundingService service;
+
+    public PrefundingInternalController(PrefundingService service) {
+        this.service = service;
+    }
+
+    /**
+     * Atomically deduct {@code amountUsd} for a confirmed payment. The idempotency key is taken from
+     * the request body, falling back to the {@code Idempotency-Key} header; at least one MUST be
+     * present (it is also persisted as the ledger {@code txn_ref} so the reverse path can find it).
+     */
+    @PostMapping("/{partnerId}/deduct")
+    public DeductResponse deduct(@PathVariable String partnerId,
+                                 @RequestBody DeductRequest req,
+                                 @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String key = firstNonBlank(req == null ? null : req.idempotencyKey(), headerKey);
+        if (key == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "idempotencyKey (body) or Idempotency-Key (header) is required");
+        }
+        if (req == null || req.amountUsd() == null || req.amountUsd().signum() <= 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "amountUsd is required and must be > 0");
+        }
+        PrefundingService.DeductResult r = service.deductIdempotent(partnerId, key, req.amountUsd());
+        return new DeductResponse(partnerId, r.balanceAfter(), CURRENCY, r.ledgerEntryId(), r.replayed());
+    }
+
+    /**
+     * Atomically reverse the prior deduction identified by {@code txnRef} (the idempotency key used at
+     * deduct time). Idempotent: a replay reports {@code reversedUsd=0} and the existing reversal entry
+     * id (or {@code null} if there was nothing to reverse).
+     */
+    @PostMapping("/{partnerId}/reverse")
+    public ReverseResponse reverse(@PathVariable String partnerId,
+                                   @RequestBody ReverseRequest req,
+                                   @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String txnRef = firstNonBlank(req == null ? null : req.txnRef(), headerKey);
+        if (txnRef == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "txnRef (body) or Idempotency-Key (header) is required");
+        }
+        PrefundingService.ReverseResult r = service.reverse(partnerId, txnRef);
+        return new ReverseResponse(partnerId, r.reversedAmount(), r.balanceAfter(), CURRENCY,
+                r.ledgerEntryId());
+    }
+
+    /**
+     * Soft-hold {@code amountUsd} of the partner's available funds at OVERSEAS CPM token issuance
+     * (qr-service IR-qr-3). Idempotent on {@code idempotencyKey} (the CPM token / session id); the
+     * matching {@link #release} reuses it. Atomic per-partner {@code SELECT FOR UPDATE}, non-negative
+     * invariant honoured against (balance + credit_limit − reserved) → 402 INSUFFICIENT_PREFUNDING on
+     * overdraw. Returns the {@code reservationId} handle plus available + total reserved after the hold.
+     */
+    @PostMapping("/{partnerId}/reserve")
+    public PrefundingReserveResponse reserve(@PathVariable String partnerId,
+                                             @RequestBody PrefundingReserveRequest req,
+                                             @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String key = firstNonBlank(req == null ? null : req.idempotencyKey(),
+                firstNonBlank(req == null ? null : req.txnRef(), headerKey));
+        if (key == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "idempotencyKey/txnRef (body) or Idempotency-Key (header) is required");
+        }
+        if (req == null || req.amountUsd() == null || req.amountUsd().signum() <= 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "amountUsd is required and must be > 0");
+        }
+        PrefundingService.CpmReserveResult r = service.reserveForCpm(partnerId, key, req.amountUsd());
+        String reservationId = r.reservationId() == null ? null : String.valueOf(r.reservationId());
+        return new PrefundingReserveResponse(req.partnerId(), reservationId,
+                r.reservedAmount(), r.available(), r.reservedTotal());
+    }
+
+    /**
+     * Free the CPM hold taken by {@link #reserve} on token expiry / decline. Idempotent on
+     * {@code idempotencyKey} (reuse the reserve key); a release that already ran — or for which no active
+     * hold exists — is a 0 no-op. Returns the resulting balance + total reserved after release.
+     */
+    @PostMapping("/{partnerId}/release")
+    public ReleaseHoldResponse release(@PathVariable String partnerId,
+                                       @RequestBody PrefundingReleaseRequest req,
+                                       @RequestHeader(value = "Idempotency-Key", required = false) String headerKey) {
+        String key = firstNonBlank(req == null ? null : req.idempotencyKey(), headerKey);
+        if (key == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "idempotencyKey (body) or Idempotency-Key (header) is required");
+        }
+        PrefundingService.CpmReleaseResult r = service.releaseForCpm(partnerId, key);
+        return new ReleaseHoldResponse(partnerId, r.releasedAmount(), r.balance(), r.reservedTotal(),
+                CURRENCY, req == null ? null : req.reservationId());
+    }
+
+    /** Result of a CPM release: amount freed, resulting balance + total reserved, echoed reservation handle. */
+    public record ReleaseHoldResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance,
+                                      BigDecimal reservedUsd, String currency, String reservationId) { }
+
+    /**
+     * Idempotent upsert of the per-partner limits config-registry pushes (IR-pf-2): the credit headroom
+     * {@code creditLimitUsd} plus the AML daily/monthly/annual amount caps and the daily transaction-count
+     * cap. Stored on the partner row so the deduct/reserve gate (available = balance + credit_limit −
+     * reserved) and the AML cap gate read them instead of receiving them per-request. Re-PUT overwrites
+     * with the latest config; a {@code null} cap clears that period's cap. If the partner has no balance
+     * row yet (config push can precede provisioning) one is created with a zero opening balance so the
+     * limits are not lost. Returns the stored limits + the resulting available + balance.
+     */
+    @PutMapping("/{partnerId}/credit-limit")
+    public CreditLimitPushResponse pushCreditLimit(@PathVariable String partnerId,
+                                                   @RequestBody CreditLimitPushRequest req) {
+        if (req == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "request body is required");
+        }
+        rejectNegative(req.creditLimitUsd(), "creditLimitUsd");
+        rejectNegative(req.amlDailyCapUsd(), "amlDailyCapUsd");
+        rejectNegative(req.amlMonthlyCapUsd(), "amlMonthlyCapUsd");
+        rejectNegative(req.amlAnnualCapUsd(), "amlAnnualCapUsd");
+        if (req.amlDailyTxnCountCap() != null && req.amlDailyTxnCountCap() < 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "amlDailyTxnCountCap must be >= 0");
+        }
+        PrefundingService.PartnerLimits r = service.pushPartnerLimits(partnerId,
+                req.creditLimitUsd(), req.amlDailyCapUsd(), req.amlMonthlyCapUsd(),
+                req.amlAnnualCapUsd(), req.amlDailyTxnCountCap());
+        return new CreditLimitPushResponse(partnerId, r.creditLimitUsd(), r.amlDailyCapUsd(),
+                r.amlMonthlyCapUsd(), r.amlAnnualCapUsd(), r.amlDailyTxnCountCap(), r.available(),
+                r.balance(), CURRENCY);
+    }
+
+    private static void rejectNegative(BigDecimal v, String field) {
+        if (v != null && v.signum() < 0) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, field + " must be >= 0");
+        }
+    }
+
+    /**
+     * Per-partner limit push from config-registry. Money fields arrive as decimal strings (Jackson binds
+     * string → {@link BigDecimal} losslessly per MONEY_CONVENTION). Any cap may be {@code null} = no cap.
+     */
+    public record CreditLimitPushRequest(BigDecimal creditLimitUsd, BigDecimal amlDailyCapUsd,
+                                         BigDecimal amlMonthlyCapUsd, BigDecimal amlAnnualCapUsd,
+                                         Integer amlDailyTxnCountCap) { }
+
+    public record CreditLimitPushResponse(String partnerId, BigDecimal creditLimitUsd,
+                                          BigDecimal amlDailyCapUsd, BigDecimal amlMonthlyCapUsd,
+                                          BigDecimal amlAnnualCapUsd, Integer amlDailyTxnCountCap,
+                                          BigDecimal available, BigDecimal balance, String currency) { }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a.trim();
+        }
+        if (b != null && !b.isBlank()) {
+            return b.trim();
+        }
+        return null;
+    }
+
+    /** {@code amountUsd} as a decimal (Jackson binds string→BigDecimal losslessly per MONEY_CONVENTION). */
+    public record DeductRequest(String idempotencyKey, BigDecimal amountUsd) { }
+
+    public record DeductResponse(String partnerId, BigDecimal balance, String currency,
+                                 Long ledgerEntryId, boolean replayed) { }
+
+    public record ReverseRequest(String txnRef) { }
+
+    public record ReverseResponse(String partnerId, BigDecimal reversedUsd, BigDecimal balance,
+                                  String currency, Long ledgerEntryId) { }
+}

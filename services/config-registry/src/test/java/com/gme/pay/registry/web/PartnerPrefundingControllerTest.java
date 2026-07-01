@@ -48,7 +48,9 @@ import org.springframework.test.web.servlet.MockMvc;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({PartnerPrefundingControllerTest.TestConfig.class, PrefundingConfigService.class,
-        AuditLogService.class, PartnerStore.class, CacheConfig.class})
+        AuditLogService.class, PartnerStore.class, CacheConfig.class,
+        com.gme.pay.registry.prefunding.push.CreditLimitPusher.class,
+        com.gme.pay.registry.prefunding.push.NoOpPrefundingCreditLimitClient.class})
 class PartnerPrefundingControllerTest {
 
     @Autowired

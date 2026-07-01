@@ -9,6 +9,7 @@ import com.gme.pay.registry.bank.BankAccountPurpose;
 import com.gme.pay.registry.bank.BankAccountRepository;
 import com.gme.pay.registry.persistence.PartnerEntity;
 import com.gme.pay.registry.persistence.PartnerRepository;
+import com.gme.pay.registry.prefunding.push.CreditLimitPusher;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -93,15 +94,18 @@ public class PrefundingConfigService {
     private final BankAccountRepository bankAccountRepository;
     private final PartnerRepository partnerRepository;
     private final ObjectProvider<AuditLogService> auditLogProvider;
+    private final CreditLimitPusher creditLimitPusher;
 
     public PrefundingConfigService(PrefundingConfigRepository configRepository,
                                    BankAccountRepository bankAccountRepository,
                                    PartnerRepository partnerRepository,
-                                   ObjectProvider<AuditLogService> auditLogProvider) {
+                                   ObjectProvider<AuditLogService> auditLogProvider,
+                                   CreditLimitPusher creditLimitPusher) {
         this.configRepository = configRepository;
         this.bankAccountRepository = bankAccountRepository;
         this.partnerRepository = partnerRepository;
         this.auditLogProvider = auditLogProvider;
+        this.creditLimitPusher = creditLimitPusher;
     }
 
     /**
@@ -160,6 +164,9 @@ public class PrefundingConfigService {
         publishAudit(partnerCode, actor,
                 priorOpt.map(PrefundingJson::canonical).orElse(null),
                 PrefundingJson.canonical(saved));
+        // Wave-3 (IR-pf-2): the credit line just changed — push the merged
+        // credit-limit + AML caps to prefunding (gated; no-op by default).
+        creditLimitPusher.pushFor(partner);
         return saved.toView();
     }
 

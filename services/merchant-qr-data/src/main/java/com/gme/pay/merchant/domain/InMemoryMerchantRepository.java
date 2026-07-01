@@ -2,6 +2,7 @@ package com.gme.pay.merchant.domain;
 
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * sandbox can validate end-to-end without real SFTP credentials (UC-07-03).
  */
 @Repository
-public class InMemoryMerchantRepository implements MerchantRepository {
+public class InMemoryMerchantRepository implements MerchantRepository, ReconcilableMerchantRepository {
 
     private final Map<String, Merchant> store = new ConcurrentHashMap<>();
 
@@ -71,6 +72,11 @@ public class InMemoryMerchantRepository implements MerchantRepository {
             return Optional.empty();
         }
         return Optional.ofNullable(store.get(qrCodeId));
+    }
+
+    @Override
+    public List<Merchant> findAll() {
+        return List.copyOf(store.values());
     }
 
     /** Adds or replaces a merchant entry — used by tests and seed loaders. */

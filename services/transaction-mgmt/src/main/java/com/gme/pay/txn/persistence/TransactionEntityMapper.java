@@ -54,6 +54,24 @@ public final class TransactionEntityMapper {
         e.setPrefundDeductedUsd(txn.prefundDeductedUsd());
         e.setApprovedAt(txn.approvedAt());
         e.setFailureReason(txn.failureReason());
+        // V007: committed-FX projection + refund enrichment
+        e.setOfferRateColl(txn.offerRateColl());
+        e.setCrossRate(txn.crossRate());
+        e.setCollectionMarginUsd(txn.collectionMarginUsd());
+        e.setPayoutMarginUsd(txn.payoutMarginUsd());
+        e.setUsdAmount(txn.usdAmount());
+        e.setSameCcyShortcircuit(txn.sameCcyShortcircuit());
+        e.setSettlementDate(txn.settlementDate());
+        e.setCommittedAt(txn.committedAt());
+        e.setRefundAmountKrw(txn.refundAmountKrw());
+        e.setQrCodeId(txn.qrCodeId());
+        e.setRefundedAt(txn.refundedAt());
+        e.setOriginalPaymentTxnRef(txn.originalPaymentTxnRef());
+        // V008: Wave-3 rate-lock pool
+        e.setCollectionUsd(txn.collectionUsd());
+        e.setCostRateColl(txn.costRateColl());
+        e.setCostRatePay(txn.costRatePay());
+        e.setPayoutUsdCost(txn.payoutUsdCost());
         return e;
     }
 
@@ -94,6 +112,20 @@ public final class TransactionEntityMapper {
                 e.getFailureReason());
         // V005: snapshot field has no constructor slot — replay it post-construction.
         txn.applyMerchantFeeRate(e.getMerchantFeeRate());
+        // V007: committed-FX projection + refund enrichment — replayed post-construction.
+        txn.applyCommittedFx(
+                e.getOfferRateColl(), e.getCrossRate(),
+                e.getCollectionMarginUsd(), e.getPayoutMarginUsd(),
+                e.getUsdAmount(), e.getSameCcyShortcircuit(),
+                e.getSettlementDate(), e.getCommittedAt());
+        txn.applyRefundEnrichment(
+                e.getRefundAmountKrw(), e.getQrCodeId(),
+                e.getRefundedAt(), e.getOriginalPaymentTxnRef());
+        // V008: Wave-3 rate-lock pool — replayed post-construction.
+        txn.applyRateLockPool(
+                e.getCollectionMarginUsd(), e.getPayoutMarginUsd(),
+                e.getCollectionUsd(), e.getCostRateColl(),
+                e.getCostRatePay(), e.getPayoutUsdCost());
         return txn;
     }
 }

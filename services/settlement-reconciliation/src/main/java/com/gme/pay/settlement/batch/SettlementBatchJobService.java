@@ -16,7 +16,10 @@ import com.gme.pay.settlement.persistence.SettlementBatchEntity;
 import com.gme.pay.settlement.persistence.SettlementBatchRepository;
 import com.gme.pay.settlement.persistence.SettlementLineEntity;
 import com.gme.pay.settlement.persistence.SettlementLineRepository;
+import com.gme.pay.settlement.client.FixtureRefundedTransactionAdapter;
 import com.gme.pay.settlement.port.PartnerConfigPort;
+import com.gme.pay.settlement.port.RefundedTransactionPort;
+import com.gme.pay.settlement.port.RefundedTransactionPort.RefundLeg;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,11 +95,15 @@ public class SettlementBatchJobService {
     private final SettlementBatchRepository batchRepo;
     private final SettlementLineRepository lineRepo;
     private final EventPublisher outbox;
+    /** Refund-DATE keyed port: surfaces refunds processed today whose original payment may have been
+     *  settled on a PRIOR day, so a cross-date claw-back nets back to the window that credited it. */
+    private final RefundedTransactionPort refundedPort;
 
     /** Window cutoff times (KST). null = no cutoff for that window (include all). */
     private final LocalTime morningCutoff;
     private final LocalTime afternoonCutoff;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
                                      SettlementBookingService booking,
@@ -104,6 +111,7 @@ public class SettlementBatchJobService {
                                      SettlementBatchRepository batchRepo,
                                      SettlementLineRepository lineRepo,
                                      @Qualifier(OutboxAppender.BEAN_NAME) EventPublisher outbox,
+                                     RefundedTransactionPort refundedPort,
                                      @Value("${settlement.morning-cutoff:04:30}") String morningCutoff,
                                      @Value("${settlement.afternoon-cutoff:13:30}") String afternoonCutoff) {
         this.txnPort = txnPort;
@@ -113,8 +121,27 @@ public class SettlementBatchJobService {
         this.batchRepo = batchRepo;
         this.lineRepo = lineRepo;
         this.outbox = outbox;
+        this.refundedPort = refundedPort;
         this.morningCutoff = parseCutoff(morningCutoff, "morning-cutoff");
         this.afternoonCutoff = parseCutoff(afternoonCutoff, "afternoon-cutoff");
+    }
+
+    /**
+     * Backwards-compatible constructor without the refund-date port (defaults to the in-process
+     * {@link FixtureRefundedTransactionAdapter} no-op). Kept so existing call sites/tests that predate the
+     * cross-date refund-date wiring compile unchanged; production DI uses the full constructor above.
+     */
+    public SettlementBatchJobService(TransactionQueryPort txnPort,
+                                     PartnerConfigPort partnerConfigPort,
+                                     SettlementBookingService booking,
+                                     SettlementBatchFactory batchFactory,
+                                     SettlementBatchRepository batchRepo,
+                                     SettlementLineRepository lineRepo,
+                                     EventPublisher outbox,
+                                     String morningCutoff,
+                                     String afternoonCutoff) {
+        this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
+                new FixtureRefundedTransactionAdapter(), morningCutoff, afternoonCutoff);
     }
 
     /** @param fileType "ZP0061" (morning) or "ZP0063" (afternoon); @param window e.g. "MORNING"/"AFTERNOON". */
@@ -239,6 +266,15 @@ public class SettlementBatchJobService {
             feeTotal = feeTotal.add(fileFee);
             residualTotal = residualTotal.add(booked.residual());
         }
+
+        // CROSS-DATE refund claw-back (settlement IR-1). The grouping above keys refunds to their original
+        // payment's CREATION date, so a payment settled on a prior day and refunded TODAY is invisible to it.
+        // The refund-DATE port surfaces exactly those legs; each carries the ORIGINAL payment txnRef, so we
+        // claw it back against the prior batch that credited the merchant — netted, persisted as a negative
+        // line, and reported as its own per-merchant claw-back row. Only legs whose original payment was
+        // already settled (positive line) and not yet clawed back (no negative line) net, keeping the
+        // claw-back idempotent across windows; same-day legs already counted above are skipped here.
+        netTotal = netTotal.add(foldCrossDateRefunds(batch, date, cutoff, rows));
 
         BuildContext ctx = new BuildContext(date.format(DateTimeFormatter.BASIC_ISO_DATE), 1, rows);
         AbstractZeroPayFileBuilder.BuiltFile file = new ZP0061RequestBuilder(fileType).build(ctx);
@@ -421,6 +457,118 @@ public class SettlementBatchJobService {
                 null, line.getTxnRef(), line.getSchemeRef(), line.getMerchantId(),
                 nz(line.getAmount()).abs(), type, nz(line.getMerchantFeeRate()),
                 status, approvedAt, null);
+    }
+
+    /**
+     * Fetch the refund-DATE legs processed on {@code date} (within the window cutoff) and claw back the ones
+     * whose ORIGINAL payment was settled in a PRIOR batch and not yet clawed back, returning the total
+     * (negative) net delta. Each eligible leg is persisted as a negative claw-back line — keyed by the leg's
+     * own refund txnRef so it is the cross-window idempotency marker — and reported as a GROSS claw-back row.
+     *
+     * <p>Disjoint from the creation-date refunds netted in {@link #runWindow}'s main loop: the per-leg
+     * negative-line idempotency marker (keyed by the refund's own txnRef) guards against a leg being clawed
+     * back twice — across windows and against a same-day refund the main loop already netted.
+     */
+    private BigDecimal foldCrossDateRefunds(SettlementBatchEntity batch, LocalDate date, Instant cutoff,
+                                            List<BuildContext.MerchantRow> rows) {
+        List<RefundLeg> legs = refundedPort.findRefundedOn(date);
+        if (legs.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        // Aggregate eligible claw-back magnitude per merchant (GROSS rows — fee was already taken at payout).
+        Map<String, BigDecimal> clawbackByMerchant = new LinkedHashMap<>();
+        Map<String, Integer> countByMerchant = new LinkedHashMap<>();
+        for (RefundLeg leg : legs) {
+            if (cutoff != null && leg.refundedAt() != null && leg.refundedAt().toInstant().isAfter(cutoff)) {
+                continue;   // after this window's cutoff — rolls into a later window
+            }
+            if (!isCrossDateClawbackEligible(leg)) {
+                continue;
+            }
+            BigDecimal amount = krw(leg.refundAmountKrw());
+            if (amount.signum() <= 0) {
+                continue;
+            }
+            // Persist the negative claw-back line under the LEG's own refund txnRef (idempotency marker +
+            // ZP0066 detail source). schemeRef/approvedAt snapshot the refund leg where available.
+            SettlementLineEntity line = new SettlementLineEntity(
+                    batch.getBatchId(), leg.refundTxnRef(), amount.negate(), SETTLE_CCY, false);
+            line.setSettlementType("G");
+            line.setSettlementRoundingMode(RoundingMode.HALF_UP.name());
+            line.setMerchantId(leg.merchantId());
+            line.setApprovedAt(leg.refundedAt() == null ? null : leg.refundedAt().toInstant());
+            line.setMerchantFeeRate(BigDecimal.ZERO);
+            lineRepo.save(line);
+
+            clawbackByMerchant.merge(leg.merchantId(), amount, BigDecimal::add);
+            countByMerchant.merge(leg.merchantId(), 1, Integer::sum);
+        }
+        BigDecimal delta = BigDecimal.ZERO;
+        for (Map.Entry<String, BigDecimal> e : clawbackByMerchant.entrySet()) {
+            String merchant = e.getKey();
+            BigDecimal clawback = e.getValue();
+            int legCount = countByMerchant.get(merchant);
+            // Reduce the BATCH net by the full claw-back regardless of how the file row carries it.
+            delta = delta.subtract(clawback);
+
+            // Prefer folding into the merchant's existing row this window (net stays >= 0 for the common
+            // case where today's payments exceed the prior-day claw-back). The file's numeric net field
+            // forbids a minus sign (num()), so when the claw-back exceeds the row's net we clamp the row's
+            // emitted net at 0 and carry the magnitude in refund_amount — the batch net (delta above) is
+            // still reduced by the full claw-back, so the settlement amount is correct.
+            int idx = indexOfMerchantRow(rows, merchant);
+            if (idx >= 0) {
+                BuildContext.MerchantRow r = rows.get(idx);
+                BigDecimal newNet = r.netSettlementAmount().subtract(clawback).max(BigDecimal.ZERO);
+                rows.set(idx, new BuildContext.MerchantRow(
+                        r.merchantId(), r.grossTxnCount(), r.grossTxnAmount(),
+                        r.refundCount() + legCount, r.refundAmount().add(clawback),
+                        r.merchantFeeTotal(), newNet, r.roundingResidual(), r.mode(), r.settlementType()));
+            } else {
+                // Refund-only merchant (no fresh payments this window): a pure GROSS claw-back row with
+                // net clamped at 0 and the claw-back in refund_amount.
+                rows.add(new BuildContext.MerchantRow(merchant, 0, BigDecimal.ZERO,
+                        legCount, clawback, BigDecimal.ZERO, BigDecimal.ZERO,
+                        BigDecimal.ZERO, RoundingMode.HALF_UP, 'G'));
+            }
+            log.info("cross-date claw-back: merchant {} −{} KRW ({} leg(s)) netted against prior settlement",
+                    merchant, clawback, legCount);
+        }
+        return delta;
+    }
+
+    /** Index of the first row for {@code merchant}, or -1. Cross-date claw-backs fold into it when present. */
+    private static int indexOfMerchantRow(List<BuildContext.MerchantRow> rows, String merchant) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).merchantId().equals(merchant)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * A cross-date refund leg is clawed back only if its ORIGINAL payment was already settled (a positive
+     * line exists for the original payment txnRef) and this refund has not already been clawed back (no
+     * negative line under the refund's OWN txnRef). Mirrors {@link #isClawbackEligible} but keys the
+     * settled-payment lookup off the original payment ref the leg carries.
+     */
+    private boolean isCrossDateClawbackEligible(RefundLeg leg) {
+        String original = leg.originalTxnRef();
+        String refundRef = leg.refundTxnRef();
+        if (original == null || original.isBlank()) {
+            log.debug("cross-date refund {} has no original payment ref — cannot net, skipping", refundRef);
+            return false;
+        }
+        if (!lineRepo.existsByTxnRefAndAmountGreaterThan(original, BigDecimal.ZERO)) {
+            log.debug("cross-date refund {} original {} not previously settled — nets to zero", refundRef, original);
+            return false;
+        }
+        if (lineRepo.existsByTxnRefAndAmountLessThan(refundRef, BigDecimal.ZERO)) {
+            log.debug("cross-date refund {} already clawed back — skipping (idempotent)", refundRef);
+            return false;
+        }
+        return true;
     }
 
     /** (merchantId, settlementType) grouping key — one settlement row per merchant per type. */

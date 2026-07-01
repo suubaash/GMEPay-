@@ -2,10 +2,12 @@ package com.gme.pay.merchant.persistence;
 
 import com.gme.pay.merchant.domain.Merchant;
 import com.gme.pay.merchant.domain.MerchantRepository;
+import com.gme.pay.merchant.domain.ReconcilableMerchantRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -25,7 +27,7 @@ import java.util.Optional;
 @Component
 @Primary
 @ConditionalOnProperty(name = "spring.data.mongodb.uri")
-public class MongoBackedMerchantRepository implements MerchantRepository {
+public class MongoBackedMerchantRepository implements MerchantRepository, ReconcilableMerchantRepository {
 
     private final MerchantMongoRepository mongoRepository;
 
@@ -54,6 +56,13 @@ public class MongoBackedMerchantRepository implements MerchantRepository {
             return Optional.empty();
         }
         return mongoRepository.findByMerchantId(merchantId).map(MongoBackedMerchantRepository::toDomain);
+    }
+
+    @Override
+    public List<Merchant> findAll() {
+        return mongoRepository.findAll().stream()
+                .map(MongoBackedMerchantRepository::toDomain)
+                .toList();
     }
 
     /**

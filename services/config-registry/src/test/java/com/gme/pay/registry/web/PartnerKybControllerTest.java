@@ -46,6 +46,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({PartnerKybControllerTest.TestConfig.class, KybService.class, StubKybClient.class,
+        com.gme.pay.registry.kyb.StubKybVerifyClient.class,
         AuditLogService.class, PartnerStore.class, CacheConfig.class})
 class PartnerKybControllerTest {
 

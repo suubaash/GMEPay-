@@ -3,6 +3,7 @@ package com.gme.pay.ledger.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.ledger.revenue.RevenueCaptureService;
 import com.gme.pay.ledger.revenue.RevenueRecord;
 import com.gme.pay.ledger.revenue.RevenueRecordStore;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,7 +48,7 @@ class RevenueCaptureControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new RevenueCaptureController(store))
+        mvc = standaloneSetup(new RevenueCaptureController(new RevenueCaptureService(store)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }

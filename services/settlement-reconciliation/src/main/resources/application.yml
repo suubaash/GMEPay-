@@ -48,6 +48,15 @@ gmepay:
   clients:
     transaction-mgmt:
       base-url: ${TRANSACTION_MGMT_URL:http://transaction-mgmt:8082}
+      refunded:
+        # Gate: enable the refund-date cross-service query (GET /v1/transactions/refunded).
+        # Default false → in-process FixtureRefundedTransactionAdapter (no cross-date netting in dev/test).
+        enabled: ${TRANSACTION_MGMT_REFUNDED_ENABLED:false}
+    revenue-ledger:
+      base-url: ${REVENUE_LEDGER_URL:http://revenue-ledger:8084}
+      # Gate: enable POSTing the Addendum-001 rounding residual to revenue-ledger.
+      # Default false → in-process FixtureRoundingResidualAdapter (logs only) in dev/test.
+      enabled: ${REVENUE_LEDGER_ENABLED:false}
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:

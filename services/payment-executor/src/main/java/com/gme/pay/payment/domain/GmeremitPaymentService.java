@@ -53,7 +53,13 @@ public class GmeremitPaymentService {
     private final QrClient qrClient;
     private final SchemeClient schemeClient;
     private final ExecutionAttemptRepository attemptRepository;
-    private final boolean lenientMerchantValidation;
+    /**
+     * When true, a merchant-lookup miss/unreachable synthesizes a placeholder UNKNOWN merchant so the
+     * payment can proceed. This is a DEV-ONLY escape hatch — gated on the explicit
+     * {@code gmepay.payment.dev-synth-merchant} flag (default false). In the default STRICT behavior the
+     * lookup failure HARD-FAILS with {@link MerchantNotFoundException} instead of synthesizing.
+     */
+    private final boolean devSynthMerchant;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
 
@@ -61,49 +67,37 @@ public class GmeremitPaymentService {
      * Production constructor.
      * Spring 6 rule: when there are 2+ constructors the @Autowired annotation must be on
      * the production (@Value) constructor.
+     *
+     * <p>Strict is the only non-dev behavior: synthesizing an UNKNOWN merchant on a lookup miss is
+     * gated on the explicit {@code gmepay.payment.dev-synth-merchant} flag (default false). The legacy
+     * {@code gmepay.payment.merchant-validation=lenient} setting alone NO LONGER enables synth — the
+     * explicit dev flag is required, so a stray lenient config in prod cannot weaken merchant validation.
      */
     @Autowired
     public GmeremitPaymentService(
             QrClient qrClient,
             SchemeClient schemeClient,
             ExecutionAttemptRepository attemptRepository,
-            @Value("${gmepay.payment.merchant-validation:strict}") String merchantValidation,
+            @Value("${gmepay.payment.dev-synth-merchant:false}") boolean devSynthMerchant,
             @Nullable TransactionClient transactionClient,
             @Nullable RevenueLedgerClient revenueLedgerClient) {
         this.qrClient = qrClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
-        this.lenientMerchantValidation = "lenient".equalsIgnoreCase(merchantValidation);
+        this.devSynthMerchant = devSynthMerchant;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
     }
 
-    /** Test-only constructor (skips @Value; no transaction/revenue clients). */
+    /**
+     * Test-only constructor (skips @Value; no transaction/revenue clients). Delegates to the full
+     * constructor with null collaborators so there is a single field-assignment site.
+     */
     GmeremitPaymentService(QrClient qrClient,
                            SchemeClient schemeClient,
                            ExecutionAttemptRepository attemptRepository,
-                           boolean lenientMerchantValidation) {
-        this.qrClient = qrClient;
-        this.schemeClient = schemeClient;
-        this.attemptRepository = attemptRepository;
-        this.lenientMerchantValidation = lenientMerchantValidation;
-        this.transactionClient = null;
-        this.revenueLedgerClient = null;
-    }
-
-    /** Test constructor with explicit transaction/revenue clients. */
-    GmeremitPaymentService(QrClient qrClient,
-                           SchemeClient schemeClient,
-                           ExecutionAttemptRepository attemptRepository,
-                           boolean lenientMerchantValidation,
-                           @Nullable TransactionClient transactionClient,
-                           @Nullable RevenueLedgerClient revenueLedgerClient) {
-        this.qrClient = qrClient;
-        this.schemeClient = schemeClient;
-        this.attemptRepository = attemptRepository;
-        this.lenientMerchantValidation = lenientMerchantValidation;
-        this.transactionClient = transactionClient;
-        this.revenueLedgerClient = revenueLedgerClient;
+                           boolean devSynthMerchant) {
+        this(qrClient, schemeClient, attemptRepository, devSynthMerchant, null, null);
     }
 
     /**
@@ -116,7 +110,10 @@ public class GmeremitPaymentService {
      */
     public WalletResult pay(String qrPayload, BigDecimal amountKrw, String userRef) {
 
-        // Step 1: Resolve merchant from QR
+        // Step 1: Resolve merchant from QR. STRICT (default, non-dev) is the only safe behavior — a
+        // lookup miss/unreachable HARD-FAILS with MERCHANT_NOT_FOUND (404). Synthesizing a placeholder
+        // UNKNOWN merchant is a dev-only escape hatch behind the explicit gmepay.payment.dev-synth-merchant
+        // flag, so a stray config can never let a payment proceed against an unverified merchant in prod.
         QrClient.MerchantView merchant;
         try {
             merchant = qrClient.resolve(qrPayload);
@@ -127,12 +124,15 @@ public class GmeremitPaymentService {
             log.warn("Payment declined: no merchant registered for qr={}", qrPayload);
             return WalletResult.declined(null, "MERCHANT_NOT_FOUND");
         } catch (RuntimeException ex) {
-            if (lenientMerchantValidation) {
-                log.warn("merchant-qr-data unreachable (lenient mode) — proceeding with unknown merchant: {}", ex.getMessage());
-                // Synthesise a placeholder merchant so the payment can proceed
+            if (devSynthMerchant) {
+                log.warn("merchant-qr-data unreachable (DEV synth-merchant flag ON) — proceeding with "
+                        + "unknown merchant: {}", ex.getMessage());
+                // Synthesise a placeholder merchant so the payment can proceed (DEV ONLY).
                 merchant = new QrClient.MerchantView("UNKNOWN", "Unknown Merchant", "KRW", SCHEME_ID, null, true);
             } else {
-                throw ex;
+                log.warn("merchant resolution failed (strict) for qr={}: {}", qrPayload, ex.getMessage());
+                throw new MerchantNotFoundException(
+                        "merchant could not be resolved for QR (strict mode): " + ex.getMessage(), ex);
             }
         }
 

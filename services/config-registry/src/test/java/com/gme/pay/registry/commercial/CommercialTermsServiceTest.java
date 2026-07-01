@@ -56,7 +56,9 @@ import org.springframework.web.server.ResponseStatusException;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({CommercialTermsServiceTest.TestConfig.class, CommercialTermsService.class,
         FeeScheduleService.class, FxConfigService.class, LimitsService.class,
-        ContractService.class, AuditLogService.class, PartnerStore.class, CacheConfig.class})
+        ContractService.class, AuditLogService.class, PartnerStore.class, CacheConfig.class,
+        com.gme.pay.registry.prefunding.push.CreditLimitPusher.class,
+        com.gme.pay.registry.prefunding.push.NoOpPrefundingCreditLimitClient.class})
 class CommercialTermsServiceTest {
 
     @Autowired

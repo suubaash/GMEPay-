@@ -3,6 +3,7 @@ package com.gme.pay.registry.web;
 import com.gme.pay.contracts.KybCommand;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.registry.kyb.KybService;
+import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -74,5 +75,36 @@ public class PartnerKybController {
     public KybView runScreening(@PathVariable String id,
                                 @RequestHeader(value = "X-Actor", required = false) String actor) {
         return kybService.runScreening(id, actor);
+    }
+
+    /**
+     * Wave-3 — run a FULL KYB verification for {@code id} via the kyb-adapter
+     * verify seam ({@code POST /v1/kyb/verify}, ADR-009) and store the collapsed
+     * decision (+ provider ref + screening status) on a fresh SCD-6 row. The
+     * document-aware counterpart to {@code /screen}: the optional body lists the
+     * onboarding documents the operator attached at the wizard's KYB step so the
+     * adapter can downgrade a clean run to MANUAL_REVIEW on a missing document.
+     *
+     * <p>Returns 200 with the updated {@link KybView}; 404 unknown partner; the
+     * adapter's 4xx and a 502-on-unreachable (REST mode) pass through.
+     */
+    @PostMapping("/{id}/kyb/verify")
+    public KybView runVerification(@PathVariable String id,
+                                   @RequestBody(required = false) VerifyRequest req,
+                                   @RequestHeader(value = "X-Actor", required = false) String actor) {
+        List<String> docs = req == null ? null : req.suppliedDocuments();
+        boolean force = req != null && Boolean.TRUE.equals(req.force());
+        return kybService.runVerification(id, docs, force, actor);
+    }
+
+    /**
+     * Request body for {@code POST /{id}/kyb/verify} — both fields optional. An
+     * absent body verifies with no documents and {@code force=false} (idempotent
+     * replay of any prior run).
+     *
+     * @param suppliedDocuments onboarding document types the operator attached.
+     * @param force             re-run even if a prior run for the same subject exists.
+     */
+    public record VerifyRequest(List<String> suppliedDocuments, Boolean force) {
     }
 }

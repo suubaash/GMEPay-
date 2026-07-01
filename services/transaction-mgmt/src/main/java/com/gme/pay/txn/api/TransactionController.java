@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.contracts.CommittedFxView;
+import com.gme.pay.contracts.RefundedTransactionView;
 import com.gme.pay.txn.api.dto.CreateTransactionRequest;
 import com.gme.pay.txn.api.dto.CreateTransactionResponse;
 import com.gme.pay.txn.api.dto.StatusPatchRequest;
@@ -113,6 +115,68 @@ public class TransactionController {
     }
 
     // -------------------------------------------------------------------------
+    // GET /v1/transactions/fx-committed  (committed-FX projection — Phase 2)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the committed cross-border transactions in the date window as the canonical
+     * {@link CommittedFxView} projection — the rate-locked FX fields captured at commit
+     * (offerRateColl = BOK FX1015 #14, crossRate, margins, USD amount). Consumed by
+     * reporting-compliance (FX1015), settlement-reconciliation (netting) and scheme-adapter.
+     *
+     * <p>Query params: {@code from} / {@code to} (inclusive ISO dates, optional) and
+     * {@code partnerId} (optional). A literal path segment, so it never collides with
+     * {@code GET /{txnRef}}.
+     */
+    @GetMapping("/fx-committed")
+    public ResponseEntity<List<CommittedFxView>> fxCommitted(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Long partnerId) {
+        return ResponseEntity.ok(transactionService.findCommittedFx(from, to, partnerId));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /v1/transactions/refunded?refundedOn=YYYY-MM-DD  (refund query — Phase 2)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the transactions refunded on the given calendar day, as the canonical shared
+     * {@link RefundedTransactionView} (lib-api-contracts). transaction-mgmt is the AUTHORITATIVE
+     * producer; the canonical view mirrors this projection's field names verbatim, so
+     * settlement-reconciliation (cross-date refund netting) and scheme-adapter-zeropay (refund
+     * detail enrichment) bind one type and stop silently null-binding their divergent ad-hoc
+     * records. {@code settlementDate} is sourced from the committed settlement-window data (the
+     * value date the refund nets onto); null when no settlement window has been booked yet.
+     */
+    @GetMapping("/refunded")
+    public ResponseEntity<List<RefundedTransactionView>> refunded(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate refundedOn) {
+        List<RefundedTransactionView> body = transactionService.findRefundedOn(refundedOn).stream()
+                .map(TransactionController::toRefundedView)
+                .toList();
+        return ResponseEntity.ok(body);
+    }
+
+    /** Maps a refunded aggregate to the canonical {@link RefundedTransactionView}. */
+    private static RefundedTransactionView toRefundedView(Transaction txn) {
+        return new RefundedTransactionView(
+                txn.txnRef(),
+                txn.originalPaymentTxnRef(),
+                txn.partnerId(),
+                txn.status() != null ? txn.status().name() : null,
+                txn.merchantId(),
+                txn.qrCodeId(),
+                txn.schemeTxnRef(),
+                txn.refundAmountKrw(),
+                txn.targetCcy(),
+                txn.merchantFeeRate(),
+                txn.refundedAt(),
+                txn.approvedAt(),
+                txn.settlementDate());
+    }
+
+    // -------------------------------------------------------------------------
     // POST /v1/transactions  (create — payment-executor 11-field contract)
     // -------------------------------------------------------------------------
 
@@ -157,7 +221,13 @@ public class TransactionController {
                 req.collectionCurrency(),
                 req.merchantId(),
                 req.quoteId(),
-                req.merchantFeeRate());
+                req.merchantFeeRate(),
+                req.collectionMarginUsd(),
+                req.payoutMarginUsd(),
+                req.collectionUsd(),
+                req.costRateColl(),
+                req.costRatePay(),
+                req.payoutUsdCost());
         return CreateTransactionResponse.from(txn);
     }
 
@@ -200,7 +270,12 @@ public class TransactionController {
                 req.approvedAt(),
                 req.bookedSettlementAmount(),
                 req.settlementRoundingMode(),
-                req.roundingResidual());
+                req.roundingResidual(),
+                req.collectionMarginUsd(),
+                req.payoutMarginUsd(),
+                req.collectionUsd(),
+                req.costRateColl(),
+                req.costRatePay());
         return ResponseEntity.noContent().build();
     }
 

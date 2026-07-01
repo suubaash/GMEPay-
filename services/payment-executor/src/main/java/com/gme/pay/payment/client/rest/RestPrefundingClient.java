@@ -1,6 +1,10 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.contracts.PrefundingDeductionHistoryView;
+import com.gme.pay.contracts.PrefundingReleaseRequest;
+import com.gme.pay.contracts.PrefundingReserveRequest;
+import com.gme.pay.contracts.PrefundingReserveResponse;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.PaymentException;
@@ -218,6 +222,110 @@ public class RestPrefundingClient implements PrefundingClient {
     }
 
     @Override
+    public BalanceSnapshot balance(String partnerCode) {
+        try {
+            BalanceResponse body = restClient.get()
+                    .uri("/v1/prefunding/{partnerCode}/balance", partnerCode)
+                    .retrieve()
+                    .body(BalanceResponse.class);
+            if (body == null) {
+                throw new PaymentException("prefunding returned empty body for balance " + partnerCode);
+            }
+            return new BalanceSnapshot(body.balance(), body.threshold(), body.currency());
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/balance failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/balance failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public PrefundingDeductionHistoryView deductionHistory(String partnerCode, int limit) {
+        try {
+            PrefundingDeductionHistoryView body = restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/v1/prefunding/{partnerCode}/deductions")
+                            .queryParam("limit", limit)
+                            .build(partnerCode))
+                    .retrieve()
+                    .body(PrefundingDeductionHistoryView.class);
+            if (body == null) {
+                throw new PaymentException(
+                        "prefunding returned empty body for deductions " + partnerCode);
+            }
+            return body;
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/deductions failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding GET /v1/prefunding/" + partnerCode + "/deductions failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public PrefundingReserveResponse reserveCpm(long partnerId, BigDecimal amountUsd,
+                                                String idempotencyKey, String txnRef) {
+        try {
+            PrefundingReserveResponse body = restClient.post()
+                    .uri("/internal/v1/prefunding/{partner}/reserve", partnerId)
+                    .body(new PrefundingReserveRequest(partnerId, amountUsd, idempotencyKey, txnRef))
+                    .retrieve()
+                    .body(PrefundingReserveResponse.class);
+            if (body == null) {
+                throw new PaymentException(
+                        "prefunding returned empty body for CPM reserve " + idempotencyKey);
+            }
+            return body;
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == HttpStatus.PAYMENT_REQUIRED.value()) {
+                throw new InsufficientPrefundingException(
+                        nonNull(parseAvailable(ex)), nonNull(amountUsd));
+            }
+            throw new PaymentException(
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/reserve failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/reserve failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
+    public void releaseCpm(long partnerId, String reservationId, String idempotencyKey, String reason) {
+        try {
+            restClient.post()
+                    .uri("/internal/v1/prefunding/{partner}/release", partnerId)
+                    .body(new PrefundingReleaseRequest(partnerId, reservationId, idempotencyKey, reason))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException ex) {
+            throw new PaymentException(
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/release failed: "
+                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException(
+                    "prefunding POST /internal/v1/prefunding/" + partnerId + "/release failed: "
+                            + ex.getMessage(), ex);
+        }
+    }
+
+    @Override
     public void reverseCumulative(long partnerId, String txnRef) {
         try {
             restClient.post()
@@ -280,4 +388,9 @@ public class RestPrefundingClient implements PrefundingClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ReleaseResponse(String partnerId, BigDecimal releasedUsd, BigDecimal balance) {}
+
+    /** Wire format for prefunding's {@code GET /v1/prefunding/{partnerCode}/balance} (BalanceView). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record BalanceResponse(String partnerCode, String currency, BigDecimal balance,
+                           BigDecimal threshold, BigDecimal pctOfThreshold) {}
 }

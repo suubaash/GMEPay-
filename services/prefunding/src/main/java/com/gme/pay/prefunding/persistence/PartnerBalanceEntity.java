@@ -36,6 +36,20 @@ public class PartnerBalanceEntity {
     @Column(name = "low_balance_threshold", precision = 20, scale = 8)
     private BigDecimal lowBalanceThreshold;
 
+    /** Per-partner AML caps pushed from config-registry (V007); NULL = no cap for that period. */
+    @Column(name = "aml_daily_cap_usd", precision = 19, scale = 4)
+    private BigDecimal amlDailyCapUsd;
+
+    @Column(name = "aml_monthly_cap_usd", precision = 19, scale = 4)
+    private BigDecimal amlMonthlyCapUsd;
+
+    @Column(name = "aml_annual_cap_usd", precision = 19, scale = 4)
+    private BigDecimal amlAnnualCapUsd;
+
+    /** Per-partner daily transaction-count velocity cap (V007); NULL = no velocity cap. */
+    @Column(name = "aml_daily_txn_count_cap")
+    private Integer amlDailyTxnCountCap;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -98,6 +112,38 @@ public class PartnerBalanceEntity {
 
     public void setLowBalanceThreshold(BigDecimal lowBalanceThreshold) {
         this.lowBalanceThreshold = lowBalanceThreshold;
+    }
+
+    public BigDecimal getAmlDailyCapUsd() {
+        return amlDailyCapUsd;
+    }
+
+    public void setAmlDailyCapUsd(BigDecimal amlDailyCapUsd) {
+        this.amlDailyCapUsd = amlDailyCapUsd;
+    }
+
+    public BigDecimal getAmlMonthlyCapUsd() {
+        return amlMonthlyCapUsd;
+    }
+
+    public void setAmlMonthlyCapUsd(BigDecimal amlMonthlyCapUsd) {
+        this.amlMonthlyCapUsd = amlMonthlyCapUsd;
+    }
+
+    public BigDecimal getAmlAnnualCapUsd() {
+        return amlAnnualCapUsd;
+    }
+
+    public void setAmlAnnualCapUsd(BigDecimal amlAnnualCapUsd) {
+        this.amlAnnualCapUsd = amlAnnualCapUsd;
+    }
+
+    public Integer getAmlDailyTxnCountCap() {
+        return amlDailyTxnCountCap;
+    }
+
+    public void setAmlDailyTxnCountCap(Integer amlDailyTxnCountCap) {
+        this.amlDailyTxnCountCap = amlDailyTxnCountCap;
     }
 
     public Instant getUpdatedAt() {

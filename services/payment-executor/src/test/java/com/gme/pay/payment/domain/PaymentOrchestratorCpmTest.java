@@ -71,8 +71,15 @@ class PaymentOrchestratorCpmTest {
 
         @Override
         public ReservationResult reserve(long partnerId, String txnRef, BigDecimal amountUsd) {
-            callLog.add("PREFUND:RESERVE");
-            return new ReservationResult(amountUsd, new BigDecimal("962.21"), new BigDecimal("1000.00"));
+            throw new AssertionError("CPM must use the idempotent reserveCpm, not the txnRef reserve");
+        }
+
+        @Override
+        public com.gme.pay.contracts.PrefundingReserveResponse reserveCpm(
+                long partnerId, BigDecimal amountUsd, String idempotencyKey, String txnRef) {
+            callLog.add("PREFUND:RESERVE_CPM");
+            return new com.gme.pay.contracts.PrefundingReserveResponse(
+                    partnerId, "RSV-CPM-1", amountUsd, new BigDecimal("962.21"), amountUsd);
         }
 
         @Override
@@ -83,8 +90,12 @@ class PaymentOrchestratorCpmTest {
 
         @Override
         public ReleaseResult release(long partnerId, String txnRef) {
-            callLog.add("PREFUND:RELEASE");
-            return new ReleaseResult(new BigDecimal("37.04"), new BigDecimal("1000.00"));
+            throw new AssertionError("CPM must use the idempotent releaseCpm, not the txnRef release");
+        }
+
+        @Override
+        public void releaseCpm(long partnerId, String reservationId, String idempotencyKey, String reason) {
+            callLog.add("PREFUND:RELEASE_CPM");
         }
     };
 
@@ -185,14 +196,14 @@ class PaymentOrchestratorCpmTest {
         assertEquals(PaymentStatus.APPROVED, result.status());
         assertNotNull(result.prefundDeductedUsd(), "OVERSEAS CPM captures the held float");
 
-        int reserve = callLog.indexOf("PREFUND:RESERVE");
+        int reserve = callLog.indexOf("PREFUND:RESERVE_CPM");
         int balance = callLog.indexOf("SCHEME:BALANCE");
         int cpmSubmit = callLog.indexOf("SCHEME:CPM:token=CPM-TOKEN-INTL-001");
         int capture = callLog.indexOf("PREFUND:CAPTURE");
         int commit = callLog.indexOf("TXN:COMMIT:APPROVED");
         assertTrue(reserve >= 0 && balance > reserve && cpmSubmit > balance
                         && capture > cpmSubmit && commit > capture,
-                "order must be RESERVE → BALANCE → CPM submit → CAPTURE → COMMIT; log=" + callLog);
+                "order must be RESERVE_CPM → BALANCE → CPM submit → CAPTURE → COMMIT; log=" + callLog);
     }
 
     @Test
@@ -205,8 +216,8 @@ class PaymentOrchestratorCpmTest {
                 () -> orchestrator.executeCpm(cpm(2L, "CPM-TOKEN-DECLINE", new BigDecimal("37.04")),
                         PartnerType.OVERSEAS));
 
-        assertEquals(1, callLog.stream().filter("PREFUND:RESERVE"::equals).count());
-        assertEquals(1, callLog.stream().filter("PREFUND:RELEASE"::equals).count(), "decline releases the hold");
+        assertEquals(1, callLog.stream().filter("PREFUND:RESERVE_CPM"::equals).count());
+        assertEquals(1, callLog.stream().filter("PREFUND:RELEASE_CPM"::equals).count(), "decline releases the hold");
         assertEquals(0, callLog.stream().filter("PREFUND:CAPTURE"::equals).count(), "no capture on decline");
         assertEquals(1, callLog.stream().filter("TXN:COMMIT:FAILED"::equals).count());
     }

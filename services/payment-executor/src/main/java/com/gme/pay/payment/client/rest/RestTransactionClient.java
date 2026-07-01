@@ -60,7 +60,15 @@ public class RestTransactionClient implements TransactionClient {
                             request.collectionCurrency(),
                             request.merchantId(),
                             request.quoteId(),
-                            request.merchantFeeRate()))
+                            request.merchantFeeRate(),
+                            request.offerRateColl(),
+                            request.crossRate(),
+                            request.costRateColl(),
+                            request.costRatePay(),
+                            request.collectionUsd(),
+                            request.payoutUsdCost(),
+                            request.collectionMarginUsd(),
+                            request.payoutMarginUsd()))
                     .retrieve()
                     .body(TransactionCreatedResponse.class);
 
@@ -93,7 +101,12 @@ public class RestTransactionClient implements TransactionClient {
                             patch.approvedAt(),
                             patch.bookedSettlementAmount(),
                             patch.settlementRoundingMode(),
-                            patch.roundingResidual()))
+                            patch.roundingResidual(),
+                            patch.collectionMarginUsd(),
+                            patch.payoutMarginUsd(),
+                            patch.collectionUsd(),
+                            patch.costRateColl(),
+                            patch.costRatePay()))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException ex) {
@@ -121,8 +134,37 @@ public class RestTransactionClient implements TransactionClient {
             String collectionCurrency,
             String merchantId,
             String quoteId,
-            BigDecimal merchantFeeRate
-    ) {}
+            BigDecimal merchantFeeRate,
+            // Wave-3 rate-lock pool fields (additive, IR-txn-2): nullable until the
+            // executor populates them on create from the locked quote.
+            BigDecimal offerRateColl,
+            BigDecimal crossRate,
+            BigDecimal costRateColl,
+            BigDecimal costRatePay,
+            BigDecimal collectionUsd,
+            BigDecimal payoutUsdCost,
+            BigDecimal collectionMarginUsd,
+            BigDecimal payoutMarginUsd
+    ) {
+        /** Backwards-compatible 12-arg constructor; pool fields default null. */
+        TransactionCreateRequest(
+                long partnerId,
+                String partnerTxnRef,
+                String schemeId,
+                String direction,
+                String paymentMode,
+                BigDecimal targetPayout,
+                String payoutCurrency,
+                BigDecimal collectionAmount,
+                String collectionCurrency,
+                String merchantId,
+                String quoteId,
+                BigDecimal merchantFeeRate) {
+            this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                    payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                    merchantFeeRate, null, null, null, null, null, null, null, null);
+        }
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record TransactionCreatedResponse(
@@ -139,6 +181,28 @@ public class RestTransactionClient implements TransactionClient {
             Instant approvedAt,
             BigDecimal bookedSettlementAmount,
             String settlementRoundingMode,
-            BigDecimal roundingResidual
-    ) {}
+            BigDecimal roundingResidual,
+            // Wave-3 commit-margin fields (additive, FX1015 accuracy): nullable until the
+            // executor carries the rate-lock pool's margins/cost rates on commit.
+            BigDecimal collectionMarginUsd,
+            BigDecimal payoutMarginUsd,
+            BigDecimal collectionUsd,
+            BigDecimal costRateColl,
+            BigDecimal costRatePay
+    ) {
+        /** Backwards-compatible 8-arg constructor; margin fields default null. */
+        StatusPatchRequest(
+                PaymentStatus newStatus,
+                String schemeTxnRef,
+                String schemeApprovalCode,
+                BigDecimal prefundDeductedUsd,
+                Instant approvedAt,
+                BigDecimal bookedSettlementAmount,
+                String settlementRoundingMode,
+                BigDecimal roundingResidual) {
+            this(newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                    bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                    null, null, null, null, null);
+        }
+    }
 }

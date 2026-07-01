@@ -1,7 +1,11 @@
 package com.gme.pay.ledger.persistence;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -21,4 +25,27 @@ public interface LedgerEntryEntityRepository extends JpaRepository<LedgerEntryEn
 
     /** All entries posted to a specific account (used by aggregation queries). */
     List<LedgerEntryEntity> findByAccountOrderByIdAsc(String account);
+
+    /**
+     * Net signed total for {@code account} in {@code currency} over a journal {@code posted_at}
+     * window {@code [start, end)} (end-exclusive instant). CREDIT lines add, DEBIT lines subtract —
+     * so the result is the signed rounding gain (positive) / loss (negative) per
+     * {@code docs/MONEY_CONVENTION.md}. COALESCE 0 when no lines match (never null).
+     *
+     * <p>Joined to {@code journals} by {@code journalId} for the time filter, since the date lives
+     * on the journal head, not the entry line.
+     */
+    @Query("""
+            SELECT COALESCE(SUM(CASE WHEN e.entryType = 'CREDIT' THEN e.amount ELSE -e.amount END), 0)
+            FROM LedgerEntryEntity e, JournalEntity j
+            WHERE e.journalId = j.journalId
+              AND e.account = :account
+              AND e.currency = :currency
+              AND j.postedAt >= :start
+              AND j.postedAt < :end
+            """)
+    BigDecimal sumSignedByAccountAndCurrencyAndPostedAtBetween(@Param("account") String account,
+                                                               @Param("currency") String currency,
+                                                               @Param("start") Instant start,
+                                                               @Param("end") Instant end);
 }

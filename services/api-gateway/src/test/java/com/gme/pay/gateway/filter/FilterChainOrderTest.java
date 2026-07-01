@@ -17,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   ORDER 2  — PartnerIpAllowlistFilter  (IP check before signature surface)
  *   ORDER 3  — MtlsFingerprintFilter     (cert binding before body buffering)
  *   ORDER 4  — HmacSignatureFilter       (HMAC-SHA256 signature + timestamp expiry)
+ *   ORDER 5  — ReplayProtectionFilter    (per-partner nonce)
+ *   ORDER 6  — RateLimitFilter           (per-partner per-second throttle)
  *   ORDER 7  — IdempotencyKeyFilter      (POST idempotency-key validation)
  * </pre>
  */
@@ -61,6 +63,17 @@ class FilterChainOrderTest {
     }
 
     @Test
+    @DisplayName("RateLimitFilter runs after ReplayProtectionFilter and before IdempotencyKeyFilter")
+    void replay_before_rateLimit_before_idempotency() {
+        assertTrue(ReplayProtectionFilter.ORDER < RateLimitFilter.ORDER,
+                "ReplayProtectionFilter (" + ReplayProtectionFilter.ORDER
+                        + ") must run before RateLimitFilter (" + RateLimitFilter.ORDER + ")");
+        assertTrue(RateLimitFilter.ORDER < IdempotencyKeyFilter.ORDER,
+                "RateLimitFilter (" + RateLimitFilter.ORDER
+                        + ") must run before IdempotencyKeyFilter (" + IdempotencyKeyFilter.ORDER + ")");
+    }
+
+    @Test
     @DisplayName("All filter order constants have the expected values")
     void absoluteOrderValues_matchDocumentation() {
         org.junit.jupiter.api.Assertions.assertAll(
@@ -72,6 +85,8 @@ class FilterChainOrderTest {
                         "HmacSignatureFilter must be ORDER 4"),
                 () -> org.junit.jupiter.api.Assertions.assertEquals(5, ReplayProtectionFilter.ORDER,
                         "ReplayProtectionFilter must be ORDER 5"),
+                () -> org.junit.jupiter.api.Assertions.assertEquals(6, RateLimitFilter.ORDER,
+                        "RateLimitFilter must be ORDER 6"),
                 () -> org.junit.jupiter.api.Assertions.assertEquals(7, IdempotencyKeyFilter.ORDER,
                         "IdempotencyKeyFilter must be ORDER 7")
         );

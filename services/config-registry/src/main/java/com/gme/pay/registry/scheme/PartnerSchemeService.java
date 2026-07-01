@@ -60,9 +60,14 @@ public class PartnerSchemeService {
     /** Audit verb for the step-7 bulk replace. */
     public static final String EVENT_TYPE_REPLACED = "PARTNER_SCHEMES_REPLACED";
 
-    /** V022 CHECK roster for scheme_id (the Slice 7 scheme registry). */
-    static final Set<String> SCHEMES = Set.of(
-            "ZEROPAY", "BAKONG", "NAPAS_247", "PROMPT_PAY", "FAST_SG", "QRIS", "KHQR");
+    /**
+     * V022 CHECK roster for scheme_id (the Slice 7 scheme registry). Derived from the
+     * {@link SchemeCatalogService} catalog — the single source of truth — so the
+     * {@code GET /v1/schemes} picker can never offer a scheme this enablement endpoint
+     * would reject with a 400. {@code SchemeCatalogServiceTest} pins this equal to the
+     * V022 {@code ck_partner_scheme_scheme} DB CHECK roster.
+     */
+    static final Set<String> SCHEMES = SchemeCatalogService.schemeIds();
 
     /** V022 CHECK roster for direction (same as V017). */
     static final Set<String> DIRECTIONS = Set.of("INBOUND", "OUTBOUND", "BOTH");
@@ -176,6 +181,29 @@ public class PartnerSchemeService {
         PartnerEntity partner = requirePartner(partnerCode);
         return schemeRepository.findAllCurrentByPartnerId(partner.getId()).stream()
                 .map(PartnerSchemeEntity::toView)
+                .toList();
+    }
+
+    /**
+     * Wave-3 location-resolution read (smart-router consumes this): every
+     * CURRENT scheme enablement, each carrying its owning partner's operating
+     * country plus the derived {@code supportsCpm}/{@code supportsMpm} +
+     * {@code status} fields, optionally filtered to one ISO-3166 alpha-2
+     * country.
+     *
+     * <p>A {@code null}/blank {@code countryCode} returns every current
+     * enablement; a country code returns only the rows whose partner operates
+     * there (rows whose partner has no operating country never match a country
+     * filter). The list is ordered by partner id then scheme id.
+     *
+     * @param countryCode optional ISO-3166 alpha-2 filter; {@code null}/blank =
+     *                    no filter.
+     */
+    @Transactional(readOnly = true)
+    public List<PartnerSchemeView> resolveByLocation(String countryCode) {
+        String filter = countryCode == null || countryCode.isBlank() ? null : countryCode;
+        return schemeRepository.findCurrentForLocation(filter).stream()
+                .map(row -> ((PartnerSchemeEntity) row[0]).toLocationView((String) row[1]))
                 .toList();
     }
 

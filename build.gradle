@@ -46,21 +46,50 @@ subprojects {
         shouldRunAfter tasks.named('test')
     }
 
-    tasks.register('e2eTest', Test) {
-        description = 'Black-box end-to-end tests (JUnit @Tag("e2e")) — boots the service fleet as subprocesses. No Docker.'
+    // ---------------------------------------------------------------------
+    // Cloud-agnostic portability guard (cloud/audit).
+    //
+    // GMEPay+ is deployable on AWS, Azure, or on-prem with NO code change — it
+    // talks only open protocols (JDBC / Redis / Kafka / S3-API / OIDC / OTLP)
+    // and every backing dependency is env-injected. This guard FAILS the build
+    // if a cloud-provider SDK lands on any runtime classpath (directly or
+    // transitively), so the provider-neutral property can never silently rot.
+    //
+    // Forbidden coordinates (group prefixes): AWS SDK v1/v2, Azure, GCP.
+    // The S3-compatible vault uses io.minio (S3-API over HTTP) — NOT an SDK — so
+    // it is deliberately not on this list.
+    tasks.register('portabilityGuard') {
+        description = 'Fails if a cloud-provider SDK (AWS/Azure/GCP) is on a runtime classpath.'
         group = 'verification'
-        testClassesDirs = sourceSets.test.output.classesDirs
-        classpath = sourceSets.test.runtimeClasspath
-        useJUnitPlatform {
-            includeTags 'e2e'
+        def forbidden = [
+                'com.amazonaws',          // AWS SDK v1
+                'software.amazon.awssdk', // AWS SDK v2
+                'com.azure',              // Azure SDK
+                'com.google.cloud',       // GCP SDK
+        ]
+        // Resolve only configurations that represent a deployable runtime classpath.
+        def runtimeConfigNames = ['runtimeClasspath', 'productionRuntimeClasspath']
+        doLast {
+            def offenders = [] as Set
+            configurations
+                    .findAll { it.canBeResolved && runtimeConfigNames.contains(it.name) }
+                    .each { cfg ->
+                        cfg.resolvedConfiguration.lenientConfiguration.allModuleDependencies.each { dep ->
+                            def coord = "${dep.moduleGroup}:${dep.moduleName}".toString()
+                            if (forbidden.any { dep.moduleGroup?.startsWith(it) }) {
+                                offenders << "${coord} (via ${cfg.name})".toString()
+                            }
+                        }
+                    }
+            if (!offenders.isEmpty()) {
+                throw new GradleException(
+                        "Cloud-provider SDK found on a runtime classpath of ':${project.name}' — " +
+                        "this breaks cloud-agnostic portability (use only JDBC/Redis/Kafka/S3-API/OIDC/OTLP):\n  " +
+                        offenders.join("\n  "))
+            }
         }
-        // The fleet needs real ports + time to boot; never parallelise, give it room.
-        maxParallelForks = 1
-        testLogging {
-            events 'passed', 'failed', 'skipped'
-            showStandardStreams = true
-            exceptionFormat = 'full'
-        }
-        shouldRunAfter tasks.named('test')
     }
+
+    // Wire into `check` so `./gradlew check` (and CI) catches future coupling.
+    tasks.named('check').configure { dependsOn 'portabilityGuard' }
 }

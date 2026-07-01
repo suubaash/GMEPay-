@@ -25,16 +25,31 @@ public final class TransactionTransitions {
         // CREATED: start of life
         m.put(TransactionStatus.CREATED, EnumSet.of(
                 TransactionStatus.PENDING_DEBIT,   // OVERSEAS: begin prefund deduction
-                TransactionStatus.APPROVED,         // LOCAL (no prefund): direct approval
+                TransactionStatus.SCHEME_SENT,      // LOCAL (no prefund): dispatch scheme directly
+                TransactionStatus.APPROVED,         // LOCAL (no prefund): direct approval (legacy short path)
                 TransactionStatus.FAILED,           // TTL expiry or validation failure
                 TransactionStatus.CANCELLED         // cancelled before debit
         ));
 
         // PENDING_DEBIT: prefund deduction in flight
         m.put(TransactionStatus.PENDING_DEBIT, EnumSet.of(
-                TransactionStatus.APPROVED,         // deduction succeeded, scheme approved
+                TransactionStatus.SCHEME_SENT,      // deduction succeeded, scheme call dispatched
+                TransactionStatus.APPROVED,         // deduction succeeded, scheme approved (short path)
                 TransactionStatus.FAILED,           // insufficient prefunding or scheme reject
                 TransactionStatus.CANCELLED         // cancelled while debit in progress
+        ));
+
+        // SCHEME_SENT: adapter call dispatched, awaiting scheme response
+        m.put(TransactionStatus.SCHEME_SENT, EnumSet.of(
+                TransactionStatus.APPROVED,         // synchronous scheme success
+                TransactionStatus.FAILED,           // scheme reject/error (prefund reversed by caller)
+                TransactionStatus.UNCERTAIN         // timeout / no response within SLA
+        ));
+
+        // UNCERTAIN: held pending batch reconciliation (ZP0012/ZP0022)
+        m.put(TransactionStatus.UNCERTAIN, EnumSet.of(
+                TransactionStatus.APPROVED,         // reconciliation confirmed success
+                TransactionStatus.FAILED            // reconciliation confirmed failure (prefund reversed)
         ));
 
         // APPROVED: a same-day cancel reverses it; an explicit refund refunds it.

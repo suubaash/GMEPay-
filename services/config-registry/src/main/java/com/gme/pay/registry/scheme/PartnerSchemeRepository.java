@@ -30,4 +30,27 @@ public interface PartnerSchemeRepository extends JpaRepository<PartnerSchemeEnti
             order by s.id
             """)
     List<PartnerSchemeEntity> findAllCurrentByPartnerId(@Param("partnerId") Long partnerId);
+
+    /**
+     * Wave-3 location-resolution projection (smart-router consumes this): every
+     * CURRENT scheme row joined to its owning partner so the country a row
+     * covers — the partner's operating country (V004 {@code operating_country})
+     * — rides along without a second round-trip.
+     *
+     * <p>Pairs each {@link PartnerSchemeEntity} with the partner's
+     * {@code operatingCountry} (nullable). Filtered to current scheme rows whose
+     * partner is also the current row ({@code superseded_at IS NULL} on both
+     * halves). Ordered by partner id then scheme id for a deterministic list.
+     * The optional {@code countryCode} predicate is applied IN SQL when present
+     * (a {@code null} bind matches every row).
+     */
+    @Query("""
+            select s, p.operatingCountry from PartnerSchemeEntity s
+              join PartnerEntity p on p.id = s.partnerId
+            where s.supersededAt is null
+              and p.supersededAt is null
+              and (:countryCode is null or p.operatingCountry = :countryCode)
+            order by s.partnerId, s.id
+            """)
+    List<Object[]> findCurrentForLocation(@Param("countryCode") String countryCode);
 }

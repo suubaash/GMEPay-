@@ -60,6 +60,7 @@ import org.springframework.web.server.ResponseStatusException;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import({KybServiceTest.TestConfig.class, KybService.class, StubKybClient.class,
+        StubKybVerifyClient.class,
         AuditLogService.class, PartnerStore.class, CacheConfig.class})
 class KybServiceTest {
 
@@ -205,6 +206,40 @@ class KybServiceTest {
         assertThat(fresh.screeningStatus()).isEqualTo("CLEAR");
         assertThat(fresh.riskRating()).isNull();
         assertThat(service.currentKyb("KYB_SCREEN_FRESH").screeningStatus()).isEqualTo("CLEAR");
+    }
+
+    @Test
+    void verify_viaStubClient_persistsDecisionAndProviderRef_onFreshRow() {
+        // Clean entity → stub verify decision APPROVED, screening CLEAR.
+        Long cleanId = seedPartnerWithLegalName("KYB_VERIFY_OK", "Totally Clean GmbH");
+        service.upsertStep3("KYB_VERIFY_OK", step3("LOW", List.of()), "maker_kim");
+
+        KybView verified = service.runVerification("KYB_VERIFY_OK",
+                List.of("BUSINESS_REGISTRATION", "AOA", "UBO_DECLARATION"), false, "checker_lee");
+
+        // The verify verdict lives off-view (V036 columns), so read the entity.
+        KybEntity row = kybRepository.findCurrentByPartnerId(cleanId).orElseThrow();
+        assertThat(row.getVerificationDecision()).isEqualTo("APPROVED");
+        assertThat(row.getVerificationDecisionReason()).isNotBlank();
+        assertThat(row.getScreeningProviderRef()).startsWith("stub-");
+        assertThat(row.getScreeningStatus()).isEqualTo("CLEAR");
+        assertThat(verified.screenedAt()).isNotNull();
+        // Step-3 fields survived the verify write.
+        assertThat(verified.riskRating()).isEqualTo("LOW");
+
+        // A sanctioned entity collapses to MANUAL_REVIEW (stub rule).
+        seedPartnerWithLegalName("KYB_VERIFY_HIT", "Sanctioned Holdings PLC");
+        service.runVerification("KYB_VERIFY_HIT", List.of(), false, "checker_lee");
+        KybEntity hit = kybRepository.findCurrentByPartnerId(
+                partnerRepository.findCurrentByPartnerCode("KYB_VERIFY_HIT").orElseThrow().getId())
+                .orElseThrow();
+        assertThat(hit.getVerificationDecision()).isEqualTo("MANUAL_REVIEW");
+        assertThat(hit.getScreeningStatus()).isEqualTo("HIT");
+
+        // The verdict survives a later step-3 save (carry-forward).
+        service.upsertStep3("KYB_VERIFY_OK", step3("MEDIUM", List.of()), "maker_kim");
+        assertThat(kybRepository.findCurrentByPartnerId(cleanId).orElseThrow()
+                .getVerificationDecision()).isEqualTo("APPROVED");
     }
 
     @Test

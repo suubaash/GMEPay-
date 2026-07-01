@@ -1,9 +1,12 @@
 package com.gme.pay.reporting.kofiu;
 
+import com.gme.pay.reporting.persistence.ReportFiling;
+import com.gme.pay.reporting.persistence.ReportFilingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -50,15 +53,21 @@ public class KofiuFeedScheduler {
     private final KofiuFeedClient feedClient;
     private final boolean enabled;
 
+    /** Owned-datastore persistence of CTR/STR filings; null when running without a DB. */
+    @Nullable
+    private final ReportFilingService filingService;
+
     @Autowired
     public KofiuFeedScheduler(
             KofiuReportService reportService,
             KofiuFeedFileBuilder fileBuilder,
             KofiuFeedClient feedClient,
+            ReportFilingService filingService,
             @Value("${gmepay.reporting.kofiu.enabled:false}") boolean enabled) {
         this.reportService = reportService;
         this.fileBuilder = fileBuilder;
         this.feedClient = feedClient;
+        this.filingService = filingService;
         this.enabled = enabled;
     }
 
@@ -87,6 +96,8 @@ public class KofiuFeedScheduler {
             }
 
             Path feedFile = fileBuilder.buildAndWrite(batch);
+            persistFilings(yesterday, batch.getCtrReports().size(),
+                    batch.getStrReports().size(), feedFile.toString());
             String receiptId = feedClient.submit(feedFile, batch);
 
             log.info("KoFIU daily feed completed: reportDate={}, ctr={}, str={}, "
@@ -115,7 +126,30 @@ public class KofiuFeedScheduler {
         KofiuReportBatch batch = reportService.buildDailyBatch(reportDate);
         if (!batch.isEmpty()) {
             Path feedFile = fileBuilder.buildAndWrite(batch);
+            persistFilings(reportDate, batch.getCtrReports().size(),
+                    batch.getStrReports().size(), feedFile.toString());
             feedClient.submit(feedFile, batch);
+        }
+    }
+
+    /**
+     * Records idempotent CTR/STR {@code report_filing} rows for the date (one per type).
+     * Best-effort: a persistence failure must not abort the feed run.
+     */
+    private void persistFilings(LocalDate reportDate, int ctrCount, int strCount, String filePath) {
+        if (filingService == null) {
+            return;
+        }
+        try {
+            ReportFiling ctr = filingService.openFiling(
+                    ReportFiling.Lane.KOFIU, "CTR", reportDate);
+            filingService.recordGenerated(ctr.getId(), ctrCount, filePath);
+            ReportFiling str = filingService.openFiling(
+                    ReportFiling.Lane.KOFIU, "STR", reportDate);
+            filingService.recordGenerated(str.getId(), strCount, filePath);
+        } catch (Exception e) {
+            log.error("KoFIU filing persistence failed for reportDate={}: {}",
+                    reportDate, e.getMessage(), e);
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.gme.pay.auth.service;
 
+import com.gme.pay.auth.dto.CredentialLookupResponse;
 import com.gme.pay.auth.dto.IssueKeyRequest;
 import com.gme.pay.auth.dto.IssueKeyResponse;
 import com.gme.pay.auth.persistence.ApiKeyEntity;
@@ -9,6 +10,7 @@ import com.gme.pay.auth.persistence.PrincipalRepository;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
@@ -118,6 +120,55 @@ public class ApiKeyIssuanceService {
         ApiKeyEntity entity = key.get();
         entity.revoke(Instant.now().truncatedTo(ChronoUnit.MICROS));
         apiKeyRepository.saveAndFlush(entity);
+    }
+
+    /**
+     * Rotate the active credential for a (partnerCode, environment) principal:
+     * revoke <em>all</em> currently-ACTIVE keys on that principal, then issue a
+     * fresh one with the same prefixes. The previous secrets stop verifying
+     * immediately; the caller forwards the returned one-time plaintext to the
+     * partner. Atomic within one transaction.
+     *
+     * <p>If no principal/keys exist yet this degrades to a plain {@link #issue}.
+     */
+    @Transactional
+    public IssueKeyResponse rotate(IssueKeyRequest request) {
+        validate(request);
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+
+        String username = "partner:" + request.partnerCode() + ":" + request.environment();
+        principalRepository.findByUsername(username).ifPresent(principal -> {
+            List<ApiKeyEntity> existing = apiKeyRepository.findByPrincipalId(principal.getId());
+            for (ApiKeyEntity key : existing) {
+                if (key.getStatus() == ApiKeyEntity.Status.ACTIVE) {
+                    key.revoke(now);
+                    apiKeyRepository.saveAndFlush(key);
+                }
+            }
+        });
+
+        return issue(request);
+    }
+
+    /**
+     * DB-backed credential lookup for the api-gateway: report whether the given
+     * api key is a known, active, non-expired credential issued by this service,
+     * and resolve its owning partner id. Returns no secret material.
+     */
+    @Transactional(readOnly = true)
+    public CredentialLookupResponse resolve(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return CredentialLookupResponse.notFound();
+        }
+        Optional<ApiKeyEntity> keyOpt = apiKeyRepository.findByApiKey(apiKey);
+        if (keyOpt.isEmpty()) {
+            return CredentialLookupResponse.notFound();
+        }
+        ApiKeyEntity key = keyOpt.get();
+        Long partnerId = key.getPrincipal() == null ? null : key.getPrincipal().getPartnerId();
+        boolean expired = key.getExpiresAt() != null && Instant.now().isAfter(key.getExpiresAt());
+        boolean active = key.getStatus() == ApiKeyEntity.Status.ACTIVE && !expired;
+        return new CredentialLookupResponse(true, active, partnerId);
     }
 
     // -------------------------- Helpers --------------------------------------

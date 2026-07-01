@@ -47,6 +47,17 @@ public class LedgerPostingService {
      * different rounding rule than GMEPay+'s precise computed amount. {@code residual = precise - booked}.
      * Positive residual = rounding GAIN (we booked less liability than precise); negative = rounding LOSS.
      * Returns {@code null} when the residual is zero (nothing to post).
+     *
+     * <p><b>Idempotent on {@code reference}.</b> The {@code reference} is the audit handle of whatever
+     * produced the residual — a settlement batch id (settlement-reconciliation) or a TXN ref
+     * (payment-executor). A repeat call with a reference for which a rounding journal already exists is a
+     * no-op: it does NOT create a second journal line and returns the previously-posted journal
+     * unchanged, so retries leave the running {@code total_rounding_usd} aggregate counting the residual
+     * exactly once. A DB partial-unique index on {@code ledger_entries(reference)} where
+     * {@code account = 'REVENUE_ROUNDING'} (Flyway V006) backstops this against concurrent retries.
+     * Only rounding journals touch {@code REVENUE_ROUNDING}, so this guard does not interfere with the
+     * revenue-capture / fee-share / reversal journals that may carry the same {@code reference} on other
+     * accounts.
      */
     public Journal postRoundingResidual(String reference, BigDecimal residual, String currency) {
         Objects.requireNonNull(reference, "reference required");
@@ -54,6 +65,12 @@ public class LedgerPostingService {
         Objects.requireNonNull(currency, "currency required");
         if (residual.signum() == 0) {
             return null;
+        }
+        // Idempotency guard: if a rounding residual was already posted for this reference, return it
+        // unchanged so a settlement-reconciliation / payment-executor retry never double-books.
+        var existing = journalStore.findRoundingResidualByReference(reference);
+        if (existing.isPresent()) {
+            return existing.get();
         }
         BigDecimal amount = residual.abs();
         List<LedgerEntry> entries;

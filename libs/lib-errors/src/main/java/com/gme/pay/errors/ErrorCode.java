@@ -60,6 +60,44 @@ public enum ErrorCode {
      * resolver, the ops BFF) possess. Non-retryable: the caller is not a trusted internal service.
      */
     UNAUTHORIZED(401, false),
+    /**
+     * The caller is authenticated but not permitted to access the requested resource — e.g. a
+     * partner asking for another partner's payment/transaction (cross-tenant access). Distinct from
+     * {@link #UNAUTHORIZED} (no/invalid credentials). Raised by payment-executor's GET payment/balance
+     * surfaces once partner-scoping lands. Non-retryable.
+     */
+    FORBIDDEN(403, false),
+    /**
+     * The referenced payment cannot be found for the caller — either it does not exist or it is not
+     * visible to this partner (payment-executor GET {@code /v1/payments/{id}}). Non-retryable.
+     */
+    PAYMENT_NOT_FOUND(404, false),
+    /**
+     * The merchant resolved for the QR/CPM token is currently SUSPENDED (temporary hold). The payment
+     * is declined before any side effect. Non-retryable until the merchant is reinstated. Raised by
+     * merchant-qr-data strict-mode validation.
+     */
+    MERCHANT_SUSPENDED(422, false),
+    /**
+     * The merchant resolved for the QR/CPM token is DEACTIVATED (terminal off-boarding). The payment
+     * is declined before any side effect. Non-retryable. Raised by merchant-qr-data strict-mode
+     * validation.
+     */
+    MERCHANT_DEACTIVATED(422, false),
+    /**
+     * Scheme rows exist for the location + direction but none is wired for the requested presentment
+     * mode (CPM/MPM). Distinct from {@link #NO_SCHEME_FOR_LOCATION} so the wallet can prompt the
+     * customer to switch modes rather than fail hard. Raised by smart-router scheme-for-location
+     * resolution (mirrors its local {@code ResolutionError.PAYMENT_MODE_NOT_SUPPORTED}).
+     */
+    PAYMENT_MODE_NOT_SUPPORTED(409, false),
+    /**
+     * Scheme rows exist for the location but none is enabled for the requested transaction direction
+     * (INBOUND/OUTBOUND/DOMESTIC). Distinct from {@link #NO_SCHEME_FOR_LOCATION} so the corridor's
+     * existence is still signalled. Raised by smart-router scheme-for-location resolution (mirrors its
+     * local {@code ResolutionError.DIRECTION_NOT_ENABLED}).
+     */
+    DIRECTION_NOT_ENABLED(409, false),
     INTERNAL_ERROR(500, true);
 
     private final int httpStatus;

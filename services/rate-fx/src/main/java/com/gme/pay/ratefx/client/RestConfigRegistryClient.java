@@ -36,7 +36,7 @@ public class RestConfigRegistryClient implements PartnerConfigPort {
     }
 
     /** Test constructor — pre-built RestClient (e.g. backed by MockRestServiceServer). */
-    RestConfigRegistryClient(RestClient restClient) {
+    public RestConfigRegistryClient(RestClient restClient) {
         this.restClient = restClient;
     }
 
@@ -70,7 +70,7 @@ public class RestConfigRegistryClient implements PartnerConfigPort {
             }
             return rules.stream()
                     .map(r -> new PartnerRule(r.schemeId(), r.direction(), r.mA(), r.mB(),
-                            r.serviceChargeUsd()))
+                            r.serviceChargeUsd(), r.rateCollSource(), r.ratePaySource()))
                     .toList();
         } catch (RestClientException e) {
             throw new ApiException(ErrorCode.INTERNAL_ERROR,
@@ -86,5 +86,6 @@ public class RestConfigRegistryClient implements PartnerConfigPort {
     /** Wire shape of config-registry's RuleView (money/margin as decimal strings → BigDecimal). */
     @JsonIgnoreProperties(ignoreUnknown = true)
     record RuleResponse(String schemeId, String direction,
-                        BigDecimal mA, BigDecimal mB, BigDecimal serviceChargeUsd) {}
+                        BigDecimal mA, BigDecimal mB, BigDecimal serviceChargeUsd,
+                        String rateCollSource, String ratePaySource) {}
 }
