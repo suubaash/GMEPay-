@@ -2,6 +2,37 @@
 
 All notable changes to the notification-webhook service. Newest first.
 
+## 2026-07-01 — Ops wave: operator webhook replay + backlog alert
+
+### Added
+- **Operator replay endpoint** — `POST /v1/webhooks/deliveries/{id}/replay` (and
+  `POST /v1/webhooks/deliveries/replay?reference=`) re-enqueues a parked
+  (`DLQ`/`FAILED`) delivery back to `PENDING` so the existing `WebhookDispatcher`
+  drain re-sends it (reuses the drain — no new dispatcher). Idempotent-safe: a live
+  `PENDING`/`DELIVERED` row is a 200 no-op (never a duplicate in-flight send); a
+  missing row is 404. Backoff clock is reset (`attempt=0`, `lastAttemptedAt=null`) so
+  a re-enqueued row sends on the next cycle instead of waiting on the exhausted-attempt
+  window.
+  - `replay/WebhookReplayService` + `api/WebhookReplayController`. Operator identity
+    (`X-Operator` header or body `operator`) and optional `reason` recorded to a new
+    **webhook_replay_audit** ledger (`db/migration/V006__create_webhook_replay_audit.sql`,
+    `WebhookReplayAuditEntity`/`Repository`) — one audit row per request incl. no-ops.
+- **Backlog alert** — `alert/WebhookBacklogMonitor`, a `@Scheduled` **config-gated
+  (default off)** check (`gmepay.webhook.backlog-monitor.enabled=true`). Backlog =
+  overdue PENDING (older than `overdue-window-seconds`, default 300) + DLQ. When it
+  strictly exceeds `threshold` (default 100) it emits an `OpsAlertPayload`
+  (`alertType=WEBHOOK_BACKLOG`, severity INFO/WARN/CRITICAL by multiple of threshold,
+  `subjectRef="global"`, `detail=counts`) on the `EventPublisher` seam → topic
+  `gmepay.ops.alert` (via `alert/OpsAlertEvent` DomainEvent adapter). Under/at threshold
+  emits nothing. Log-fallback `LogEventPublisher` bean (`@ConditionalOnMissingBean`) so
+  it works with no broker; a `@Primary KafkaEventPublisher` wins when
+  `spring.kafka.bootstrap-servers` is set.
+- **Tests** (broker-free / mocked): `WebhookReplayServiceTest` (5) — DLQ re-enqueue +
+  audit, PENDING/DELIVERED no-ops, NOT_FOUND, reference prefers parked row;
+  `WebhookBacklogMonitorTest` (4) — over-threshold emits, under/at emits nothing,
+  severity scaling. `:services:notification-webhook:test` green.
+
+
 ## 2026-06-30 — Phase 2: align payment.approved consumer to canonical contract
 
 ### Changed
