@@ -47,6 +47,13 @@ describe('AppShell', () => {
     window.localStorage.setItem(TOKEN_KEY, 'tok123');
   });
 
+  it('renders the Operations nav item linking to /operations', () => {
+    renderShell();
+    const link = screen.getByRole('link', { name: /operations/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/operations');
+  });
+
   it('opens the user menu when the avatar is clicked', async () => {
     const user = userEvent.setup();
     renderShell();
