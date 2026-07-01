@@ -70,6 +70,23 @@ class LocationSchemeResolverTest {
         assertTrue(r.ambiguous());
     }
 
+    @Test
+    @DisplayName("NP scan resolves to NEPAL in both presentment modes (single-phase, BOTH)")
+    void npResolvesToNepalEitherMode() {
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0));
+
+        SchemeResolution cpm = new LocationSchemeResolver(registry)
+                .resolve(new LocationSchemeQuery("np", PaymentMode.CPM, "INBOUND"));
+        assertEquals("NEPAL", cpm.scheme());
+        assertFalse(cpm.ambiguous());
+
+        SchemeResolution mpm = new LocationSchemeResolver(registry)
+                .resolve(new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC"));
+        assertEquals("NEPAL", mpm.scheme());
+        assertEquals(List.of("NEPAL"), mpm.candidates());
+    }
+
     // --------------------------- branch: VALIDATION_ERROR --------------------
 
     @Test

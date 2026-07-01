@@ -7,7 +7,6 @@ import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -29,9 +28,13 @@ import java.time.Instant;
  *   <li>503 / 504 / network read timeout → {@link SchemeTimeoutException}
  *   <li>other non-2xx → {@link PaymentException}
  * </ul>
+ *
+ * <p>This adapter is the ZeroPay/default {@link SchemeClient}. It is no longer
+ * {@code @Primary}: {@link SchemeClientRouter} is the primary bean and delegates
+ * ZeroPay (and any non-NEPAL/unknown scheme) here, so this class's behaviour and
+ * base-url default are unchanged.
  */
 @Component
-@Primary
 public class RestSchemeClient implements SchemeClient {
 
     private final RestClient restClient;

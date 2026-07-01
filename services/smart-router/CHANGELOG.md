@@ -1,5 +1,15 @@
 # smart-router CHANGELOG
 
+## [Unreleased] — na/wiring — 2026-07-01
+
+### Added (NEPAL routing)
+- **NP → NEPAL resolution.** Added a NEPAL row for country `NP` to the seeded
+  `InMemoryPartnerSchemeRegistry` fixture (`CPM+MPM`, direction `BOTH`, priority 0):
+  Nepal pay is single-phase (submit = authorize+commit) and covers both presentment
+  modes, so a NP scan resolves to `NEPAL` in either mode.
+- Resolver tests: `LocationSchemeResolverTest.npResolvesToNepalEitherMode` and
+  `InMemoryPartnerSchemeRegistryTest.npResolvesToNepal`.
+
 ## [Unreleased] — w3/smart-router — 2026-06-30
 
 ### Added (Wave-3 — data-driven scheme resolution over config-registry)
