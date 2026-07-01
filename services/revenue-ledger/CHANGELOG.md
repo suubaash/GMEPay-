@@ -2,6 +2,36 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-07-02 — reversing journal on payment.reversed (fix/revenue-ledger)
+
+### Added
+- **`payment.reversed` consumer** (`PaymentReversedEventHandler` + `PaymentReversedKafkaConsumer`) on
+  topic `gmepay.payment.reversed`, consuming the canonical `PaymentReversedPayload` (lib-api-contracts).
+  When a payment's terminal outcome becomes `REVERSED` — including an operator force-resolve of an
+  `UNCERTAIN` txn — it books a **reversing journal**: a balanced contra-entry that backs out the original
+  revenue capture for that txnRef (FX margin + service charge + fee-share). Registered as a bean only by
+  `RevenueLedgerKafkaConsumerConfig` (gated on `spring.kafka.bootstrap-servers`), reusing the existing
+  MANUAL-ack container factory + DLT error handler — broker-free by default, exactly like the
+  `payment.approved` consumer.
+- **`RevenueReversalService.reverseCapture(txnRef)`** — finds every original capture journal for the
+  txnRef via `JournalStore.findByReference` and posts a single balanced journal mirroring all their lines
+  with the DEBIT/CREDIT side flipped, so the net across capture + reversal is exactly zero on every
+  account and currency. **Idempotent on txnRef**: a reversing line is the only DEBIT ever posted to a
+  `REVENUE_*` income account (capture only CREDITs them), so a prior reversal is detected and a repeat
+  `payment.reversed` is a no-op (no second contra). **No original capture → safe no-op** (logged, acked,
+  never dead-lettered), since a reversal before/without a capture is a benign ordering artifact.
+
+### Notes
+- **Operator-COMPLETED needs no new code.** transaction-mgmt emits the normal `payment.approved` for an
+  operator COMPLETED; the existing `PaymentApprovedEventHandler` (which gates only on
+  `eventType == payment.approved`, not on source/status) books the capture unchanged.
+
+### Tests
+- `PaymentReversedEventHandlerTest` (+8, broker-free, real `InMemoryJournalStore`): reversal nets the
+  original capture to zero on every account/currency; second reversal is an idempotent no-op (no second
+  contra); reversal for an unknown txnRef is a safe no-op (nothing posted); txnRef record-key fallback;
+  poison cases (wrong eventType, invalid JSON, empty payload, missing txnRef).
+
 ## 2026-06-30 — Wave-3: idempotent rounding-residual posting (w3/revenue-ledger)
 
 ### Changed
