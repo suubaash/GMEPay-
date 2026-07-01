@@ -74,4 +74,10 @@ public class SchemeClientRouter implements SchemeClient {
         // No scheme code on this call; cancel is a ZeroPay two-phase concept.
         defaultClient.cancelPayment(schemeTxnRef, reason);
     }
+
+    @Override
+    public LookupStatus lookupStatus(String schemeId, String reference) {
+        // Route the anti-double-charge probe (ADR-016 §4) to the scheme's own adapter.
+        return route(schemeId).lookupStatus(schemeId, reference);
+    }
 }

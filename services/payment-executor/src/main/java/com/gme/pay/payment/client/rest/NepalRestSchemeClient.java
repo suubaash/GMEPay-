@@ -101,6 +101,49 @@ public class NepalRestSchemeClient implements SchemeClient {
                 "NEPAL is single-phase (submit=authorize+commit); cancelPayment is not supported");
     }
 
+    /**
+     * Anti-double-charge status lookup (ADR-016 §4): {@code GET /internal/scheme/nepal/status?reference=}.
+     * The adapter answers whether our stable reference was paid. A 404 → {@link LookupStatus#NOT_FOUND}
+     * (safe to fail over). Any transport/other error is treated as {@code NOT_FOUND} best-effort — but
+     * note the router only calls this AFTER a technical failure, so an unreachable status endpoint
+     * degrades to the pre-guard behaviour (fail over) rather than a hard error.
+     */
+    @Override
+    public LookupStatus lookupStatus(String schemeId, String reference) {
+        try {
+            NepalStatusResponse body = restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/internal/scheme/nepal/status")
+                            .queryParam("reference", reference)
+                            .build())
+                    .retrieve()
+                    .body(NepalStatusResponse.class);
+            if (body == null || body.status() == null) {
+                return LookupStatus.NOT_FOUND;
+            }
+            return mapStatus(body.status());
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == HttpStatus.NOT_FOUND.value()) {
+                return LookupStatus.NOT_FOUND;
+            }
+            // Ambiguous status-endpoint failure: cannot confirm a payment, so best-effort NOT_FOUND.
+            return LookupStatus.NOT_FOUND;
+        } catch (RuntimeException ex) {
+            return LookupStatus.NOT_FOUND;
+        }
+    }
+
+    /** Maps the Nepal adapter's status vocabulary onto the canonical {@link LookupStatus}. */
+    private static LookupStatus mapStatus(String status) {
+        String s = status.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (s) {
+            case "SUCCESS", "APPROVED", "PAID", "COMPLETED" -> LookupStatus.APPROVED;
+            case "PENDING", "IN_PROGRESS", "PROCESSING" -> LookupStatus.PENDING;
+            case "FAILED", "DECLINED", "REJECTED" -> LookupStatus.REJECTED;
+            default -> LookupStatus.NOT_FOUND;
+        };
+    }
+
     private static BigDecimal toPaisa(BigDecimal amount) {
         // Nepal amounts are minor units (paisa); the orchestrator carries a decimal payout.
         return amount == null ? null : amount.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP);
@@ -150,5 +193,12 @@ public class NepalRestSchemeClient implements SchemeClient {
             String schemeTxnRef,
             String status,
             BigDecimal amountPaisa
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record NepalStatusResponse(
+            String schemeTxnRef,
+            String status,
+            String reference
     ) {}
 }

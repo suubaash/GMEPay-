@@ -48,6 +48,38 @@ public interface SchemeClient {
         return new BalanceCheckResult(true, null);
     }
 
+    /**
+     * Idempotent status lookup by our stable payment {@code reference} (ADR-016 §4,
+     * anti-double-charge guard). On a technical failure (timeout / 5xx / connect / unavailable)
+     * the payment outcome is <em>unknown</em>, so before failing over to another partner the
+     * router asks the scheme whether this reference was in fact paid or is pending — and if so it
+     * returns that outcome instead of retrying (which would double-charge).
+     *
+     * <p>Default returns {@link LookupStatus#NOT_FOUND} (best-effort) so existing hand-written
+     * fakes and any adapter without a status endpoint remain valid; a scheme that cannot answer
+     * definitively must NOT falsely report a payment as absent, so NOT_FOUND is the safe default
+     * only for schemes that genuinely have no record.
+     *
+     * @param schemeId  scheme CODE (routes to the right adapter via {@link SchemeClient}).
+     * @param reference our stable payment reference used at submit time.
+     * @return the scheme's view of the reference.
+     */
+    default LookupStatus lookupStatus(String schemeId, String reference) {
+        return LookupStatus.NOT_FOUND;
+    }
+
+    /** Outcome of an idempotent {@link #lookupStatus} probe. */
+    enum LookupStatus {
+        /** The scheme confirms this reference was paid — treat as APPROVED, do NOT retry. */
+        APPROVED,
+        /** The scheme has the reference in-flight — outcome not yet final; do NOT retry. */
+        PENDING,
+        /** The scheme processed and rejected this reference — a business decline. */
+        REJECTED,
+        /** The scheme has no record of this reference — safe to fail over to another partner. */
+        NOT_FOUND
+    }
+
     // ---- request/response value objects ----
 
     record MpmSubmitRequest(
