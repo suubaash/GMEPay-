@@ -43,6 +43,19 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * <p>{@code @JsonInclude(ALWAYS)} so {@code null} fields stay on the wire —
  * same contract as {@link PartnerView} / {@link RuleView}.
+ *
+ * <h2>ADR-016 QR-network routing field (additive)</h2>
+ *
+ * <p>Appended for QR-classified failover routing (ADR-016). Nullable/additive so
+ * config-registry can populate it incrementally without breaking existing readers:
+ * <ul>
+ *   <li>{@code networkIdentifier} — the QR network's globally-unique reverse-domain
+ *       / AID GUID (e.g. {@code com.zeropay}, {@code fonepay.com}) that a scanned QR
+ *       is classified to. It is the deterministic routing key mapping
+ *       QR-network → partner; smart-router resolves this to the ordered candidate
+ *       list. Nullable while the row predates the {@code network_identifier}
+ *       column population.</li>
+ * </ul>
  */
 @JsonInclude(JsonInclude.Include.ALWAYS)
 public record PartnerSchemeView(
@@ -62,11 +75,13 @@ public record PartnerSchemeView(
         Boolean supportsCpm,
         Boolean supportsMpm,
         Integer priority,
-        String status) {
+        String status,
+        String networkIdentifier) {
 
     /**
      * Backwards-compatible 12-arg constructor (pre-Wave-3 shape). Delegates the
-     * five location-resolution fields to {@code null} so existing producers
+     * five location-resolution fields and the ADR-016 {@code networkIdentifier}
+     * to {@code null} so existing producers
      * (config-registry {@code PartnerSchemeEntity.toView}) and readers keep
      * compiling unchanged.
      */
@@ -85,6 +100,35 @@ public record PartnerSchemeView(
             Boolean enabled) {
         this(partnerId, schemeId, direction, role, zeropayMerchantId, zeropaySubMerchantId,
                 kftcInstitutionCode, partnerTypeChar, vaultSecretId, approvalMethodCpm,
-                approvalMethodMpm, enabled, null, null, null, null, null);
+                approvalMethodMpm, enabled, null, null, null, null, null, null);
+    }
+
+    /**
+     * Backwards-compatible 17-arg constructor (Wave-3 shape, pre-ADR-016).
+     * Delegates {@code networkIdentifier} to {@code null} so existing
+     * Wave-3 call sites in config-registry + smart-router keep compiling unchanged.
+     */
+    public PartnerSchemeView(
+            Long partnerId,
+            String schemeId,
+            String direction,
+            String role,
+            String zeropayMerchantId,
+            String zeropaySubMerchantId,
+            String kftcInstitutionCode,
+            String partnerTypeChar,
+            String vaultSecretId,
+            String approvalMethodCpm,
+            String approvalMethodMpm,
+            Boolean enabled,
+            String countryCode,
+            Boolean supportsCpm,
+            Boolean supportsMpm,
+            Integer priority,
+            String status) {
+        this(partnerId, schemeId, direction, role, zeropayMerchantId, zeropaySubMerchantId,
+                kftcInstitutionCode, partnerTypeChar, vaultSecretId, approvalMethodCpm,
+                approvalMethodMpm, enabled, countryCode, supportsCpm, supportsMpm, priority,
+                status, null);
     }
 }
