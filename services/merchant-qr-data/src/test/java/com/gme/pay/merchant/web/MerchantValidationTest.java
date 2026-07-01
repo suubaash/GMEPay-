@@ -7,6 +7,7 @@ import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.merchant.domain.InMemoryMerchantRepository;
 import com.gme.pay.merchant.domain.Merchant;
 import com.gme.pay.merchant.domain.MerchantLookupService;
+import com.gme.pay.merchant.domain.MerchantRegistrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -76,7 +77,8 @@ class MerchantValidationTest {
                 "USD", "ZEROPAY", "Daegu", "6211"));
 
         MerchantLookupService service = new MerchantLookupService(repository);
-        controller = new MerchantController(service);
+        MerchantRegistrationService registrationService = new MerchantRegistrationService(repository);
+        controller = new MerchantController(service, registrationService);
     }
 
     // ------------------------------------------------------------------

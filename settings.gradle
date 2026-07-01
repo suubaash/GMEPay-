@@ -46,3 +46,7 @@ include 'services:api-gateway'
 include 'services:ops-partner-bff'
 // KYB vendor integration service (ADR-009 port / ADR-014 Octa Solution adapter).
 include 'services:kyb-adapter'
+
+// Black-box end-to-end test harness (opt-in, @Tag("e2e")). Boots the real money-path
+// fleet as subprocesses and drives wallet-scan -> payment across services.
+include 'e2e-tests'

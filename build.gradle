@@ -26,11 +26,12 @@ subprojects {
     }
 
     // Unit/slice tests: run everywhere (no Docker). Docker-backed Testcontainers ITs
-    // must be annotated @Tag("docker") — they are excluded here and run only via the
-    // `integrationTest` task (CI ubuntu runners have Docker; the local Windows box does not).
+    // must be annotated @Tag("docker"); the heavy fleet-booting end-to-end test is
+    // @Tag("e2e"). Both are excluded from the default `test` task so `./gradlew build`
+    // stays fast and self-contained. They run via the dedicated tasks below.
     test {
         useJUnitPlatform {
-            excludeTags 'docker'
+            excludeTags 'docker', 'e2e'
         }
     }
 
@@ -41,6 +42,24 @@ subprojects {
         classpath = sourceSets.test.runtimeClasspath
         useJUnitPlatform {
             includeTags 'docker'
+        }
+        shouldRunAfter tasks.named('test')
+    }
+
+    tasks.register('e2eTest', Test) {
+        description = 'Black-box end-to-end tests (JUnit @Tag("e2e")) — boots the service fleet as subprocesses. No Docker.'
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags 'e2e'
+        }
+        // The fleet needs real ports + time to boot; never parallelise, give it room.
+        maxParallelForks = 1
+        testLogging {
+            events 'passed', 'failed', 'skipped'
+            showStandardStreams = true
+            exceptionFormat = 'full'
         }
         shouldRunAfter tasks.named('test')
     }

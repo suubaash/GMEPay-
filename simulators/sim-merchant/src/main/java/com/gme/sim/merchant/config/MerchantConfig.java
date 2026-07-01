@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClient;
 public class MerchantConfig {
 
     private final String schemeBaseUrl;
+    private final String merchantQrDataBaseUrl;
 
     // Spring 6: @Autowired required when a class has 2+ constructors.
     // This class has one constructor so no annotation is needed, but we're
@@ -21,18 +22,38 @@ public class MerchantConfig {
     public MerchantConfig(
             @org.springframework.beans.factory.annotation.Value(
                     "${gmepay.sim.merchant.scheme-base-url:http://localhost:9102}")
-            String schemeBaseUrl) {
+            String schemeBaseUrl,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${gmepay.sim.merchant.merchant-qr-data-base-url:http://localhost:18083}")
+            String merchantQrDataBaseUrl) {
         this.schemeBaseUrl = schemeBaseUrl;
+        this.merchantQrDataBaseUrl = merchantQrDataBaseUrl;
     }
 
     public String getSchemeBaseUrl() {
         return schemeBaseUrl;
     }
 
+    public String getMerchantQrDataBaseUrl() {
+        return merchantQrDataBaseUrl;
+    }
+
     @Bean
     public RestClient schemeRestClient() {
         return RestClient.builder()
                 .baseUrl(schemeBaseUrl)
+                .build();
+    }
+
+    /**
+     * Client for merchant-qr-data ({@code POST /v1/merchants}) — used to mirror a freshly
+     * registered terminal shop's QR into the payment-side lookup store, so the wallet's
+     * scanned QR resolves at pay time instead of 404-ing.
+     */
+    @Bean
+    public RestClient merchantQrDataRestClient() {
+        return RestClient.builder()
+                .baseUrl(merchantQrDataBaseUrl)
                 .build();
     }
 }

@@ -120,6 +120,12 @@ public class GmeremitPaymentService {
         QrClient.MerchantView merchant;
         try {
             merchant = qrClient.resolve(qrPayload);
+        } catch (MerchantNotFoundException ex) {
+            // Merchant definitively unknown (merchant-qr-data 404) — a clean business decline,
+            // NOT a server error and NOT something lenient mode should mask: lenient covers
+            // "merchant-qr-data unreachable", never "this merchant does not exist".
+            log.warn("Payment declined: no merchant registered for qr={}", qrPayload);
+            return WalletResult.declined(null, "MERCHANT_NOT_FOUND");
         } catch (RuntimeException ex) {
             if (lenientMerchantValidation) {
                 log.warn("merchant-qr-data unreachable (lenient mode) — proceeding with unknown merchant: {}", ex.getMessage());

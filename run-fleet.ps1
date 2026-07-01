@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Boot / stop / inspect the full GMEPay+ local fleet with the transparency tracer.
 
@@ -84,8 +84,8 @@ $fleet = @(
     @{ name = 'sim-rate-provider';          type = 'sim';     port = 9101 }
     @{ name = 'sim-scheme';                 type = 'sim';     port = 9102; args = @('--gmepay.sim.scheme.profile=ZEROPAY') }
     @{ name = 'sim-wallet';                 type = 'sim';     port = 9103 }
-    @{ name = 'sim-merchant';               type = 'sim';     port = 9104 }
-    @{ name = 'sim-gmeremit';               type = 'sim';     port = 9105 }
+    @{ name = 'sim-merchant';               type = 'sim';     port = 9104; args = @('--gmepay.sim.merchant.merchant-qr-data-base-url=http://localhost:18083') }
+    @{ name = 'sim-gmeremit';               type = 'sim';     port = 9105; args = @('--gmepay.sim.gmeremit.gmepay-base-url=http://localhost:18084') }
 )
 
 # Running all 22 JVMs at once needs ~8-10 GB RAM; on a tight box the OS may reap some.
@@ -97,6 +97,22 @@ if ($Subset -eq 'money') { $fleet = @($fleet | Where-Object { $moneyNames -conta
 
 # Stateless / web-only services (no JPA/Kafka/Redis) get a smaller heap tier.
 $statelessNames = @('smart-router', 'reporting-compliance', 'ops-partner-bff', 'kyb-adapter')
+
+# Inter-service wiring. Each backend service defaults its peer base-URLs to Docker
+# hostnames (e.g. http://merchant-qr-data:8080) which do NOT resolve when the fleet
+# runs as bare localhost JVMs. We rewrite every gmepay.<service>.base-url to the peer's
+# actual fleet port so the cross-service cascade (payment-executor -> merchant-qr-data /
+# scheme-adapter / transaction-mgmt / revenue-ledger, ops-partner-bff -> its backends, ...)
+# works locally. Property names are shared per-peer across all services, so one map is
+# correct fleet-wide; passing a base-url a given service doesn't read is harmless.
+# NB: scheme-adapter-zeropay reaches sim-scheme via gmepay.scheme.zeropay.base-url
+# (defaults to http://localhost:9102) — a different property we intentionally leave alone.
+$downstreamArgs = @()
+foreach ($peer in $fleet) {
+    if ($peer.type -eq 'service') {
+        $downstreamArgs += "--gmepay.$($peer.name).base-url=http://localhost:$($peer.port)"
+    }
+}
 
 # --- helpers ---------------------------------------------------------------
 function Resolve-Jar($c) {
@@ -181,6 +197,9 @@ function Start-Component($c) {
         '--springdoc.api-docs.enabled=false', '--springdoc.swagger-ui.enabled=false'
     )
     if ($traceEnabled) { $spring += '--gmepay.trace.enabled=true' }
+    # Point every gmepay.<peer>.base-url at the peer's localhost fleet port (services only;
+    # sims keep their own per-sim properties via $c.args below).
+    if ($c.type -eq 'service') { $spring += $downstreamArgs }
     if ($c.args) { $spring += $c.args }
     $a = (Get-JvmFlags $c) + @('-jar', $jar) + $spring
     Start-Process -FilePath 'java' -ArgumentList $a -WindowStyle Hidden `
