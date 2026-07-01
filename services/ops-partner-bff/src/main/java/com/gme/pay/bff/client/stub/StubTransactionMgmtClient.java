@@ -61,6 +61,27 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
     }
 
     @Override
+    public TransactionSummary resolve(String txnRef, String resolution, String actor, String reason) {
+        TransactionSummary existing = getTransaction(txnRef);
+        String newState = switch (resolution == null ? "" : resolution) {
+            case "FORCE_APPROVE" -> "COMMITTED";
+            case "FORCE_FAIL" -> "FAILED";
+            default -> "REVIEWED";
+        };
+        if (existing == null) {
+            // Unknown ref — echo a minimal resolved summary so the stub path still answers.
+            return TransactionSummary.of(txnRef, null, newState, null, null, Instant.now());
+        }
+        return new TransactionSummary(
+                existing.txnId(), existing.partnerId(), newState,
+                existing.amount(), existing.currency(), existing.committedAt(),
+                existing.qrSchemeId(), existing.krwAmount(), existing.payerCurrency(),
+                existing.payerCurrencyAmount(), existing.appliedFxRate(), existing.rateTimestamp(),
+                existing.prefundingDeductedUsd(), existing.schemeTxnRef(), existing.schemeApprovalCode(),
+                existing.merchantId(), existing.approvedAt());
+    }
+
+    @Override
     public Page<TransactionSummary> list(Filter filter) {
         List<TransactionSummary> filtered = STORE.stream()
                 .filter(t -> filter.partnerId() == null || filter.partnerId().equals(t.partnerId()))

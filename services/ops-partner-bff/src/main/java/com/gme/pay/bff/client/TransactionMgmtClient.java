@@ -37,6 +37,51 @@ public interface TransactionMgmtClient {
      */
     Page<TransactionSummary> list(Filter filter);
 
+    // -------- Ops wave: 360° search + operator resolve -----------------------
+    //
+    // Additive default methods (never break existing anonymous test fakes /
+    // lambda implementations). Both real implementations (rest + stub) override.
+
+    /**
+     * 360° transaction search — the Ops control-tower drill-down. Routes to
+     * transaction-mgmt's {@code GET /v1/transactions/search?q=...&status=...&partnerId=...}
+     * free-text + facet search (broader than {@link #list(Filter)}'s date/state filter).
+     * Returns the mapped result rows; empty page when nothing matches or upstream degrades.
+     *
+     * <p>Default: falls back to {@link #list(Filter)} on {@code (partnerId, state)} so a
+     * stub / minimal fake still answers.
+     */
+    default Page<TransactionSummary> search(SearchQuery query) {
+        Filter f = new Filter(query.partnerId(), null, query.status(), null, null,
+                query.page(), query.size());
+        return list(f);
+    }
+
+    /**
+     * Operator resolution of an UNCERTAIN / stuck transaction. Routes to
+     * transaction-mgmt's {@code POST /v1/transactions/{ref}/resolve} carrying the
+     * operator's resolution (e.g. {@code FORCE_APPROVE} | {@code FORCE_FAIL} |
+     * {@code MARK_REVIEWED}) + reason. Returns the fresh {@link TransactionSummary}
+     * in its post-resolution state. Upstream 404 (unknown ref) / 409 (illegal state)
+     * propagate as {@code ResponseStatusException} from the rest impl.
+     */
+    default TransactionSummary resolve(String txnRef, String resolution, String actor, String reason) {
+        throw new UnsupportedOperationException(
+                "resolve is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Free-text + facet search criteria for {@link #search(SearchQuery)}. All fields
+     * optional; {@code page} 0-indexed.
+     */
+    record SearchQuery(
+            String q,
+            String partnerId,
+            String status,
+            int page,
+            int size
+    ) {}
+
     /**
      * Partner-facing transaction summary (UC-10-02).
      *
