@@ -1,5 +1,42 @@
 # prefunding — CHANGELOG
 
+## 2026-07-02 (fix/prefunding — harden: release-on-reversal + FLOAT_LOW ops alert + ShedLock)
+
+### Fixed — #1 release the held float on payment reversal
+- New `payment.reversed` consumer (`PaymentReversedKafkaConsumer` + `PaymentReversedEventHandler`,
+  topic `gmepay.payment.reversed`, deserialises canonical `PaymentReversedPayload`). On receipt it
+  credits `reversedUsd` back onto the partner balance via new
+  `PrefundingService.releaseReversedFloat(partnerId, txnRef, reversedUsd)` — closing the leak where an
+  operator force-resolve →REVERSED never returned the held USD. Idempotent on `txnRef` (a CREDIT
+  tagged with the txnRef is the reversal marker, shared with the operator `reverse` path), so Kafka
+  redelivery / an already-handled reversal never double-credits. Null/absent `reversedUsd` logs + no-ops;
+  missing txnRef/partnerId or bad JSON is poison → DLT. Consumer wiring
+  (`PrefundingKafkaConsumerConfig`) is `@ConditionalOnProperty(spring.kafka.bootstrap-servers)`, MANUAL
+  ack, retry→`.DLT` (mirrors revenue-ledger); no broker needed for local/tests.
+
+### Added — #5 FLOAT_LOW ops alert (converged onto the ops control tower)
+- `TierAlertEvaluator` now ALSO emits an `OpsAlertPayload`(alertType `FLOAT_LOW`) outbox row on topic
+  `gmepay.ops.alert` for every low-balance crossing it already raises — the existing per-partner
+  `prefunding.alert` stream is unchanged (converge, not replace). Severity scales with depth below
+  threshold: TIER_95→INFO, TIER_85/TIER_70→WARN, BREACH→CRITICAL; `subjectRef`=partner code,
+  `detail`=balance/threshold (decimal strings).
+
+### Added — #3 ShedLock on the scheduled outbox drain
+- `OutboxPublisher.publishPending()` (the one `@Scheduled` in this service) now carries
+  `@SchedulerLock`; `OutboxConfig` gains `@EnableSchedulerLock` + a `JdbcTemplateLockProvider`. New
+  `V008__create_shedlock.sql` (additive) backs the lock. With >1 replica exactly one instance drains
+  per tick — no double-publish. Deps: `shedlock-spring` + `shedlock-provider-jdbc-template` 5.16.0,
+  plus `lib-events-kafka` + `spring-kafka` for the consumer.
+
+### Tests
+- `PaymentReversedEventHandlerTest`: reversal credits held USD; idempotent on redelivery; null
+  reversedUsd no-op; unknown partner throws; missing txnRef poison.
+- `FloatLowOpsAlertTest`: crossing emits FLOAT_LOW on `gmepay.ops.alert` alongside `prefunding.alert`;
+  INFO/WARN/CRITICAL severity by tier/breach.
+- `OutboxPublisherShedLockTest`: `@SchedulerLock` present + named on the drain.
+- Existing `TierAlertEvaluatorTest` outbox-count assertions filtered to `prefunding.alert` (now two
+  outbox rows per crossing). `./gradlew :services:prefunding:test` green (61 tests).
+
 ## 2026-06-30 (w3/prefunding — Wave-3 credit-limit / AML-cap push, IR-pf-2)
 
 ### Added — config-registry → prefunding limit push

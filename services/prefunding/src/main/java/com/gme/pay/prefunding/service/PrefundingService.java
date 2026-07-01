@@ -178,6 +178,52 @@ public class PrefundingService {
     /** Outcome of a reverse: the amount credited back, the balance after, and the reversal CREDIT ledger entry id. */
     public record ReverseResult(BigDecimal reversedAmount, BigDecimal balanceAfter, Long ledgerEntryId) {}
 
+    /**
+     * Release the held prefund float for a reversed payment (the {@code payment.reversed} event path).
+     * Credits {@code reversedUsd} back onto the partner's balance and appends a CREDIT entry tagged with
+     * {@code txnRef} — the SAME reversal marker convention as {@link #reverse(String, String)} (a CREDIT
+     * carrying a txnRef IS the reversal marker), so the two paths share idempotency: if a CREDIT for this
+     * txnRef already exists (whether from an operator reverse or a prior delivery of this event), NOTHING is
+     * written and zero is reported. This is what closes the leak where an operator force-resolve →REVERSED
+     * never returned the held USD.
+     *
+     * <p>Unlike {@link #reverse(String, String)} — which derives the amount from the matching DEBIT ledger
+     * entry — this credits the caller-supplied {@code reversedUsd} from the event, because the reversed
+     * payment was not necessarily debited through this service's DEBIT path (it may have been captured, or
+     * settled elsewhere); the authoritative "float to release" figure rides on the event.
+     *
+     * <p>Idempotent + at-least-once safe (Kafka redelivery). A {@code reversedUsd} that is null or
+     * non-positive is a no-op reporting zero (the caller logs the null case). Throws
+     * {@link ErrorCode#VALIDATION_ERROR} for an unknown partner (surfaced by the consumer, which decides
+     * whether to ack or dead-letter).
+     *
+     * @return the amount actually credited back + the resulting balance + the CREDIT ledger entry id
+     */
+    @Transactional
+    public ReverseResult releaseReversedFloat(String partnerId, String txnRef, BigDecimal reversedUsd) {
+        PartnerBalanceEntity row = lockOrThrow(partnerId);
+        java.util.List<LedgerEntryEntity> entries = ledger.findByPartnerIdAndTxnRef(partnerId, txnRef);
+        LedgerEntryEntity existingCredit = entries.stream()
+                .filter(e -> ENTRY_CREDIT.equals(e.getEntryType()))
+                .findFirst().orElse(null);
+        if (existingCredit != null || reversedUsd == null || reversedUsd.signum() <= 0) {
+            // Already released (idempotent replay / prior operator reverse) OR nothing to release.
+            return new ReverseResult(BigDecimal.ZERO, row.getBalance(),
+                    existingCredit != null ? existingCredit.getId() : null);
+        }
+        BigDecimal previousBalance = row.getBalance();
+        PrefundingAccount account = toDomain(row);
+        BigDecimal newBalance = account.credit(reversedUsd);
+        Instant now = Instant.now();
+        row.setBalance(newBalance);
+        row.setUpdatedAt(now);
+        PartnerBalanceEntity saved = balances.save(row);
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT,
+                reversedUsd, row.getCurrency(), now));
+        tierAlerts.afterBalanceChange(saved, previousBalance);
+        return new ReverseResult(reversedUsd, newBalance, entry.getId());
+    }
+
     // ---- cumulative usage caps (AML daily/monthly/annual, V006) ----
 
     /**

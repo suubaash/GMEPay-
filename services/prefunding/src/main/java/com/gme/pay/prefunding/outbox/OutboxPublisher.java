@@ -2,6 +2,7 @@ package com.gme.pay.prefunding.outbox;
 
 import com.gme.pay.events.DomainEvent;
 import com.gme.pay.events.EventPublisher;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -42,7 +43,11 @@ public class OutboxPublisher {
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher required");
     }
 
+    /** Name of the ShedLock row (V008) serialising this drain across replicas. */
+    public static final String LOCK_NAME = "prefunding-outbox-drain";
+
     @Scheduled(fixedDelayString = "${gmepay.outbox.poll-ms:1000}")
+    @SchedulerLock(name = LOCK_NAME, lockAtMostFor = "PT30S", lockAtLeastFor = "PT0S")
     @Transactional
     public void publishPending() {
         List<OutboxEntity> batch = repository.findUnpublished(PageRequest.of(0, BATCH_SIZE));
