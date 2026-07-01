@@ -6,6 +6,7 @@ import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.outbox.OutboxAppender;
 import com.gme.pay.txn.outbox.PaymentApprovedEvent;
+import com.gme.pay.txn.outbox.PaymentReversedEvent;
 import com.gme.pay.txn.outbox.TransactionCommittedEvent;
 import com.gme.pay.txn.outbox.TransactionStatusChangedEvent;
 import org.slf4j.Logger;
@@ -112,6 +113,20 @@ public class TransactionStateMachine {
                 log.warn("committed-FX capture/publish failed for txn {} (commit proceeds): {}",
                         txn.txnRef(), ex.toString());
             }
+        }
+
+        // On REVERSED, emit the partner-facing/revenue-bearing payment.reversed domain event (topic
+        // gmepay.payment.reversed) so revenue-ledger books a reversing journal and prefunding
+        // releases the held float. Before this, REVERSED emitted only the internal FSM status event
+        // above — so an operator force-resolve of an UNCERTAIN txn to REVERSED moved money with ZERO
+        // ledger impact (defect #1). Populated from the txn snapshot: the reversed collection amount +
+        // currency and, crucially, the prefund USD held at UNCERTAIN (prefundDeductedUsd) as
+        // reversedUsd so prefunding releases exactly what it held; reason = the operator's resolution
+        // reason; source = OPERATOR. Same partnerId guard as APPROVED: an event with a null partnerId
+        // (legacy 5-field rows) has no consumer route, so it is skipped. Appended to the SAME outbox
+        // (durable) as the status event, so it is never silently dropped for this money-terminal state.
+        if (to == TransactionStatus.REVERSED && txn.partnerId() != null) {
+            eventPublisher.publish(PaymentReversedEvent.fromOperatorResolution(txn, Instant.now()));
         }
 
         return txn;

@@ -5,6 +5,7 @@ import com.gme.pay.txn.domain.model.TransactionStatus;
 import com.gme.pay.txn.domain.statemachine.TransactionStateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -91,6 +92,8 @@ public class ExpirySweeperService {
      */
     @Scheduled(fixedDelayString = "${gmepay.txn.expiry-sweeper.interval-ms:10000}",
                zone = "Asia/Seoul")
+    @SchedulerLock(name = "ExpirySweeperService_sweep",
+                   lockAtMostFor = "PT1M", lockAtLeastFor = "PT2S")
     public void sweep() {
         if (!enabled) {
             return;

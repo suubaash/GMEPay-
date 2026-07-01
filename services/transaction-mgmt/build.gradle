@@ -12,6 +12,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation 'org.flywaydb:flyway-core'
+    // ShedLock: distributed lock so a @Scheduled method fires on at most one replica per tick
+    // (the sweepers + outbox drain must not double-fire across horizontally-scaled instances).
+    // JDBC-template provider reuses the service's existing DataSource; no extra infra.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.13.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.13.0'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
