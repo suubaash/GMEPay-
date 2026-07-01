@@ -3,6 +3,7 @@ package com.gme.pay.notify.persistence;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -21,6 +22,13 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
      * dispatcher to fire the queue-depth alert without materialising rows.
      */
     long countByStatus(String status);
+
+    /**
+     * Backlog gauge for the Ops backlog monitor: count of rows in a status created at
+     * or before {@code cutoff}. Used to count only <em>overdue</em> PENDING rows
+     * (older than the overdue window) so a healthy in-flight burst does not alert.
+     */
+    long countByStatusAndCreatedAtBefore(String status, Instant cutoff);
 
     /**
      * BOUNDED, FIFO drain query (#92): the oldest rows in a status, capped by
