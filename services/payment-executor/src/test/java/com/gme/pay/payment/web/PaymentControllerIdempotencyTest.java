@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gme.pay.events.RecordingEventPublisher;
+import com.gme.pay.contracts.OperationalStatusView;
+import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
 import com.gme.pay.payment.domain.PaymentStatus;
@@ -45,6 +47,9 @@ class PaymentControllerIdempotencyTest {
     private PaymentAuthorizationService authorizationService;
     private RecordingEventPublisher eventPublisher;
     private MockMvc mvc;
+    /** Mutable operational status the gate reads; flipped per-test to simulate a pause. */
+    private final java.util.concurrent.atomic.AtomicReference<OperationalStatusView> opsStatus =
+            new java.util.concurrent.atomic.AtomicReference<>(OperationalStatusView.allClear());
 
     private static PaymentResult sampleResult(String paymentId) {
         return new PaymentResult(
@@ -88,9 +93,10 @@ class PaymentControllerIdempotencyTest {
         ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        opsStatus.set(OperationalStatusView.allClear());
         PaymentController controller = new PaymentController(
                 orchestrator, partnerConfigClient, authorizationRepository, authorizationService,
-                eventPublisher);
+                eventPublisher, new OperationalGate(opsStatus::get));
         mvc = standaloneSetup(controller)
                 .setControllerAdvice(new PaymentExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
@@ -154,6 +160,59 @@ class PaymentControllerIdempotencyTest {
                         .content("{\"wallet_charge_ref\":\"WCR1\"}"))
                 .andExpect(status().isCreated());
 
+        gateEventCheck();
+    }
+
+    private static final String AUTHORIZE_BODY = """
+            {
+              "quote_id": "Q-1",
+              "merchant_qr": "ZPQR0001",
+              "direction": "INBOUND",
+              "scheme_id": "zeropay",
+              "customer_ref": "cust-1",
+              "partner_txn_ref": "PTR-NEW",
+              "collection_amount": "1000",
+              "collection_currency": "KRW",
+              "country_code": "KR"
+            }
+            """;
+
+    @Test
+    void authorize_systemPaused_rejectedWithSystemPaused_andNoSideEffect() throws Exception {
+        opsStatus.set(new OperationalStatusView(true, false,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), "incident", null));
+        when(authorizationRepository.findByPartnerIdAndPartnerTxnRef(1L, "PTR-NEW"))
+                .thenReturn(Optional.empty());
+
+        mvc.perform(post("/v1/payments/authorize")
+                        .header("X-Partner-Id", "1")
+                        .header("X-Partner-Code", "GMEREMIT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(AUTHORIZE_BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("SYSTEM_PAUSED"));
+
+        // No new authorization side-effect ran (gate is before authorizeMpm).
+        verify(orchestrator, never()).authorizeMpm(any(), any());
+    }
+
+    @Test
+    void authorize_idempotentReplay_notGated_evenWhenPaused() throws Exception {
+        // An ALREADY-authorized (in-flight) txn replays and completes even mid-pause.
+        opsStatus.set(new OperationalStatusView(true, false,
+                java.util.List.of(), java.util.List.of(), java.util.List.of(), "incident", null));
+        when(authorizationRepository.findByPartnerIdAndPartnerTxnRef(1L, "PTR-NEW"))
+                .thenReturn(Optional.of(authorizedEntity()));
+
+        mvc.perform(post("/v1/payments/authorize")
+                        .header("X-Partner-Id", "1")
+                        .header("X-Partner-Code", "GMEREMIT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(AUTHORIZE_BODY))
+                .andExpect(status().isCreated());
+    }
+
+    private void gateEventCheck() {
         var event = (com.gme.pay.payment.domain.event.PaymentEvents.PaymentApproved)
                 eventPublisher.published().get(0);
         var payload = event.payload();

@@ -3,6 +3,7 @@ package com.gme.pay.payment.web;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.QrSchemeClassifier;
 import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
@@ -72,6 +73,8 @@ public class WalletPayController {
     @Nullable private final SchemeClient schemeClient;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
+    /** Operations operational gate — checked at the START of every NEW wallet payment. */
+    @Nullable private final OperationalGate operationalGate;
 
     /**
      * Production constructor — all collaborators injected.
@@ -83,19 +86,21 @@ public class WalletPayController {
                                FailoverPaymentRouter failoverPaymentRouter,
                                @Nullable SchemeClient schemeClient,
                                @Nullable TransactionClient transactionClient,
-                               @Nullable RevenueLedgerClient revenueLedgerClient) {
+                               @Nullable RevenueLedgerClient revenueLedgerClient,
+                               @Nullable OperationalGate operationalGate) {
         this.gmeremitPaymentService = gmeremitPaymentService;
         this.sendmnPaymentService = sendmnPaymentService;
         this.failoverPaymentRouter = failoverPaymentRouter;
         this.schemeClient = schemeClient;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
+        this.operationalGate = operationalGate;
     }
 
     /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
-        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null);
+        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null, null);
     }
 
     /**
@@ -108,6 +113,18 @@ public class WalletPayController {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
+        // Operations operational gate: refuse NEW payments while the platform is paused / in
+        // maintenance, or when THIS payment's partner alias / classified network (route) is suspended.
+        // Runs at the START, before any merchant lookup / scheme submit, so nothing irreversible fires
+        // on a rejected payment. Confirm/refund of an in-flight txn does not enter this controller.
+        Classification gateQr = QrSchemeClassifier.classify(req.qrPayload());
+        if (operationalGate != null) {
+            operationalGate.checkNewAuthorization(
+                    req.partner(),
+                    null,
+                    gateQr.isKnown() ? gateQr.networkIdentifier() : null);
+        }
+
         // ADR-016: route the scanned MPM QR by its OWN network identifier, not by partner. A
         // non-ZeroPay network (Fonepay/NepalPay/Khalti…) arrives as partner=GMEREMIT but must NOT
         // go down the ZeroPay domestic path (it would 404 with MERCHANT_NOT_FOUND). We classify the
@@ -116,7 +133,7 @@ public class WalletPayController {
         // NepalQrDetector: a Fonepay QR classifies to fonepay.com and resolves to the Nepal
         // candidate. ZeroPay QRs (com.zeropay / 5802KR) keep the unchanged GMEREMIT/SENDMN paths
         // so their merchant validation + fee behaviour is preserved exactly.
-        Classification qr = QrSchemeClassifier.classify(req.qrPayload());
+        Classification qr = gateQr;
         boolean routeViaFailover = failoverPaymentRouter != null
                 && qr.isKnown()
                 && !isZeroPayNetwork(qr.networkIdentifier());

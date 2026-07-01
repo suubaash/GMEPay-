@@ -9,6 +9,7 @@ import com.gme.pay.payment.domain.PaymentOrchestrator.AuthorizeResult;
 import com.gme.pay.payment.domain.PaymentOrchestrator.ConfirmContext;
 import com.gme.pay.payment.domain.PaymentOrchestrator.MpmPaymentCommand;
 import com.gme.pay.payment.domain.PaymentOrchestrator.PaymentResult;
+import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
@@ -82,23 +83,28 @@ public class PaymentController {
     private final PaymentAuthorizationRepository authorizationRepository;
     private final PaymentAuthorizationService authorizationService;
     private final EventPublisher eventPublisher;
+    /** Operations operational gate — checked at the START of the orchestrated NEW authorize. */
+    private final OperationalGate operationalGate;
 
     /**
      * Constructor injection. {@code partnerConfigClient} resolves the partner type from
      * config-registry; the authorization repository + service back the two-phase authorize/confirm
      * state machine; {@code eventPublisher} emits the lifecycle events this service EXPOSES
-     * (payment.approved / payment.failed / payment.cancelled).
+     * (payment.approved / payment.failed / payment.cancelled); {@code operationalGate} refuses new
+     * authorizes while the platform / partner / scheme is paused or suspended.
      */
     public PaymentController(PaymentOrchestrator orchestrator,
                              PartnerConfigClient partnerConfigClient,
                              PaymentAuthorizationRepository authorizationRepository,
                              PaymentAuthorizationService authorizationService,
-                             EventPublisher eventPublisher) {
+                             EventPublisher eventPublisher,
+                             OperationalGate operationalGate) {
         this.orchestrator = orchestrator;
         this.partnerConfigClient = partnerConfigClient;
         this.authorizationRepository = authorizationRepository;
         this.authorizationService = authorizationService;
         this.eventPublisher = eventPublisher;
+        this.operationalGate = operationalGate;
     }
 
     /**
@@ -123,9 +129,17 @@ public class PaymentController {
         Optional<PaymentAuthorizationEntity> existing =
                 authorizationRepository.findByPartnerIdAndPartnerTxnRef(partnerId, req.partnerTxnRef());
         if (existing.isPresent()) {
+            // Idempotent replay of an ALREADY-authorized (in-flight) txn — must complete even mid-pause,
+            // so the operational gate is deliberately NOT applied to a replay.
             log.info("idempotent authorize replay for partner={} txnRef={}", partnerId, req.partnerTxnRef());
             return ResponseEntity.status(HttpStatus.CREATED).body(toAuthorizeResponse(existing.get()));
         }
+
+        // Operations operational gate: refuse this NEW authorize while the platform is paused / in
+        // maintenance, or when the resolved partner / scheme is suspended. Runs before any side effect
+        // (quote agreement-check, merchant resolve, float reserve). Confirm/cancel/refund of an
+        // existing authorization never reaches here.
+        operationalGate.checkNewAuthorization(partnerCode, req.schemeId(), req.direction());
 
         PartnerType partnerType = resolvePartnerType(partnerCode, partnerTypeHeader);
         MpmPaymentCommand cmd = new MpmPaymentCommand(

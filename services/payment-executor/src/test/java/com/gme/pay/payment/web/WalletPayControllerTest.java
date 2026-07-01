@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.OperationalGate;
+import com.gme.pay.payment.domain.OperationalGateException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
@@ -74,6 +76,9 @@ class WalletPayControllerTest {
 
     @MockBean
     private RevenueLedgerClient revenueLedgerClient;
+
+    @MockBean
+    private OperationalGate operationalGate;
 
     // ---- Test 1: APPROVED happy path ----
 
@@ -336,5 +341,85 @@ class WalletPayControllerTest {
                         .content(body))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.status", is("FAILED")));
+    }
+
+    // ---- Operations operational gate ----
+
+    @Test
+    @DisplayName("POST /v1/pay — systemPaused: 503 SYSTEM_PAUSED, payment service NOT touched")
+    void walletPay_systemPaused_rejected() throws Exception {
+        doThrow(new OperationalGateException(OperationalGateException.SYSTEM_PAUSED,
+                "platform is paused — new payments are not being accepted"))
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+
+        String body = """
+                {
+                  "qrPayload": "ZPQR0001",
+                  "amountKrw": "50000",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-007"
+                }
+                """;
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code", is("SYSTEM_PAUSED")))
+                .andExpect(jsonPath("$.retryable", is(true)));
+
+        // A paused platform must not run the payment.
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    @Test
+    @DisplayName("POST /v1/pay — suspended partner: 503 PARTNER_SUSPENDED")
+    void walletPay_partnerSuspended_rejected() throws Exception {
+        doThrow(new OperationalGateException(OperationalGateException.PARTNER_SUSPENDED,
+                "partner 'GMEREMIT' is currently suspended"))
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+
+        String body = """
+                {
+                  "qrPayload": "ZPQR0001",
+                  "amountKrw": "50000",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-007"
+                }
+                """;
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code", is("PARTNER_SUSPENDED")));
+
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    @Test
+    @DisplayName("POST /v1/pay/{ref}/refund — in-flight refund NOT gated even when platform paused")
+    void walletPay_refundNotGated_whenPaused() throws Exception {
+        // Even if the gate WOULD pause a new payment, a refund of an in-flight txn must proceed:
+        // the refund path never calls the gate, so a stubbed pause has no effect here.
+        doThrow(new OperationalGateException(OperationalGateException.SYSTEM_PAUSED, "paused"))
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+        doNothing().when(schemeClient).cancelPayment(eq("AUTH-CPM-001"), anyString());
+
+        String body = """
+                {
+                  "authId": "AUTH-CPM-001",
+                  "reason": "CUSTOMER_REQUEST"
+                }
+                """;
+
+        mockMvc.perform(post("/v1/pay/TXN-AABB1122/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status", is("REFUNDED")));
+
+        // The gate must never be consulted on the in-flight refund path.
+        verifyNoInteractions(operationalGate);
     }
 }
