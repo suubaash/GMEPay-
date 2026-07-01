@@ -1,11 +1,15 @@
 package com.gme.pay.payment.client.rest;
 
 import com.gme.pay.contracts.OperationalStatusView;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+
+import java.net.InetSocketAddress;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -69,7 +73,7 @@ class RestOperationalStatusClientTest {
     }
 
     @Test
-    @DisplayName("fail-OPEN (default): unreachable config-registry with no cache → all-clear (allow)")
+    @DisplayName("fail-OPEN (opt-in): unreachable config-registry with no cache → all-clear (allow)")
     void currentStatus_failOpen() {
         RestClient.Builder b = builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
@@ -84,7 +88,7 @@ class RestOperationalStatusClientTest {
     }
 
     @Test
-    @DisplayName("fail-CLOSED: unreachable config-registry with no cache → synthetic systemPaused")
+    @DisplayName("fail-CLOSED (default): unreachable + no cache → synthetic systemPaused (kill-switch safe)")
     void currentStatus_failClosed() {
         RestClient.Builder b = builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
@@ -95,5 +99,58 @@ class RestOperationalStatusClientTest {
 
         assertTrue(v.systemPaused(), "fail-closed must pause when status cannot be confirmed");
         server.verify();
+    }
+
+    @Test
+    @DisplayName("last-known-good cache is preferred over the fail-closed default on a later outage")
+    void currentStatus_prefersLastKnownGoodOnOutage() {
+        RestClient.Builder b = builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
+        // First call: all-clear success. Second call (after TTL) errors → must serve last-known-good.
+        server.expect(requestTo(URL)).andRespond(withSuccess(
+                "{\"systemPaused\":false,\"maintenanceMode\":false,\"suspendedPartners\":[],"
+                        + "\"suspendedSchemes\":[],\"suspendedRoutes\":[],\"reason\":null,\"since\":null}",
+                MediaType.APPLICATION_JSON));
+        server.expect(requestTo(URL)).andRespond(withServerError());
+        // TTL 0 → the second call always re-fetches (and then falls back to last-known-good).
+        RestOperationalStatusClient client = new RestOperationalStatusClient(b.build(), 0, false);
+
+        assertFalse(client.currentStatus().systemPaused());          // seeds the cache
+        OperationalStatusView second = client.currentStatus();       // outage → last-known-good
+        assertFalse(second.systemPaused(), "a brief blip must not flip policy to fail-closed");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("hard client timeout: a hung config-registry is treated as unreachable within budget")
+    void currentStatus_timesOutAndFailsClosed() throws Exception {
+        // A local HTTP server that NEVER responds within the read timeout, simulating a hung registry.
+        HttpServer hung = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        hung.createContext("/v1/ops/operational-status", exchange -> {
+            try {
+                Thread.sleep(10_000); // far beyond the 300ms read timeout
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        hung.start();
+        try {
+            String baseUrl = "http://127.0.0.1:" + hung.getAddress().getPort();
+            // Production constructor path so the configured connect/read timeouts are applied.
+            RestOperationalStatusClient client = new RestOperationalStatusClient(
+                    RestClient.builder(), baseUrl, 60_000, /*failOpen*/ false,
+                    /*connectMs*/ 300, /*readMs*/ 300);
+
+            long start = System.nanoTime();
+            OperationalStatusView v = client.currentStatus();
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+
+            assertTrue(v.systemPaused(),
+                    "a timed-out (hung) registry with no cache must fail-closed for security");
+            assertTrue(elapsed.toMillis() < 5_000,
+                    "the read timeout must fire well within budget (was " + elapsed.toMillis() + "ms)");
+        } finally {
+            hung.stop(0);
+        }
     }
 }

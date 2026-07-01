@@ -82,4 +82,17 @@ class OperationalGateTest {
                 false, false, List.of("OTHER"), List.of("other-scheme"), List.of(), null, null);
         assertDoesNotThrow(() -> gate(v).checkNewAuthorization(null, null, null));
     }
+
+    @Test
+    @DisplayName("fail-closed-security: synthetic unreachable status (systemPaused) → SYSTEM_PAUSED denial")
+    void failClosedSyntheticStatus_denies() {
+        // Mirrors what RestOperationalStatusClient returns when config-registry is unreachable with no
+        // cache under the default fail-closed-security policy: a synthetic systemPaused status.
+        OperationalStatusView unreachable = new OperationalStatusView(
+                true, false, List.of(), List.of(), List.of(),
+                "operational status unreachable (fail-closed)", null);
+        OperationalGateException ex = assertThrows(OperationalGateException.class,
+                () -> gate(unreachable).checkNewAuthorization("GMEREMIT", "zeropay", "INBOUND"));
+        assertEquals(OperationalGateException.SYSTEM_PAUSED, ex.code());
+    }
 }
