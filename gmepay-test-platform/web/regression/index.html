@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GMEPay+ · Before/After Regression</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Before / After Regression <span class="sub">GMEPay+</span></h1>
+      <div id="env" class="env"></div>
+    </header>
+
+    <section class="guide">
+      <b>The loop:</b>
+      <span class="step"><i>1</i> Record <b>before</b></span> →
+      <span class="step"><i>2</i> Publish your change</span> →
+      <span class="step"><i>3</i> Record <b>after</b></span> →
+      <span class="step"><i>4</i> Compare</span>
+      <p class="hint">Same environment, run by hand. Volatile fields (ids, timestamps, refs) are scrubbed so a diff means <b>your code</b> changed the value — not that time passed.</p>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <h2>1 · Cases <span id="caseCount" class="count"></span></h2>
+        <div id="groups" class="groups"></div>
+        <ul id="cases" class="cases"></ul>
+      </section>
+
+      <section class="card">
+        <h2>2 · Record a run</h2>
+        <label>Label
+          <input id="label" type="text" placeholder="before" />
+        </label>
+        <p class="hint">Tip: name the first run <code>before</code>, publish, then record <code>after</code>.</p>
+        <button id="recordBtn" class="primary">▶ Record run</button>
+        <div id="recordMsg" class="msg"></div>
+        <h3>Saved runs</h3>
+        <ul id="runs" class="runs"></ul>
+      </section>
+    </div>
+
+    <section class="card compare">
+      <h2>3 · Compare</h2>
+      <div class="compareRow">
+        <label>Before <select id="beforeSel"></select></label>
+        <span class="arrow">→</span>
+        <label>After <select id="afterSel"></select></label>
+        <button id="compareBtn" class="primary">Compare</button>
+        <label class="chk"><input type="checkbox" id="changedOnly" checked /> changed only</label>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="report" class="report"></div>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>
