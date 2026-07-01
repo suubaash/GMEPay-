@@ -2,6 +2,27 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [na/wiring] — 2026-07-01 (NEPAL scheme-keyed adapter dispatch)
+
+### Added
+- **`SchemeClientRouter`** (now the `@Primary` `SchemeClient`): scheme-keyed dispatch.
+  Reads the scheme code off each request (`submitMpm`/`submitCpm`) or the `schemeId` arg
+  (`checkBalance`) and delegates — `NEPAL` → `NepalRestSchemeClient`, everything else /
+  unknown / null → the ZeroPay `RestSchemeClient` (default). `cancelPayment` carries no
+  scheme code and is a ZeroPay two-phase concept, so it routes to the default.
+- **`NepalRestSchemeClient`**: single-phase adapter for `scheme-adapter-nepal`. Both
+  MPM and CPM submit land on `POST /internal/scheme/nepal/submit` (submit = authorize+
+  commit); the `{schemeTxnRef,status,amountPaisa}` response maps into the existing
+  `MpmSubmitResponse`/`CpmSubmitResponse` shape (schemeApprovalCode ← status, approvedAt
+  ← now). Base-url config key `gmepay.scheme-adapters.NEPAL.base-url` (default
+  `http://localhost:18091`). `cancelPayment` throws (Nepal has no cancel endpoint).
+- **`SchemeId`**: `NEPAL` appended as id `8` (existing 1..7 ids kept stable).
+- Tests: `NepalRestSchemeClientTest` + `SchemeClientRouterTest` (`MockRestServiceServer`).
+
+### Changed
+- `RestSchemeClient` is no longer `@Primary` (the router is); its ZeroPay behaviour and
+  base-url default (`gmepay.scheme-adapter-zeropay.base-url`) are unchanged.
+
 ## [w3/payment-executor] — 2026-06-30 (Wave-3 cross-service reconcile)
 
 ### Fixed

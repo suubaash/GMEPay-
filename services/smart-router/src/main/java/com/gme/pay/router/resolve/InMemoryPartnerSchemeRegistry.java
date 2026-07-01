@@ -13,8 +13,9 @@ import org.springframework.stereotype.Component;
  * In-process {@link PartnerSchemeRegistry} fixture — the resolver's default
  * backing until the config-registry V022 read contract is delivered (see the
  * INTEGRATION REQUEST). Seeded from the real V022 CHECK roster + the corridors
- * GMEPay+ operates today (KR/ZeroPay domestic; KH/VN/SG inbound corridors) so
- * resolution behaves data-drivenly, not from a code allow-list.
+ * GMEPay+ operates today (KR/ZeroPay domestic; NP/NEPAL domestic; KH/VN/SG
+ * inbound corridors) so resolution behaves data-drivenly, not from a code
+ * allow-list.
  *
  * <p>Marked {@code @Profile("!config-registry")} so wiring the production REST
  * adapter (profile {@code config-registry}) silently displaces this fixture
@@ -31,6 +32,11 @@ public class InMemoryPartnerSchemeRegistry implements PartnerSchemeRegistry {
     public InMemoryPartnerSchemeRegistry() {
         // KR domestic: ZeroPay, both presentment modes, the live corridor.
         add(new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0));
+        // NP domestic: NEPAL, the second live corridor (scheme-adapter-nepal).
+        // Nepal pay is single-phase (submit = authorize+commit) and covers both
+        // presentment modes, so the row is CPM+MPM / BOTH directions — a NP scan
+        // resolves to NEPAL regardless of mode. Priority 0 (sole NP scheme today).
+        add(new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0));
         // KH inbound: KHQR (MPM only) preferred, BAKONG (both) fallback.
         add(new PartnerSchemeRecord("KHQR", "KH", "INBOUND", false, true, 0));
         add(new PartnerSchemeRecord("BAKONG", "KH", "BOTH", true, true, 1));

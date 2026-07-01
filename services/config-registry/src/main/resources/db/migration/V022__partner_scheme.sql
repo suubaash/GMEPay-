@@ -113,7 +113,7 @@ CREATE TABLE partner_scheme (
         FOREIGN KEY (partner_id) REFERENCES partners (id),
 
     CONSTRAINT ck_partner_scheme_scheme CHECK (
-        scheme_id IN ('ZEROPAY', 'BAKONG', 'NAPAS_247', 'PROMPT_PAY',
+        scheme_id IN ('ZEROPAY', 'NEPAL', 'BAKONG', 'NAPAS_247', 'PROMPT_PAY',
                       'FAST_SG', 'QRIS', 'KHQR')
     ),
 

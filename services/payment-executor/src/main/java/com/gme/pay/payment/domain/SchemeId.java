@@ -36,7 +36,11 @@ public final class SchemeId {
             Map.entry("NAPAS247", 4L),
             Map.entry("PROMPTPAY", 5L),
             Map.entry("FASTSG", 6L),
-            Map.entry("QRIS", 7L));
+            Map.entry("QRIS", 7L),
+            // NEPAL (scheme-adapter-nepal) is a later addition to the roster; appended
+            // with a fresh id (8) rather than inserted at its catalog position so the
+            // existing 1..7 ids stay stable for already-persisted transaction rows.
+            Map.entry("NEPAL", 8L));
 
     private SchemeId() {
     }

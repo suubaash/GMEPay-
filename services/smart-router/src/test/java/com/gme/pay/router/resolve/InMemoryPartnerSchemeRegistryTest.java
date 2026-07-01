@@ -21,6 +21,14 @@ class InMemoryPartnerSchemeRegistryTest {
     }
 
     @Test
+    @DisplayName("NP corridor resolves to NEPAL (single live NP scheme)")
+    void npResolvesToNepal() {
+        List<PartnerSchemeRecord> rows = registry.schemesForCountry("np");
+        assertEquals(List.of("NEPAL"),
+                rows.stream().map(PartnerSchemeRecord::schemeId).toList());
+    }
+
+    @Test
     void unknownCountryIsEmptyNotNull() {
         assertTrue(registry.schemesForCountry("ZZ").isEmpty());
         assertTrue(registry.schemesForCountry(null).isEmpty());

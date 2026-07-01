@@ -11,10 +11,11 @@ import java.util.Set;
  * Supplies the platform's supported-scheme catalog for {@code GET /v1/schemes}.
  *
  * <p>The catalog is static reference data: the set of QR payment schemes GMEPay+
- * can integrate, with {@code status} reflecting integration truth. Today only
- * {@code ZEROPAY} has a live scheme adapter ({@code ACTIVE}); the Phase-2 corridor
- * schemes are {@code PLANNED} (roadmap, no adapter yet) so the Admin UI shows the
- * honest roster rather than implying schemes are routable when they are not.
+ * can integrate, with {@code status} reflecting integration truth. Today
+ * {@code ZEROPAY} and {@code NEPAL} have live scheme adapters ({@code ACTIVE});
+ * the Phase-2 corridor schemes are {@code PLANNED} (roadmap, no adapter yet) so
+ * the Admin UI shows the honest roster rather than implying schemes are routable
+ * when they are not.
  *
  * <p>Kept as a code-level constant (not a Flyway-seeded table) because the roster
  * changes only when a new adapter ships — a code change anyway. When dynamic
@@ -25,7 +26,7 @@ import java.util.Set;
  *
  * <p>The {@code schemeId}s here are the ONE roster the whole platform agrees on:
  * the V022 {@code partner_scheme} DB CHECK ({@code ck_partner_scheme_scheme}) and
- * the BFF's {@code StubConfigRegistryClient} both carry the same seven values. The
+ * the BFF's {@code StubConfigRegistryClient} both carry the same values. The
  * Admin UI scheme picker is populated from this catalog, so any id offered here MUST
  * be one the Slice-7 enablement endpoint ({@link PartnerSchemeService#replaceDraftSchemes})
  * will accept — otherwise the picker offers schemes the save endpoint rejects with a
@@ -39,6 +40,15 @@ public class SchemeCatalogService {
 
     private static final List<SchemeCatalogResponse> CATALOG = List.of(
             new SchemeCatalogResponse("ZEROPAY", "ZeroPay (Korea)", "KR", "KRW", "LIVE", "ACTIVE"),
+            // Nepal QR rail. A live scheme-adapter-nepal ships alongside this wiring, so
+            // NEPAL is ACTIVE (a second live adapter beside ZEROPAY). The supported
+            // Nepal networks (khalti / mobank / fonepay / nepalpay / unionpay / smartqr)
+            // are sub-networks/modes carried by the adapter, not distinct catalog rows —
+            // the DTO has no networks field, so they are named descriptively here.
+            new SchemeCatalogResponse(
+                    "NEPAL",
+                    "Nepal QR (khalti/mobank/fonepay/nepalpay/unionpay/smartqr)",
+                    "NP", "NPR", "LIVE", "ACTIVE"),
             new SchemeCatalogResponse("BAKONG", "Bakong / KHQR (Cambodia)", "KH", "KHR", "LIVE", "PLANNED"),
             new SchemeCatalogResponse("KHQR", "KHQR (Cambodia)", "KH", "KHR", "LIVE", "PLANNED"),
             new SchemeCatalogResponse("NAPAS_247", "NAPAS 247 (Vietnam)", "VN", "VND", "LIVE", "PLANNED"),
