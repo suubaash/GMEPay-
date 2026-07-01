@@ -4,6 +4,27 @@ All notable changes to this service. Dates are KST.
 
 ## [Unreleased]
 
+### 2026-07-01 — Ops: operator recon re-run + reconciliation-break alert
+
+- **Added** operator recon re-run endpoint `POST /v1/settlements/recon/rerun` (`ReconRerunController` /
+  `ReconRerunService`). Body `{batchId}` **or** `{settlementDate}` (exactly one; both/neither → 400,
+  unknown batch → 404) plus `operatorId`/`reason`. Re-runs reconciliation for that batch (or every
+  ZP0061/ZP0063 request batch of the day), **reusing the existing idempotent `ReconDiffEngine.runDiffForBatch`**
+  (delete-then-reinsert on `batchId`), so a re-run never double-posts or duplicates exception lines. Records
+  who/why in the audit log and returns the per-batch match/exception summary. Scheme confirmation file is
+  re-read via a new shared `ReconFileSource` (extracted from `ReconScheduler`; ZP0061→ZP0062, ZP0063→ZP0064).
+- **Added** reconciliation-break alert (`ReconBreakAlerter` + `ReconAlertEvent`): whenever a recon run
+  (scheduled or operator) leaves any exception open, emits an `OpsAlertPayload` (`alertType=RECON_BREAK`,
+  `subjectRef=batchId`, `detail`=exception summary with break amount, `severity` by blast radius — CRITICAL
+  on any MISSING line or ≥₩10M, WARN on ≥5 lines or ≥₩1M, else INFO) via the `EventPublisher` seam on topic
+  `gmepay.ops.alert`. Transport selected like the outbox (`ReconAlertConfig`): Kafka when configured, else
+  the `LoggingEventPublisher` log-fallback — no broker needed locally. A clean batch emits nothing. Wired
+  into both `runDiff` and `runDiffForBatch`.
+- **Added** tests (H2 + mocks): re-run is idempotent (two runs → same result, single exception row); a forced
+  mismatch emits a `RECON_BREAK` OpsAlert **and** persists the exception; a clean batch emits no alert (batch
+  → RECONCILED); severity derivation; scope validation (400/404). `ReconBreakAlerterTest` (6) +
+  `ReconRerunServiceTest` (7). Additive; libs and other services untouched. Real SFTP/IDD remain externally blocked.
+
 ### 2026-06-30 — Wave-3 RECONCILE: canonical `/refunded` contract + cross-date netting folded in
 
 - **Fixed (latent silent-null bug)** `RestRefundedTransactionClient` bound an ad-hoc wire record

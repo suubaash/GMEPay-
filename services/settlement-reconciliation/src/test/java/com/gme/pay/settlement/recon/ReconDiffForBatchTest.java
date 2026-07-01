@@ -52,7 +52,8 @@ class ReconDiffForBatchTest {
     @BeforeEach
     void setUp() {
         engine = new ReconDiffEngine(transactionQueryPort, new LineMatcher(),
-                reconExceptionRepository, batchRepository, lineRepository, roundingResidualPort);
+                reconExceptionRepository, batchRepository, lineRepository, roundingResidualPort,
+                new com.gme.pay.settlement.alert.ReconBreakAlerter(event -> {}));
         lenient().when(reconExceptionRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(lineRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(batchRepository.save(any())).thenAnswer(i -> i.getArgument(0));

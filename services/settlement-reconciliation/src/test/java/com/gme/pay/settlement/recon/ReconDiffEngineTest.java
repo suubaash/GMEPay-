@@ -65,7 +65,8 @@ class ReconDiffEngineTest {
     void setUp() {
         lineMatcher = new LineMatcher();
         engine = new ReconDiffEngine(transactionQueryPort, lineMatcher, reconExceptionRepository,
-                batchRepository, lineRepository, (ref, residual, ccy) -> true);
+                batchRepository, lineRepository, (ref, residual, ccy) -> true,
+                new com.gme.pay.settlement.alert.ReconBreakAlerter(event -> {}));
         zp0062Parser = new ZP0062Parser();
         // lenient: some tests never trigger save (allMatched, fieldNameContract)
         lenient().when(reconExceptionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));

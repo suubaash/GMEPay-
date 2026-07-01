@@ -48,7 +48,7 @@ public class ReconScheduler {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final boolean enabled;
-    private final String inboxDir;
+    private final ReconFileSource fileSource;
     private final ZP0062Parser zp0062Parser;
     private final ZP0064Parser zp0064Parser;
     private final ReconDiffEngine diffEngine;
@@ -56,13 +56,13 @@ public class ReconScheduler {
 
     public ReconScheduler(
             @Value("${gmepay.settlement.recon.enabled:false}") boolean enabled,
-            @Value("${gmepay.settlement.recon.inbox-dir:}") String inboxDir,
+            ReconFileSource fileSource,
             ZP0062Parser zp0062Parser,
             ZP0064Parser zp0064Parser,
             ReconDiffEngine diffEngine,
             SettlementBatchRepository batchRepository) {
         this.enabled = enabled;
-        this.inboxDir = inboxDir;
+        this.fileSource = fileSource;
         this.zp0062Parser = zp0062Parser;
         this.zp0064Parser = zp0064Parser;
         this.diffEngine = diffEngine;
@@ -112,7 +112,7 @@ public class ReconScheduler {
      */
     void processZP0062(LocalDate date) {
         String filename = "ZP0062_" + date.format(DATE_FMT) + ".txt";
-        List<String> lines = readInboxFile(filename);
+        List<String> lines = fileSource.readInboxFile(filename);
         if (lines == null) {
             log.warn("ReconScheduler: ZP0062 file not found in inbox: {}", filename);
             return;
@@ -130,7 +130,7 @@ public class ReconScheduler {
      */
     void processZP0064(LocalDate date) {
         String filename = "ZP0064_" + date.format(DATE_FMT) + ".txt";
-        List<String> lines = readInboxFile(filename);
+        List<String> lines = fileSource.readInboxFile(filename);
         if (lines == null) {
             log.warn("ReconScheduler: ZP0064 file not found in inbox: {}", filename);
             return;
@@ -163,27 +163,5 @@ public class ReconScheduler {
             return;
         }
         diffEngine.runDiffForBatch(batch, records);
-    }
-
-    /**
-     * Read lines from the inbox directory. Returns null if the file does not exist.
-     *
-     * <p>Phase 2b TODO: this will be replaced by an SFTP client call.
-     */
-    private List<String> readInboxFile(String filename) {
-        if (inboxDir == null || inboxDir.isBlank()) {
-            log.debug("ReconScheduler: inboxDir not configured; skipping file read for {}", filename);
-            return null;
-        }
-        java.io.File file = new java.io.File(inboxDir, filename);
-        if (!file.exists()) {
-            return null;
-        }
-        try {
-            return java.nio.file.Files.readAllLines(file.toPath());
-        } catch (java.io.IOException e) {
-            log.error("ReconScheduler: failed to read {}: {}", file.getAbsolutePath(), e.getMessage());
-            return null;
-        }
     }
 }
