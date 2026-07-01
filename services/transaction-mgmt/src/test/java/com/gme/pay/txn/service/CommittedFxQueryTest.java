@@ -96,8 +96,10 @@ class CommittedFxQueryTest {
         @Override public Optional<Transaction> findByTxnRef(String txnRef) { return Optional.empty(); }
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
+                                                         String txnRef, String schemeTxnRef, String merchantId,
                                                          Pageable pageable) { return Page.empty(); }
         @Override public List<Transaction> findExpiredNonTerminal(Instant expiryBefore) { return List.of(); }
+        @Override public List<Transaction> findStuck(Instant stuckBefore, List<String> sweepStatuses) { return List.of(); }
         @Override public List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
             return List.copyOf(committed);
         }

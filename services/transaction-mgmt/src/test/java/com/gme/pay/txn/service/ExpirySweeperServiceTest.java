@@ -335,7 +335,13 @@ class ExpirySweeperServiceTest {
         @Override
         public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                TransactionStatus status, Long partnerId,
+                                               String txnRef, String schemeTxnRef, String merchantId,
                                                Pageable pageable) {
+            throw new UnsupportedOperationException("not needed in sweeper tests");
+        }
+
+        @Override
+        public List<Transaction> findStuck(Instant stuckBefore, List<String> sweepStatuses) {
             throw new UnsupportedOperationException("not needed in sweeper tests");
         }
 

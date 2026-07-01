@@ -37,7 +37,17 @@ public interface TransactionRepository {
      */
     Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                     TransactionStatus status, Long partnerId,
+                                    String txnRef, String schemeTxnRef, String merchantId,
                                     Pageable pageable);
+
+    /**
+     * Ops stuck-transaction sweep. Returns transactions whose status is in {@code sweepStatuses}
+     * and that have not been updated since {@code stuckBefore} (aged beyond the threshold).
+     *
+     * @param stuckBefore   upper-exclusive bound on updatedAt (i.e. now minus threshold)
+     * @param sweepStatuses status names considered stuck-eligible (e.g. UNCERTAIN, PENDING_DEBIT)
+     */
+    List<Transaction> findStuck(Instant stuckBefore, List<String> sweepStatuses);
 
     /**
      * Returns transactions in a non-terminal sweepable state whose {@code createdAt}

@@ -72,6 +72,10 @@ public final class TransactionEntityMapper {
         e.setCostRateColl(txn.costRateColl());
         e.setCostRatePay(txn.costRatePay());
         e.setPayoutUsdCost(txn.payoutUsdCost());
+        // V009 (Ops): operator force-resolution audit
+        e.setResolutionReason(txn.resolutionReason());
+        e.setResolvedBy(txn.resolvedBy());
+        e.setResolvedAt(txn.resolvedAt());
         return e;
     }
 
@@ -126,6 +130,9 @@ public final class TransactionEntityMapper {
                 e.getCollectionMarginUsd(), e.getPayoutMarginUsd(),
                 e.getCollectionUsd(), e.getCostRateColl(),
                 e.getCostRatePay(), e.getPayoutUsdCost());
+        // V009 (Ops): operator force-resolution audit — replayed post-construction (no updatedAt bump).
+        txn.applyOperatorResolution(
+                e.getResolutionReason(), e.getResolvedBy(), e.getResolvedAt(), false);
         return txn;
     }
 }
