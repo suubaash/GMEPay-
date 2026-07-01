@@ -2,6 +2,43 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-02 — Wire ops alerts to real on-call paging
+
+Closes the paging gap: `gmepay.ops.alert` was consumed into an in-memory store + exposed at
+`GET /v1/admin/ops/alerts`, but nothing paged a human. Now a consumed alert can page the
+on-call, be acknowledged, and (optionally) escalate. Additive; no lib or other service touched.
+
+### Added
+- **Vendor-agnostic paging port** (ADR-015, no cloud SDK) — `PagingPort.page(PageRequest)`
+  with a small stable wire shape (`alertType, severity, subjectRef, detail, occurredAt, link`).
+  - `WebhookPagingAdapter` — active when `gmepay.ops.paging.webhook-url` is set; POSTs the
+    alert as JSON to one generic on-call webhook (works with Slack incoming webhooks /
+    PagerDuty Events API / Opsgenie / MS Teams — no vendor hardcoded). Explicit connect+read
+    timeout (`gmepay.ops.paging.timeout-ms`, default 3000ms) and retries on 5xx/transport
+    error (`gmepay.ops.paging.max-attempts`, default 3); 4xx = permanent, not retried. Never throws.
+  - `LogPagingAdapter` — `@ConditionalOnMissingBean` fallback (via `PagingConfig`) that logs
+    the page, so paging is functional with zero config.
+- **Dispatch on consume** — `OpsPagingDispatcher.onStored(...)`, called by
+  `OpsAlertEventHandler` after storing: pages only when `severity >=
+  gmepay.ops.paging.min-severity` (default `CRITICAL`; can be lowered to `WARN`); INFO/below
+  stored only. Single-fire across replicas via the Kafka consumer group.
+- **Dedupe / cooldown** — suppresses a repeat page for the same `(alertType + subjectRef)`
+  within `gmepay.ops.paging.dedupe-window` (default 15m); suppressed pages recorded as
+  `SUPPRESSED`.
+- **Delivery record** — each attempt (`DELIVERED` / `FAILED` / `SUPPRESSED`, channel,
+  attempts, lastAt) stamped on the stored alert (`OpsAlertView.Paging`) and returned by
+  `GET /v1/admin/ops/alerts`.
+- **Acknowledge API** — `POST /v1/admin/ops/alerts/{id}/ack` {operator, note} marks the alert
+  `acked` (stops escalation), reflected in the alerts list + control tower. Fail-closed
+  `ops:operate` RBAC (`OpsRbacGuard`) + durable operator-action audit (`ops.alert.ack`), same
+  as the other ops actions.
+- **Escalation (config-gated, default OFF)** — `OpsPagingEscalationScheduler` re-pages
+  un-acked CRITICAL alerts older than `gmepay.ops.paging.escalation.after` (default 10m) on a
+  sweep. Enabled only by `gmepay.ops.paging.escalation.enabled=true`. **Single-replica-only:**
+  ops-partner-bff has NO DataSource, so there is no ShedLock guard — run on exactly one
+  replica; cooldown still bounds duplicate pages. Documented to ShedLock-guard if a DataSource
+  is ever added.
+
 ## 2026-07-02 — Harden Ops: fail-closed RBAC + fail-closed audit + ops.alert consumer
 
 Closes defect #2 (RBAC failed open + best-effort audit on money-affecting operator
