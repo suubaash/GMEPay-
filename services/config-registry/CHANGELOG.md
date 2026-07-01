@@ -2,6 +2,31 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-07-01 — Ops kill-switch (global pause / maintenance / suspend) (ops/config-registry)
+
+### Added
+- **Persistence** (`V038__ops_control.sql`, additive/new): `ops_control` — a
+  singleton row (id = 1, CHECK-pinned, seeded all-clear) holding `system_paused`
+  + `maintenance_mode` global flags plus `reason`/`since`/`updated_by`/`updated_at`;
+  and `ops_suspension` — per-entity emergency quarantine rows
+  (`entity_type PARTNER|SCHEME|ROUTE` CHECK, `entity_id`, `reason`, `active`,
+  `created_by`/`created_at`). Plain portable DDL (TIMESTAMP/BOOLEAN, no
+  TIMESTAMPTZ/JSONB).
+- **Read** `GET /v1/ops/operational-status` → shared
+  `com.gme.pay.contracts.OperationalStatusView`; aggregates the control flags +
+  active suspensions into suspendedPartners/Schemes/Routes; returns
+  `OperationalStatusView.allClear()` when nothing is set.
+- **Operator actions** (single-operator + immediate — emergency, NOT 4-eyes;
+  every action hash-chain audited via the existing `AuditLogService`, ADR-007,
+  with `X-Actor` operator + reason): `POST /v1/ops/pause`, `/resume`,
+  `/maintenance` {on,reason}, `/suspend` {entityType,entityId,reason},
+  `/unsuspend`. All idempotent (audit row written only on real state change).
+  Global actions chain under `ops-control`/`global`; per-entity under
+  `ops-suspension`/`TYPE:id`.
+- Tests: `OpsControlServiceTest` (8) + `OpsControlControllerTest` (4) cover
+  pause→paused, suspend→bucket, unsuspend→clear, idempotency, per-action audit
+  row, status aggregation, bad-entityType 400.
+
 ## 2026-07-01 — partner_scheme QR network_identifier (ADR-016) (fo/config-registry)
 
 ### Added
