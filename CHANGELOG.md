@@ -1,5 +1,32 @@
 # Changelog
 
+## admin-ui Operations console (branch `feat/ops-console`)
+
+Adds the native React Operations console — the #1 Ops sign-off blocker (backend
+existed, no operating screen). Edits scoped to `apps/admin-ui/` only.
+
+### Added
+- **"Operations" nav item** (`/operations`, HealthAndSafety icon) near the top of
+  the AppShell sidebar — it's the live control surface.
+- **`src/app/operations/page.jsx`** — tabbed console:
+  - *Control Tower* (default): rollup cards (in-flight, UNCERTAIN/aged, webhook
+    backlog, service health, open recon exceptions), float-headroom table with
+    at-risk highlighting, operational-status banner (paused/maintenance/suspended
+    + reason/since), recent-alerts strip. Auto-refreshes every ~12s + manual
+    refresh; `degradedSections` render as "unavailable" rather than crashing.
+  - *Kill-switch*: Pause/Resume, Maintenance on/off, Suspend/Unsuspend (entityType
+    select + id + reason) — each behind a confirm dialog with success/error toast
+    and a status-banner refresh after.
+  - *Alerts*: `/v1/admin/ops/alerts` list with severity/type filters.
+  - *Transactions & Recovery*: search form → results table → per-row Resolve
+    (COMPLETED|REVERSED + reason); webhook replay + recon re-run.
+- **`src/api/opsApi.js`** — standalone BFF client (mirrors complianceApi.js).
+  Money-affecting ACTION calls send `X-Gme-Permissions: ops:operate` for the
+  fail-closed BFF. DEV-only header — in prod it is derived server-side from the
+  operator's verified token / PDP (noted in code).
+- Vitest coverage for the page (control tower, kill-switch POST, alerts) and an
+  AppShell nav assertion.
+
 ## harden transaction-mgmt — event emission + ShedLock (branch `fix/transaction-mgmt`)
 
 Fixes defect #1 (money moves with no ledger impact on operator force-resolve) and
