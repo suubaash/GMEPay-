@@ -66,4 +66,20 @@ public class StubSettlementClient implements SettlementClient {
         List<SettlementLine> lines = LINES.getOrDefault(batchId, List.of());
         return new SettlementBatchDetail(batch, lines);
     }
+
+    @Override
+    public Integer openReconExceptions() {
+        // Count the unmatched lines across all seeded batches (TXN-1099 is unmatched).
+        return (int) LINES.values().stream()
+                .flatMap(List::stream)
+                .filter(l -> !l.matched())
+                .count();
+    }
+
+    @Override
+    public ReconRerunResult rerunRecon(String date, String actor, String reason) {
+        long matched = LINES.values().stream().flatMap(List::stream).filter(SettlementLine::matched).count();
+        long unmatched = LINES.values().stream().flatMap(List::stream).filter(l -> !l.matched()).count();
+        return new ReconRerunResult("COMPLETED", (int) matched, (int) unmatched, "recon rerun accepted (stub)");
+    }
 }

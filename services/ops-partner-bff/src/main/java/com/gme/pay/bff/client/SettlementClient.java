@@ -28,6 +28,35 @@ public interface SettlementClient {
      */
     SettlementBatchDetail detail(String batchId);
 
+    // -------- Ops wave: recon exceptions gauge + operator rerun --------------
+    //
+    // Additive default methods (never break existing stubs / fakes). Both real
+    // implementations (rest + stub) override.
+
+    /**
+     * Count of OPEN reconciliation exceptions (unmatched / breaks) for the
+     * control-tower gauge. Routes to settlement-reconciliation's exceptions
+     * endpoint. Never throws — degrades to {@code null} ("unknown") when the
+     * upstream is unavailable so the control-tower section shows unknown, not 500.
+     */
+    default Integer openReconExceptions() {
+        return null;
+    }
+
+    /**
+     * Operator-triggered reconciliation rerun. Routes to settlement-reconciliation's
+     * {@code POST /v1/settlements/recon/rerun} carrying an optional {@code date} +
+     * operator {@code reason}. Returns the outcome; upstream 4xx propagates as
+     * {@code ResponseStatusException} from the rest impl.
+     */
+    default ReconRerunResult rerunRecon(String date, String actor, String reason) {
+        throw new UnsupportedOperationException(
+                "rerunRecon is not implemented by " + getClass().getName());
+    }
+
+    /** Outcome of a reconciliation rerun. */
+    record ReconRerunResult(String status, Integer matched, Integer unmatched, String detail) {}
+
     record SettlementBatchSummary(
             String batchId,
             String partnerId,

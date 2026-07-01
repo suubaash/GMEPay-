@@ -100,6 +100,60 @@ public class RestSettlementClient implements SettlementClient {
         return null;
     }
 
+    @Override
+    public Integer openReconExceptions() {
+        try {
+            WireExceptions ex = restClient.get()
+                    .uri("/v1/settlements/recon/exceptions")
+                    .retrieve()
+                    .body(WireExceptions.class);
+            return ex == null ? null : ex.open();
+        } catch (RestClientResponseException e) {
+            log.warn("settlement-reconciliation error on recon exceptions (status={}): {}",
+                    e.getStatusCode(), e.getMessage());
+            return null;
+        } catch (ResourceAccessException e) {
+            log.warn("settlement-reconciliation unreachable on recon exceptions: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public ReconRerunResult rerunRecon(String date, String actor, String reason) {
+        try {
+            java.util.Map<String, String> body = new java.util.HashMap<>();
+            if (date != null) {
+                body.put("date", date);
+            }
+            if (actor != null) {
+                body.put("actor", actor);
+            }
+            if (reason != null) {
+                body.put("reason", reason);
+            }
+            WireRerun r = restClient.post()
+                    .uri("/v1/settlements/recon/rerun")
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(WireRerun.class);
+            if (r == null) {
+                return new ReconRerunResult("COMPLETED", null, null, null);
+            }
+            return new ReconRerunResult(
+                    r.status() == null ? "COMPLETED" : r.status(), r.matched(), r.unmatched(), r.detail());
+        } catch (RestClientResponseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatusCode.valueOf(e.getStatusCode().value()), e.getMessage());
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record WireExceptions(Integer open) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record WireRerun(String status, Integer matched, Integer unmatched, String detail) {}
+
     /** settlement-reconciliation's {@code SettlementResponse} wire shape. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record WireSettlement(

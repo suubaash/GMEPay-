@@ -136,6 +136,64 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
         }
     }
 
+    @Override
+    public Page<TransactionSummary> search(SearchQuery query) {
+        int page = Math.max(0, query.page());
+        int size = query.size() <= 0 ? DEFAULT_SIZE : Math.min(query.size(), MAX_SIZE);
+        try {
+            UriComponentsBuilder uri = UriComponentsBuilder.fromPath("/v1/transactions/search")
+                    .queryParam("page", page)
+                    .queryParam("size", size);
+            if (query.q() != null && !query.q().isBlank()) {
+                uri.queryParam("q", query.q());
+            }
+            if (query.status() != null && !query.status().isBlank()) {
+                uri.queryParam("status", query.status());
+            }
+            Long numericPartner = parseLongOrNull(query.partnerId());
+            if (numericPartner != null) {
+                uri.queryParam("partnerId", numericPartner);
+            }
+            WirePage resp = restClient.get()
+                    .uri(uri.build().toUriString())
+                    .retrieve()
+                    .body(WirePage.class);
+            if (resp == null || resp.content() == null) {
+                return new Page<>(List.of(), page, size, 0L);
+            }
+            List<TransactionSummary> items = resp.content().stream()
+                    .map(WireTxn::toSummary)
+                    .toList();
+            return new Page<>(items, resp.page(), resp.size(), resp.totalElements());
+        } catch (RestClientResponseException e) {
+            log.warn("transaction-mgmt error on search (status={}): {}", e.getStatusCode(), e.getMessage());
+            return new Page<>(List.of(), page, size, 0L);
+        } catch (ResourceAccessException e) {
+            log.warn("transaction-mgmt unreachable on search: {}", e.getMessage());
+            return new Page<>(List.of(), page, size, 0L);
+        }
+    }
+
+    @Override
+    public TransactionSummary resolve(String txnRef, String resolution, String actor, String reason) {
+        try {
+            WireTxn t = restClient.post()
+                    .uri("/v1/transactions/{ref}/resolve", txnRef)
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .body(java.util.Map.of(
+                            "resolution", resolution == null ? "" : resolution,
+                            "actor", actor == null ? "" : actor,
+                            "reason", reason == null ? "" : reason))
+                    .retrieve()
+                    .body(WireTxn.class);
+            return t == null ? null : t.toSummary();
+        } catch (RestClientResponseException e) {
+            // Unknown ref (404) / illegal state (409) -> propagate upstream status + message.
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatusCode.valueOf(e.getStatusCode().value()), e.getMessage());
+        }
+    }
+
     private static Long parseLongOrNull(String s) {
         if (s == null || s.isBlank()) {
             return null;
