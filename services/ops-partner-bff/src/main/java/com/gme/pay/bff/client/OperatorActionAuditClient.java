@@ -1,5 +1,8 @@
 package com.gme.pay.bff.client;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ResponseStatus;
+
 import java.time.Instant;
 
 /**
@@ -14,10 +17,15 @@ import java.time.Instant;
  * captures records in memory so the BFF boots standalone and controller tests can
  * assert the record was written without an operating auth service.
  *
- * <p><b>Best-effort, never blocks the action.</b> A failed audit write is logged and
- * the delegated action still proceeds — the operator action is the primary intent and
- * the audit record is a durable side-effect, not a gate. (A future hard-audit mode
- * that fails-closed is an outstanding ask.)
+ * <p><b>Two write modes.</b>
+ * <ul>
+ *   <li>{@link #record} is <b>best-effort</b>: a failed write is logged and the delegated
+ *       action still proceeds. Appropriate for pure reads / low-stakes surfaces.</li>
+ *   <li>{@link #recordDurable} is <b>fail-closed</b>: it throws
+ *       {@link AuditWriteException} if the record could not be durably persisted, so a
+ *       money/state-affecting operator action can be blocked when it has no audit trail.
+ *       No money-affecting action without a durable audit record.</li>
+ * </ul>
  */
 public interface OperatorActionAuditClient {
 
@@ -35,6 +43,29 @@ public interface OperatorActionAuditClient {
      * @param reason free-text operator-supplied reason; may be null
      */
     OperatorActionRecord record(String action, String target, String actor, String reason);
+
+    /**
+     * Durably record one operator action BEFORE the caller delegates a money/state-affecting
+     * action. Returns the persisted record on success; throws {@link AuditWriteException}
+     * if the write could not be durably persisted — the caller MUST NOT proceed with the
+     * action in that case (fail closed: no durable audit ⇒ no privileged action).
+     *
+     * @throws AuditWriteException when the record could not be durably persisted
+     */
+    OperatorActionRecord recordDurable(String action, String target, String actor, String reason)
+            throws AuditWriteException;
+
+    /**
+     * Thrown by {@link #recordDurable} when a money-affecting operator action's audit
+     * record could not be durably written; the action must be blocked. Mapped to HTTP
+     * 500 so the operator sees the action did not run (no durable audit ⇒ no action).
+     */
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    class AuditWriteException extends RuntimeException {
+        public AuditWriteException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
     /**
      * One persisted operator-action audit row. {@code at} is the instant the record

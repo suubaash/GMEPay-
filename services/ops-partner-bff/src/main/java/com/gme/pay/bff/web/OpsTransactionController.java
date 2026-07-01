@@ -25,9 +25,9 @@ import java.util.Map;
  *   <li>{@code GET  /v1/admin/transactions/search?q=&status=&partnerId=&page=&size=}
  *       — proxies transaction-mgmt's free-text + facet search, returning the mapped
  *       result rows for the Ops drill-down.</li>
- *   <li>{@code POST /v1/admin/transactions/{ref}/resolve} — writes an operator-action
- *       audit record then delegates to transaction-mgmt's resolve. RBAC-guarded (see
- *       {@link OpsActionController#guard}).</li>
+ *   <li>{@code POST /v1/admin/transactions/{ref}/resolve} — durably writes an operator-action
+ *       audit record (fail-closed) then delegates to transaction-mgmt's resolve. Fail-closed
+ *       RBAC via {@link OpsRbacGuard}.</li>
  * </ul>
  */
 @RestController
@@ -38,10 +38,13 @@ public class OpsTransactionController {
 
     private final TransactionMgmtClient transactions;
     private final OperatorActionAuditClient audit;
+    private final OpsRbacGuard rbac;
 
-    public OpsTransactionController(TransactionMgmtClient transactions, OperatorActionAuditClient audit) {
+    public OpsTransactionController(TransactionMgmtClient transactions, OperatorActionAuditClient audit,
+                                    OpsRbacGuard rbac) {
         this.transactions = transactions;
         this.audit = audit;
+        this.rbac = rbac;
     }
 
     /** 360° search proxy — mapped result page for the Ops drill-down. */
@@ -68,14 +71,14 @@ public class OpsTransactionController {
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
             @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        OpsActionController.guard(permissions);
+        rbac.requireOps(permissions);
         String resolution = OpsActionController.str(body, "resolution");
         if (resolution == null || resolution.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "resolution is required");
         }
         String actor = OpsActionController.actor(principal);
         String reason = OpsActionController.reason(body);
-        audit.record("transaction.resolve", ref, actor, reason);
+        audit.recordDurable("transaction.resolve", ref, actor, reason);
         TransactionSummary result = transactions.resolve(ref, resolution, actor, reason);
         if (result == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "transaction " + ref + " not found");

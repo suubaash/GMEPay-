@@ -3,6 +3,7 @@ package com.gme.pay.bff.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.bff.client.OperatorActionAuditClient;
 import com.gme.pay.bff.client.OpsControlClient;
 import com.gme.pay.bff.client.OperatorActionAuditClient.OperatorActionRecord;
 import com.gme.pay.bff.client.SettlementClient;
@@ -21,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -60,7 +62,19 @@ class OpsActionControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new OpsActionController(opsControl, settlements, audit))
+        this.om = om;
+        // enforce=false (dev gate-off): absent permissions header allowed; present-but-wrong
+        // still denied. Fail-closed enforcement (enforce=true) is covered below + OpsRbacGuardTest.
+        mvc = standaloneSetup(new OpsActionController(opsControl, settlements, audit, new OpsRbacGuard(false)))
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
+                .build();
+    }
+
+    private ObjectMapper om;
+
+    /** MockMvc bound to a controller whose RBAC guard fail-closes (enforce=true). */
+    private MockMvc mvcEnforced(OperatorActionAuditClient auditClient) {
+        return standaloneSetup(new OpsActionController(opsControl, settlements, auditClient, new OpsRbacGuard(true)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
@@ -171,5 +185,47 @@ class OpsActionControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk());
         assertThat(audit.captured()).hasSize(1);
+    }
+
+    // -------- fail-closed RBAC (#2a) --------------------------------------------
+
+    @Test
+    void rbacGuard_failsClosed_whenPermissionsHeaderAbsent() throws Exception {
+        // enforce=true: a money-affecting action with NO permissions presented must be 403
+        // (previously this was allowed through) and the upstream must NOT be called.
+        mvcEnforced(audit).perform(post("/v1/admin/ops/pause")
+                        .header(RbacHeaders.PRINCIPAL_ID, "ops.admin@gmepay.com")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"))
+                .andExpect(status().isForbidden());
+        verify(opsControl, never()).pause(any(), any());
+        assertThat(audit.captured()).isEmpty();
+    }
+
+    @Test
+    void rbacGuard_failsClosed_stillProceedsWhenOpsPermissionPresent() throws Exception {
+        mvcEnforced(audit).perform(post("/v1/admin/ops/pause")
+                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"))
+                .andExpect(status().isOk());
+        assertThat(audit.captured()).hasSize(1);
+    }
+
+    // -------- audit fail-closed for money-affecting actions (#2b) ----------------
+
+    @Test
+    void moneyAffectingAction_blockedWhenDurableAuditWriteFails() throws Exception {
+        OperatorActionAuditClient failingAudit = mock(OperatorActionAuditClient.class);
+        when(failingAudit.recordDurable(any(), any(), any(), any()))
+                .thenThrow(new OperatorActionAuditClient.AuditWriteException("audit down", null));
+
+        mvcEnforced(failingAudit).perform(post("/v1/admin/settlements/recon/rerun")
+                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
+                        .header(RbacHeaders.PRINCIPAL_ID, "ops.finance@gmepay.com")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"date\":\"2026-06-30\",\"reason\":\"late file\"}"))
+                .andExpect(status().is5xxServerError());
+
+        // Fail closed: the durable audit failed, so the upstream money action must NOT run.
+        verify(settlements, never()).rerunRecon(any(), any(), any());
     }
 }

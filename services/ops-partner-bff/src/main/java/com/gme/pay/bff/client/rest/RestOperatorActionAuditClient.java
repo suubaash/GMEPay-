@@ -56,31 +56,53 @@ public class RestOperatorActionAuditClient implements OperatorActionAuditClient 
     @Override
     public OperatorActionRecord record(String action, String target, String actor, String reason) {
         try {
-            WireRecord resp = restClient.post()
-                    .uri("/v1/audit/operator-actions")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .headers(h -> {
-                        if (internalSecret != null && !internalSecret.isBlank()) {
-                            h.set("X-Gme-Internal", internalSecret);
-                        }
-                    })
-                    .body(Map.of(
-                            "action", nz(action),
-                            "target", nz(target),
-                            "actor", nz(actor),
-                            "reason", reason == null ? "" : reason))
-                    .retrieve()
-                    .body(WireRecord.class);
-            if (resp != null) {
-                return resp.toRecord(action, target, actor, reason);
-            }
+            return post(action, target, actor, reason);
         } catch (Exception e) {
-            // Audit is a durable side-effect, not a gate — never fail the operator action.
+            // Best-effort: a failed write is logged and the operator action still proceeds.
             log.warn("operator-action audit write failed (action={}, target={}): {}",
                     action, target, e.getMessage());
+            // Best-effort local echo so callers always get a non-null record.
+            return new OperatorActionRecord(null, action, target, actor, reason, Instant.now());
         }
-        // Best-effort local echo so callers always get a non-null record.
-        return new OperatorActionRecord(null, action, target, actor, reason, Instant.now());
+    }
+
+    @Override
+    public OperatorActionRecord recordDurable(String action, String target, String actor, String reason) {
+        try {
+            OperatorActionRecord rec = post(action, target, actor, reason);
+            if (rec == null) {
+                throw new AuditWriteException(
+                        "operator-action audit endpoint returned no record (action=" + action + ")", null);
+            }
+            return rec;
+        } catch (AuditWriteException e) {
+            throw e;
+        } catch (Exception e) {
+            // Fail closed: a money-affecting action must not proceed without a durable audit record.
+            log.error("durable operator-action audit write failed (action={}, target={}): {}",
+                    action, target, e.getMessage());
+            throw new AuditWriteException(
+                    "operator-action audit write failed for action=" + action, e);
+        }
+    }
+
+    private OperatorActionRecord post(String action, String target, String actor, String reason) {
+        WireRecord resp = restClient.post()
+                .uri("/v1/audit/operator-actions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> {
+                    if (internalSecret != null && !internalSecret.isBlank()) {
+                        h.set("X-Gme-Internal", internalSecret);
+                    }
+                })
+                .body(Map.of(
+                        "action", nz(action),
+                        "target", nz(target),
+                        "actor", nz(actor),
+                        "reason", reason == null ? "" : reason))
+                .retrieve()
+                .body(WireRecord.class);
+        return resp == null ? null : resp.toRecord(action, target, actor, reason);
     }
 
     private static String nz(String s) {

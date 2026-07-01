@@ -1,6 +1,7 @@
 package com.gme.pay.bff.web.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.gme.pay.bff.alert.OpsAlertView;
 import com.gme.pay.contracts.OperationalStatusView;
 
 import java.math.BigDecimal;
@@ -28,8 +29,17 @@ public record ControlTowerView(
         Health health,
         Integer openReconExceptions,
         OperationalStatusView operationalStatus,
+        RecentAlerts recentAlerts,
         List<String> degradedSections
 ) {
+
+    /**
+     * Recent ops alerts consumed from {@code gmepay.ops.alert} (alert loop #5): total retained,
+     * a critical count for the badge, and the newest few for the tower's alert strip. Empty when
+     * no alerts have been consumed (e.g. no broker configured).
+     */
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public record RecentAlerts(int total, int critical, List<OpsAlertView> latest) {}
 
     /** In-flight + attention-needing transaction counts. Null = section unavailable. */
     @JsonInclude(JsonInclude.Include.ALWAYS)

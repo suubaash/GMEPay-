@@ -2,6 +2,42 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-02 — Harden Ops: fail-closed RBAC + fail-closed audit + ops.alert consumer
+
+Closes defect #2 (RBAC failed open + best-effort audit on money-affecting operator
+actions) and defect #5 (`gmepay.ops.alert` had emitters but no consumer). Additive; no
+other service or lib touched.
+
+### Changed
+- **Fail-CLOSED RBAC** (`OpsRbacGuard`, new `@Component`) — the ops operator-action guard
+  now DENIES (403) when `X-Gme-Permissions` is absent or lacks `ops:operate`. The previous
+  allow-when-absent behaviour (which let pause/suspend/resolve/recon-rerun/webhook-replay run
+  unauthorized) is removed. Config-overridable only via the dev flag `gmepay.ops.rbac.enforce`
+  (default `true` = enforce); with the gate off an *absent* header is allowed but a
+  *present-but-wrong* header is still denied. `OpsActionController.guard(...)` (static,
+  allow-when-absent) deleted; all three action controllers inject the guard.
+- **Fail-CLOSED audit for money-affecting actions** — `OperatorActionAuditClient.recordDurable(...)`
+  added; it throws `AuditWriteException` (mapped to HTTP 500 via `@ResponseStatus`) when the
+  record cannot be durably persisted. The money/state-affecting actions (pause/resume/
+  maintenance/suspend/unsuspend, transaction resolve, webhook replay, recon rerun) now call
+  `recordDurable` BEFORE delegating — if the audit write fails the action FAILS (5xx) and the
+  upstream is NOT called. `record(...)` (best-effort) stays for pure reads. The live REST
+  client fails closed on `recordDurable`; the in-memory stub is always durable.
+
+### Added
+- **`gmepay.ops.alert` consumer (#5)** — `OpsAlertKafkaConsumer` + gated
+  `OpsAlertKafkaConsumerConfig` (`@ConditionalOnProperty("spring.kafka.bootstrap-servers")`,
+  MANUAL ack, `.DLT` poison handling), mirroring the revenue-ledger/notification-webhook
+  pattern. No broker ⇒ no listener beans (no-broker fallback). `OpsAlertEventHandler`
+  deserializes the canonical `OpsAlertPayload` and stores it in the in-memory, bounded,
+  newest-first `OpsAlertStore` (`gmepay.ops.alerts.capacity`, default 200).
+- **`GET /v1/admin/ops/alerts`** (`OpsAlertController`) — recent alerts newest-first, filter
+  by `severity` and/or `type`, `limit` (default 100).
+- **Control tower alert strip** — `ControlTowerView.recentAlerts` (total, critical count,
+  newest 10) folded in from the store.
+
+Follow-ups: durable (JPA) alert store; a real pager / on-call push.
+
 ## 2026-07-01 — Ops control-tower + 360° search + audited operator actions
 
 Adds the Operations wave BFF surface: one composed situational view, a transaction
