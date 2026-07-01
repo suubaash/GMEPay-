@@ -2,6 +2,31 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [fix/wallet-nepal-routing] — 2026-07-01 (wallet /v1/pay Nepal QR routing)
+
+### Fixed
+- **Nepal Fonepay QR paid via the wallet returned DECLINED / HUB_ERROR.** `WalletPayController`
+  dispatched `POST /v1/pay` ONLY by `partner`, so a Fonepay QR (which arrives as
+  `partner=GMEREMIT`) went down the ZeroPay domestic path — ZeroPay merchant-lookup 404'd /
+  couldn't parse it. Nepal is now decided by the QR content, not the partner.
+
+### Added
+- **`NepalQrDetector`** — `isNepal(qrPayload)` flags a Nepal QR from any marker: `fonepay.com`,
+  EMVCo country tag `5802NP`, or `khalti`/`nepalpay`/`npqr` (case-insensitive). Does not misfire
+  on ZeroPay QRs (`com.zeropay` / `5802KR`). Unit-tested with the sample Fonepay + ZeroPay QRs.
+- **`NepalPaymentService.pay(qrPayload, amount, userRef)`** — mirrors `GmeremitPaymentService`'s
+  shape/`WalletResult` but builds an `MpmSubmitRequest` with `schemeId="NEPAL"` and submits via
+  the injected `SchemeClient` (the `@Primary SchemeClientRouter`) → Nepal adapter. Skips the
+  ZeroPay `merchant-qr-data` validation (the adapter resolves the merchant). Treats the wallet
+  amount as NPR for now (adapter → paisa ×100 HALF_UP); TODO(fx) KRW→NPR via rate-fx is a
+  follow-up. Records the txn in transaction-mgmt (resilient); adapter decline/failure → DECLINED
+  with the adapter's reason (not a generic HUB_ERROR).
+- **`WalletPayController`** — routes to `NepalPaymentService` when `NepalQrDetector.isNepal(...)`,
+  BEFORE the partner branch; GMEREMIT/SENDMN branches unchanged. `NepalPaymentService` added to
+  the primary ctor; the 2-arg test ctor still compiles (defaults it to null).
+- Tests: `NepalQrDetectorTest`; two `WalletPayControllerTest` cases (Fonepay QR → Nepal APPROVED;
+  ZeroPay QR still → GMEREMIT). Full suite green.
+
 ## [na/wiring] — 2026-07-01 (NEPAL scheme-keyed adapter dispatch)
 
 ### Added

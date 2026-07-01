@@ -3,6 +3,7 @@ package com.gme.pay.payment.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.NepalPaymentService;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
@@ -25,6 +26,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -59,6 +62,9 @@ class WalletPayControllerTest {
 
     @MockBean
     private SendmnPaymentService sendmnPaymentService;
+
+    @MockBean
+    private NepalPaymentService nepalPaymentService;
 
     @MockBean
     private SchemeClient schemeClient;
@@ -212,6 +218,81 @@ class WalletPayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest());
+    }
+
+    // ---- Test: Nepal Fonepay QR (partner=GMEREMIT) routes to NepalPaymentService ----
+
+    @Test
+    @DisplayName("POST /v1/pay — Nepal Fonepay QR routes to Nepal service: 201 APPROVED with schemeTxnRef")
+    void walletPay_nepalFonepayQr_routesToNepal() throws Exception {
+        String fonepayQr = "00020101021102164271420013285741263500011fonepay.com"
+                + "...5802NP5923kinaun shopping pvt.ltd6013ANAMNAGAR...";
+
+        WalletResult nepalApproved = WalletResult.approved(
+                "NEPAL-txn-1",
+                "NP-SCHEME-777",
+                null,
+                new BigDecimal("1000"),
+                BigDecimal.ZERO,
+                new BigDecimal("1000"),
+                "2026-07-01T10:00:00+09:00");
+        // partner is GMEREMIT (the wallet's issuing partner) — Nepal is decided by the QR, not the partner.
+        when(nepalPaymentService.pay(eq(fonepayQr), eq(new BigDecimal("1000")), eq("user-np-1")))
+                .thenReturn(nepalApproved);
+
+        String body = """
+                {
+                  "qrPayload": "%s",
+                  "amountKrw": "1000",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-np-1"
+                }
+                """.formatted(fonepayQr);
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("NP-SCHEME-777")))
+                .andExpect(jsonPath("$.txnRef", is("NEPAL-txn-1")));
+
+        // The ZeroPay domestic path must NOT be touched for a Nepal QR.
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    // ---- Test: ZeroPay QR still routes to GmeremitPaymentService (unchanged) ----
+
+    @Test
+    @DisplayName("POST /v1/pay — ZeroPay QR still routes to GMEREMIT (Nepal service untouched)")
+    void walletPay_zeropayQr_routesToGmeremit() throws Exception {
+        String zeropayQr = "00020101021102...com.zeropay...5802KR5910COFFEE HUT6304ABCD";
+
+        WalletResult approved = WalletResult.approved(
+                "GMEREMIT-42", "ZP-TXN-42", "Coffee Hut",
+                new BigDecimal("5000"), new BigDecimal("500"), new BigDecimal("5500"),
+                "2026-07-01T10:00:00+09:00");
+        when(gmeremitPaymentService.pay(eq(zeropayQr), eq(new BigDecimal("5000")), eq("user-kr-1")))
+                .thenReturn(approved);
+
+        String body = """
+                {
+                  "qrPayload": "%s",
+                  "amountKrw": "5000",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-kr-1"
+                }
+                """.formatted(zeropayQr);
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("ZP-TXN-42")));
+
+        verify(gmeremitPaymentService).pay(eq(zeropayQr), eq(new BigDecimal("5000")), eq("user-kr-1"));
+        verifyNoInteractions(nepalPaymentService);
     }
 
     // ---- Test 6: Refund happy path ----

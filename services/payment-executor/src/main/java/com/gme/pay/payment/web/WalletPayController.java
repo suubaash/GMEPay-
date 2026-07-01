@@ -2,6 +2,8 @@ package com.gme.pay.payment.web;
 
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.NepalPaymentService;
+import com.gme.pay.payment.domain.NepalQrDetector;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
@@ -65,6 +67,7 @@ public class WalletPayController {
 
     private final GmeremitPaymentService gmeremitPaymentService;
     private final SendmnPaymentService sendmnPaymentService;
+    @Nullable private final NepalPaymentService nepalPaymentService;
     @Nullable private final SchemeClient schemeClient;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
@@ -76,20 +79,22 @@ public class WalletPayController {
     @org.springframework.beans.factory.annotation.Autowired
     public WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                                SendmnPaymentService sendmnPaymentService,
+                               NepalPaymentService nepalPaymentService,
                                @Nullable SchemeClient schemeClient,
                                @Nullable TransactionClient transactionClient,
                                @Nullable RevenueLedgerClient revenueLedgerClient) {
         this.gmeremitPaymentService = gmeremitPaymentService;
         this.sendmnPaymentService = sendmnPaymentService;
+        this.nepalPaymentService = nepalPaymentService;
         this.schemeClient = schemeClient;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
     }
 
-    /** Backwards-compatible 2-arg constructor used by existing tests. */
+    /** Backwards-compatible 2-arg constructor used by existing tests (no Nepal routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
-        this(gmeremitPaymentService, sendmnPaymentService, null, null, null);
+        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null);
     }
 
     /**
@@ -102,7 +107,12 @@ public class WalletPayController {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
-        if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
+        // Nepal is determined by the QR, not the partner: a Fonepay/NepalPay QR arrives as
+        // partner=GMEREMIT but must NOT go down the ZeroPay domestic path (it would fail with
+        // MERCHANT_NOT_FOUND / HUB_ERROR). Detect and route to the Nepal adapter first.
+        if (nepalPaymentService != null && NepalQrDetector.isNepal(req.qrPayload())) {
+            result = nepalPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
+        } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
             result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
                     req.userRef(), SENDMN_PARTNER_ID);
         } else if (PARTNER_GMEREMIT.equalsIgnoreCase(req.partner())) {
