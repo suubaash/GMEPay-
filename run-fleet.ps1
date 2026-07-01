@@ -67,13 +67,20 @@ $fleet = @(
     @{ name = 'config-registry';           type = 'service'; port = 18081 }
     @{ name = 'transaction-mgmt';           type = 'service'; port = 18082 }
     @{ name = 'merchant-qr-data';           type = 'service'; port = 18083 }
-    @{ name = 'payment-executor';           type = 'service'; port = 18084 }
+    @{ name = 'payment-executor';           type = 'service'; port = 18084; args = @(
+            '--gmepay.config-registry.base-url=http://localhost:18081'
+            '--gmepay.rate-fx.base-url=http://localhost:18101'
+            '--gmepay.prefunding.base-url=http://localhost:18088'
+            '--gmepay.merchant-qr-data.base-url=http://localhost:18083'
+            '--gmepay.scheme-adapter-zeropay.base-url=http://localhost:18090'
+            '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
+            '--gmepay.revenue-ledger.base-url=http://localhost:18092') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
     @{ name = 'reporting-compliance';       type = 'service'; port = 18087 }
     @{ name = 'prefunding';                 type = 'service'; port = 18088 }
     @{ name = 'qr-service';                 type = 'service'; port = 18089 }
-    @{ name = 'scheme-adapter-zeropay';     type = 'service'; port = 18090 }
+    @{ name = 'scheme-adapter-zeropay';     type = 'service'; port = 18090; args = @('--gmepay.scheme.zeropay.base-url=http://localhost:9102/v1/scheme') }
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }

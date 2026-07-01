@@ -46,6 +46,20 @@ subprojects {
         shouldRunAfter tasks.named('test')
     }
 
+    // Heavy black-box end-to-end tests (JUnit @Tag("e2e")) that boot the real money-path
+    // fleet as detached JVMs. Excluded from the default `test` task; the :e2e-tests module
+    // wires its fleet bootJar dependencies onto this task (see e2e-tests/build.gradle).
+    tasks.register('e2eTest', Test) {
+        description = 'Fleet-booting end-to-end tests (JUnit @Tag("e2e")) — no Docker required.'
+        group = 'verification'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags 'e2e'
+        }
+        shouldRunAfter tasks.named('test')
+    }
+
     // ---------------------------------------------------------------------
     // Cloud-agnostic portability guard (cloud/audit).
     //

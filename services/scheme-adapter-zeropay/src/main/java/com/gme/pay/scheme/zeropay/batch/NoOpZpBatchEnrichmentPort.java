@@ -24,7 +24,7 @@ public class NoOpZpBatchEnrichmentPort {
 
     @Bean
     @ConditionalOnMissingBean(ZpBatchEnrichmentPort.class)
-    ZpBatchEnrichmentPort noOpZpBatchEnrichmentPort() {
+    ZpBatchEnrichmentPort noOpEnrichmentPort() {
         return new ZpBatchEnrichmentPort() {
             @Override
             public Map<String, RefundEnrichment> refundEnrichment(LocalDate businessDate) {

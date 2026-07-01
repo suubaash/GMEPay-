@@ -2,6 +2,7 @@ package com.gme.pay.scheme.zeropay.batch;
 
 import com.gme.pay.scheme.zeropay.persistence.ZpCommittedTxnEntity;
 import com.gme.pay.scheme.zeropay.persistence.ZpCommittedTxnRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -51,6 +52,7 @@ public class ZpPersistenceBatchDataPort implements ZpBatchDataPort {
     private final ZpCommittedTxnRepository repository;
     private final ZpBatchEnrichmentPort enrichment;
 
+    @Autowired
     public ZpPersistenceBatchDataPort(ZpCommittedTxnRepository repository,
                                       ZpBatchEnrichmentPort enrichment) {
         this.repository = repository;
