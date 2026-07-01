@@ -1,0 +1,226 @@
+
+===== PAGE 1 =====
+K H A L T I 
+Partner Integration 
+QR Validate API 
+Integration Guide & API Reference 
+Resolve Nepali QR codes into receiver details for inbound remittance  
+Document Title QR Validate API — Integration Guide & API Reference 
+Version 1.0 
+Status For Integration 
+Audience Engineering and Integration Teams 
+Confidentiality Confidential — for authorized recipients only 
+This document and its contents are confidential and intended solely for the use of authorized recipients for the 
+purpose of integrating with the Khalti QR Validate API. It must not be redistributed without the written consent of 
+Khalti. 
+
+===== PAGE 2 =====
+ 
+Page 2 of 8 
+1. Overview 
+The QR Validate API enables remittance applications to resolve a scanned Nepali QR code into the 
+corresponding receiver details. The application submits the raw QR string; Khalti identifies the QR 
+network, fetches the receiver’s details, and returns a structured payload. The application uses the 
+response to render a confirmation screen before initiating the transfer through its existing remittance 
+pipeline. 
+The API only validates QR payloads — it does not initiate or settle funds movement. It is read-only 
+and idempotent: the same QR may be submitted any number of times and will yield the same 
+response. 
+1.1  Supported QR Networks 
+Network Encoding Typical Receiver Type 
+khalti JSON Khalti wallet 
+mobank JSON Nepali bank account 
+fonepay EMVCo TLV FonePay merchant 
+nepalpay EMVCo TLV NepalPay merchant 
+unionpay EMVCo TLV UnionPay merchant 
+smartqr EMVCo TLV SmartQR merchant 
+2. Endpoint 
+POST http://develop.khalti.com.np/api/qr/validate/ 
+ 
+The endpoint is also reachable at the following aliases. All three resolve to the same handler; the 
+request and response shapes are identical. 
+POST /api/qr/validate/        (no version prefix) 
+POST /api/v2/qr/validate/     (forward-compatible alias) 
+2.1  Required Headers 
+The API uses IP-bound token authentication. A request is accepted only when it carries a valid token 
+issued by Khalti and originates from an IP address on the registered allowlist. 
+Header Value 
+Authorization Token <PARTNER_AUTH_TOKEN> 
+Content-Type application/json 
+
+===== PAGE 3 =====
+ 
+Page 3 of 8 
+ 
+ 
+
+===== PAGE 4 =====
+ 
+Page 4 of 8 
+3. Request Body 
+{ "qr": "<qr-string>" } 
+ 
+Field Type Required Constraints 
+qr string Yes Length 8 to 2000 characters. Whitespace is trimmed 
+before validation. 
+The qr value is the raw payload obtained from the scanned QR. For JSON-encoded networks 
+(Khalti, Mobile Banking), it is a JSON object serialised as a string. For TLV-encoded networks 
+(FonePay, NepalPay, UnionPay, SmartQR), it is the EMVCo TLV string as printed on the QR. 
+4. Response — Success Cases 
+All successful responses use HTTP status 200 OK and a flat JSON object. The first key is always 
+network, which acts as the discriminator; the remaining keys depend on the network. Fields that are 
+not relevant to a given network are not returned, and there are no always-null padding fields. 
+4.1  Khalti 
+{ 
+  "network": "khalti", 
+  "name": "<Receiver Name>", 
+  "mobile": "98XXXXXXXX" 
+} 
+ 
+Field Type Description 
+network string Always "khalti". 
+name string 
+Canonical receiver name as held in Khalti’s user record. 
+May differ from the name field in the QR payload, which is 
+sender-side display data and is not authoritative. 
+mobile string The receiver’s Khalti mobile number, as encoded in the 
+QR’s Khalti_ID field. 
+4.2  Mobile Banking (mobank) 
+{ 
+  "network": "mobank", 
+  "name": "<Account Holder Name>", 
+  "account_number": "XXXXXXXXXXX", 
+  "bank": { 
+    "swift_code": "NICENPKA", 
+    "name": "NIC Asia Bank" 
+  } 
+} 
+ 
+
+===== PAGE 5 =====
+ 
+Page 5 of 8 
+Field Type Description 
+network string Always "mobank". 
+name string Account holder name from the QR. 
+account_number string The receiver’s bank account number from the QR. 
+bank.swift_code string 
+The canonical SWIFT code for the bank. Legacy or merged-
+bank codes are mapped to the current canonical SWIFT (for 
+example, BOALNPKA is mapped to NICENPKA). 
+bank.name string 
+Display name of the bank. An empty string is returned when 
+the bank-name registry has not been configured for a particular 
+code. 
+4.3  Merchant Networks (fonepay, nepalpay, unionpay, smartqr) 
+All four merchant networks share a common shape. The contents of extra vary by network. 
+{ 
+  "network": "fonepay", 
+  "name": "<Merchant Name>", 
+  "merchant_id": "<network_specific_merchant_identifier>", 
+  "amount": null, 
+  "currency": "NPR", 
+  "purpose": "Remittance", 
+  "extra": { "merchant_city": "Kathmandu", "mcc": "5411", "country": "NP" } 
+} 
+ 
+Field Type Description 
+network string One of "fonepay", "nepalpay", "unionpay", "smartqr". 
+name string 
+Merchant display name from the QR. May be empty for some 
+SmartQR or UnionPay payloads where the merchant name is 
+not encoded. 
+merchant_id string Network-specific merchant identifier extracted from the QR. 
+amount integer or 
+null 
+Transaction amount in paisa (1 NPR = 100 paisa) when the 
+QR is dynamic. null when the QR is static (no amount 
+encoded). 
+currency string ISO 4217 alpha currency code. Defaults to "NPR". 
+purpose string Purpose of transaction as encoded in the QR. Defaults to 
+"Remittance" when the QR does not encode a purpose. 
+extra object Network-specific supplementary context. See the table below. 
+Keys returned inside extra, by network (mcc is the Merchant Category Code as defined by ISO 
+18245): 
+Network extra keys 
+fonepay merchant_city, mcc, country 
+
+===== PAGE 6 =====
+ 
+Page 6 of 8 
+Network extra keys 
+nepalpay merchant_city, mcc, is_smartqr (boolean), is_personal_qr (boolean) 
+unionpay merchant_city, mcc, iin, uid 
+smartqr merchant_city, mcc 
+
+===== PAGE 7 =====
+ 
+Page 7 of 8 
+5. Response — Error Cases 
+5.1  Error Envelope 
+All error responses use the following structure: 
+{ 
+  "error": { 
+    "code": "<machine_code>", 
+    "message": "<human_readable_message>", 
+    "detail": { } 
+  } 
+} 
+ 
+Field Type Description 
+error.code string Stable machine-readable identifier for the error class. 
+error.message string Human-readable description suitable for display to the 
+sender, where appropriate. 
+error.detail object Optional additional context (for example, serializer validation 
+errors). May be empty. 
+5.2  HTTP Status Codes 
+Status Meaning 
+200 Validation succeeded; receiver details returned. 
+400 Request body is malformed or the QR is unsupported. 
+401 Token is invalid or source IP is not allowlisted. 
+403 Authentication header is missing or permission is denied. 
+422 QR is valid but the receiver cannot be served (not found or not eligible). 
+429 Rate limit exceeded. Retry after the cooldown indicated by the Retry-After 
+header. 
+500 / 502 / 
+504 Unhandled server error. 
+5.3  Error Code Catalog 
+code HTTP When Returned 
+invalid_qr 400 
+The request body fails schema validation, or the QR 
+matches a known network’s detector but a required field 
+within the QR is empty. 
+unsupported_qr 400 The QR does not match any supported network. 
+fonepay_legacy_unsupported 400 
+The QR is a legacy UPI-format FonePay QR. The sender 
+should request a current-format FonePay QR from the 
+receiver. 
+
+===== PAGE 8 =====
+ 
+Page 8 of 8 
+code HTTP When Returned 
+receiver_not_found 422 The QR is a Khalti QR and is well-formed, but no Khalti 
+user exists for the given mobile number. 
+receiver_not_eligible 422 The receiver exists but cannot accept remittance. The 
+reason is given in error.message. 
+internal_error 500 Unhandled server condition. Retry with exponential 
+backoff and escalate to Khalti if the condition persists. 
+5.4  Eligibility Failure Messages 
+When the response code is receiver_not_eligible, error.message will be one of the following: 
+• Account is closed. 
+• Account is deactivated. 
+• Account is not KYC-verified. 
+• Account is not eligible to receive remittance. 
+5.5  Authentication Failures 
+Failure HTTP Status Response Body 
+Authorization header missing 403 {"detail": "You do not have permission 
+to perform this action."} 
+Token does not match any user 401 {"detail": "Invalid token."} 
+Source IP not on allowlist 401 {"detail": "Invalid IP address."} 
+Token lacks qr-validate 
+permission 403 {"detail": "You do not have permission 
+to perform this action."} 
+ 
+End of document 
+ 

@@ -2,6 +2,20 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-07-01 — NEPAL scheme registration (na/wiring)
+
+### Added
+- **NEPAL in the scheme catalog** (`SchemeCatalogService`, `GET /v1/schemes`): operating
+  country `NP`, currency `NPR`, `LIVE`/`ACTIVE` — a second live-adapter scheme beside
+  ZEROPAY (a live `scheme-adapter-nepal` ships alongside). Supported Nepal networks
+  (khalti/mobank/fonepay/nepalpay/unionpay/smartqr) are carried descriptively in `name`
+  (the DTO has no networks field). Slotted right after ZEROPAY.
+- **`NEPAL` added to the V022 `ck_partner_scheme_scheme` CHECK roster** so partner-scheme
+  rows may enable it. `PartnerSchemeService.SCHEMES` auto-picks it up (derives from
+  `SchemeCatalogService.schemeIds()`), keeping the catalog / enablement / DB-CHECK
+  invariant intact (asserted by `SchemeCatalogServiceTest`).
+- Tests updated: catalog now has 8 rows with two ACTIVE schemes (ZEROPAY, NEPAL).
+
 ## 2026-06-30 — Cloud-agnostic vault config (agent/cloud-audit)
 
 ### Added

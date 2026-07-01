@@ -1,0 +1,27 @@
+server:
+  port: 9103
+
+spring:
+  application:
+    name: sim-nepal-qr
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+gmepay:
+  sim:
+    nepalqr:
+      # Validate API: enforce Authorization: Token <t>. Any non-empty token is accepted.
+      # IP allowlist check is OFF by default (sim). Turn on to reject requests.
+      ip-allowlist-enabled: false
+      allowed-ips: []
+      # Issuance-extension (Scan & Pay) nonce window check. OFF/lenient by default.
+      # When on, X-KhaltiNonce must satisfy ServerTs-100 <= nonce <= ServerTs+200.
+      nonce-window-enabled: false
+      # Default outcome for /qrscan-thirdparty/pay/ : APPROVE | PENDING | REJECT
+      default-pay-outcome: APPROVE
+
+logging:
+  level:
+    com.gme.sim: DEBUG

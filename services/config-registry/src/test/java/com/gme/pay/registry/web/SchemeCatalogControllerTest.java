@@ -28,12 +28,16 @@ class SchemeCatalogControllerTest {
     void getSchemes_returnsCatalogWithZeropayActiveFirst() throws Exception {
         mvc.perform(get("/v1/schemes"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(7))
+                .andExpect(jsonPath("$.length()").value(8))
                 .andExpect(jsonPath("$[0].schemeId").value("ZEROPAY"))
                 .andExpect(jsonPath("$[0].country").value("KR"))
                 .andExpect(jsonPath("$[0].currency").value("KRW"))
                 .andExpect(jsonPath("$[0].status").value("ACTIVE"))
+                // NEPAL is the second live adapter (ACTIVE), right after ZEROPAY.
+                .andExpect(jsonPath("$[1].schemeId").value("NEPAL"))
+                .andExpect(jsonPath("$[1].country").value("NP"))
+                .andExpect(jsonPath("$[1].status").value("ACTIVE"))
                 // Phase-2 roadmap schemes are present but honestly marked PLANNED.
-                .andExpect(jsonPath("$[1].status").value("PLANNED"));
+                .andExpect(jsonPath("$[2].status").value("PLANNED"));
     }
 }

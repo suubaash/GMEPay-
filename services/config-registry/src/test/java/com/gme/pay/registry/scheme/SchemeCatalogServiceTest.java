@@ -32,16 +32,18 @@ class SchemeCatalogServiceTest {
 
     private static final SchemeCatalogService CATALOG = new SchemeCatalogService();
 
-    /** The catalog leads with the only live ({@code ACTIVE}) scheme. */
+    /** The catalog leads with ZEROPAY, and the live-adapter schemes are ACTIVE. */
     @Test
     void catalog_leadsWithZeropayActive() {
         List<SchemeCatalogResponse> schemes = CATALOG.listSchemes();
         assertThat(schemes).isNotEmpty();
         assertThat(schemes.get(0).schemeId()).isEqualTo("ZEROPAY");
         assertThat(schemes.get(0).status()).isEqualTo("ACTIVE");
-        // Only ZEROPAY has a live adapter; everything else is honestly PLANNED.
-        assertThat(schemes.stream().filter(s -> "ACTIVE".equals(s.status())).count())
-                .isEqualTo(1);
+        // ZEROPAY and NEPAL both have live adapters (ACTIVE); everything else is
+        // honestly PLANNED.
+        assertThat(schemes.stream().filter(s -> "ACTIVE".equals(s.status()))
+                        .map(SchemeCatalogResponse::schemeId))
+                .containsExactlyInAnyOrder("ZEROPAY", "NEPAL");
     }
 
     /** Catalog rows carry the field names the BFF {@code SchemeSummary} binds. */
