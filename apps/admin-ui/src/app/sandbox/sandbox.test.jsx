@@ -65,17 +65,24 @@ describe('SandboxPage', () => {
     expect(within(visiblePanel).getByTestId('iframe-2')).toBeInTheDocument();
   });
 
-  it('switching to Nepal QR tab shows iframe-3', async () => {
+  it('switching to Nepal QR tab renders the NATIVE console, not an iframe', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByRole('tab', { name: /nepal qr/i }));
 
     const visiblePanel = screen.getByRole('tabpanel', { hidden: false });
-    expect(within(visiblePanel).getByTestId('iframe-3')).toBeInTheDocument();
+    // The native console UI is present...
+    expect(within(visiblePanel).getByRole('heading', { name: /1 · QR/ })).toBeInTheDocument();
+    expect(within(visiblePanel).getByLabelText(/QR payload/i)).toBeInTheDocument();
+    expect(within(visiblePanel).getByRole('button', { name: /^Pay$/ })).toBeInTheDocument();
+    expect(within(visiblePanel).getByRole('button', { name: /^Decode$/ })).toBeInTheDocument();
+
+    // ...and there is no Nepal iframe (index 3) anywhere.
+    expect(screen.queryByTestId('iframe-3')).not.toBeInTheDocument();
   });
 
-  it('each simulator caption and URL are visible when their tab is active', async () => {
+  it('each iframe simulator caption and URL are visible when their tab is active', async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -90,8 +97,9 @@ describe('SandboxPage', () => {
     await user.click(screen.getByRole('tab', { name: /fx rate board/i }));
     expect(screen.getByText(/localhost:9101/)).toBeInTheDocument();
 
-    // Nepal QR tab
+    // Nepal QR tab is native — it advertises the same-origin proxy, NOT a localhost URL.
     await user.click(screen.getByRole('tab', { name: /nepal qr/i }));
-    expect(screen.getByText(/localhost:9103/)).toBeInTheDocument();
+    expect(screen.getByText(/native console \(same-origin proxy\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/localhost:9103/)).not.toBeInTheDocument();
   });
 });

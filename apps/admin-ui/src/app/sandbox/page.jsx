@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Box, Tab, Tabs, Typography, Alert } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ServiceTrace from '@/components/ServiceTrace';
+import NepalQrConsole from './NepalQrConsole';
 
 const SIM_MERCHANT_URL =
   process.env.NEXT_PUBLIC_SIM_MERCHANT_URL ?? 'http://localhost:9104';
@@ -11,9 +12,13 @@ const SIM_WALLET_URL =
   process.env.NEXT_PUBLIC_SIM_WALLET_URL ?? 'http://localhost:9105';
 const SIM_RATE_URL =
   process.env.NEXT_PUBLIC_SIM_RATE_URL ?? 'http://localhost:9101';
-const SIM_NEPAL_QR_URL =
-  process.env.NEXT_PUBLIC_SIM_NEPAL_QR_URL ?? 'http://localhost:9103';
 
+// Tabs are either an iframe sim (has `url`) or a native React panel (has
+// `component`). The three ZeroPay sims stay iframes; the Nepal QR tab is now a
+// NATIVE console (NepalQrConsole) whose data calls go through the same-origin
+// /sim-nepal-qr rewrite in next.config.mjs — so it works when the admin portal
+// is reached remotely (over a Cloudflare tunnel), where a client-side
+// localhost:9103 iframe resolves to the viewer's own machine and shows nothing.
 const TABS = [
   {
     label: 'Merchant Terminal',
@@ -38,10 +43,10 @@ const TABS = [
   },
   {
     label: 'Nepal QR',
-    url: SIM_NEPAL_QR_URL,
+    component: NepalQrConsole,
     sim: 'sim-nepal-qr',
     caption:
-      'Nepal QR partner simulator (Khalti/Fonepay) — decode a Nepali QR, enter the amount, pay, and inspect the stored request/response the partner API exchanges with GMEPay+.',
+      'Nepal QR partner simulator (Khalti/Fonepay) — decode a Nepali QR, enter the amount, pay, and inspect the stored request/response the partner API exchanges with GMEPay+. Native console: data calls are proxied same-origin (/sim-nepal-qr) so it works remotely.',
   },
 ];
 
@@ -60,8 +65,9 @@ function TabPanel({ children, value, index }) {
 }
 
 /**
- * Sandbox Console — embeds the three ZeroPay sandbox simulators side-by-side
- * in tabs so an operator can walk through the full payment journey without
+ * Sandbox Console — embeds the three ZeroPay sandbox simulators (as iframes)
+ * side-by-side in tabs, plus a NATIVE Nepal QR console and the Service Trace
+ * panel, so an operator can walk through the full payment journey without
  * leaving the admin portal.
  *
  * End-to-end journey:
@@ -127,33 +133,42 @@ export default function SandboxPage() {
         </Tabs>
       </Box>
 
-      {TABS.map((t, i) => (
-        <TabPanel key={t.label} value={tab} index={i}>
-          <Box sx={{ py: 1, px: 0 }}>
-            <Typography variant="caption" color="text.secondary">
-              {t.caption}
-            </Typography>
-            <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
-              &mdash; <strong>{t.url}</strong> &nbsp;|&nbsp; start with:{' '}
-              <code>gradlew -p simulators/{t.sim} bootRun</code>
-            </Typography>
-          </Box>
-          <Box
-            component="iframe"
-            src={t.url}
-            title={t.label}
-            data-testid={`iframe-${i}`}
-            sx={{
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 1,
-              width: '100%',
-              height: 'calc(80vh - 56px)',
-              flexGrow: 1,
-            }}
-          />
-        </TabPanel>
-      ))}
+      {TABS.map((t, i) => {
+        const Component = t.component;
+        return (
+          <TabPanel key={t.label} value={tab} index={i}>
+            <Box sx={{ py: 1, px: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                {t.caption}
+              </Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
+                &mdash;{' '}
+                <strong>{Component ? 'native console (same-origin proxy)' : t.url}</strong>{' '}
+                &nbsp;|&nbsp; start with:{' '}
+                <code>gradlew -p simulators/{t.sim} bootRun</code>
+              </Typography>
+            </Box>
+            {Component ? (
+              <Component />
+            ) : (
+              <Box
+                component="iframe"
+                src={t.url}
+                title={t.label}
+                data-testid={`iframe-${i}`}
+                sx={{
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                  width: '100%',
+                  height: 'calc(80vh - 56px)',
+                  flexGrow: 1,
+                }}
+              />
+            )}
+          </TabPanel>
+        );
+      })}
 
       <TabPanel key="service-trace" value={tab} index={TABS.length}>
         <ServiceTrace />
