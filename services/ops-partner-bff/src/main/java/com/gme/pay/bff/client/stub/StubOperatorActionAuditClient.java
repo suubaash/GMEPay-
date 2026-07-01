@@ -36,6 +36,16 @@ public class StubOperatorActionAuditClient implements OperatorActionAuditClient 
         return rec;
     }
 
+    /**
+     * In-memory capture is always durable, so the durable write behaves like {@link #record}
+     * (and never throws) — the fail-closed path is exercised against the live REST client or a
+     * failing test double.
+     */
+    @Override
+    public OperatorActionRecord recordDurable(String action, String target, String actor, String reason) {
+        return record(action, target, actor, reason);
+    }
+
     /** Test/observability hook — the operator actions recorded so far, oldest first. */
     public List<OperatorActionRecord> captured() {
         return List.copyOf(captured);

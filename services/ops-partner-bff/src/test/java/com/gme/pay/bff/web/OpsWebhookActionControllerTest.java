@@ -34,7 +34,9 @@ class OpsWebhookActionControllerTest {
     void setUp() {
         webhooks = mock(WebhookOpsClient.class);
         audit = new StubOperatorActionAuditClient();
-        mvc = standaloneSetup(new OpsWebhookActionController(webhooks, audit))
+        // enforce=false (dev gate-off): absent permissions header allowed. Fail-closed
+        // enforcement is covered in OpsRbacGuardTest.
+        mvc = standaloneSetup(new OpsWebhookActionController(webhooks, audit, new OpsRbacGuard(false)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(new ObjectMapper()))
                 .build();
     }

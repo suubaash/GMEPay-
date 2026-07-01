@@ -19,6 +19,11 @@ dependencies {
     // Slice 1: canonical PartnerView / PartnerCommand DTOs that this BFF binds against
     // when talking to config-registry — see docs/PARTNER_SETUP_PLAN.md §"Cross-cutting bug fixes".
     implementation project(':libs:lib-api-contracts')
+    // Ops-alert consumer (#5): consume gmepay.ops.alert (OpsAlertPayload) so emitted alerts
+    // surface in the control tower + GET /v1/admin/ops/alerts. The listener wiring is gated
+    // on spring.kafka.bootstrap-servers, so no broker is required for the local default.
+    implementation 'org.springframework.kafka:spring-kafka'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
 }

@@ -15,9 +15,9 @@ import java.util.Map;
 /**
  * Audited operator webhook-replay action.
  *
- * <p>{@code POST /v1/admin/webhooks/{id}/replay} — writes an operator-action audit
- * record then delegates to notification-webhook's delivery replay. RBAC-guarded (see
- * {@link OpsActionController#guard}).
+ * <p>{@code POST /v1/admin/webhooks/{id}/replay} — durably writes an operator-action
+ * audit record (fail-closed) then delegates to notification-webhook's delivery replay.
+ * Fail-closed RBAC via {@link OpsRbacGuard}.
  */
 @RestController
 @RequestMapping("/v1/admin/webhooks")
@@ -25,10 +25,13 @@ public class OpsWebhookActionController {
 
     private final WebhookOpsClient webhooks;
     private final OperatorActionAuditClient audit;
+    private final OpsRbacGuard rbac;
 
-    public OpsWebhookActionController(WebhookOpsClient webhooks, OperatorActionAuditClient audit) {
+    public OpsWebhookActionController(WebhookOpsClient webhooks, OperatorActionAuditClient audit,
+                                      OpsRbacGuard rbac) {
         this.webhooks = webhooks;
         this.audit = audit;
+        this.rbac = rbac;
     }
 
     @PostMapping("/{id}/replay")
@@ -37,10 +40,10 @@ public class OpsWebhookActionController {
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
             @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        OpsActionController.guard(permissions);
+        rbac.requireOps(permissions);
         String actor = OpsActionController.actor(principal);
         String reason = OpsActionController.reason(body);
-        audit.record("webhook.replay", id, actor, reason);
+        audit.recordDurable("webhook.replay", id, actor, reason);
         return webhooks.replay(id, actor);
     }
 }

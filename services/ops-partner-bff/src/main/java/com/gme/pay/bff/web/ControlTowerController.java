@@ -1,5 +1,7 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.alert.OpsAlertStore;
+import com.gme.pay.bff.alert.OpsAlertView;
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.client.OpsControlClient;
 import com.gme.pay.bff.client.PrefundingClient;
@@ -54,6 +56,10 @@ public class ControlTowerController {
     private final SettlementClient settlements;
     private final ConfigRegistryClient configRegistry;
     private final OpsControlClient opsControl;
+    private final OpsAlertStore alerts;
+
+    /** How many of the newest alerts the control tower's alert strip carries. */
+    private static final int LATEST_ALERTS = 10;
 
     public ControlTowerController(TransactionMgmtClient transactions,
                                   WebhookOpsClient webhooks,
@@ -61,7 +67,8 @@ public class ControlTowerController {
                                   SystemHealthClient systemHealth,
                                   SettlementClient settlements,
                                   ConfigRegistryClient configRegistry,
-                                  OpsControlClient opsControl) {
+                                  OpsControlClient opsControl,
+                                  OpsAlertStore alerts) {
         this.transactions = transactions;
         this.webhooks = webhooks;
         this.prefunding = prefunding;
@@ -69,6 +76,7 @@ public class ControlTowerController {
         this.settlements = settlements;
         this.configRegistry = configRegistry;
         this.opsControl = opsControl;
+        this.alerts = alerts;
     }
 
     @GetMapping("/control-tower")
@@ -81,8 +89,23 @@ public class ControlTowerController {
         ControlTowerView.Health health = health(degraded);
         Integer reconExceptions = reconExceptions(degraded);
         OperationalStatusView status = operationalStatus(degraded);
+        ControlTowerView.RecentAlerts recentAlerts = recentAlerts(degraded);
 
-        return new ControlTowerView(inFlight, backlog, headroom, health, reconExceptions, status, degraded);
+        return new ControlTowerView(
+                inFlight, backlog, headroom, health, reconExceptions, status, recentAlerts, degraded);
+    }
+
+    private ControlTowerView.RecentAlerts recentAlerts(List<String> degraded) {
+        try {
+            List<OpsAlertView> latest = alerts.recent(null, null, LATEST_ALERTS);
+            int total = alerts.size();
+            int critical = (int) alerts.recent("CRITICAL", null, 0).stream().count();
+            return new ControlTowerView.RecentAlerts(total, critical, latest);
+        } catch (Exception e) {
+            log.debug("control-tower: recent-alerts section unavailable ({})", e.toString());
+            degraded.add("recentAlerts");
+            return new ControlTowerView.RecentAlerts(0, 0, List.of());
+        }
     }
 
     private ControlTowerView.InFlight inFlight(List<String> degraded) {

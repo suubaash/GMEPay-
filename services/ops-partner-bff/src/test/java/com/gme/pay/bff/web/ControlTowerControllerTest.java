@@ -49,6 +49,7 @@ class ControlTowerControllerTest {
     private SettlementClient settlements;
     private ConfigRegistryClient configRegistry;
     private OpsControlClient opsControl;
+    private com.gme.pay.bff.alert.OpsAlertStore alerts;
 
     @BeforeEach
     void setUp() {
@@ -63,8 +64,9 @@ class ControlTowerControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        alerts = new com.gme.pay.bff.alert.OpsAlertStore(200);
         mvc = standaloneSetup(new ControlTowerController(
-                transactions, webhooks, prefunding, systemHealth, settlements, configRegistry, opsControl))
+                transactions, webhooks, prefunding, systemHealth, settlements, configRegistry, opsControl, alerts))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
@@ -125,6 +127,30 @@ class ControlTowerControllerTest {
                 .andExpect(jsonPath("$.openReconExceptions").value(3))
                 .andExpect(jsonPath("$.operationalStatus.systemPaused").value(true))
                 .andExpect(jsonPath("$.degradedSections.length()").value(0));
+    }
+
+    @Test
+    void reflectsConsumedOpsAlerts() throws Exception {
+        when(transactions.search(any(SearchQuery.class))).thenReturn(pageWithTotal(0));
+        when(webhooks.backlog()).thenReturn(new WebhookOpsClient.WebhookBacklog(0, 0));
+        when(configRegistry.listPartnerViews()).thenReturn(List.of());
+        when(systemHealth.check()).thenReturn(new SystemHealthClient.SystemHealth(
+                Instant.parse("2026-07-01T00:00:00Z"), List.of()));
+        when(settlements.openReconExceptions()).thenReturn(0);
+        when(opsControl.operationalStatus()).thenReturn(OperationalStatusView.allClear());
+
+        alerts.add(new com.gme.pay.contracts.events.OpsAlertPayload(
+                "ops.alert", "FLOAT_LOW", "WARN", "P_B", "float below threshold", "2026-07-01T01:00:00Z"));
+        alerts.add(new com.gme.pay.contracts.events.OpsAlertPayload(
+                "ops.alert", "STUCK_TXN", "CRITICAL", "TXN-9", "stuck 30m", "2026-07-01T02:00:00Z"));
+
+        mvc.perform(get("/v1/admin/ops/control-tower"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recentAlerts.total").value(2))
+                .andExpect(jsonPath("$.recentAlerts.critical").value(1))
+                // newest-first: STUCK_TXN was added last
+                .andExpect(jsonPath("$.recentAlerts.latest[0].alertType").value("STUCK_TXN"))
+                .andExpect(jsonPath("$.recentAlerts.latest[1].alertType").value("FLOAT_LOW"));
     }
 
     @Test

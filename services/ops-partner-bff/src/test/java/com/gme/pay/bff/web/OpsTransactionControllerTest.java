@@ -47,7 +47,9 @@ class OpsTransactionControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new OpsTransactionController(transactions, audit))
+        // enforce=false (dev gate-off): absent permissions header allowed; a present-but-wrong
+        // header is still denied. Fail-closed enforcement is covered in OpsRbacGuardTest.
+        mvc = standaloneSetup(new OpsTransactionController(transactions, audit, new OpsRbacGuard(false)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
