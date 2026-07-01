@@ -163,7 +163,8 @@ class SettlementPersistenceIT {
                 };
         ReconDiffEngine engine = new ReconDiffEngine(
                 noTxnPort, new LineMatcher(), reconExceptionRepository,
-                batchRepository, lineRepository, (ref, residual, ccy) -> true);
+                batchRepository, lineRepository, (ref, residual, ccy) -> true,
+                new com.gme.pay.settlement.alert.ReconBreakAlerter(event -> {}));
 
         SettlementBatchEntity batch = new SettlementBatchEntity(
                 "ZP0061-20260615-MORNING", "GME_REMIT", LocalDate.of(2026, 6, 15),

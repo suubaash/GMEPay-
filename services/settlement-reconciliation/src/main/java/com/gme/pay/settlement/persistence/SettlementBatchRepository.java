@@ -16,6 +16,9 @@ public interface SettlementBatchRepository extends JpaRepository<SettlementBatch
 
     List<SettlementBatchEntity> findByPartnerIdAndBusinessDate(String partnerId, LocalDate businessDate);
 
+    /** All batches for a business date — used by the operator recon re-run's settlementDate scope. */
+    List<SettlementBatchEntity> findByBusinessDate(LocalDate businessDate);
+
     List<SettlementBatchEntity> findByStatus(String status);
 
     /** Outbound-batch idempotency key (V006 unique index): one batch per file_type + date + window. */

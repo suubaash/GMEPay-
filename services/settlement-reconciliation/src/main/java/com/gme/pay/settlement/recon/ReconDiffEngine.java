@@ -1,5 +1,6 @@
 package com.gme.pay.settlement.recon;
 
+import com.gme.pay.settlement.alert.ReconBreakAlerter;
 import com.gme.pay.settlement.batch.SettlementBatchStatus;
 import com.gme.pay.settlement.model.TransactionRecord;
 import com.gme.pay.settlement.parser.ZeroPayResultRecord;
@@ -50,6 +51,7 @@ public class ReconDiffEngine {
     private final SettlementBatchRepository batchRepository;
     private final SettlementLineRepository lineRepository;
     private final RoundingResidualPort roundingResidualPort;
+    private final ReconBreakAlerter breakAlerter;
 
     public ReconDiffEngine(
             TransactionQueryPort transactionQueryPort,
@@ -57,13 +59,15 @@ public class ReconDiffEngine {
             ReconExceptionRepository reconExceptionRepository,
             SettlementBatchRepository batchRepository,
             SettlementLineRepository lineRepository,
-            RoundingResidualPort roundingResidualPort) {
+            RoundingResidualPort roundingResidualPort,
+            ReconBreakAlerter breakAlerter) {
         this.transactionQueryPort = transactionQueryPort;
         this.lineMatcher = lineMatcher;
         this.reconExceptionRepository = reconExceptionRepository;
         this.batchRepository = batchRepository;
         this.lineRepository = lineRepository;
         this.roundingResidualPort = roundingResidualPort;
+        this.breakAlerter = breakAlerter;
     }
 
     /**
@@ -105,6 +109,10 @@ public class ReconDiffEngine {
 
         // 4. Persist exceptions (DISCREPANCY + MISSING)
         long exceptionCount = persistExceptions(batchId, allLines);
+
+        // 5. Reconciliation-break alert: emit an ops RECON_BREAK OpsAlert when this run left any
+        //    exception open. A clean run emits nothing.
+        breakAlerter.alertOnBreak(batchId, allLines);
 
         log.info("ReconDiff batchId={} date={} totalLines={} exceptions={}",
                 batchId, settlementDate, allLines.size(), exceptionCount);
@@ -175,6 +183,10 @@ public class ReconDiffEngine {
         // 5. Flag the matched lines and advance the batch lifecycle.
         markMatchedLines(lines, allLines);
         advanceBatchStatus(batch, exceptionCount);
+
+        // 5b. Reconciliation-break alert: emit an ops RECON_BREAK OpsAlert when this run left any
+        //     exception open (scheduled or operator-triggered path). Clean tie-out emits nothing.
+        breakAlerter.alertOnBreak(batchId, allLines);
 
         // 6. Addendum-001: when the batch has fully reconciled, post its per-partner rounding-mode
         //    residual to revenue-ledger — exactly once per batch (guarded by residual_posted_at, so a
