@@ -1,0 +1,16 @@
+// scheme-adapter-nepal: ACL adapter for the Nepal QR scheme (Khalti/Fonepay).
+// Counterpart to sim-nepal-qr (:9103). Real-time REST only — unlike ZeroPay there is
+// no batch-file / persistence layer here, so no JPA/Flyway deps.
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation project(':libs:lib-errors')
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.mockito:mockito-core'
+}

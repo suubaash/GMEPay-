@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: scheme-adapter-nepal
+
+server:
+  port: 8092
+
+management:
+  server:
+    port: 8093
+  endpoint:
+    health:
+      show-details: always
+
+# Nepal QR scheme (Khalti/Fonepay) — targets sim-nepal-qr :9103.
+# Override in production with GMEPAY_SCHEME_NEPAL_* environment variables.
+gmepay:
+  scheme:
+    nepal:
+      enabled: true
+      # sim-nepal-qr base URL
+      base-url: http://localhost:9103
+      # Authorization: Token <token> for /api/qr/validate/
+      token: sim-token
+      # Authorization: Key <key> for /qrscan-thirdparty/pay/ and /status/
+      key: sim-key
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true
