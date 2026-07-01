@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import java.util.List;
@@ -160,5 +161,92 @@ class LocationSchemeResolverTest {
                         new PartnerSchemeRecord("FAST_SG", "KH", "OUTBOUND", true, false, 1)),
                 new LocationSchemeQuery("KH", PaymentMode.CPM, "INBOUND"));
         assertEquals(ErrorCode.PAYMENT_MODE_NOT_SUPPORTED, ex.errorCode());
+    }
+
+    // --------------------- ADR-016: resolveCandidates (failover) --------------
+
+    @Test
+    @DisplayName("network=fonepay.com + NP + MPM -> ordered candidates by priority (failover order)")
+    void networkTwoPartnersSameNetworkReturnsBothInPriorityOrder() {
+        // Two NP partners both front fonepay.com; NEPAL is priority 0, the direct
+        // integration is priority 1 -> both returned, NEPAL first (the failover order).
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("NEPAL_FONEPAY_DIRECT", "NP", "BOTH", true, true, 1,
+                        21L, "fonepay.com"),
+                new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0,
+                        20L, "fonepay.com,nepalpay,com.f1soft"));
+
+        List<PartnerSchemeView> candidates = new LocationSchemeResolver(registry)
+                .resolveCandidates("fonepay.com",
+                        new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC"));
+
+        assertEquals(List.of("NEPAL", "NEPAL_FONEPAY_DIRECT"),
+                candidates.stream().map(PartnerSchemeView::schemeId).toList());
+        assertEquals(20L, candidates.get(0).partnerId());
+        assertEquals("ACTIVE", candidates.get(0).status());
+    }
+
+    @Test
+    @DisplayName("CSV membership: a mid-list Nepal GUID (nepalpay) still matches the NEPAL row")
+    void networkCsvMembershipMatchesInteriorToken() {
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0,
+                        20L, "fonepay.com,nepalpay,com.f1soft"));
+
+        List<PartnerSchemeView> candidates = new LocationSchemeResolver(registry)
+                .resolveCandidates("nepalpay",
+                        new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC"));
+
+        assertEquals(List.of("NEPAL"),
+                candidates.stream().map(PartnerSchemeView::schemeId).toList());
+    }
+
+    @Test
+    @DisplayName("network=com.zeropay -> ZEROPAY only")
+    void networkZeroPayResolvesToZeropay() {
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", true, true, 0, 10L, "com.zeropay"),
+                new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0, 20L, "fonepay.com"));
+
+        List<PartnerSchemeView> candidates = new LocationSchemeResolver(registry)
+                .resolveCandidates("com.zeropay",
+                        new LocationSchemeQuery("KR", PaymentMode.MPM, "DOMESTIC"));
+
+        assertEquals(List.of("ZEROPAY"),
+                candidates.stream().map(PartnerSchemeView::schemeId).toList());
+    }
+
+    @Test
+    @DisplayName("unknown network -> NO_SCHEME_FOR_LOCATION (nothing serves it)")
+    void unknownNetworkIsNoScheme() {
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("NEPAL", "NP", "BOTH", true, true, 0, 20L, "fonepay.com"));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> new LocationSchemeResolver(registry).resolveCandidates("com.unknown",
+                        new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC")));
+        assertEquals(ErrorCode.NO_SCHEME_FOR_LOCATION, ex.errorCode());
+    }
+
+    @Test
+    @DisplayName("network member but wrong mode -> filtered out -> NO_SCHEME_FOR_LOCATION")
+    void networkMatchesButModeExcludes() {
+        // Serves com.zeropay but MPM-only; a CPM request finds no candidate.
+        PartnerSchemeRegistry registry = registryOf(
+                new PartnerSchemeRecord("ZEROPAY", "KR", "BOTH", false, true, 0, 10L, "com.zeropay"));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> new LocationSchemeResolver(registry).resolveCandidates("com.zeropay",
+                        new LocationSchemeQuery("KR", PaymentMode.CPM, "DOMESTIC")));
+        assertEquals(ErrorCode.NO_SCHEME_FOR_LOCATION, ex.errorCode());
+    }
+
+    @Test
+    @DisplayName("blank network -> VALIDATION_ERROR")
+    void blankNetworkIsValidationError() {
+        ApiException ex = assertThrows(ApiException.class,
+                () -> new LocationSchemeResolver(registryOf()).resolveCandidates("  ",
+                        new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC")));
+        assertEquals(ErrorCode.VALIDATION_ERROR, ex.errorCode());
     }
 }

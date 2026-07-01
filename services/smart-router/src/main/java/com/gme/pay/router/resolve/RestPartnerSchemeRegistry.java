@@ -166,7 +166,9 @@ public class RestPartnerSchemeRegistry implements PartnerSchemeRegistry {
                 view.direction(),
                 supportsCpm(view),
                 supportsMpm(view),
-                view.priority() == null ? Integer.MAX_VALUE : view.priority());
+                view.priority() == null ? Integer.MAX_VALUE : view.priority(),
+                view.partnerId(),
+                view.networkIdentifier());
     }
 
     /** Explicit flag wins; else the presence of the CPM approval-method wiring. */

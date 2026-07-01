@@ -1,11 +1,13 @@
 package com.gme.pay.router.web;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.domain.routing.PartnerSchemeResolver;
@@ -101,6 +103,59 @@ class LocationResolveControllerTest {
                         .param("direction", "INBOUND"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("NO_SCHEME_FOR_LOCATION"));
+    }
+
+    @Test
+    @DisplayName("network param present -> ordered candidate list (ADR-016 failover)")
+    void networkReturnsOrderedCandidateList() throws Exception {
+        PartnerSchemeView primary = new PartnerSchemeView(20L, "NEPAL", "BOTH", null, null, null,
+                null, null, null, null, null, Boolean.TRUE, "NP", true, true, 0, "ACTIVE",
+                "fonepay.com,nepalpay");
+        PartnerSchemeView failover = new PartnerSchemeView(21L, "NEPAL_FONEPAY_DIRECT", "BOTH",
+                null, null, null, null, null, null, null, null, Boolean.TRUE, "NP", true, true, 1,
+                "ACTIVE", "fonepay.com");
+        when(resolver.resolveCandidates(eq("fonepay.com"), any()))
+                .thenReturn(List.of(primary, failover));
+
+        mvc.perform(get("/v1/route/resolve")
+                        .param("network", "fonepay.com")
+                        .param("country", "NP")
+                        .param("mode", "MPM")
+                        .param("direction", "DOMESTIC"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].schemeId").value("NEPAL"))
+                .andExpect(jsonPath("$[0].networkIdentifier").value("fonepay.com,nepalpay"))
+                .andExpect(jsonPath("$[1].schemeId").value("NEPAL_FONEPAY_DIRECT"));
+    }
+
+    @Test
+    @DisplayName("network unknown -> NO_SCHEME_FOR_LOCATION 404 canonical envelope")
+    void networkUnknownIs404() throws Exception {
+        when(resolver.resolveCandidates(any(), any()))
+                .thenThrow(new ApiException(ErrorCode.NO_SCHEME_FOR_LOCATION, "nothing serves it"));
+
+        mvc.perform(get("/v1/route/resolve")
+                        .param("network", "com.unknown")
+                        .param("country", "NP")
+                        .param("mode", "MPM")
+                        .param("direction", "DOMESTIC"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NO_SCHEME_FOR_LOCATION"));
+    }
+
+    @Test
+    @DisplayName("blank network falls back to country-based ResolveResponse (existing behavior)")
+    void blankNetworkFallsBackToCountryResolve() throws Exception {
+        when(resolver.resolve(any()))
+                .thenReturn(SchemeResolution.of(List.of("ZEROPAY")));
+
+        mvc.perform(get("/v1/route/resolve")
+                        .param("network", "")
+                        .param("country", "KR")
+                        .param("mode", "MPM")
+                        .param("direction", "DOMESTIC"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scheme").value("ZEROPAY"));
     }
 
     @Test

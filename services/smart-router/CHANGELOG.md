@@ -1,5 +1,37 @@
 # smart-router CHANGELOG
 
+## [Unreleased] — fo/smart-router — 2026-07-01
+
+### Added (ADR-016 — QR-classified failover routing: candidate resolve)
+- **`LocationSchemeResolver.resolveCandidates(network, query)`** — resolves a
+  QR-classified network GUID + country/mode/direction into the ORDERED candidate
+  list (`List<PartnerSchemeView>`, ascending `priority`, ACTIVE only) of
+  `partner_scheme` rows whose `networkIdentifier` CSV CONTAINS the network AND
+  match country + direction + mode. This ordered list IS the failover order
+  (element 0 = primary; the rest = failover). Empty → `NO_SCHEME_FOR_LOCATION`;
+  blank network → `VALIDATION_ERROR`.
+- **CSV-membership match** — `PartnerSchemeRecord.servesNetwork(network)` splits the
+  comma-separated `networkIdentifier` (e.g. `fonepay.com,nepalpay,com.f1soft`) and
+  matches any element case-insensitively/trimmed. A partner fronting several networks
+  is a candidate for a scan classified to any one of them.
+- **Endpoint** — `GET /v1/route/resolve` now accepts an OPTIONAL `network` param:
+  present → returns the ordered `List<PartnerSchemeView>` (ADR-016); absent/blank →
+  the pre-existing country-based `ResolveResponse` (unchanged).
+- **`PartnerSchemeRecord`** carries `partnerId` + `networkIdentifier` (kept a
+  6-arg back-compat constructor so country-only call sites are unchanged) and a
+  `toView()` that reconstitutes the canonical `PartnerSchemeView` for the response.
+- **`RestPartnerSchemeRegistry`** maps `PartnerSchemeView.networkIdentifier` +
+  `partnerId` through into the record.
+- **Fixture seed** — `InMemoryPartnerSchemeRegistry`: `com.zeropay`→ZEROPAY (KR),
+  Nepal GUIDs (`fonepay.com,nepalpay,com.f1soft,connectips`)→NEPAL (NP, priority 0),
+  plus a SECOND NP partner `NEPAL_FONEPAY_DIRECT` (priority 1) also serving
+  `fonepay.com` to exercise ordered multi-candidate failover.
+- **Tests** — resolver candidate tests (two-partner-same-network ordered, interior
+  CSV token, com.zeropay, unknown-network 404, mode-filtered 404, blank-network 400),
+  controller network-path tests (ordered array, 404, blank→fallback), and a
+  MockRestServiceServer wire test proving `networkIdentifier`+`partnerId` flow
+  through. `./gradlew :services:smart-router:test` green (49 tests).
+
 ## [Unreleased] — na/wiring — 2026-07-01
 
 ### Added (NEPAL routing)

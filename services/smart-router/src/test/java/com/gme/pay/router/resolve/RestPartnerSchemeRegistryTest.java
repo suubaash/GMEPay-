@@ -187,6 +187,43 @@ class RestPartnerSchemeRegistryTest {
     }
 
     @Test
+    @DisplayName("ADR-016: networkIdentifier CSV + partnerId flow through to the ordered candidate list")
+    void networkCandidatesOverLiveData() {
+        // NP directory with two partners, both serving fonepay.com; the second at a
+        // higher priority. Proves CSV membership match + ordered multi-candidate.
+        server.expect(requestTo(BASE + "/v1/partners"))
+                .andRespond(withSuccess("""
+                        [
+                          {"id":20,"partnerCode":"NEPAL_PSP","status":"LIVE",
+                           "operatingAddress":{"country":"NP"}},
+                          {"id":21,"partnerCode":"FONEPAY_DIRECT","status":"LIVE",
+                           "operatingAddress":{"country":"NP"}}
+                        ]
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/v1/admin/partners/NEPAL_PSP/schemes"))
+                .andRespond(withSuccess("""
+                        [{"partnerId":20,"schemeId":"NEPAL","direction":"BOTH","enabled":true,
+                          "countryCode":"NP","supportsCpm":true,"supportsMpm":true,"priority":0,
+                          "status":"ACTIVE","networkIdentifier":"fonepay.com,nepalpay,com.f1soft"}]
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(BASE + "/v1/admin/partners/FONEPAY_DIRECT/schemes"))
+                .andRespond(withSuccess("""
+                        [{"partnerId":21,"schemeId":"NEPAL_FONEPAY_DIRECT","direction":"BOTH",
+                          "enabled":true,"countryCode":"NP","supportsCpm":true,"supportsMpm":true,
+                          "priority":1,"status":"ACTIVE","networkIdentifier":"fonepay.com"}]
+                        """, MediaType.APPLICATION_JSON));
+
+        var candidates = resolver.resolveCandidates("fonepay.com",
+                new LocationSchemeQuery("NP", PaymentMode.MPM, "DOMESTIC"));
+
+        assertEquals(List.of("NEPAL", "NEPAL_FONEPAY_DIRECT"),
+                candidates.stream().map(c -> c.schemeId()).toList());
+        assertEquals(20L, candidates.get(0).partnerId());
+        assertEquals("fonepay.com,nepalpay,com.f1soft", candidates.get(0).networkIdentifier());
+        server.verify();
+    }
+
+    @Test
     @DisplayName("an upstream 5xx surfaces as SCHEME_UNAVAILABLE, never a silent empty")
     void upstreamFailureMapsToSchemeUnavailable() {
         server.expect(requestTo(BASE + "/v1/partners"))
