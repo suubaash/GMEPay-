@@ -1,5 +1,39 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-01 — Ops: force-resolve UNCERTAIN + stuck-txn alerts + 360° search
+
+Adds three Operations capabilities. Edits confined to `services/transaction-mgmt/`; shared
+`OpsAlertPayload` contract (from `ops/contracts`) reused unchanged.
+
+### Added
+- **Force-resolve UNCERTAIN.** `POST /v1/transactions/{txnRef}/resolve` body
+  `{resolution: COMPLETED|REVERSED, reason, operator}` → transitions an UNCERTAIN txn to a
+  terminal state via the real FSM (`COMPLETED`→APPROVED, `REVERSED`→REVERSED), recording
+  `reason`/`operator`/`resolvedAt` in the transaction audit. Idempotent (repeat once resolved
+  returns the resolved state); rejects a non-UNCERTAIN txn. `TransactionService.resolveByOperator`;
+  new FSM edge `UNCERTAIN→REVERSED`; `Transaction.applyOperatorResolution(...)`.
+- **Stuck/aged alert sweep.** `StuckTransactionAlertSweeper` — `@Scheduled`, config-gated
+  (`gmepay.txn.stuck-alert.enabled`, **default off**). Finds txns stuck in a non-terminal state
+  (default `UNCERTAIN`; configurable to add `PENDING_DEBIT`/`SCHEME_SENT`) older than
+  `threshold-seconds` (default 900) and emits an `OpsAlertPayload` (alertType `UNCERTAIN_AGED`/
+  `STUCK_TXN`, severity WARN→CRITICAL past `critical-multiplier`×, subjectRef=txnRef) via the
+  existing outbox `EventPublisher` seam → topic `gmepay.ops.alert`; `LoggingEventPublisher`
+  fallback when no broker. New `OpsAlertEvent` DomainEvent + `TransactionRepository.findStuck`.
+- **360° search.** `GET /v1/transactions/search` (and the existing `GET /v1/transactions`
+  extended, not duplicated) with optional filters `txnRef`, `partnerId`, `schemeTxnRef`, `status`,
+  `merchantId`, `from`/`to` → paged `TransactionResponse` projection for operator drill-down.
+- Flyway `V009__operator_resolution_audit.sql` — nullable `resolution_reason` / `resolved_by` /
+  `resolved_at` columns (additive).
+
+### Tests
+- `TransactionServiceForceResolveTest` — UNCERTAIN→REVERSED with reason+operator audit,
+  COMPLETED→APPROVED, idempotent repeat, reject non-UNCERTAIN, reject bad input.
+- `StuckTransactionAlertSweeperTest` — emits an `UNCERTAIN_AGED` ops.alert for an aged UNCERTAIN
+  txn (asserts EventPublisher publish + canonical `ops.alert` payload), CRITICAL escalation,
+  disabled-sweep no-op.
+- `TransactionSearchTest` — merchantId filter returns only matching rows; no-filter returns all.
+- `TransactionTransitionsTest` — UNCERTAIN outgoing edges now include REVERSED.
+
 ## 2026-06-30 — Wave-3: margin-accurate FX1015 + canonical /refunded (producer)
 
 Wires the Wave-3 shared contracts (commit a36997e). Edits confined to

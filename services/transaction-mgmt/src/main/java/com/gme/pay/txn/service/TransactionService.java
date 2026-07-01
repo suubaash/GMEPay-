@@ -248,10 +248,24 @@ public class TransactionService {
     public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
                                                TransactionStatus status, Long partnerId,
                                                int page, int size) {
+        return queryTransactions(from, to, status, partnerId, null, null, null, page, size);
+    }
+
+    /**
+     * 360° operator search (GET /v1/transactions and /v1/transactions/search). Extends the paged
+     * query with the flexible drill-down filters {@code txnRef} (exact), {@code schemeTxnRef}
+     * (exact) and {@code merchantId} (exact) alongside the existing date / status / partner
+     * filters. All filters optional; a null / blank value is ignored.
+     */
+    public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
+                                               TransactionStatus status, Long partnerId,
+                                               String txnRef, String schemeTxnRef, String merchantId,
+                                               int page, int size) {
         int safeSize = Math.min(size, 500);
         PageRequest pageRequest = PageRequest.of(page, safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
-        return repository.findByFilters(from, to, status, partnerId, pageRequest);
+        return repository.findByFilters(from, to, status, partnerId,
+                txnRef, schemeTxnRef, merchantId, pageRequest);
     }
 
     /**
@@ -405,5 +419,69 @@ public class TransactionService {
         }
         stateMachine.transition(txn, outcome);
         return repository.save(txn);
+    }
+
+    /**
+     * Operator force-resolution of a stuck {@link TransactionStatus#UNCERTAIN} transaction
+     * (Ops: {@code POST /v1/transactions/{txnRef}/resolve}). Transitions the txn to the chosen
+     * terminal state via the real FSM, recording the {@code reason} + {@code operator} on the
+     * aggregate for the transaction history/audit.
+     *
+     * <p>{@code resolution} maps to a terminal state:
+     * <ul>
+     *   <li>{@code COMPLETED} → {@link TransactionStatus#APPROVED} (scheme is believed to have paid)</li>
+     *   <li>{@code REVERSED}  → {@link TransactionStatus#REVERSED} (held prefunding reversed)</li>
+     * </ul>
+     *
+     * <p><b>Idempotent.</b> A repeat call once the txn already sits in the resolved terminal state
+     * returns it unchanged (no re-transition, no duplicate event). A call whose {@code resolution}
+     * maps to a <em>different</em> terminal state than the one already recorded is rejected.
+     *
+     * @throws ApiException {@code VALIDATION_ERROR} if the txn is neither UNCERTAIN nor already in
+     *                      the requested terminal state (i.e. it is not force-resolvable).
+     */
+    @Transactional
+    public Transaction resolveByOperator(String txnRef, String resolution,
+                                         String reason, String operator) {
+        TransactionStatus target = mapResolution(resolution);
+        if (reason == null || reason.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "reason is required");
+        }
+        if (operator == null || operator.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "operator is required");
+        }
+        Transaction txn = getByTxnRef(txnRef);
+        TransactionStatus current = txn.status();
+
+        // Idempotent replay: already in the requested terminal state → return unchanged.
+        if (current == target) {
+            return txn;
+        }
+        // Only an UNCERTAIN txn is force-resolvable. Any other non-matching state is rejected.
+        if (current != TransactionStatus.UNCERTAIN) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "Transaction " + txnRef + " is not UNCERTAIN (was " + current
+                            + "); only UNCERTAIN transactions can be force-resolved");
+        }
+        // Record the audit (who/why) BEFORE the transition so it is captured with the state change.
+        txn.applyOperatorResolution(reason, operator, Instant.now(), true);
+        stateMachine.transition(txn, target);
+        return repository.save(txn);
+    }
+
+    /**
+     * Maps the operator {@code resolution} string to the terminal {@link TransactionStatus}.
+     * {@code COMPLETED} → APPROVED, {@code REVERSED} → REVERSED. Any other value is rejected.
+     */
+    private TransactionStatus mapResolution(String resolution) {
+        if (resolution == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "resolution is required");
+        }
+        return switch (resolution) {
+            case "COMPLETED" -> TransactionStatus.APPROVED;
+            case "REVERSED"  -> TransactionStatus.REVERSED;
+            default -> throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "resolution must be COMPLETED or REVERSED, was: " + resolution);
+        };
     }
 }

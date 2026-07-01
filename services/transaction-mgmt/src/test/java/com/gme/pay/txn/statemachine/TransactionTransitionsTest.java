@@ -144,7 +144,8 @@ class TransactionTransitionsTest {
                 Set.of(TransactionStatus.APPROVED, TransactionStatus.FAILED, TransactionStatus.UNCERTAIN),
                 TransactionTransitions.allowedFrom(TransactionStatus.SCHEME_SENT));
         assertEquals(
-                Set.of(TransactionStatus.APPROVED, TransactionStatus.FAILED),
+                // UNCERTAIN exits via reconciliation (APPROVED/FAILED) or operator force-resolve (REVERSED).
+                Set.of(TransactionStatus.APPROVED, TransactionStatus.FAILED, TransactionStatus.REVERSED),
                 TransactionTransitions.allowedFrom(TransactionStatus.UNCERTAIN));
     }
 

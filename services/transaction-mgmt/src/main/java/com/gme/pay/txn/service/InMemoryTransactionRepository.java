@@ -53,14 +53,30 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     @Override
     public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                            TransactionStatus status, Long partnerId,
+                                           String txnRef, String schemeTxnRef, String merchantId,
                                            Pageable pageable) {
         var fromInstant = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         // 'to' is inclusive: advance to start of next day for < comparison
         var toInstant = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         String statusStr = status != null ? status.name() : null;
         return jpaRepository
-                .findByFilters(fromInstant, toInstant, statusStr, partnerId, pageable)
+                .findByFilters(fromInstant, toInstant, statusStr, partnerId,
+                        blankToNull(txnRef), blankToNull(schemeTxnRef), blankToNull(merchantId),
+                        pageable)
                 .map(TransactionEntityMapper::toDomain);
+    }
+
+    /** Treat an empty / blank optional filter param as "no filter". */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+
+    @Override
+    public List<Transaction> findStuck(Instant stuckBefore, List<String> sweepStatuses) {
+        return jpaRepository.findStuck(stuckBefore, sweepStatuses)
+                .stream()
+                .map(TransactionEntityMapper::toDomain)
+                .collect(Collectors.toList());
     }
 
     /**

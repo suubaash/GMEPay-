@@ -173,6 +173,17 @@ public class TransactionEntity {
     @Column(name = "payout_usd_cost", precision = 20, scale = 8)
     private BigDecimal payoutUsdCost;
 
+    // --- V009 (Ops): operator force-resolution audit columns ---
+
+    @Column(name = "resolution_reason", length = 256)
+    private String resolutionReason;
+
+    @Column(name = "resolved_by", length = 128)
+    private String resolvedBy;
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
     /** Required no-arg constructor for JPA. */
     public TransactionEntity() {}
 
@@ -321,4 +332,15 @@ public class TransactionEntity {
 
     public BigDecimal getPayoutUsdCost() { return payoutUsdCost; }
     public void setPayoutUsdCost(BigDecimal payoutUsdCost) { this.payoutUsdCost = payoutUsdCost; }
+
+    // --- V009 (Ops) accessors ---
+
+    public String getResolutionReason() { return resolutionReason; }
+    public void setResolutionReason(String resolutionReason) { this.resolutionReason = resolutionReason; }
+
+    public String getResolvedBy() { return resolvedBy; }
+    public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy; }
+
+    public Instant getResolvedAt() { return resolvedAt; }
+    public void setResolvedAt(Instant resolvedAt) { this.resolvedAt = resolvedAt; }
 }

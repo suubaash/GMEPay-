@@ -113,11 +113,16 @@ class TransactionServiceResolveUncertainTest {
 
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
+                                                         String txnRef, String schemeTxnRef, String merchantId,
                                                          Pageable pageable) {
             return Page.empty(pageable);
         }
 
         @Override public List<Transaction> findExpiredNonTerminal(Instant expiryBefore) {
+            return List.of();
+        }
+
+        @Override public List<Transaction> findStuck(Instant stuckBefore, List<String> sweepStatuses) {
             return List.of();
         }
 

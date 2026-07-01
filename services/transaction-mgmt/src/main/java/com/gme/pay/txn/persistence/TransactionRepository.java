@@ -36,17 +36,39 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
      */
     @Query("""
             SELECT t FROM TransactionEntity t
-            WHERE (:fromInstant IS NULL OR t.createdAt >= :fromInstant)
-              AND (:toInstant   IS NULL OR t.createdAt <  :toInstant)
-              AND (:status      IS NULL OR t.status    =  :status)
-              AND (:partnerId   IS NULL OR t.partnerId =  :partnerId)
+            WHERE (:fromInstant  IS NULL OR t.createdAt    >= :fromInstant)
+              AND (:toInstant    IS NULL OR t.createdAt    <  :toInstant)
+              AND (:status       IS NULL OR t.status       =  :status)
+              AND (:partnerId    IS NULL OR t.partnerId    =  :partnerId)
+              AND (:txnRef       IS NULL OR t.txnRef       =  :txnRef)
+              AND (:schemeTxnRef IS NULL OR t.schemeTxnRef =  :schemeTxnRef)
+              AND (:merchantId   IS NULL OR t.merchantId   =  :merchantId)
             """)
     Page<TransactionEntity> findByFilters(
-            @Param("fromInstant") Instant fromInstant,
-            @Param("toInstant")   Instant toInstant,
-            @Param("status")      String status,
-            @Param("partnerId")   Long partnerId,
+            @Param("fromInstant")  Instant fromInstant,
+            @Param("toInstant")    Instant toInstant,
+            @Param("status")       String status,
+            @Param("partnerId")    Long partnerId,
+            @Param("txnRef")       String txnRef,
+            @Param("schemeTxnRef") String schemeTxnRef,
+            @Param("merchantId")   String merchantId,
             Pageable pageable);
+
+    /**
+     * Ops stuck-transaction sweep (STUCK_TXN / UNCERTAIN_AGED alerts). Returns rows whose status
+     * is in {@code sweepStatuses} and whose {@code updatedAt} is older than {@code stuckBefore}
+     * (i.e. they have not moved for longer than the configured threshold). Ordered by
+     * {@code updatedAt} so the oldest / most-aged surface first.
+     */
+    @Query("""
+            SELECT t FROM TransactionEntity t
+            WHERE t.status IN :sweepStatuses
+              AND t.updatedAt < :stuckBefore
+            ORDER BY t.updatedAt ASC
+            """)
+    List<TransactionEntity> findStuck(
+            @Param("stuckBefore") Instant stuckBefore,
+            @Param("sweepStatuses") List<String> sweepStatuses);
 
     /**
      * Returns non-terminal transactions whose {@code createdAt} is older than

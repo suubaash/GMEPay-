@@ -46,10 +46,11 @@ public final class TransactionTransitions {
                 TransactionStatus.UNCERTAIN         // timeout / no response within SLA
         ));
 
-        // UNCERTAIN: held pending batch reconciliation (ZP0012/ZP0022)
+        // UNCERTAIN: held pending batch reconciliation (ZP0012/ZP0022) or operator force-resolve
         m.put(TransactionStatus.UNCERTAIN, EnumSet.of(
-                TransactionStatus.APPROVED,         // reconciliation confirmed success
-                TransactionStatus.FAILED            // reconciliation confirmed failure (prefund reversed)
+                TransactionStatus.APPROVED,         // reconciliation / operator confirmed success (COMPLETED)
+                TransactionStatus.FAILED,           // reconciliation confirmed failure (prefund reversed)
+                TransactionStatus.REVERSED          // operator force-resolve: reverse the held prefunding (Ops)
         ));
 
         // APPROVED: a same-day cancel reverses it; an explicit refund refunds it.

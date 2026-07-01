@@ -99,6 +99,13 @@ public class Transaction {
     private BigDecimal costRatePay;
     private BigDecimal payoutUsdCost;
 
+    // V009 (Ops): operator force-resolution audit — set when an operator force-resolves an
+    // UNCERTAIN transaction to a terminal state (COMPLETED→APPROVED / REVERSED). Records WHY and
+    // WHO for the transaction history/audit. All nullable (never set on the normal lifecycle).
+    private String resolutionReason;
+    private String resolvedBy;
+    private Instant resolvedAt;
+
     /**
      * Creates a new transaction in {@link TransactionStatus#CREATED} state
      * using the legacy 5-field signature (kept for backward compat with unit tests).
@@ -545,6 +552,22 @@ public class Transaction {
     }
 
     /**
+     * Records the operator force-resolution audit (V009 / Ops) — the reason and operator id that
+     * accompanied a manual resolution of an UNCERTAIN transaction. Set immediately before the FSM
+     * transition to the terminal state so the history/audit reflects who forced the outcome and why.
+     * Replayed on rehydration, so it does NOT bump {@code updatedAt} when {@code stamp} is false.
+     */
+    public void applyOperatorResolution(String resolutionReason, String resolvedBy,
+                                        Instant resolvedAt, boolean stamp) {
+        this.resolutionReason = resolutionReason;
+        this.resolvedBy = resolvedBy;
+        this.resolvedAt = resolvedAt;
+        if (stamp) {
+            this.updatedAt = Instant.now();
+        }
+    }
+
+    /**
      * Records refund enrichment (V007) so the committed/refund projection carries the fields
      * scheme-adapter / settlement read. All nullable; does not change status (the FSM owns that).
      */
@@ -651,4 +674,9 @@ public class Transaction {
     public BigDecimal costRateColl()        { return costRateColl; }
     public BigDecimal costRatePay()         { return costRatePay; }
     public BigDecimal payoutUsdCost()       { return payoutUsdCost; }
+
+    // V009 (Ops) operator-resolution audit accessors
+    public String resolutionReason()        { return resolutionReason; }
+    public String resolvedBy()              { return resolvedBy; }
+    public Instant resolvedAt()             { return resolvedAt; }
 }

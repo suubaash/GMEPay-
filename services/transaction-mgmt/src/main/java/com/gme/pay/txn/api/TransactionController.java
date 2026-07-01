@@ -9,6 +9,7 @@ import com.gme.pay.contracts.CommittedFxView;
 import com.gme.pay.contracts.RefundedTransactionView;
 import com.gme.pay.txn.api.dto.CreateTransactionRequest;
 import com.gme.pay.txn.api.dto.CreateTransactionResponse;
+import com.gme.pay.txn.api.dto.ResolveTransactionRequest;
 import com.gme.pay.txn.api.dto.StatusPatchRequest;
 import com.gme.pay.txn.api.dto.TransactionQueryPageResponse;
 import com.gme.pay.txn.api.dto.TransactionResponse;
@@ -89,19 +90,56 @@ public class TransactionController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) TransactionStatus status,
             @RequestParam(required = false) Long partnerId,
+            @RequestParam(required = false) String txnRef,
+            @RequestParam(required = false) String schemeTxnRef,
+            @RequestParam(required = false) String merchantId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
-        Page<Transaction> result = transactionService.queryTransactions(from, to, status, partnerId, page, size);
+        return ResponseEntity.ok(runSearch(
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /v1/transactions/search  (360° operator drill-down search)
+    // -------------------------------------------------------------------------
+
+    /**
+     * 360° transaction search for operator drill-down. Same flexible optional filters as the list
+     * endpoint — {@code txnRef}, {@code partnerId}, {@code schemeTxnRef}, {@code status},
+     * {@code merchantId}, {@code from}/{@code to} date — returning the paged transaction
+     * projection. A literal path segment, so it never collides with {@code GET /{txnRef}}.
+     */
+    @GetMapping("/search")
+    public ResponseEntity<TransactionQueryPageResponse> search(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) TransactionStatus status,
+            @RequestParam(required = false) Long partnerId,
+            @RequestParam(required = false) String txnRef,
+            @RequestParam(required = false) String schemeTxnRef,
+            @RequestParam(required = false) String merchantId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        return ResponseEntity.ok(runSearch(
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size));
+    }
+
+    /** Shared paged-search implementation behind both {@code GET /} and {@code GET /search}. */
+    private TransactionQueryPageResponse runSearch(
+            LocalDate from, LocalDate to, TransactionStatus status, Long partnerId,
+            String txnRef, String schemeTxnRef, String merchantId, int page, int size) {
+        Page<Transaction> result = transactionService.queryTransactions(
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size);
         List<TransactionResponse> content = result.getContent().stream()
                 .map(TransactionResponse::from)
                 .toList();
-        TransactionQueryPageResponse response = TransactionQueryPageResponse.of(
+        return TransactionQueryPageResponse.of(
                 content,
                 result.getNumber(),
                 result.getSize(),
                 result.getTotalElements());
-        return ResponseEntity.ok(response);
     }
 
     // -------------------------------------------------------------------------
@@ -277,6 +315,26 @@ public class TransactionController {
                 req.costRateColl(),
                 req.costRatePay());
         return ResponseEntity.noContent().build();
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /v1/transactions/{txnRef}/resolve  (Ops force-resolve UNCERTAIN)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Operator force-resolution of a stuck UNCERTAIN transaction. Body:
+     * {@code { resolution: COMPLETED|REVERSED, reason, operator }}. Transitions the txn to the
+     * chosen terminal state via the real FSM (COMPLETED→APPROVED, REVERSED→REVERSED) and records
+     * the reason + operator in the transaction audit. Idempotent — a repeat once resolved returns
+     * the resolved state; rejects a txn that is not UNCERTAIN.
+     */
+    @PostMapping("/{txnRef}/resolve")
+    public ResponseEntity<TransactionResponse> resolve(
+            @PathVariable String txnRef,
+            @RequestBody ResolveTransactionRequest req) {
+        Transaction txn = transactionService.resolveByOperator(
+                txnRef, req.resolution(), req.reason(), req.operator());
+        return ResponseEntity.ok(TransactionResponse.from(txn));
     }
 
     // -------------------------------------------------------------------------
