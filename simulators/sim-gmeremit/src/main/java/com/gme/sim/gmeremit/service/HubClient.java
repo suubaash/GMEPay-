@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
@@ -65,22 +66,33 @@ public class HubClient {
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new HubPayRequest(qrPayload, amountKrw, "GMEREMIT", userRef))
                     .retrieve()
-                    .onStatus(status -> status.value() == 422, (req, res) -> {
-                        /* handled below via exchange — allow non-2xx to flow through */
-                    })
+                    // Let every non-2xx body flow through to deserialization instead of throwing.
+                    // Business declines arrive as 422 with a populated declineReason; we want to
+                    // surface that REAL reason (e.g. MERCHANT_NOT_FOUND), not mask it.
+                    .onStatus(HttpStatusCode::isError, (req, res) -> { /* no-op: read body below */ })
                     .body(HubPayResponse.class);
 
             if (resp == null) {
-                return HubPayResult.hubDown();
+                // No body at all — the hub answered but said nothing usable.
+                return HubPayResult.hubError("HUB_ERROR");
+            }
+            if (resp.status() == null) {
+                // Non-2xx whose body wasn't a wallet response (e.g. a raw 5xx ApiError envelope).
+                // The hub IS reachable but errored — don't pretend it's unavailable.
+                log.warn("Hub returned an error response without a wallet status: declineReason={}",
+                        resp.declineReason());
+                return HubPayResult.hubError(
+                        resp.declineReason() != null ? resp.declineReason() : "HUB_ERROR");
             }
             return HubPayResult.fromResponse(resp);
 
         } catch (ResourceAccessException e) {
+            // Connection refused / timeout — the hub is genuinely unreachable.
             log.warn("Hub unreachable for payment: {}", e.getMessage());
             return HubPayResult.hubDown();
         } catch (Exception e) {
             log.warn("Payment hub call failed: {}", e.getMessage());
-            return HubPayResult.hubDown();
+            return HubPayResult.hubError("HUB_ERROR");
         }
     }
 
@@ -129,6 +141,15 @@ public class HubClient {
     ) {
         public static HubPayResult hubDown() {
             return new HubPayResult(false, true, null, null, null, null, null, null, "HUB_UNAVAILABLE");
+        }
+
+        /**
+         * The hub was reachable but returned an error (e.g. HTTP 5xx) rather than a clean
+         * wallet decline. Distinct from {@link #hubDown()} so the wallet does not falsely
+         * report "unavailable" when the service is actually up.
+         */
+        public static HubPayResult hubError(String reason) {
+            return new HubPayResult(false, false, null, null, null, null, null, null, reason);
         }
 
         public static HubPayResult fromResponse(HubPayResponse r) {

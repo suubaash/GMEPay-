@@ -84,6 +84,12 @@ public class InMemoryMerchantRepository implements MerchantRepository, Reconcila
         store.put(merchant.qrCodeId(), merchant);
     }
 
+    @Override
+    public Merchant upsert(Merchant merchant) {
+        put(merchant);
+        return merchant;
+    }
+
     /** Removes a merchant entry — used by tests. */
     public void remove(String qrCodeId) {
         store.remove(qrCodeId);

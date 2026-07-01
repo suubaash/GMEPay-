@@ -1,6 +1,7 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.payment.domain.MerchantNotFoundException;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.client.QrClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,9 +52,15 @@ public class RestQrClient implements QrClient {
                     body.merchantType(),
                     body.isActive());
         } catch (RestClientResponseException ex) {
-            throw new PaymentException(
-                    "merchant-qr-data GET /v1/merchants/" + merchantQr + " failed: "
-                            + ex.getStatusCode() + " " + ex.getResponseBodyAsString(), ex);
+            String detail = "merchant-qr-data GET /v1/merchants/" + merchantQr + " failed: "
+                    + ex.getStatusCode() + " " + ex.getResponseBodyAsString();
+            // A 404 means the merchant is definitively unknown — a normal business decline,
+            // not a server fault. Surface it distinctly so the orchestrator declines cleanly
+            // (MERCHANT_NOT_FOUND) instead of bubbling an unhandled 500 to the wallet.
+            if (ex.getStatusCode().value() == 404) {
+                throw new MerchantNotFoundException(detail, ex);
+            }
+            throw new PaymentException(detail, ex);
         } catch (PaymentException ex) {
             throw ex;
         } catch (RuntimeException ex) {

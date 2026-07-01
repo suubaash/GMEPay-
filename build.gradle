@@ -26,11 +26,12 @@ subprojects {
     }
 
     // Unit/slice tests: run everywhere (no Docker). Docker-backed Testcontainers ITs
-    // must be annotated @Tag("docker") — they are excluded here and run only via the
-    // `integrationTest` task (CI ubuntu runners have Docker; the local Windows box does not).
+    // must be annotated @Tag("docker"); the heavy fleet-booting end-to-end test is
+    // @Tag("e2e"). Both are excluded from the default `test` task so `./gradlew build`
+    // stays fast and self-contained. They run via the dedicated tasks below.
     test {
         useJUnitPlatform {
-            excludeTags 'docker'
+            excludeTags 'docker', 'e2e'
         }
     }
 

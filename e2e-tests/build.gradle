@@ -1,0 +1,30 @@
+// Black-box end-to-end test harness.
+//
+// This module has no production code — only the @Tag("e2e") test that boots the
+// real money-path fleet (payment-executor + merchant-qr-data + transaction-mgmt +
+// scheme-adapter-zeropay + revenue-ledger + sim-scheme) as detached JVMs on H2 /
+// in-memory (no Docker, no Kafka) and drives the wallet-scan -> payment flow over
+// HTTP, asserting the cross-service side effects.
+//
+// Run with:   ./gradlew :e2e-tests:e2eTest
+//
+// The java plugin, JUnit 5 platform, and the `e2eTest` task are applied by the root
+// build's `subprojects` block.
+
+dependencies {
+    // JSON assertions on the wire payloads. Pinned to the Jackson line that ships with
+    // Spring Boot 3.3.x so the harness speaks the same JSON the services emit.
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+}
+
+// Build the service boot jars this test launches. These are part of the root multi-project
+// build, so Gradle wires them as task dependencies (no nested Gradle invocation).
+// sim-scheme lives in the *separate* `simulators` Gradle build, so it is NOT listed here —
+// the test builds it on demand via the wrapper if its jar is missing (see the test's setup).
+tasks.named('e2eTest') {
+    dependsOn ':services:payment-executor:bootJar',
+              ':services:merchant-qr-data:bootJar',
+              ':services:transaction-mgmt:bootJar',
+              ':services:scheme-adapter-zeropay:bootJar',
+              ':services:revenue-ledger:bootJar'
+}

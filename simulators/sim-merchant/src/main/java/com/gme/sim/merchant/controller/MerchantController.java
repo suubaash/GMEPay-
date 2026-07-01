@@ -8,6 +8,7 @@ import com.gme.sim.merchant.dto.ChargeResponse;
 import com.gme.sim.merchant.dto.RegisterShopRequest;
 import com.gme.sim.merchant.model.ShopRecord;
 import com.gme.sim.merchant.model.ShopStore;
+import com.gme.sim.merchant.service.MerchantQrDataClient;
 import com.gme.sim.merchant.service.SchemeClient;
 import com.gme.sim.merchant.service.SchemeUnavailableException;
 import jakarta.validation.Valid;
@@ -29,12 +30,15 @@ import java.util.Map;
 @RequestMapping("/v1/merchant")
 public class MerchantController {
 
-    private final SchemeClient  schemeClient;
-    private final ShopStore     shopStore;
+    private final SchemeClient        schemeClient;
+    private final ShopStore           shopStore;
+    private final MerchantQrDataClient merchantQrDataClient;
 
-    public MerchantController(SchemeClient schemeClient, ShopStore shopStore) {
+    public MerchantController(SchemeClient schemeClient, ShopStore shopStore,
+                              MerchantQrDataClient merchantQrDataClient) {
         this.schemeClient = schemeClient;
         this.shopStore    = shopStore;
+        this.merchantQrDataClient = merchantQrDataClient;
     }
 
     // -------------------------------------------------------------------------
@@ -71,7 +75,8 @@ public class MerchantController {
     @GetMapping("/shops/{merchantId}/store-qr")
     public ResponseEntity<?> getStoreQr(@PathVariable String merchantId) {
         // Validate locally first
-        if (shopStore.find(merchantId).isEmpty()) {
+        ShopRecord shop = shopStore.find(merchantId).orElse(null);
+        if (shop == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("code", "SHOP_NOT_FOUND",
                                  "message", "Shop " + merchantId + " not registered in this terminal"));
@@ -81,6 +86,8 @@ public class MerchantController {
             if (resp == null) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
             }
+            // Write-through: mirror this QR into merchant-qr-data so the wallet's scan resolves.
+            merchantQrDataClient.mirror(resp.path("qrPayload").asText(null), shop);
             return ResponseEntity.ok(resp);
         } catch (SchemeUnavailableException e) {
             return serviceUnavailable(e.getMessage());
@@ -96,7 +103,8 @@ public class MerchantController {
             @PathVariable String merchantId,
             @Valid @RequestBody ChargeRequest req) {
 
-        if (shopStore.find(merchantId).isEmpty()) {
+        ShopRecord shop = shopStore.find(merchantId).orElse(null);
+        if (shop == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("code", "SHOP_NOT_FOUND",
                                  "message", "Shop " + merchantId + " not registered in this terminal"));
@@ -105,6 +113,8 @@ public class MerchantController {
             ChargeResponse charge = schemeClient.mintDynamicQr(
                     merchantId, req.amount(),
                     req.currency() != null ? req.currency() : "KRW");
+            // Write-through: mirror this dynamic QR into merchant-qr-data so the wallet's scan resolves.
+            merchantQrDataClient.mirror(charge.qrPayload(), shop);
             return ResponseEntity.ok(charge);
         } catch (SchemeUnavailableException e) {
             return serviceUnavailable(e.getMessage());

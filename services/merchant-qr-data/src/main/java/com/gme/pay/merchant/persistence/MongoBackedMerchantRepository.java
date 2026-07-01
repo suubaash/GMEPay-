@@ -76,6 +76,7 @@ public class MongoBackedMerchantRepository implements MerchantRepository, Reconc
      * @param merchant the domain merchant to persist
      * @return the persisted merchant mapped back to the domain model
      */
+    @Override
     public Merchant upsert(Merchant merchant) {
         MerchantDocument saved = mongoRepository.save(toDocument(merchant));
         return toDomain(saved);

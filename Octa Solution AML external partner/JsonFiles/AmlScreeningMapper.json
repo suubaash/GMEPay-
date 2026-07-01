@@ -1,0 +1,7 @@
+{
+  "CUSTOMER_NO": "Customer.No",
+  "CUSTOMER_NAME": "Customer.Name",
+  "CUSTOMER_ENG_NM": "Customer.Name_en",
+  "COUNTRY_CD": "Customer.Sender_name",
+  "RECEVER_COUNTRY_CD": "Customer.Receiver_country"
+}

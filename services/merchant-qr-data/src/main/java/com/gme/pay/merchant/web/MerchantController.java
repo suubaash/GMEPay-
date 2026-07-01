@@ -4,6 +4,8 @@ import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.merchant.domain.Merchant;
 import com.gme.pay.merchant.domain.MerchantLookupService;
+import com.gme.pay.merchant.domain.MerchantRegistrationService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,9 +25,12 @@ import java.util.UUID;
 public class MerchantController {
 
     private final MerchantLookupService merchantLookupService;
+    private final MerchantRegistrationService merchantRegistrationService;
 
-    public MerchantController(MerchantLookupService merchantLookupService) {
+    public MerchantController(MerchantLookupService merchantLookupService,
+                              MerchantRegistrationService merchantRegistrationService) {
         this.merchantLookupService = merchantLookupService;
+        this.merchantRegistrationService = merchantRegistrationService;
     }
 
     /**
@@ -50,6 +55,41 @@ public class MerchantController {
                 merchant.city(),
                 merchant.mcc());
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Registers (upserts) a merchant keyed by its QR code identifier, so a scanned QR
+     * resolves at payment time. Idempotent — re-posting the same merchant is a no-op replace.
+     *
+     * @param req the merchant to register; {@code qrCodeId} is required
+     * @return 200 with the persisted merchant projection
+     */
+    @PostMapping
+    public ResponseEntity<MerchantResponse> upsert(@RequestBody MerchantUpsertRequest req) {
+        boolean active = req.active() == null || req.active();
+        String status = (req.status() != null && !req.status().isBlank())
+                ? req.status()
+                : (active ? "ACTIVE" : "DEACTIVATED");
+
+        Merchant merchant = new Merchant(
+                req.merchantId(),
+                req.qrCodeId(),
+                req.merchantName(),
+                req.merchantType(),
+                req.feeType(),
+                status,
+                active,
+                req.payoutCurrency() != null ? req.payoutCurrency() : "KRW",
+                req.schemeId() != null ? req.schemeId() : "ZEROPAY",
+                req.city(),
+                req.mcc());
+
+        Merchant saved = merchantRegistrationService.register(merchant);
+        MerchantResponse response = new MerchantResponse(
+                saved.merchantId(), saved.qrCodeId(), saved.name(),
+                saved.merchantType(), saved.feeType(), saved.status(), saved.active(),
+                saved.payoutCurrency(), saved.schemeId(), saved.city(), saved.mcc());
+        return ResponseEntity.status(HttpStatus.OK).body(response);
     }
 
     /** Translates {@link ApiException} into the canonical error envelope. */

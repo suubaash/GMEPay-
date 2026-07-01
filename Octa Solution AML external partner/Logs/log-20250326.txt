@@ -1,0 +1,67 @@
+2025-03-26 11:27:20.241 +09:00 [INF] Incoming Request: POST /api/aml/screening/tran 
+Headers: {"Accept":["application/json, text/plain, */*"],"Accept-Encoding":["gzip, compress, deflate, br"],"Connection":["keep-alive"],"Content-Length":["92"],"Content-Type":["application/json"],"Host":["localhost:41430"],"User-Agent":["bruno-runtime/1.35.0"],"request-start-time":["1742956040039"]} 
+Body: {
+  "Customer":{
+    "No":"1000000",
+    "Name":"bin laden",
+    "Name_en":"bin laden"
+  }
+}
+2025-03-26 11:27:20.261 +09:00 [INF] AML API saved info log in AML Controller.
+2025-03-26 11:27:20.280 +09:00 [INF] Triggering Octa API....
+2025-03-26 11:27:20.894 +09:00 [INF] Successfully fetched data from Octa API....
+2025-03-26 11:27:20.895 +09:00 [INF] Data saving process info log from the OktaHttp Service.
+2025-03-26 11:27:20.910 +09:00 [INF] Data saved info log from the OktaHttp Service.
+2025-03-26 11:27:20.910 +09:00 [INF] Data saved info log in AML Controller.
+2025-03-26 11:27:20.917 +09:00 [INF] Outgoing Response: 200 
+Headers: {"Content-Type":["application/json; charset=utf-8"]} 
+Body: {"uniqueId":"2","msg":"Watch List 대상입니다. 준법감시팀에 결재요청/승인 하시기 바랍니다.","statusCode":"200","flag":"R","responseBody":"{\r\n    \"SUCCESS_YN\":\"Y\",\r\n    \"ERROR_MSG\":\"\",\r\n    \"CODE\":\"200\",\r\n    \"CODE_MSG\":\"Watch List 대상입니다. 준법감시팀에 결재요청/승인 하시기 바랍니다.\",\r\n    \"REAL\":\"\" ,\r\n    \"PARAMREPORT\" : \"{SYS_QUERY_SUB_FIX=_MY, REQ_USER_ID=SYSTEM, SYS_SYSTEM_DIV=GMEFT, CEO3_NM=, CEO_LIVE_COUNTRY_CD=, REAL_OWNR2_COUNTRY_CD=, COUNTRY_CD=, REAL_OWNR2_LIVE_COUNTRY_CD=, REAL_OWNR_NM=, LIVE_COUNTRY_CD=, REAL_OWNR2_NM=, AGENT_YN=, SURETY_BIRTH_DD=, CEO2_BIRTH_DD=, REAL_OWNR3_BIRTH_DD=, CEO2_YN=, SURETY_YN=, CEO_YN=, CEO3_ENG_NM=, AGENT_BIRTH_DD=, RLT_CORP_COUNTRY_CD=, SRCH_RQS_DD=20250326, CEO3_COUNTRY_CD=, RLT_CORP_YN=, RECEVER_COUNTRY_CD=, REAL_OWNR3_ENG_NM=, REAL_OWNR_ENG_NM=, CEO3_BIRTH_DD=, RECEVER_NM=, SURETY_ENG_NM=, SURETY_COUNTRY_CD=, REAL_OWNR_BIRTH_DD=, CEO3_YN=, REAL_OWNR3_YN=, AGENT_LIVE_COUNTRY_CD=, BIRTH_DD=, RLT_CORP_ENG_NM=, REAL_OWNR2_BIRTH_DD=, CUSTOMER_DIV=01, CUSTOMER_ENG_NM=bin laden, CEO_COUNTRY_CD=, RECEVER_YN=, AGENT_ENG_NM=, CEO3_LIVE_COUNTRY_CD=, RECEVER_LIVE_COUNTRY_CD=, CEO_NM=, REAL_OWNR_LIVE_COUNTRY_CD=, CEO2_COUNTRY_CD=, CEO2_ENG_NM=, AGENT_COUNTRY_CD=, REAL_OWNR2_YN=, REAL_OWNR_YN=, REAL_OWNR3_COUNTRY_CD=, CEO2_LIVE_COUNTRY_CD=, RECEVER_ENG_NM=, CEO_BIRTH_DD=, CEO2_NM=, REAL_OWNR2_ENG_NM=, RECEVER_BIRTH_DD=, AGENT_NM=, CEO_ENG_NM=, CUSTOMER_NM=, REAL_OWNR_COUNTRY_CD=, CUSTOMER_NO=1000000, REAL_OWNR3_NM=, REAL_OWNR3_LIVE_COUNTRY_CD=, SURETY_LIVE_COUNTRY_CD=, RLT_CORP_CD=, SURETY_NM=}\",\r\n    \"RESULT\":[{\"REQ_DEST_DIV\":\"1\", \"REQ_DEST_ID\":\"1000000\",\"REQ_ENG_NM\":\"bin laden\",\"WLF_STS\":\"200\"}]\r\n}\r\n\r\n"}
+2025-03-26 11:27:20.927 +09:00 [INF] Stored LogId in HttpContext: 3
+2025-03-26 11:27:20.932 +09:00 [WRN] No output formatter was found for content types '["application/json; charset=utf-8","application/json; charset=utf-8"]' to write the response.
+2025-03-26 11:27:21.130 +09:00 [ERR] An unhandled exception has occurred while executing the request.
+System.InvalidOperationException: StatusCode cannot be set because the response has already started.
+   at Microsoft.AspNetCore.Server.IIS.Core.IISHttpContext.ThrowResponseAlreadyStartedException(String name)
+   at Microsoft.AspNetCore.Server.IIS.Core.IISHttpContext.set_StatusCode(Int32 value)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ObjectResultExecutor.ExecuteAsyncCore(ActionContext context, ObjectResult result, Type objectType, Object value)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ObjectResultExecutor.ExecuteAsync(ActionContext context, ObjectResult result)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.ResultNext[TFilter,TFilterAsync](State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeNextResultFilterAsync[TFilter,TFilterAsync]()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResultExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.ResultNext[TFilter,TFilterAsync](State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeResultFilters()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at Swashbuckle.AspNetCore.SwaggerUI.SwaggerUIMiddleware.Invoke(HttpContext httpContext)
+   at Swashbuckle.AspNetCore.Swagger.SwaggerMiddleware.Invoke(HttpContext httpContext, ISwaggerProvider swaggerProvider)
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.DeveloperExceptionPageMiddlewareImpl.Invoke(HttpContext context)
+2025-03-26 11:27:21.148 +09:00 [WRN] The response has already started, the error page middleware will not be executed.
+2025-03-26 11:27:21.230 +09:00 [ERR] Connection ID "18230571326760812545", Request ID "40000002-0008-fd00-b63f-84710c7967bb": An unhandled exception was thrown by the application.
+System.InvalidOperationException: StatusCode cannot be set because the response has already started.
+   at Microsoft.AspNetCore.Server.IIS.Core.IISHttpContext.ThrowResponseAlreadyStartedException(String name)
+   at Microsoft.AspNetCore.Server.IIS.Core.IISHttpContext.set_StatusCode(Int32 value)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ObjectResultExecutor.ExecuteAsyncCore(ActionContext context, ObjectResult result, Type objectType, Object value)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ObjectResultExecutor.ExecuteAsync(ActionContext context, ObjectResult result)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.ResultNext[TFilter,TFilterAsync](State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeNextResultFilterAsync[TFilter,TFilterAsync]()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.Rethrow(ResultExecutedContextSealed context)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.ResultNext[TFilter,TFilterAsync](State& next, Scope& scope, Object& state, Boolean& isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeResultFilters()
+--- End of stack trace from previous location ---
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeFilterPipelineAsync>g__Awaited|20_0(ResourceInvoker invoker, Task lastTask, State next, Scope scope, Object state, Boolean isCompleted)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.<InvokeAsync>g__Awaited|17_0(ResourceInvoker invoker, Task task, IDisposable scope)
+   at Microsoft.AspNetCore.Authorization.AuthorizationMiddleware.Invoke(HttpContext context)
+   at Swashbuckle.AspNetCore.SwaggerUI.SwaggerUIMiddleware.Invoke(HttpContext httpContext)
+   at Swashbuckle.AspNetCore.Swagger.SwaggerMiddleware.Invoke(HttpContext httpContext, ISwaggerProvider swaggerProvider)
+   at Microsoft.AspNetCore.Authentication.AuthenticationMiddleware.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.DeveloperExceptionPageMiddlewareImpl.Invoke(HttpContext context)
+   at Microsoft.AspNetCore.Diagnostics.DeveloperExceptionPageMiddlewareImpl.Invoke(HttpContext context)
+   at Microsoft.WebTools.BrowserLink.Net.BrowserLinkMiddleware.InvokeAsync(HttpContext context)
+   at Microsoft.AspNetCore.Watch.BrowserRefresh.BrowserRefreshMiddleware.InvokeAsync(HttpContext context)
+   at Microsoft.AspNetCore.Server.IIS.Core.IISHttpContextOfT`1.ProcessRequestAsync()
