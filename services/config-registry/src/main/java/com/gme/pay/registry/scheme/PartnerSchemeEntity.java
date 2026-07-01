@@ -122,6 +122,37 @@ public class PartnerSchemeEntity {
     @Column(name = "current_scheme_key", length = 50)
     private String currentSchemeKey;
 
+    /**
+     * ADR-016 — the QR network GUID(s) this enablement can front, as a
+     * COMMA-SEPARATED list (e.g. {@code com.zeropay};
+     * {@code fonepay.com,nepalpay,khalti,mobank,unionpay,smartqr}). A scanned
+     * QR is classified to one GUID and routed to the partner_scheme row(s)
+     * whose list CONTAINS it; smart-router does the membership filter + ordering.
+     * Nullable/additive (V037). Defaulted from {@code scheme_id} in
+     * {@link #onPersist} for rows inserted through the frozen write command,
+     * which carries no {@code networkIdentifier} field.
+     */
+    @Column(name = "network_identifier", length = 200)
+    private String networkIdentifier;
+
+    /**
+     * Default {@code scheme_id -> network_identifier} map for the schemes that
+     * front a fixed QR network set. MIRRORS the V037 back-fill UPDATEs so a row
+     * inserted after the migration carries the same identifier the migration
+     * would have stamped. Absent scheme_ids leave {@code networkIdentifier}
+     * NULL (unmapped until an operator sets it). Package-visible so tests can
+     * assert the seeded expectation against one source of truth.
+     */
+    static String defaultNetworkIdentifierFor(String schemeId) {
+        if ("ZEROPAY".equals(schemeId)) {
+            return "com.zeropay";
+        }
+        if ("NEPAL".equals(schemeId)) {
+            return "fonepay.com,nepalpay,khalti,mobank,unionpay,smartqr";
+        }
+        return null;
+    }
+
     public PartnerSchemeEntity() {
         // JPA
     }
@@ -147,6 +178,13 @@ public class PartnerSchemeEntity {
         if (supersededAt == null && currentSchemeKey == null) {
             currentSchemeKey = partnerId + ":" + schemeId;
         }
+        // ADR-016: rows are INSERTed via a frozen write command with no
+        // networkIdentifier field, so derive it from the scheme_id (same map as
+        // the V037 back-fill) unless one was set explicitly. Null-safe: an
+        // unmapped scheme stays NULL.
+        if (networkIdentifier == null) {
+            networkIdentifier = defaultNetworkIdentifierFor(schemeId);
+        }
     }
 
     @jakarta.persistence.PreUpdate
@@ -159,7 +197,12 @@ public class PartnerSchemeEntity {
         }
     }
 
-    /** Adapt this row to the canonical {@link PartnerSchemeView} wire DTO. */
+    /**
+     * Adapt this row to the canonical {@link PartnerSchemeView} wire DTO.
+     * Carries the ADR-016 {@code networkIdentifier} (null-safe) so the
+     * partner-schemes read surface exposes the QR-network map; the location
+     * fields stay null on this projection ({@link #toLocationView} adds them).
+     */
     public PartnerSchemeView toView() {
         return new PartnerSchemeView(
                 partnerId,
@@ -173,7 +216,13 @@ public class PartnerSchemeEntity {
                 vaultSecretId,
                 approvalMethodCpm,
                 approvalMethodMpm,
-                enabled);
+                enabled,
+                null,
+                null,
+                null,
+                null,
+                null,
+                networkIdentifier);
     }
 
     /**
@@ -192,6 +241,9 @@ public class PartnerSchemeEntity {
      *   <li>{@code status} — {@code ACTIVE} when the kill switch is on,
      *       {@code SUSPENDED} when off — orthogonal to {@code enabled} on the
      *       wire but derived from it until a dedicated lifecycle column exists.</li>
+     *   <li>{@code networkIdentifier} — the ADR-016 QR-network GUID list this
+     *       row fronts (null-safe); smart-router consumes it to map a scanned
+     *       QR's network to candidate partners.</li>
      * </ul>
      */
     public PartnerSchemeView toLocationView(String countryCode) {
@@ -213,7 +265,8 @@ public class PartnerSchemeEntity {
                 approvalMethodCpm != null,
                 approvalMethodMpm != null,
                 null,
-                on ? "ACTIVE" : "SUSPENDED");
+                on ? "ACTIVE" : "SUSPENDED",
+                networkIdentifier);
     }
 
     public Long getId() {
@@ -350,5 +403,14 @@ public class PartnerSchemeEntity {
 
     public String getCurrentSchemeKey() {
         return currentSchemeKey;
+    }
+
+    /** ADR-016 QR-network GUID list (comma-separated); nullable. */
+    public String getNetworkIdentifier() {
+        return networkIdentifier;
+    }
+
+    public void setNetworkIdentifier(String networkIdentifier) {
+        this.networkIdentifier = networkIdentifier;
     }
 }

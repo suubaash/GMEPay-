@@ -2,6 +2,25 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-07-01 — partner_scheme QR network_identifier (ADR-016) (fo/config-registry)
+
+### Added
+- **`partner_scheme.network_identifier`** (`V037__partner_scheme_network_identifier.sql`):
+  nullable `VARCHAR(200)`, a COMMA-SEPARATED list of the QR network GUID(s) a scheme fronts
+  (ADR-016 QR-classified failover routing). Additive/Expand-safe ALTER ADD COLUMN. Back-fills
+  current rows: `ZEROPAY → com.zeropay`, `NEPAL →
+  fonepay.com,nepalpay,khalti,mobank,unionpay,smartqr` (guarded `IS NULL`, idempotent).
+- **`PartnerSchemeEntity`** maps the column and derives it from `scheme_id` in `onPersist`
+  (same map as the V037 back-fill) so rows INSERTed via the frozen write command — which has
+  no `networkIdentifier` field — still carry it. Exposed (null-safe) through both read
+  surfaces: `toView` (`GET /v1/admin/partners/{code}/schemes`, step-7 patch response) and
+  `toLocationView` (`GET /v1/schemes/resolve`), populating the ADR-016 field already present
+  on `PartnerSchemeView`.
+- Tests: seeded ZEROPAY/NEPAL rows expose the expected identifier via both paths; each NEPAL
+  network GUID is discoverable by CSV membership; an unmapped scheme stays null.
+- config-registry only STORES + EXPOSES; the network→candidate filter/ordering lives in
+  smart-router.
+
 ## 2026-07-01 — NEPAL scheme registration (na/wiring)
 
 ### Added
