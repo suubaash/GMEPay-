@@ -27,6 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *  T08 status returns APPROVED for created reference
  *  T09 status returns Error for unknown reference
  *  T10 records inspection returns stored req/resp incl decoded payload
+ *  T11 same-origin UI pay creates txn + records it (used by the web console)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
@@ -199,5 +200,36 @@ class NepalQrControllerTest {
                 .andExpect(jsonPath("$[0].responseStatus").value(200))
                 .andExpect(jsonPath("$[0].decodedPayload.reference").value(ref))
                 .andExpect(jsonPath("$[0].decodedPayload.amount").value("1500"));
+    }
+
+    // T11 — same-origin UI pay (web console) creates txn + records req/resp
+    @Test
+    void t11_uiPayCreatesTxnAndRecords() throws Exception {
+        String ref = "UI-T11-" + System.nanoTime();
+        String body = mapper.writeValueAsString(Map.of(
+                "qs", FONEPAY_QR, "amountPaisa", "1000", "reference", ref,
+                "mobile", "9800000000", "purpose", "ServicePayment", "remarks", "console"));
+        mvc.perform(post("/sim/nepal-qr/ui/pay")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.idx").isNotEmpty())
+                .andExpect(jsonPath("$.amount").value("1000"))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.meta.balance.on_hold").value("1000"));
+
+        // txn stored under reference
+        mvc.perform(get("/sim/nepal-qr/txns/{ref}", ref))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("APPROVED"))
+                .andExpect(jsonPath("$.amountPaisa").value(1000));
+
+        // request/response recorded with decoded payload
+        mvc.perform(get("/sim/nepal-qr/records").param("reference", ref))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].endpoint").value("/sim/nepal-qr/ui/pay"))
+                .andExpect(jsonPath("$[0].reference").value(ref))
+                .andExpect(jsonPath("$[0].idx").isNotEmpty())
+                .andExpect(jsonPath("$[0].responseStatus").value(200))
+                .andExpect(jsonPath("$[0].decodedPayload.reference").value(ref));
     }
 }

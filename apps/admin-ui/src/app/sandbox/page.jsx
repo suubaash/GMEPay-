@@ -11,6 +11,8 @@ const SIM_WALLET_URL =
   process.env.NEXT_PUBLIC_SIM_WALLET_URL ?? 'http://localhost:9105';
 const SIM_RATE_URL =
   process.env.NEXT_PUBLIC_SIM_RATE_URL ?? 'http://localhost:9101';
+const SIM_NEPAL_QR_URL =
+  process.env.NEXT_PUBLIC_SIM_NEPAL_QR_URL ?? 'http://localhost:9103';
 
 const TABS = [
   {
@@ -33,6 +35,13 @@ const TABS = [
     sim: 'sim-rate-provider',
     caption:
       'Live FX rate board — shows the KRW exchange rates the platform uses for settlement calculations.',
+  },
+  {
+    label: 'Nepal QR',
+    url: SIM_NEPAL_QR_URL,
+    sim: 'sim-nepal-qr',
+    caption:
+      'Nepal QR partner simulator (Khalti/Fonepay) — decode a Nepali QR, enter the amount, pay, and inspect the stored request/response the partner API exchanges with GMEPay+.',
   },
 ];
 
@@ -88,7 +97,9 @@ export default function SandboxPage() {
             (4) Return to <em>Merchant Terminal</em> — the <em>Payments received</em> list
             refreshes with the new transaction. &nbsp;
             (5) Consult <em>FX Rate Board</em> at any time to inspect the live KRW rates used
-            for settlement.
+            for settlement. &nbsp;
+            (6) Open <em>Nepal QR</em> to decode a Nepali QR (Khalti/Fonepay), pay in NPR, and
+            inspect the request/response the partner API exchanges with GMEPay+.
           </Typography>
         </Alert>
       </Box>
