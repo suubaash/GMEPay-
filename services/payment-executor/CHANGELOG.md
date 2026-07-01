@@ -2,6 +2,60 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [fo/payment-executor] — 2026-07-01 (ADR-016 QR-classified failover routing)
+
+### Added
+- **`QrSchemeClassifier`** — parses a scanned QR into `{networkIdentifier, country, mode}`
+  (ADR-016 §1). EMVCo: reads Merchant Account Information templates (tags 26–51), sub-tag `00`
+  = network GUID/AID (`com.zeropay`, `fonepay.com`, NepalPay GUID…); country from tag `58`;
+  mode MPM. JSON QRs (Khalti/mobank) classified by shape. A substring-marker fallback keeps
+  well-known networks routable from a slightly non-conformant QR. The QR's network identifier
+  is the deterministic routing key, not the country.
+- **`SmartRouterClient`** — resolves `(network, country, mode, direction)` → ordered
+  `List<PartnerSchemeView>` candidates (priority order). `RestSmartRouterClient`
+  (`GET {smart-router}/v1/route/resolve`) gated `@ConditionalOnProperty(gmepay.smart-router.base-url)`;
+  in-process `FixtureSmartRouterClient` fallback (`@ConditionalOnMissingBean`) resolves well-known
+  networks so tests / a no-router sandbox route deterministically (single candidate = pre-ADR-016
+  behaviour). Candidate `schemeId` maps straight to the `SchemeClientRouter` scheme code.
+- **`SchemeClient.lookupStatus(schemeId, reference)`** → `APPROVED|PENDING|REJECTED|NOT_FOUND` —
+  the anti-double-charge guard (ADR-016 §4). Implemented in `NepalRestSchemeClient`
+  (`GET /internal/scheme/nepal/status?reference=`) and `RestSchemeClient`
+  (`GET /internal/scheme/zeropay/status?reference=`); `SchemeClientRouter` routes it by scheme code.
+  Default / unknown / unreachable → best-effort `NOT_FOUND`.
+- **`FailoverPaymentRouter`** — the ADR-016 §3–4 engine on the MPM scan `/v1/pay` path: classify QR
+  → resolve ordered candidates → walk them (bounded by `gmepay.routing.max-hops`, default 3),
+  `submitMpm(schemeId=candidate.schemeId, …)`. APPROVED → done. **Business decline**
+  (`invalid_qr / unsupported_qr / receiver_not_found / receiver_not_eligible / insufficient /
+  duplicate_reference`) → **TERMINAL, no failover**. **Technical failure** (timeout / 5xx /
+  SCHEME_UNAVAILABLE / connect) → `lookupStatus(candidate, reference)`; APPROVED/PENDING → return
+  that (NO double-charge, no second submit); else fail over. All exhausted → SCHEME_UNAVAILABLE.
+  Each attempt (partner / outcome / reason) recorded in the attempt trail (resilient). Business-
+  decline vs technical is distinguished from the canonical `ErrorCode`/exception the adapters already
+  return (`SchemeDeclinedException` w/ business code = terminal; `PaymentException`/`SchemeTimeout`/
+  non-business decline code = technical).
+- **`WalletPayController`** — the retired `NepalQrDetector` branch is replaced by the
+  `FailoverPaymentRouter` for scanned-QR MPM payments to a **known non-ZeroPay network** (subsumes
+  Nepal: a Fonepay QR classifies to `fonepay.com` → Nepal candidate). ZeroPay QRs
+  (`com.zeropay` / `5802KR`) and the SENDMN path keep the unchanged GMEREMIT/SENDMN services, so
+  their merchant validation + fee behaviour is preserved exactly. `FailoverPaymentRouter` added to
+  the primary ctor; the 2-arg test ctor still compiles (defaults it null).
+
+### Removed
+- **`NepalQrDetector`** (+ its test) — retired per ADR-016. Its Nepal string-match cases are
+  subsumed by `QrSchemeClassifier` (Nepal GUIDs → `fonepay.com`/`nepalpay`/`khalti`).
+  (`NepalPaymentService` remains as a standalone bean but is no longer on the `/v1/pay` path —
+  its Nepal dispatch is now the failover router's single Nepal candidate.)
+
+### Tests
+- `QrSchemeClassifierTest` (fonepay.com / com.zeropay / khalti-JSON / country tag / unknown).
+- `FailoverPaymentRouterTest`: (a) primary technical-fail + lookup NOT_FOUND → secondary APPROVED;
+  (b) primary business-decline → terminal, secondary NOT tried; (c) primary timeout + lookup
+  APPROVED → returns primary, **no second submit (no double-charge)**; (d) single-candidate ZeroPay
+  → unchanged APPROVED; plus no-candidates and all-exhausted.
+- `lookupStatus` cases added to `NepalRestSchemeClientTest` / `RestSchemeClientTest`
+  (`MockRestServiceServer`). `WalletPayControllerTest` updated: Fonepay QR → failover router;
+  ZeroPay QR still → GMEREMIT. Full suite green (128 tests, 0 failures).
+
 ## [fix/wallet-nepal-routing] — 2026-07-01 (wallet /v1/pay Nepal QR routing)
 
 ### Fixed

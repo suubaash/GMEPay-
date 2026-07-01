@@ -1,9 +1,9 @@
 package com.gme.pay.payment.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
-import com.gme.pay.payment.domain.NepalPaymentService;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
@@ -64,7 +64,7 @@ class WalletPayControllerTest {
     private SendmnPaymentService sendmnPaymentService;
 
     @MockBean
-    private NepalPaymentService nepalPaymentService;
+    private FailoverPaymentRouter failoverPaymentRouter;
 
     @MockBean
     private SchemeClient schemeClient;
@@ -220,25 +220,24 @@ class WalletPayControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
-    // ---- Test: Nepal Fonepay QR (partner=GMEREMIT) routes to NepalPaymentService ----
+    // ---- Test: non-ZeroPay (Fonepay) QR routes to the FailoverPaymentRouter ----
 
     @Test
-    @DisplayName("POST /v1/pay — Nepal Fonepay QR routes to Nepal service: 201 APPROVED with schemeTxnRef")
-    void walletPay_nepalFonepayQr_routesToNepal() throws Exception {
-        String fonepayQr = "00020101021102164271420013285741263500011fonepay.com"
-                + "...5802NP5923kinaun shopping pvt.ltd6013ANAMNAGAR...";
+    @DisplayName("POST /v1/pay — Fonepay QR routes to failover router: 201 APPROVED with schemeTxnRef")
+    void walletPay_fonepayQr_routesToFailover() throws Exception {
+        String fonepayQr = "00020101021126150011fonepay.com5802NP5910KINAUN PVT6304ABCD";
 
-        WalletResult nepalApproved = WalletResult.approved(
-                "NEPAL-txn-1",
+        WalletResult foApproved = WalletResult.approved(
                 "NP-SCHEME-777",
-                null,
+                "NP-SCHEME-777",
+                "Nepal",
                 new BigDecimal("1000"),
                 BigDecimal.ZERO,
                 new BigDecimal("1000"),
                 "2026-07-01T10:00:00+09:00");
-        // partner is GMEREMIT (the wallet's issuing partner) — Nepal is decided by the QR, not the partner.
-        when(nepalPaymentService.pay(eq(fonepayQr), eq(new BigDecimal("1000")), eq("user-np-1")))
-                .thenReturn(nepalApproved);
+        // partner is GMEREMIT (the wallet's issuing partner) — the QR's network decides routing.
+        when(failoverPaymentRouter.pay(eq(fonepayQr), eq(new BigDecimal("1000")), eq("user-np-1"), anyString()))
+                .thenReturn(foApproved);
 
         String body = """
                 {
@@ -254,19 +253,18 @@ class WalletPayControllerTest {
                         .content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status", is("APPROVED")))
-                .andExpect(jsonPath("$.schemeTxnRef", is("NP-SCHEME-777")))
-                .andExpect(jsonPath("$.txnRef", is("NEPAL-txn-1")));
+                .andExpect(jsonPath("$.schemeTxnRef", is("NP-SCHEME-777")));
 
-        // The ZeroPay domestic path must NOT be touched for a Nepal QR.
+        // The ZeroPay domestic path must NOT be touched for a non-ZeroPay QR.
         verifyNoInteractions(gmeremitPaymentService);
     }
 
     // ---- Test: ZeroPay QR still routes to GmeremitPaymentService (unchanged) ----
 
     @Test
-    @DisplayName("POST /v1/pay — ZeroPay QR still routes to GMEREMIT (Nepal service untouched)")
+    @DisplayName("POST /v1/pay — ZeroPay QR still routes to GMEREMIT (failover router untouched)")
     void walletPay_zeropayQr_routesToGmeremit() throws Exception {
-        String zeropayQr = "00020101021102...com.zeropay...5802KR5910COFFEE HUT6304ABCD";
+        String zeropayQr = "00020101021126260011com.zeropay010888888885802KR5910COFFEE HUT6304ABCD";
 
         WalletResult approved = WalletResult.approved(
                 "GMEREMIT-42", "ZP-TXN-42", "Coffee Hut",
@@ -292,7 +290,7 @@ class WalletPayControllerTest {
                 .andExpect(jsonPath("$.schemeTxnRef", is("ZP-TXN-42")));
 
         verify(gmeremitPaymentService).pay(eq(zeropayQr), eq(new BigDecimal("5000")), eq("user-kr-1"));
-        verifyNoInteractions(nepalPaymentService);
+        verifyNoInteractions(failoverPaymentRouter);
     }
 
     // ---- Test 6: Refund happy path ----

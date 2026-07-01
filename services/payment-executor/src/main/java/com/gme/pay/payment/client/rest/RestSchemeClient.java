@@ -157,6 +157,48 @@ public class RestSchemeClient implements SchemeClient {
         }
     }
 
+    /**
+     * Anti-double-charge status lookup (ADR-016 §4): {@code GET /internal/scheme/zeropay/status?reference=}.
+     * Asks ZeroPay whether our stable reference was paid before the router fails over to another
+     * partner. 404 → {@link LookupStatus#NOT_FOUND} (safe to fail over); any other failure is
+     * best-effort {@code NOT_FOUND} (the router only calls this after a technical failure, so an
+     * unreachable status endpoint degrades to fail-over rather than a hard error).
+     */
+    @Override
+    public LookupStatus lookupStatus(String schemeId, String reference) {
+        try {
+            SchemeStatusResponse body = restClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/internal/scheme/zeropay/status")
+                            .queryParam("reference", reference)
+                            .build())
+                    .retrieve()
+                    .body(SchemeStatusResponse.class);
+            if (body == null || body.status() == null) {
+                return LookupStatus.NOT_FOUND;
+            }
+            return mapLookupStatus(body.status());
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == HttpStatus.NOT_FOUND.value()) {
+                return LookupStatus.NOT_FOUND;
+            }
+            return LookupStatus.NOT_FOUND;
+        } catch (RuntimeException ex) {
+            return LookupStatus.NOT_FOUND;
+        }
+    }
+
+    /** Maps ZeroPay's status vocabulary onto the canonical {@link LookupStatus}. */
+    private static LookupStatus mapLookupStatus(String status) {
+        String s = status.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (s) {
+            case "APPROVED", "CAPTURED", "SUCCESS", "PAID", "COMPLETED" -> LookupStatus.APPROVED;
+            case "PENDING", "AUTHORIZED", "IN_PROGRESS", "PROCESSING" -> LookupStatus.PENDING;
+            case "DECLINED", "FAILED", "REJECTED", "CANCELLED" -> LookupStatus.REJECTED;
+            default -> LookupStatus.NOT_FOUND;
+        };
+    }
+
     /** Maps a non-2xx scheme response onto the right domain exception. */
     private RuntimeException mapSchemeFailure(RestClientResponseException ex) {
         HttpStatusCode status = ex.getStatusCode();
@@ -227,5 +269,12 @@ public class RestSchemeClient implements SchemeClient {
             String schemeApprovalCode,
             String schemeTxnRef,
             Instant approvedAt
+    ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record SchemeStatusResponse(
+            String schemeTxnRef,
+            String status,
+            String reference
     ) {}
 }

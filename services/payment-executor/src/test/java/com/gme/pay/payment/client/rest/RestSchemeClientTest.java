@@ -98,4 +98,27 @@ class RestSchemeClientTest {
         client.cancelPayment("ZP20260608093115001234", "PARTNER_INITIATED");
         server.verify();
     }
+
+    @Test
+    @DisplayName("lookupStatus: CAPTURED → APPROVED")
+    void lookupStatus_approved() {
+        server.expect(requestTo(BASE + "/internal/scheme/zeropay/status?reference=ref-1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        "{\"schemeTxnRef\":\"ZP-1\",\"status\":\"CAPTURED\",\"reference\":\"ref-1\"}",
+                        MediaType.APPLICATION_JSON));
+
+        assertEquals(SchemeClient.LookupStatus.APPROVED, client.lookupStatus("zeropay", "ref-1"));
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("lookupStatus: 404 → NOT_FOUND (safe to fail over)")
+    void lookupStatus_notFound() {
+        server.expect(requestTo(BASE + "/internal/scheme/zeropay/status?reference=ref-x"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND).body(""));
+
+        assertEquals(SchemeClient.LookupStatus.NOT_FOUND, client.lookupStatus("zeropay", "ref-x"));
+        server.verify();
+    }
 }

@@ -1,10 +1,11 @@
 package com.gme.pay.payment.web;
 
+import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
-import com.gme.pay.payment.domain.NepalPaymentService;
-import com.gme.pay.payment.domain.NepalQrDetector;
 import com.gme.pay.payment.domain.PaymentStatus;
+import com.gme.pay.payment.domain.QrSchemeClassifier;
+import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
@@ -67,7 +68,7 @@ public class WalletPayController {
 
     private final GmeremitPaymentService gmeremitPaymentService;
     private final SendmnPaymentService sendmnPaymentService;
-    @Nullable private final NepalPaymentService nepalPaymentService;
+    @Nullable private final FailoverPaymentRouter failoverPaymentRouter;
     @Nullable private final SchemeClient schemeClient;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
@@ -79,19 +80,19 @@ public class WalletPayController {
     @org.springframework.beans.factory.annotation.Autowired
     public WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                                SendmnPaymentService sendmnPaymentService,
-                               NepalPaymentService nepalPaymentService,
+                               FailoverPaymentRouter failoverPaymentRouter,
                                @Nullable SchemeClient schemeClient,
                                @Nullable TransactionClient transactionClient,
                                @Nullable RevenueLedgerClient revenueLedgerClient) {
         this.gmeremitPaymentService = gmeremitPaymentService;
         this.sendmnPaymentService = sendmnPaymentService;
-        this.nepalPaymentService = nepalPaymentService;
+        this.failoverPaymentRouter = failoverPaymentRouter;
         this.schemeClient = schemeClient;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
     }
 
-    /** Backwards-compatible 2-arg constructor used by existing tests (no Nepal routing). */
+    /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
         this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null);
@@ -107,11 +108,22 @@ public class WalletPayController {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
-        // Nepal is determined by the QR, not the partner: a Fonepay/NepalPay QR arrives as
-        // partner=GMEREMIT but must NOT go down the ZeroPay domestic path (it would fail with
-        // MERCHANT_NOT_FOUND / HUB_ERROR). Detect and route to the Nepal adapter first.
-        if (nepalPaymentService != null && NepalQrDetector.isNepal(req.qrPayload())) {
-            result = nepalPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
+        // ADR-016: route the scanned MPM QR by its OWN network identifier, not by partner. A
+        // non-ZeroPay network (Fonepay/NepalPay/Khalti…) arrives as partner=GMEREMIT but must NOT
+        // go down the ZeroPay domestic path (it would 404 with MERCHANT_NOT_FOUND). We classify the
+        // QR and, for a known non-ZeroPay network, dispatch through the FailoverPaymentRouter
+        // (classify → resolve ordered candidates → failover). This subsumes the retired
+        // NepalQrDetector: a Fonepay QR classifies to fonepay.com and resolves to the Nepal
+        // candidate. ZeroPay QRs (com.zeropay / 5802KR) keep the unchanged GMEREMIT/SENDMN paths
+        // so their merchant validation + fee behaviour is preserved exactly.
+        Classification qr = QrSchemeClassifier.classify(req.qrPayload());
+        boolean routeViaFailover = failoverPaymentRouter != null
+                && qr.isKnown()
+                && !isZeroPayNetwork(qr.networkIdentifier());
+
+        if (routeViaFailover) {
+            // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
+            result = failoverPaymentRouter.pay(req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS");
         } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
             result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
                     req.userRef(), SENDMN_PARTNER_ID);
@@ -140,6 +152,12 @@ public class WalletPayController {
 
         HttpStatus status = result.approved() ? HttpStatus.CREATED : HttpStatus.UNPROCESSABLE_ENTITY;
         return ResponseEntity.status(status).body(response);
+    }
+
+    /** True when the classified QR network is ZeroPay (domestic path stays on the existing services). */
+    private static boolean isZeroPayNetwork(String networkIdentifier) {
+        return networkIdentifier != null
+                && networkIdentifier.toLowerCase(java.util.Locale.ROOT).contains("zeropay");
     }
 
     /**

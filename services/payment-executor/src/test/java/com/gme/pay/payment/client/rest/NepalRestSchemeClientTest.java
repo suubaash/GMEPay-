@@ -102,4 +102,27 @@ class NepalRestSchemeClientTest {
                         "t", "M", new BigDecimal("10"), "NPR", "NEPAL", "QR")));
         server.verify();
     }
+
+    @Test
+    @DisplayName("lookupStatus: SUCCESS → APPROVED")
+    void lookupStatus_approved() {
+        server.expect(requestTo(BASE + "/internal/scheme/nepal/status?reference=ref-1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess(
+                        "{\"schemeTxnRef\":\"NP-1\",\"status\":\"SUCCESS\",\"reference\":\"ref-1\"}",
+                        MediaType.APPLICATION_JSON));
+
+        assertEquals(SchemeClient.LookupStatus.APPROVED, client.lookupStatus("NEPAL", "ref-1"));
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("lookupStatus: 404 → NOT_FOUND (safe to fail over)")
+    void lookupStatus_notFound() {
+        server.expect(requestTo(BASE + "/internal/scheme/nepal/status?reference=ref-x"))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND).body(""));
+
+        assertEquals(SchemeClient.LookupStatus.NOT_FOUND, client.lookupStatus("NEPAL", "ref-x"));
+        server.verify();
+    }
 }
