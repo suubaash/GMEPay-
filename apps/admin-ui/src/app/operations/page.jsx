@@ -14,6 +14,7 @@ import {
   DialogTitle,
   Divider,
   FormControl,
+  FormControlLabel,
   Grid,
   IconButton,
   InputLabel,
@@ -21,6 +22,7 @@ import {
   Paper,
   Select,
   Stack,
+  Switch,
   Tab,
   Table,
   TableBody,
@@ -64,12 +66,40 @@ function severityColor(sev) {
     case 'CRITICAL':
       return 'error';
     case 'WARNING':
+    case 'WARN':
       return 'warning';
     case 'INFO':
       return 'info';
     default:
       return 'default';
   }
+}
+
+/**
+ * Normalise the alert paging/delivery status into a { label, color } chip.
+ * Null-safe: older alerts without a paging status render as "not paged".
+ */
+function pagingChip(status) {
+  switch ((status || '').toUpperCase()) {
+    case 'DELIVERED':
+      return { label: 'Paged · delivered', color: 'success' };
+    case 'FAILED':
+      return { label: 'Paging failed', color: 'error' };
+    case 'SUPPRESSED':
+      return { label: 'Paging suppressed', color: 'warning' };
+    case 'NOT_PAGED':
+    case '':
+      return { label: 'Not paged', color: 'default' };
+    default:
+      return { label: String(status), color: 'default' };
+  }
+}
+
+/** True when an alert is still open (not acknowledged). Null-safe. */
+function isOpen(a) {
+  if (a?.acked === true) return false;
+  if (a?.open === false) return false;
+  return true;
 }
 
 /** Small stat card used across the control-tower rollup grid. */
@@ -608,11 +638,18 @@ function KillSwitch() {
 // Alerts tab
 // ---------------------------------------------------------------------------
 function AlertsTab() {
+  const snackbar = useSnackbar();
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [severity, setSeverity] = useState('');
   const [type, setType] = useState('');
+  const [openOnly, setOpenOnly] = useState(false);
+
+  // Ack dialog: { alert } | null
+  const [ackTgt, setAckTgt] = useState(null);
+  const [ackNote, setAckNote] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -631,6 +668,34 @@ function AlertsTab() {
     load();
   }, [load]);
 
+  const openAck = (alert) => {
+    setAckTgt({ alert });
+    setAckNote('');
+  };
+
+  const submitAck = async () => {
+    const a = ackTgt?.alert;
+    // id is preferred; some alerts key on subjectRef.
+    const id = a?.id ?? a?.subjectRef;
+    if (!id) {
+      snackbar.error('Alert has no id to acknowledge.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await opsApi.ackAlert(id, { note: ackNote.trim() || undefined });
+      snackbar.success('Alert acknowledged.');
+      setAckTgt(null);
+      await load();
+    } catch (e) {
+      snackbar.error(e.message || 'Acknowledge failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = openOnly ? alerts.filter((a) => isOpen(a)) : alerts;
+
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
@@ -644,7 +709,7 @@ function AlertsTab() {
         </Tooltip>
       </Box>
 
-      <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
+      <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap" alignItems="center">
         <FormControl size="small" sx={{ minWidth: 150 }}>
           <InputLabel id="alert-sev-label">Severity</InputLabel>
           <Select
@@ -668,15 +733,31 @@ function AlertsTab() {
           placeholder="e.g. FLOAT_LOW"
           inputProps={{ 'aria-label': 'filter by type' }}
         />
+        <FormControlLabel
+          control={
+            <Switch
+              checked={openOnly}
+              onChange={(e) => setOpenOnly(e.target.checked)}
+              inputProps={{ 'aria-label': 'open only' }}
+            />
+          }
+          label="Open only"
+        />
       </Stack>
 
       <ErrorAlert message={error} onRetry={load} title="Could not load alerts" />
 
       {loading && alerts.length === 0 ? (
         <LoadingSkeleton variant="table" rows={5} />
-      ) : !loading && alerts.length === 0 && !error ? (
+      ) : !loading && shown.length === 0 && !error ? (
         <Paper variant="outlined">
-          <EmptyState heading="No alerts match the current filters" />
+          <EmptyState
+            heading={
+              openOnly && alerts.length > 0
+                ? 'No open alerts — all acknowledged'
+                : 'No alerts match the current filters'
+            }
+          />
         </Paper>
       ) : (
         <TableContainer component={Paper}>
@@ -687,25 +768,114 @@ function AlertsTab() {
                 <TableCell>Type</TableCell>
                 <TableCell>Subject</TableCell>
                 <TableCell>Detail</TableCell>
-                <TableCell>Occurred at</TableCell>
+                <TableCell>Paging</TableCell>
+                <TableCell>State</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>Occurred at</TableCell>
+                <TableCell align="right">Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {alerts.map((a, i) => (
-                <TableRow key={a.subjectRef ? `${a.subjectRef}-${i}` : i} hover>
-                  <TableCell>
-                    <Chip size="small" label={a.severity ?? '—'} color={severityColor(a.severity)} />
-                  </TableCell>
-                  <TableCell>{a.alertType ?? '—'}</TableCell>
-                  <TableCell>{a.subjectRef ?? '—'}</TableCell>
-                  <TableCell>{a.detail ?? '—'}</TableCell>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{fmt(a.occurredAt)}</TableCell>
-                </TableRow>
-              ))}
+              {shown.map((a, i) => {
+                const open = isOpen(a);
+                const pg = pagingChip(a.pagingStatus);
+                return (
+                  <TableRow
+                    key={a.id ?? (a.subjectRef ? `${a.subjectRef}-${i}` : i)}
+                    hover
+                    sx={open ? undefined : { opacity: 0.6 }}
+                    aria-label={`alert-${a.id ?? a.subjectRef ?? i}`}
+                  >
+                    <TableCell>
+                      <Chip size="small" label={a.severity ?? '—'} color={severityColor(a.severity)} />
+                    </TableCell>
+                    <TableCell>{a.alertType ?? '—'}</TableCell>
+                    <TableCell>{a.subjectRef ?? '—'}</TableCell>
+                    <TableCell>{a.detail ?? '—'}</TableCell>
+                    <TableCell>
+                      <Chip size="small" variant="outlined" label={pg.label} color={pg.color} />
+                    </TableCell>
+                    <TableCell>
+                      {open ? (
+                        <Chip size="small" label="Open" color="warning" />
+                      ) : (
+                        <Tooltip
+                          title={
+                            a.ackedBy
+                              ? `Acknowledged by ${a.ackedBy}${a.ackedAt ? ` at ${fmt(a.ackedAt)}` : ''}${
+                                  a.ackNote ? ` — ${a.ackNote}` : ''
+                                }`
+                              : 'Acknowledged'
+                          }
+                        >
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={a.ackedBy ? `Acked by ${a.ackedBy}` : 'Acknowledged'}
+                          />
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{fmt(a.occurredAt)}</TableCell>
+                    <TableCell align="right">
+                      {open ? (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => openAck(a)}
+                          aria-label={`acknowledge ${a.id ?? a.subjectRef ?? i}`}
+                        >
+                          Acknowledge
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </TableContainer>
       )}
+
+      {/* Acknowledge dialog */}
+      <Dialog
+        open={Boolean(ackTgt)}
+        onClose={() => (busy ? null : setAckTgt(null))}
+        maxWidth="sm"
+        fullWidth
+        aria-labelledby="ack-dialog-title"
+      >
+        <DialogTitle id="ack-dialog-title">
+          Acknowledge alert{ackTgt?.alert?.alertType ? ` — ${ackTgt.alert.alertType}` : ''}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            Acknowledging tells other on-call operators you own this alert. An optional note is recorded with the ack.
+          </DialogContentText>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            minRows={2}
+            label="Note (optional)"
+            value={ackNote}
+            onChange={(e) => setAckNote(e.target.value)}
+            inputProps={{ 'aria-label': 'ack note' }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAckTgt(null)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={submitAck}
+            disabled={busy}
+            aria-label="confirm acknowledge"
+          >
+            Acknowledge
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

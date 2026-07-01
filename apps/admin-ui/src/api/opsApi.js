@@ -25,6 +25,7 @@
  *
  *   GET  /v1/admin/ops/control-tower  -> ControlTower (see below)
  *   GET  /v1/admin/ops/alerts?severity=&type=&limit=  -> OpsAlert[]
+ *   POST /v1/admin/ops/alerts/{id}/ack { operator?, note? }  -> OpsAlert
  *   POST /v1/admin/ops/pause          { reason }
  *   POST /v1/admin/ops/resume         {}
  *   POST /v1/admin/ops/maintenance    { on, reason }
@@ -154,7 +155,14 @@ export function getControlTower() {
 
 /**
  * GET /v1/admin/ops/alerts?severity=&type=&limit=
- * -> OpsAlert[]  { alertType, severity, subjectRef, detail, occurredAt }
+ * -> OpsAlert[]  {
+ *   id, alertType, severity, subjectRef, detail, occurredAt,
+ *   pagingStatus,          // 'DELIVERED' | 'FAILED' | 'SUPPRESSED' | 'NOT_PAGED' | null
+ *   acked,                 // boolean
+ *   open,                  // boolean
+ *   ackedBy, ackedAt, ackNote   // present when acked
+ * }
+ * Older alerts may omit the paging/ack fields — callers must be null-safe.
  */
 export function getAlerts(filters) {
   return request(`/v1/admin/ops/alerts${qs(filters)}`);
@@ -173,6 +181,21 @@ export function searchTransactions(filters) {
 // ---------------------------------------------------------------------------
 // Actions (money-affecting) — all send X-Gme-Permissions: ops:operate.
 // ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/admin/ops/alerts/{id}/ack { note? }
+ * Acknowledge an open alert. The BFF derives the operator from the verified
+ * token; a free-text `note` may accompany the ack. Money-affecting-adjacent
+ * on-call action — sends X-Gme-Permissions: ops:operate (fail-closed BFF).
+ * Returns the updated OpsAlert (acked=true, ackedBy/ackedAt populated).
+ */
+export function ackAlert(id, { note } = {}) {
+  return request(`/v1/admin/ops/alerts/${encodeURIComponent(id)}/ack`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+    operate: true,
+  });
+}
 
 /** POST /v1/admin/ops/pause { reason } */
 export function pause(reason) {

@@ -24,11 +24,13 @@ const mockGetControlTower = vi.fn();
 const mockGetAlerts = vi.fn();
 const mockSearchTransactions = vi.fn();
 const mockPause = vi.fn();
+const mockAckAlert = vi.fn();
 vi.mock('@/api/opsApi', () => ({
   getControlTower: (...a) => mockGetControlTower(...a),
   getAlerts: (...a) => mockGetAlerts(...a),
   searchTransactions: (...a) => mockSearchTransactions(...a),
   pause: (...a) => mockPause(...a),
+  ackAlert: (...a) => mockAckAlert(...a),
   resume: vi.fn(),
   setMaintenance: vi.fn(),
   suspend: vi.fn(),
@@ -65,8 +67,30 @@ const CONTROL_TOWER = {
 };
 
 const ALERTS = [
-  { alertType: 'FLOAT_LOW', severity: 'WARNING', subjectRef: 'GME_VN_002', detail: 'Below threshold', occurredAt: '2026-07-02T00:00:00Z' },
-  { alertType: 'WEBHOOK_DLQ', severity: 'CRITICAL', subjectRef: 'wh-99', detail: 'Dead-lettered', occurredAt: '2026-07-02T00:05:00Z' },
+  {
+    id: 'al-1',
+    alertType: 'FLOAT_LOW',
+    severity: 'WARNING',
+    subjectRef: 'GME_VN_002',
+    detail: 'Below threshold',
+    occurredAt: '2026-07-02T00:00:00Z',
+    pagingStatus: 'DELIVERED',
+    acked: false,
+    open: true,
+  },
+  {
+    id: 'al-2',
+    alertType: 'WEBHOOK_DLQ',
+    severity: 'CRITICAL',
+    subjectRef: 'wh-99',
+    detail: 'Dead-lettered',
+    occurredAt: '2026-07-02T00:05:00Z',
+    pagingStatus: 'FAILED',
+    acked: true,
+    open: false,
+    ackedBy: 'oncall@gme',
+    ackedAt: '2026-07-02T00:10:00Z',
+  },
 ];
 
 import OperationsPage from '../page';
@@ -87,10 +111,12 @@ describe('OperationsPage', () => {
     mockGetAlerts.mockReset();
     mockSearchTransactions.mockReset();
     mockPause.mockReset();
+    mockAckAlert.mockReset();
     mockGetControlTower.mockResolvedValue(CONTROL_TOWER);
     mockGetAlerts.mockResolvedValue(ALERTS);
     mockSearchTransactions.mockResolvedValue({ content: [], page: 0, size: 20, total: 0 });
     mockPause.mockResolvedValue(undefined);
+    mockAckAlert.mockResolvedValue(undefined);
   });
 
   it('renders control tower rollups and float table from the client', async () => {
@@ -132,7 +158,7 @@ describe('OperationsPage', () => {
     await waitFor(() => expect(success).toHaveBeenCalled());
   });
 
-  it('alerts tab renders the alert list', async () => {
+  it('alerts tab renders the alert list with severity, paging status and ack state', async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole('tab', { name: /alerts/i }));
@@ -140,5 +166,45 @@ describe('OperationsPage', () => {
     const table = await screen.findByRole('table', { name: /ops alerts/i });
     expect(within(table).getByText('FLOAT_LOW')).toBeInTheDocument();
     expect(within(table).getByText('WEBHOOK_DLQ')).toBeInTheDocument();
+    // severity chip
+    expect(within(table).getByText('WARNING')).toBeInTheDocument();
+    // paging status chips (delivered on the open one, failed on the acked one)
+    expect(within(table).getByText(/Paged · delivered/i)).toBeInTheDocument();
+    expect(within(table).getByText(/Paging failed/i)).toBeInTheDocument();
+    // open vs acked state
+    expect(within(table).getByText('Open')).toBeInTheDocument();
+    expect(within(table).getByText(/Acked by oncall@gme/i)).toBeInTheDocument();
+    // open alert has an Acknowledge button; acked one does not
+    expect(within(table).getByRole('button', { name: /acknowledge al-1/i })).toBeInTheDocument();
+    expect(within(table).queryByRole('button', { name: /acknowledge al-2/i })).not.toBeInTheDocument();
+  });
+
+  it('acknowledging an open alert calls the client and shows it acked', async () => {
+    // After ack, the reload returns the alert as acknowledged.
+    const ACKED = [
+      { ...ALERTS[0], acked: true, open: false, ackedBy: 'me@gme', ackedAt: '2026-07-02T02:00:00Z' },
+      ALERTS[1],
+    ];
+    mockGetAlerts.mockResolvedValueOnce(ALERTS).mockResolvedValue(ACKED);
+
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('tab', { name: /alerts/i }));
+
+    await user.click(await screen.findByRole('button', { name: /acknowledge al-1/i }));
+
+    // Optional note, then confirm.
+    await user.type(await screen.findByLabelText('ack note'), 'looking into it');
+    await user.click(screen.getByRole('button', { name: /confirm acknowledge/i }));
+
+    await waitFor(() =>
+      expect(mockAckAlert).toHaveBeenCalledWith('al-1', { note: 'looking into it' }),
+    );
+    await waitFor(() => expect(success).toHaveBeenCalled());
+    // The refreshed list shows al-1 acknowledged (no more Acknowledge button for it).
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /acknowledge al-1/i })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText(/Acked by me@gme/i)).toBeInTheDocument();
   });
 });
