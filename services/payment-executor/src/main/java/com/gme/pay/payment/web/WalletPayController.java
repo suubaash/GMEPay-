@@ -1,5 +1,6 @@
 package com.gme.pay.payment.web;
 
+import com.gme.pay.payment.alert.DeclineSpikeMonitor;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
@@ -75,6 +76,8 @@ public class WalletPayController {
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
     /** Operations operational gate — checked at the START of every NEW wallet payment. */
     @Nullable private final OperationalGate operationalGate;
+    /** DECLINE_SPIKE monitor (defect #5) — records each outcome; null when the feature is off. */
+    @Nullable private final DeclineSpikeMonitor declineSpikeMonitor;
 
     /**
      * Production constructor — all collaborators injected.
@@ -87,7 +90,8 @@ public class WalletPayController {
                                @Nullable SchemeClient schemeClient,
                                @Nullable TransactionClient transactionClient,
                                @Nullable RevenueLedgerClient revenueLedgerClient,
-                               @Nullable OperationalGate operationalGate) {
+                               @Nullable OperationalGate operationalGate,
+                               @Nullable DeclineSpikeMonitor declineSpikeMonitor) {
         this.gmeremitPaymentService = gmeremitPaymentService;
         this.sendmnPaymentService = sendmnPaymentService;
         this.failoverPaymentRouter = failoverPaymentRouter;
@@ -95,12 +99,13 @@ public class WalletPayController {
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
         this.operationalGate = operationalGate;
+        this.declineSpikeMonitor = declineSpikeMonitor;
     }
 
     /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
-        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null, null);
+        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null, null, null);
     }
 
     /**
@@ -150,6 +155,15 @@ public class WalletPayController {
             throw new IllegalArgumentException(
                     "Unsupported partner: " + req.partner()
                             + ". Supported: GMEREMIT, SENDMN");
+        }
+
+        // DECLINE_SPIKE monitor (defect #5): record the outcome per partner + classified network so a
+        // burst of declines on either dimension raises an ops alert. No-op when the feature is off.
+        if (declineSpikeMonitor != null) {
+            declineSpikeMonitor.record(
+                    req.partner(),
+                    qr.isKnown() ? qr.networkIdentifier() : null,
+                    result.approved());
         }
 
         WalletPaymentResponse response = new WalletPaymentResponse(

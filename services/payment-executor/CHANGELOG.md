@@ -2,6 +2,46 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [fix/payment-executor] — 2026-07-02 (harden kill-switch: fail-CLOSED for security + DECLINE_SPIKE)
+
+### Fixed
+- **Defect #4 — kill-switch safety inversion (fail-OPEN → fail-CLOSED for security).** The operational
+  gate is a kill switch, but `RestOperationalStatusClient` defaulted to fail-**OPEN** on an unreachable
+  config-registry with no client timeout: a cold executor (no cached value) during a config-registry
+  outage would let a **suspended/paused partner transact**, defeating the switch. Fix: the default is now
+  fail-**CLOSED for the security flags** (`systemPaused` / `maintenanceMode` / partner/scheme/route
+  *suspended*) — when status is unreachable/unknown and there is no fresh or last-known-good cached value,
+  the client returns a synthetic `systemPaused` status so the gate DENIES the new authorization with the
+  existing `SYSTEM_PAUSED` code. A last-known-good cached value is still preferred over either policy, so a
+  brief blip does not flip behaviour; only a genuinely no-signal cold executor fails closed. Config default
+  flipped: `gmepay.ops.status.fail-open` now defaults to **`false`** (set `true` to restore legacy
+  allow-on-outage). Additive; no contract/lib change.
+- **Defect #4 — hard client timeout.** The `RestOperationalStatusClient` RestClient now sets explicit
+  connect + read timeouts (`gmepay.ops.status.connect-timeout-millis` /
+  `read-timeout-millis`, default **500ms** each) via `ClientHttpRequestFactorySettings`, so a HUNG
+  config-registry can no longer stall the pay path. A timeout surfaces as `ResourceAccessException` →
+  treated as unreachable → the fail-closed-security rule applies.
+
+### Added
+- **Defect #5 — `DECLINE_SPIKE` ops alert** (`alert/DeclineSpikeMonitor` + local `alert/OpsAlertEvent`).
+  A lightweight in-memory rolling-window decline counter per partner AND per classified scheme/network.
+  When the decline rate over `window-seconds` (default 60s) strictly exceeds `threshold-rate`
+  (default 0.5) with at least `min-samples` (default 20) outcomes in-window, it emits an
+  `OpsAlertPayload` (`alertType=DECLINE_SPIKE`, severity WARN / CRITICAL≥0.8, `subjectRef`=partner/scheme)
+  onto `gmepay.ops.alert` via the `EventPublisher` seam (`LogEventPublisher` fallback logs it). Per-subject
+  cooldown (`cooldown-seconds`, default 300s) suppresses repeats. **Default OFF**
+  (`gmepay.decline-spike.enabled=true` to enable); injected `@Nullable` into `WalletPayController` so it is
+  purely additive. Alerting never throws into the pay path. A `Clock` bean (`@ConditionalOnMissingBean`,
+  system-UTC) was added for the monitor.
+
+### Tests
+- `RestOperationalStatusClientTest`: default fail-CLOSED on unreachable+no-cache; last-known-good cache
+  preferred over the fail-closed default on a later outage; a real hung local HTTP server proves the read
+  timeout fires within budget and is treated as unreachable → fail-closed.
+- `OperationalGateTest`: the synthetic unreachable (`systemPaused`) status → `SYSTEM_PAUSED` denial.
+- `DeclineSpikeMonitorTest`: a decline burst emits `DECLINE_SPIKE`; below-min-samples and all-approved do
+  not alert; cooldown suppresses the repeat.
+
 ## [ops/payment-executor] — 2026-07-01 (Operations operational gate)
 
 ### Added

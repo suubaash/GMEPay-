@@ -6,6 +6,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Clock;
+
 /**
  * Wires the service's {@link EventPublisher}. {@code lib-events} is a pure contracts library with no
  * Spring annotations, so the consuming service owns the bean.
@@ -21,5 +23,15 @@ public class EventPublisherConfig {
     @ConditionalOnMissingBean(EventPublisher.class)
     public EventPublisher eventPublisher() {
         return new LogEventPublisher();
+    }
+
+    /**
+     * System-UTC {@link Clock} for the Ops monitors (e.g. {@code DeclineSpikeMonitor}). Guarded by
+     * {@link ConditionalOnMissingBean} so a test can inject a fixed clock.
+     */
+    @Bean
+    @ConditionalOnMissingBean(Clock.class)
+    public Clock clock() {
+        return Clock.systemUTC();
     }
 }
