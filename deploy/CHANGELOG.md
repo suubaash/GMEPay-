@@ -16,6 +16,18 @@
   `GMEPAY_SCHEME_NEPAL_BASE_URL` per overlay to the live Nepal partner endpoint).
 - Both `bootJar`s verified green; both YAML manifests parse.
 
+### Fixed
+- **Local fleet (`run-fleet.ps1`) never started the Nepal corridor** — the launcher
+  predates it, so a Nepal QR paid from the GMERemit wallet failed with `HUB_ERROR`.
+  Root cause: `payment-executor`'s Nepal adapter URL defaulted to `localhost:18091`,
+  which in the fleet is **smart-router** (port collision), and neither
+  `scheme-adapter-nepal` nor `sim-nepal-qr` were launched.
+  - Added `scheme-adapter-nepal` (18094) + `sim-nepal-qr` (9106) to the fleet.
+  - `payment-executor` → `--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094`.
+  - `scheme-adapter-nepal` → `--gmepay.scheme.nepal.base-url=http://localhost:9106`.
+  - `sim-gmeremit` decode → `--gmepay.sim.nepal-qr.base-url=http://localhost:9106`
+    (default 9103 collided with `sim-wallet`). Both added to the `money` subset.
+
 ## 2026-06-30 — Cloud-agnostic Helm umbrella chart + overlays (agent/cloud-deploy)
 
 ### Added

@@ -74,13 +74,15 @@ $fleet = @(
             '--gmepay.merchant-qr-data.base-url=http://localhost:18083'
             '--gmepay.scheme-adapter-zeropay.base-url=http://localhost:18090'
             '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
-            '--gmepay.revenue-ledger.base-url=http://localhost:18092') }
+            '--gmepay.revenue-ledger.base-url=http://localhost:18092'
+            '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
     @{ name = 'reporting-compliance';       type = 'service'; port = 18087 }
     @{ name = 'prefunding';                 type = 'service'; port = 18088 }
     @{ name = 'qr-service';                 type = 'service'; port = 18089 }
     @{ name = 'scheme-adapter-zeropay';     type = 'service'; port = 18090; args = @('--gmepay.scheme.zeropay.base-url=http://localhost:9102/v1/scheme') }
+    @{ name = 'scheme-adapter-nepal';       type = 'service'; port = 18094; args = @('--gmepay.scheme.nepal.base-url=http://localhost:9106') }
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }
@@ -92,18 +94,21 @@ $fleet = @(
     @{ name = 'sim-scheme';                 type = 'sim';     port = 9102; args = @('--gmepay.sim.scheme.profile=ZEROPAY') }
     @{ name = 'sim-wallet';                 type = 'sim';     port = 9103 }
     @{ name = 'sim-merchant';               type = 'sim';     port = 9104; args = @('--gmepay.sim.merchant.merchant-qr-data-base-url=http://localhost:18083') }
-    @{ name = 'sim-gmeremit';               type = 'sim';     port = 9105; args = @('--gmepay.sim.gmeremit.gmepay-base-url=http://localhost:18084') }
+    @{ name = 'sim-gmeremit';               type = 'sim';     port = 9105; args = @(
+            '--gmepay.sim.gmeremit.gmepay-base-url=http://localhost:18084'
+            '--gmepay.sim.nepal-qr.base-url=http://localhost:9106') }
+    @{ name = 'sim-nepal-qr';               type = 'sim';     port = 9106 }
 )
 
 # Running all 22 JVMs at once needs ~8-10 GB RAM; on a tight box the OS may reap some.
 # -Subset money boots just the core payment cascade (~14 components) which fits comfortably.
 $moneyNames = @('config-registry', 'transaction-mgmt', 'payment-executor', 'scheme-adapter-zeropay',
-    'rate-fx', 'prefunding', 'ops-partner-bff', 'merchant-qr-data', 'qr-service',
-    'sim-scheme', 'sim-merchant', 'sim-gmeremit', 'sim-wallet', 'sim-rate-provider')
+    'scheme-adapter-nepal', 'rate-fx', 'prefunding', 'ops-partner-bff', 'merchant-qr-data', 'qr-service',
+    'sim-scheme', 'sim-merchant', 'sim-gmeremit', 'sim-wallet', 'sim-nepal-qr', 'sim-rate-provider')
 if ($Subset -eq 'money') { $fleet = @($fleet | Where-Object { $moneyNames -contains $_.name }) }
 
 # Stateless / web-only services (no JPA/Kafka/Redis) get a smaller heap tier.
-$statelessNames = @('smart-router', 'reporting-compliance', 'ops-partner-bff', 'kyb-adapter')
+$statelessNames = @('smart-router', 'reporting-compliance', 'ops-partner-bff', 'kyb-adapter', 'scheme-adapter-nepal')
 
 # Inter-service wiring. Each backend service defaults its peer base-URLs to Docker
 # hostnames (e.g. http://merchant-qr-data:8080) which do NOT resolve when the fleet
