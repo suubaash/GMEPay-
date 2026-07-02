@@ -21,6 +21,9 @@ gmepay:
       nonce-window-enabled: false
       # Default outcome for /qrscan-thirdparty/pay/ : APPROVE | PENDING | REJECT
       default-pay-outcome: APPROVE
+      # Where records/txns are persisted (JSONL, append-only). Relative to run dir.
+      # Delete the files to reset history.
+      data-dir: data/sim-nepal-qr
 
 logging:
   level:
