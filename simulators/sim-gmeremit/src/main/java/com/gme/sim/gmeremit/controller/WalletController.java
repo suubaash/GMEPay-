@@ -6,8 +6,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gme.sim.gmeremit.model.WalletStore;
 import com.gme.sim.gmeremit.model.WalletTransaction;
 import com.gme.sim.gmeremit.model.WalletUser;
+import com.gme.sim.gmeremit.service.FxRates;
 import com.gme.sim.gmeremit.service.HubClient;
+import com.gme.sim.gmeremit.service.NepalQrClient;
+import com.gme.sim.gmeremit.service.QrNetwork;
 import com.gme.sim.gmeremit.service.WalletService;
+
+import java.math.BigDecimal;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -26,11 +31,16 @@ public class WalletController {
     private final WalletStore   store;
     private final WalletService walletService;
     private final HubClient     hub;
+    private final NepalQrClient nepalQr;
+    private final FxRates       fx;
 
-    public WalletController(WalletStore store, WalletService walletService, HubClient hub) {
+    public WalletController(WalletStore store, WalletService walletService, HubClient hub,
+                            NepalQrClient nepalQr, FxRates fx) {
         this.store         = store;
         this.walletService = walletService;
         this.hub           = hub;
+        this.nepalQr       = nepalQr;
+        this.fx            = fx;
     }
 
     // -------------------------------------------------------------------------
@@ -54,28 +64,68 @@ public class WalletController {
             return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "qrPayload is required");
         }
 
-        HubClient.QrPreview preview = hub.decodeQr(req.qrPayload());
+        QrNetwork network = QrNetwork.detect(req.qrPayload());
+        if (network == QrNetwork.NEPAL) {
+            return ResponseEntity.ok(scanNepal(req.qrPayload()));
+        }
+        return ResponseEntity.ok(scanDomestic(req.qrPayload()));
+    }
 
+    /** Domestic ZeroPay decode via the scheme sim (KRW) — unchanged behaviour. */
+    private Map<String, Object> scanDomestic(String qrPayload) {
+        HubClient.QrPreview preview = hub.decodeQr(qrPayload);
+        Map<String, Object> resp = new LinkedHashMap<>();
         if (preview == null) {
-            // Hub is down — return a minimal echo so the wallet can still show something
-            Map<String, Object> resp = new LinkedHashMap<>();
+            // Scheme sim is down — return a minimal echo so the wallet can still show something.
             resp.put("merchantId",   "UNKNOWN");
             resp.put("merchantName", "Unknown Merchant");
             resp.put("mode",         "static");
             resp.put("amount",       null);
             resp.put("currency",     "KRW");
+            resp.put("network",      "ZEROPAY");
             resp.put("hubAvailable", false);
-            return ResponseEntity.ok(resp);
+            return resp;
         }
-
-        Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("merchantId",   preview.merchantId());
         resp.put("merchantName", preview.merchantName());
         resp.put("mode",         preview.mode());
         resp.put("amount",       preview.amount());
         resp.put("currency",     preview.currency());
+        resp.put("network",      "ZEROPAY");
         resp.put("hubAvailable", true);
-        return ResponseEntity.ok(resp);
+        return resp;
+    }
+
+    /** Cross-border Nepal decode via sim-nepal-qr — resolves the REAL merchant + NPR amount. */
+    private Map<String, Object> scanNepal(String qrPayload) {
+        NepalQrClient.NepalParse parse = nepalQr.decode(qrPayload);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("network",  "FONEPAY");
+        resp.put("currency", "NPR");
+        if (parse == null) {
+            // Nepal sim down — do NOT masquerade as a known merchant.
+            resp.put("merchantId",   "UNKNOWN");
+            resp.put("merchantName", "Unknown Nepal Merchant");
+            resp.put("merchantCity", null);
+            resp.put("mode",         "static");
+            resp.put("amount",       null);
+            resp.put("krwPerNpr",    fx.effectiveKrwPerNpr().toPlainString());
+            resp.put("hubAvailable", false);
+            return resp;
+        }
+        String mode = "dynamic".equalsIgnoreCase(parse.initMethod()) ? "dynamic" : "static";
+        resp.put("merchantId",   parse.merchantName());   // Nepal parse has no separate id; use name
+        resp.put("merchantName", parse.merchantName());
+        resp.put("merchantCity", parse.merchantCity());
+        resp.put("mode",         mode);
+        resp.put("amount",       parse.trxAmount());       // NPR rupees, null for static
+        resp.put("krwPerNpr",    fx.effectiveKrwPerNpr().toPlainString());
+        // KRW-debit estimate for a dynamic (fixed-amount) NPR QR.
+        if (parse.trxAmount() != null) {
+            resp.put("estKrwDebit", fx.nprToKrw(new BigDecimal(parse.trxAmount())).toPlainString());
+        }
+        resp.put("hubAvailable", true);
+        return resp;
     }
 
     // -------------------------------------------------------------------------
@@ -88,20 +138,25 @@ public class WalletController {
         if (req.qrPayload() == null || req.qrPayload().isBlank()) {
             return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "qrPayload is required");
         }
-        if (req.amountKrw() == null || req.amountKrw().isBlank()) {
-            return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "amountKrw is required");
+        // Amount is in the merchant currency (KRW domestic / NPR Nepal). Accept the new `amount`
+        // field, falling back to the legacy `amountKrw` for backward compatibility.
+        String amount = req.amount() != null && !req.amount().isBlank() ? req.amount() : req.amountKrw();
+        if (amount == null || amount.isBlank()) {
+            return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "amount is required");
         }
 
-        WalletService.PayResult result = walletService.pay(userId, req.qrPayload(), req.amountKrw());
+        WalletService.PayResult result = walletService.pay(userId, req.qrPayload(), amount);
 
         if (result.approved()) {
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("status", "APPROVED");
             Map<String, Object> receipt = new LinkedHashMap<>();
             receipt.put("merchantName",  result.merchantName());
-            receipt.put("payAmountKrw",  result.payAmountKrw());
+            receipt.put("currency",      result.currency());
+            receipt.put("payAmount",     result.payAmount());     // merchant-currency amount
+            receipt.put("payAmountKrw",  result.payAmountKrw());  // KRW value of the payment leg
             receipt.put("feeKrw",        result.feeKrw());
-            receipt.put("chargedKrw",    result.chargedKrw());
+            receipt.put("chargedKrw",    result.chargedKrw());    // KRW debited from wallet
             receipt.put("schemeTxnRef",  result.schemeTxnRef());
             receipt.put("committedAt",   result.committedAt());
             resp.put("receipt",          receipt);
@@ -155,7 +210,8 @@ public class WalletController {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PayRequest(
-            @JsonProperty("qrPayload")  String qrPayload,
-            @JsonProperty("amountKrw") String amountKrw
+            @JsonProperty("qrPayload") String qrPayload,
+            @JsonProperty("amount")    String amount,     // amount in merchant currency (KRW/NPR)
+            @JsonProperty("amountKrw") String amountKrw    // legacy alias for domestic KRW
     ) {}
 }

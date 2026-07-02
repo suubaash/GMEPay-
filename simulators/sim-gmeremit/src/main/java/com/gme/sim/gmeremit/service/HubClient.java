@@ -59,12 +59,20 @@ public class HubClient {
     // Payment execution
     // -------------------------------------------------------------------------
 
-    public HubPayResult pay(String qrPayload, String amountKrw, String userRef) {
+    /**
+     * Executes a payment at the hub.
+     *
+     * @param qrPayload raw scanned QR
+     * @param currency  merchant currency — {@code "KRW"} for domestic ZeroPay, {@code "NPR"} for Nepal
+     * @param amount    amount in the merchant currency (KRW for domestic, NPR for Nepal)
+     * @param userRef   wallet user id
+     */
+    public HubPayResult pay(String qrPayload, String currency, String amount, String userRef) {
         try {
             HubPayResponse resp = restClient.post()
                     .uri("/v1/pay")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(new HubPayRequest(qrPayload, amountKrw, "GMEREMIT", userRef))
+                    .body(new HubPayRequest(qrPayload, amount, currency, "GMEREMIT", userRef))
                     .retrieve()
                     // Let every non-2xx body flow through to deserialization instead of throwing.
                     // Business declines arrive as 422 with a populated declineReason; we want to
@@ -100,18 +108,35 @@ public class HubClient {
     // DTOs
     // -------------------------------------------------------------------------
 
+    /**
+     * Hub payment request. {@code amount} is in the merchant currency ({@code currency}); for a
+     * domestic KRW payment {@code amountKrw} is also populated for backward compatibility with the
+     * existing hub contract. For a Nepal payment {@code amount} is the NPR amount and
+     * {@code currency} is {@code "NPR"}.
+     */
     public record HubPayRequest(
-            @JsonProperty("qrPayload")  String qrPayload,
+            @JsonProperty("qrPayload") String qrPayload,
+            @JsonProperty("amount")    String amount,
             @JsonProperty("amountKrw") String amountKrw,
+            @JsonProperty("currency")  String currency,
             @JsonProperty("partner")   String partner,
             @JsonProperty("userRef")   String userRef
-    ) {}
+    ) {
+        HubPayRequest(String qrPayload, String amount, String currency,
+                      String partner, String userRef) {
+            this(qrPayload, amount,
+                    "KRW".equals(currency) ? amount : null,   // amountKrw only meaningful for domestic
+                    currency, partner, userRef);
+        }
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record HubPayResponse(
             @JsonProperty("status")        String status,
             @JsonProperty("schemeTxnRef")  String schemeTxnRef,
             @JsonProperty("merchantName")  String merchantName,
+            @JsonProperty("currency")      String currency,      // merchant currency; may be null (domestic)
+            @JsonProperty("payAmount")     String payAmount,     // merchant-currency amount; may be null
             @JsonProperty("payAmountKrw")  String payAmountKrw,
             @JsonProperty("feeKrw")        String feeKrw,
             @JsonProperty("chargedKrw")    String chargedKrw,
@@ -133,6 +158,8 @@ public class HubClient {
             boolean isHubDown,
             String schemeTxnRef,
             String merchantName,
+            String currency,
+            String payAmount,
             String payAmountKrw,
             String feeKrw,
             String chargedKrw,
@@ -140,7 +167,7 @@ public class HubClient {
             String declineReason
     ) {
         public static HubPayResult hubDown() {
-            return new HubPayResult(false, true, null, null, null, null, null, null, "HUB_UNAVAILABLE");
+            return new HubPayResult(false, true, null, null, null, null, null, null, null, null, "HUB_UNAVAILABLE");
         }
 
         /**
@@ -149,13 +176,14 @@ public class HubClient {
          * report "unavailable" when the service is actually up.
          */
         public static HubPayResult hubError(String reason) {
-            return new HubPayResult(false, false, null, null, null, null, null, null, reason);
+            return new HubPayResult(false, false, null, null, null, null, null, null, null, null, reason);
         }
 
         public static HubPayResult fromResponse(HubPayResponse r) {
             boolean ok = "APPROVED".equals(r.status());
             return new HubPayResult(ok, false,
                     r.schemeTxnRef(), r.merchantName(),
+                    r.currency(), r.payAmount(),
                     r.payAmountKrw(), r.feeKrw(), r.chargedKrw(),
                     r.committedAt(), r.declineReason());
         }

@@ -29,4 +29,18 @@ public class GmeremitSimConfig {
                 .baseUrl(schemeBaseUrl)
                 .build();
     }
+
+    /**
+     * Client for the Nepal QR partner simulator (sim-nepal-qr, port 9103), which decodes
+     * Fonepay / NepalPay QRs via {@code POST /qrscan-thirdparty/parse/}. Used when a scanned
+     * QR is detected as a Nepal (cross-border) payment; domestic ZeroPay QRs still use
+     * {@link #schemeRestClient}.
+     */
+    @Bean
+    public RestClient nepalQrRestClient(
+            @Value("${gmepay.sim.nepal-qr.base-url:http://localhost:9103}") String nepalBaseUrl) {
+        return RestClient.builder()
+                .baseUrl(nepalBaseUrl)
+                .build();
+    }
 }
