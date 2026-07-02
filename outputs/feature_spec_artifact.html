@@ -1,0 +1,331 @@
+<title>GMEPay+ — End-to-End Feature Specification</title>
+<style>
+  :root{
+    --ground:#F6F7F9; --surface:#FFFFFF; --ink:#14263F; --body:#3A4653;
+    --muted:#6B7683; --accent:#0E7C7B; --accent-2:#0B5F5E; --tint:#E7F1F0;
+    --hair:#E4E7EC; --warn-bg:#FBF5E9; --warn-bd:#E8D6A8; --warn-ink:#7A5B14;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--body);font-family:var(--sans);
+    font-size:16px;line-height:1.62;-webkit-text-size-adjust:100%;}
+  .wrap{max-width:720px;margin:0 auto;padding:22px 18px 72px;}
+  .card{background:var(--surface);border:1px solid var(--hair);border-radius:14px;
+    padding:20px 18px;margin:14px 0;}
+  /* header */
+  header{padding:14px 2px 6px;}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;}
+  h1{font-size:30px;line-height:1.12;color:var(--ink);margin:.28em 0 .18em;font-weight:800;
+    letter-spacing:-.01em;text-wrap:balance;}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 12px;text-wrap:balance;}
+  .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);border-top:1px solid var(--hair);
+    padding-top:10px;margin-top:8px;}
+  /* nav */
+  nav{margin:16px 0;}
+  nav a{display:block;text-decoration:none;color:var(--ink);font-size:14.5px;padding:9px 12px;
+    border:1px solid var(--hair);border-radius:9px;background:var(--surface);margin:6px 0;}
+  nav a .n{font-family:var(--mono);color:var(--accent);font-weight:600;margin-right:9px;font-size:12.5px;}
+  nav a:active{background:var(--tint);}
+  /* headings */
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent-2);
+    margin:34px 0 4px;font-weight:700;}
+  h2 .big{display:block;font-family:var(--sans);font-size:22px;letter-spacing:-.01em;text-transform:none;
+    color:var(--ink);font-weight:800;margin-top:5px;line-height:1.18;text-wrap:balance;}
+  h3{font-size:17px;color:var(--ink);margin:22px 0 4px;font-weight:750;line-height:1.25;text-wrap:balance;}
+  p{margin:.5em 0;}
+  .lead{color:var(--body);font-size:16.5px;}
+  /* labelled bullets */
+  ul.plain{list-style:none;margin:.4em 0;padding:0;}
+  ul.plain>li{position:relative;padding:7px 0 7px 20px;border-bottom:1px solid var(--hair);}
+  ul.plain>li:last-child{border-bottom:0;}
+  ul.plain>li::before{content:"";position:absolute;left:2px;top:15px;width:7px;height:7px;border-radius:2px;
+    background:var(--accent);}
+  b.lab{color:var(--ink);}
+  /* numbered flow */
+  ol.flow{list-style:none;margin:.6em 0;padding:0;counter-reset:s;}
+  ol.flow>li{counter-increment:s;position:relative;padding:4px 0 14px 44px;}
+  ol.flow>li::before{content:counter(s);position:absolute;left:0;top:1px;width:28px;height:28px;
+    display:flex;align-items:center;justify-content:center;background:var(--ink);color:#fff;
+    font-family:var(--mono);font-size:13px;font-weight:600;border-radius:8px;}
+  ol.flow>li::after{content:"";position:absolute;left:13px;top:30px;bottom:2px;width:2px;background:var(--hair);}
+  ol.flow>li:last-child::after{display:none;}
+  ol.flow .lab{color:var(--ink);font-weight:700;}
+  /* note callout */
+  .note{background:var(--warn-bg);border:1px solid var(--warn-bd);color:var(--warn-ink);
+    border-radius:10px;padding:10px 13px;font-size:14px;margin:10px 0 2px;}
+  .note b{color:var(--warn-ink);}
+  /* services */
+  dl.svc{margin:.4em 0;padding:0;}
+  dl.svc div{padding:11px 0;border-bottom:1px solid var(--hair);}
+  dl.svc div:last-child{border-bottom:0;}
+  dl.svc dt{font-family:var(--mono);font-size:13.5px;color:var(--accent-2);font-weight:600;}
+  dl.svc dd{margin:3px 0 0;font-size:14.5px;color:var(--body);}
+  /* waterfall */
+  .fall{margin:14px 0 2px;}
+  .fall .node{background:var(--tint);border:1px solid #CFE4E2;color:var(--ink);border-radius:10px;
+    padding:11px 14px;font-family:var(--mono);font-size:13.5px;text-align:center;font-weight:600;}
+  .fall .arrow{color:var(--accent);text-align:center;font-size:18px;line-height:1;margin:5px 0;}
+  .fall .node.pay{background:var(--ink);color:#fff;border-color:var(--ink);}
+  /* pills */
+  .pill{display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:.04em;
+    background:var(--tint);color:var(--accent-2);border:1px solid #CFE4E2;border-radius:999px;
+    padding:2px 9px;margin:0 4px 6px 0;}
+  .foot{color:var(--muted);font-size:12.5px;font-family:var(--mono);text-align:center;margin-top:40px;
+    border-top:1px solid var(--hair);padding-top:16px;}
+  a.up{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:12px;}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">Feature Specification · v1.0</div>
+    <h1>GMEPay+</h1>
+    <p class="sub">What the platform must do — and how the microservices coordinate to do it.</p>
+    <div class="meta">1 JULY 2026 · grounded in a full review of the repo: Hub-Core PRD, business scenarios, spec, service map, inter-service contracts, settlement-flow spec, and all 16 ADRs.</div>
+  </header>
+
+  <nav aria-label="Contents">
+    <a href="#s1"><span class="n">1</span>What GMEPay+ is</a>
+    <a href="#s2"><span class="n">2</span>Key concepts</a>
+    <a href="#s3"><span class="n">3</span>The microservices at a glance</a>
+    <a href="#s4"><span class="n">4</span>End-to-end feature flows (16)</a>
+    <a href="#s5"><span class="n">5</span>The money waterfall</a>
+    <a href="#s6"><span class="n">6</span>Coordination non-negotiables</a>
+    <a href="#s7"><span class="n">7</span>Phasing &amp; external dependencies</a>
+  </nav>
+
+  <section id="s1" class="card">
+    <h2>Section 1<span class="big">What GMEPay+ is</span></h2>
+    <p class="lead">GMEPay+ is GME’s cross-border QR-payment hub. It sits between three parties and lets a wallet/remittance partner’s own customer pay a merchant by scanning a QR — across borders and currencies — while GME handles routing, FX, funding, settlement, accounting and regulatory reporting.</p>
+    <h3>Who is involved</h3>
+    <ul class="plain">
+      <li><b class="lab">Wallet / remittance partners (“API clients”)</b> — e.g. GME Remit, SendMN, more later. They own the end customer and their wallet.</li>
+      <li><b class="lab">Their customers</b> — the people who scan and pay. GME never charges them directly; only the partner debits its own customer.</li>
+      <li><b class="lab">QR scheme providers</b> — the local rails: ZeroPay (Korea); Khalti/Fonepay (Nepal); later Alipay, WeChat, QRIS, KHQR.</li>
+      <li><b class="lab">Merchants</b> — the shops that receive money and always get the full payout.</li>
+      <li><b class="lab">GME (the hub)</b> — parses the QR, routes it, prices the FX, funds the payment, settles with everyone, reports to regulators.</li>
+      <li><b class="lab">Regulators</b> — Bank of Korea (FX), KoFIU (AML), Hometax (tax invoices).</li>
+    </ul>
+    <h3>How GME earns</h3>
+    <p>Three revenue streams: an <b class="lab">FX margin</b> on cross-border payments, a <b class="lab">service fee</b> charged to the partner, and a conditional <b class="lab">share of the merchant fee (MDR)</b>. Every partner × scheme × direction is priced independently.</p>
+  </section>
+
+  <section id="s2" class="card">
+    <h2>Section 2<span class="big">Key concepts</span></h2>
+    <ul class="plain">
+      <li><b class="lab">Partner vs customer vs merchant</b> — partner is GME’s client; customer is the partner’s user who pays; merchant gets paid.</li>
+      <li><b class="lab">MPM vs CPM</b> — MPM: the customer scans the merchant’s QR. CPM: the merchant scans a token from the customer’s wallet.</li>
+      <li><b class="lab">Static vs dynamic QR</b> — static carries no amount (customer types it); dynamic already contains the amount.</li>
+      <li><b class="lab">Inbound vs outbound</b> — inbound = a foreigner pays a Korean merchant; outbound = a customer pays a merchant abroad (e.g. Nepal).</li>
+      <li><b class="lab">Prefunding / float (double prefund)</b> — partners keep a prepaid balance with GME, and GME keeps one with each scheme; both drawn per transaction.</li>
+      <li><b class="lab">Authorize → Confirm (two-phase)</b> — the payment is reserved first (nothing irreversible), then confirmed; GME submits to the scheme only after the partner has charged its customer.</li>
+      <li><b class="lab">Net vs gross settlement</b> — domestic settles net; overseas settles gross with a separate monthly merchant-fee invoice.</li>
+    </ul>
+  </section>
+
+  <section id="s3" class="card">
+    <h2>Section 3<span class="big">The microservices at a glance</span></h2>
+    <p>Independent services, each owning its own database, talking only via APIs and events — never a shared database. Features are delivered by these services coordinating.</p>
+    <dl class="svc">
+      <div><dt>API Gateway</dt><dd>The front door: authenticates partner requests, enforces rate limits &amp; replay protection, routes inward.</dd></div>
+      <div><dt>Payment Executor</dt><dd>The orchestrator/brain of a payment — coordinates rate, merchant check, prefunding, scheme submit and recording in the right order.</dd></div>
+      <div><dt>Smart Router</dt><dd>Decides which partner/scheme handles a scanned QR, and in what order (failover), by network + country.</dd></div>
+      <div><dt>QR Service</dt><dd>Generates customer-presented tokens; parses/validates scanned QR payloads (EMVCo).</dd></div>
+      <div><dt>Rate-FX</dt><dd>Produces locked exchange-rate quotes (USD-intermediary), applies margins, holds the rate briefly.</dd></div>
+      <div><dt>Prefunding</dt><dd>Manages float: reserve, capture, release, top-up, low-balance alerts, credit limits.</dd></div>
+      <div><dt>Transaction Mgmt</dt><dd>The system of record: state machine, history, idempotency, rate-locked details for reporting.</dd></div>
+      <div><dt>Scheme Adapter · ZeroPay</dt><dd>Talks to ZeroPay: two-phase authorize→commit, settlement files, refunds.</dd></div>
+      <div><dt>Scheme Adapter · Nepal</dt><dd>Talks to Khalti/Fonepay: decode, pay (single step), status lookup.</dd></div>
+      <div><dt>Merchant &amp; QR Data</dt><dd>Mirrors merchant/QR data; validates a scanned QR against a real, active merchant.</dd></div>
+      <div><dt>Revenue Ledger</dt><dd>Double-entry accounting: FX margin, service fee, fee-share split, rounding.</dd></div>
+      <div><dt>Settlement &amp; Recon</dt><dd>Calculates what’s owed (net/gross), matches scheme files, flags exceptions, books the residual.</dd></div>
+      <div><dt>Reporting &amp; Compliance</dt><dd>BOK FX reports, KoFIU AML (CTR/STR), Hometax tax invoices.</dd></div>
+      <div><dt>Config Registry</dt><dd>Source of truth for partners, schemes, pricing, corridors, credentials — with 4-eyes approval + tamper-evident audit.</dd></div>
+      <div><dt>Auth-Identity</dt><dd>Issues/verifies machine credentials (partner keys, service tokens); rotation.</dd></div>
+      <div><dt>KYB Adapter</dt><dd>Business screening &amp; registration verification during onboarding.</dd></div>
+      <div><dt>Notification / Webhook</dt><dd>Delivers results to partners over signed webhooks, with retries &amp; a dead-letter queue.</dd></div>
+      <div><dt>Ops / Partner BFF</dt><dd>Aggregates data from the services for the Admin &amp; Partner portals.</dd></div>
+      <div><dt>Admin &amp; Partner Portals</dt><dd>Dashboards, onboarding, settlement/revenue views, a sandbox console, partner self-service.</dd></div>
+      <div><dt>Simulators (sandbox)</dt><dd>Mock schemes/wallets (ZeroPay, Nepal QR, rates) that record every request/response.</dd></div>
+    </dl>
+  </section>
+
+  <section id="s4">
+    <h2 style="margin-left:2px">Section 4<span class="big">End-to-end feature flows</span></h2>
+    <p style="margin:0 2px 4px;color:var(--muted)">Each feature as a coordinated sequence across the services — what each step does and what it triggers next.</p>
+
+    <div class="card">
+      <h3>4.1 · Make a payment — inbound (foreign customer → Korean merchant, via ZeroPay)</h3>
+      <p>The flagship two-phase flow. Rules: only the partner charges its own customer, and GME submits to the scheme <b class="lab">last</b> (the only irreversible step).</p>
+      <ol class="flow">
+        <li><span class="lab">Quote the rate.</span> The partner asks Rate-FX for a locked quote (valid ~15 min).</li>
+        <li><span class="lab">Start the payment (authorize).</span> The partner sends the request to the Payment Executor, echoing the quoted amount; the Executor re-checks it against Rate-FX.</li>
+        <li><span class="lab">Check limits.</span> The Executor applies the per-transaction AML cap before anything moves.</li>
+        <li><span class="lab">Identify the merchant.</span> The Executor asks Merchant &amp; QR Data to resolve the QR to a real, active merchant.</li>
+        <li><span class="lab">Create a pending transaction.</span> Transaction Mgmt records a PENDING txn, snapshotting rate, margins and merchant fee.</li>
+        <li><span class="lab">Reserve the partner’s float (hold, not charge).</span> Prefunding reserves payout-cost + FX margin + service fee. Short float declines here — nothing moved.</li>
+        <li><span class="lab">Check the scheme balance.</span> The ZeroPay adapter confirms GME’s prepaid balance is enough; if short, the authorization is voided before the customer is charged.</li>
+        <li><span class="lab">Partner charges its own customer.</span> Only the partner debits its customer’s wallet.</li>
+        <li><span class="lab">Confirm &amp; pay the merchant.</span> The partner confirms; the Executor tells the ZeroPay adapter to submit — paying the merchant. The only irreversible step, done last.</li>
+        <li><span class="lab">Capture &amp; commit.</span> Prefunding turns the hold into a debit; Transaction Mgmt marks APPROVED and emits “payment approved”.</li>
+        <li><span class="lab">Book revenue &amp; notify.</span> Revenue Ledger books the margin/fee/split journal; Notification sends the result to the partner.</li>
+      </ol>
+      <div class="note"><b>If it goes wrong:</b> decline → release hold, mark FAILED. Timeout → funds stay held, mark UNCERTAIN for reconciliation. Never confirmed → an expiry sweeper releases the hold.</div>
+    </div>
+
+    <div class="card">
+      <h3>4.2 · Make a payment — outbound (customer → merchant abroad, e.g. Nepal)</h3>
+      <p>A wallet scans a foreign QR. Routing is decided by the QR itself, with failover across partners.</p>
+      <ol class="flow">
+        <li><span class="lab">Scan &amp; classify.</span> The QR Classifier reads the QR’s network (e.g. fonepay.com) + country — routing by the QR, not just the country.</li>
+        <li><span class="lab">Find the partners.</span> Smart Router returns an ordered candidate list (by priority) of partners that can serve that network.</li>
+        <li><span class="lab">Try the first partner.</span> The Nepal adapter calls the partner (Khalti) to pay — a single synchronous step returning a reference.</li>
+        <li><span class="lab">Fail over safely.</span> On a technical failure it first asks that partner whether it already paid; only if it definitely didn’t does it try the next. A business decline is final — no failover, no double-charge.</li>
+        <li><span class="lab">If all fail.</span> The customer sees a clear “scheme unavailable”.</li>
+        <li><span class="lab">Record.</span> Transaction Mgmt records the txn; every attempt is logged.</li>
+      </ol>
+      <div class="note"><b>Next step:</b> the Nepal corridor is single-phase today; adding FX (KRW→NPR) and prefunding reserve/capture for it is a documented follow-up.</div>
+    </div>
+
+    <div class="card">
+      <h3>4.3 · Scan the QR &amp; enter the amount</h3>
+      <ul class="plain">
+        <li><b class="lab">Static QR</b> — no amount encoded; the customer types it, and that’s what’s authorized.</li>
+        <li><b class="lab">Dynamic QR</b> — the amount is in the QR and used as-is.</li>
+        <li><b class="lab">Customer-presented (CPM)</b> — the wallet mints a one-time token (with a prefunding reservation) that the merchant scans.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.4 · Refund / cancel</h3>
+      <ol class="flow">
+        <li><span class="lab">Request.</span> The partner or an operator requests a same-day cancel/refund.</li>
+        <li><span class="lab">Reverse at the scheme.</span> The Executor calls the scheme adapter’s cancel/refund; the merchant payment is reversed.</li>
+        <li><span class="lab">Restore &amp; record.</span> Prefunding restores the amount, Transaction Mgmt moves to REVERSED/REFUNDED, Revenue Ledger books the mirror reversal at the originally locked rate.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>4.5 · Quote the rate &amp; compute amounts (FX)</h3>
+      <ul class="plain">
+        <li><b class="lab">Two-leg, USD-intermediary</b> — collection leg + payout leg, with market±buffer cost rates.</li>
+        <li><b class="lab">Three-tier cascade</b> — scheme KRW rate + GME margin + partner margin.</li>
+        <li><b class="lab">Locked &amp; time-boxed</b> — ~15-min lock; expired quote rejected at confirm; survives restart.</li>
+        <li><b class="lab">GME bears the FX risk</b> in that window; same-currency domestic skips FX (flat KRW fee).</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.6 · Manage prefunding / balances</h3>
+      <ul class="plain">
+        <li><b class="lab">Reserve → capture → release</b> — held at authorize, debited on success, released on decline/expiry; can never go negative.</li>
+        <li><b class="lab">Top-up &amp; credit limit</b> — partners top up in bulk; Config Registry pushes credit limit + AML caps to Prefunding.</li>
+        <li><b class="lab">Low-balance alerts</b> — a threshold breach emits an alert delivered to partner + ops.</li>
+        <li><b class="lab">Two float relationships</b> — partner→GME and GME→scheme tracked independently.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.7 · Settle &amp; reconcile</h3>
+      <ol class="flow">
+        <li><span class="lab">Calculate what’s owed.</span> Net (domestic) or gross (international), summed at full precision.</li>
+        <li><span class="lab">Match against the scheme.</span> Per-merchant match vs the scheme’s files; a mismatch raises a reconciliation exception + ops alert.</li>
+        <li><span class="lab">Book the journal &amp; residual.</span> Round the liability once at the end; post the tiny rounding difference as a journal entry — exactly once per batch.</li>
+        <li><span class="lab">Ship files &amp; announce.</span> Generate scheme settlement files; emit “settlement completed”; cross-date refunds netted back.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>4.8 · Book revenue &amp; accounting</h3>
+      <ul class="plain">
+        <li><b class="lab">On “payment approved”</b> — Revenue Ledger books a revenue-capture entry (FX margin + service fee) and the fee-share split as balanced double-entry.</li>
+        <li><b class="lab">On “settlement booked”</b> — a journal entry is triggered for the position and the rounding residual.</li>
+        <li><b class="lab">Configurable split</b> — fee-share is config-driven, not hardcoded; every entry balances.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.9 · Onboard &amp; configure a partner</h3>
+      <ol class="flow">
+        <li><span class="lab">Draft.</span> An operator fills the onboarding wizard in Config Registry (identity, banking, pricing, schemes, credentials).</li>
+        <li><span class="lab">Verify (KYB).</span> Config Registry calls the KYB Adapter to screen + verify registration; the verdict is stored.</li>
+        <li><span class="lab">Approve (4-eyes).</span> A second operator approves; every change is maker-checker controlled + audited.</li>
+        <li><span class="lab">Issue &amp; wire up.</span> On activation: issue API credentials (Auth-Identity), register the webhook (Notification), push the credit limit (Prefunding).</li>
+        <li><span class="lab">Set pricing.</span> Per partner × scheme × direction pricing stored, enforcing the cross-border minimum-margin rule.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h3>4.10 · Register schemes &amp; route intelligently</h3>
+      <ul class="plain">
+        <li><b class="lab">Config-driven</b> — each partner is registered with the QR network(s) it serves + a priority. Adding a partner is config, not code.</li>
+        <li><b class="lab">Route by the QR</b> — Smart Router maps a scanned QR’s network to the partner(s) that can serve it, filtered by country/mode/direction.</li>
+        <li><b class="lab">Failover</b> — multiple partners per network are tried in priority order, with the no-double-charge check between hops.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.11 – 4.16 · The rest, in brief</h3>
+      <ul class="plain">
+        <li><b class="lab">Merchant/QR sync &amp; validation</b> — mirror scheme data; reject unknown/suspended merchants with a precise reason.</li>
+        <li><b class="lab">Partner notifications</b> — signed webhooks, retry with back-off, dead-letter + alert, idempotent delivery.</li>
+        <li><b class="lab">Regulatory reporting</b> — BOK FX (incl. the rate-locked offer-rate field), KoFIU CTR/STR, monthly Hometax invoices.</li>
+        <li><b class="lab">Security &amp; access</b> — signed partner APIs, replay/rate-limit, OIDC operator login, role-based + partner-scoped access, hash-chained audit.</li>
+        <li><b class="lab">Portals</b> — ops dashboards, onboarding &amp; approvals, a sandbox console (incl. a Nepal QR tab), partner self-service.</li>
+        <li><b class="lab">Platform</b> — cloud-agnostic (on-prem / AWS / Azure via config), one database per service, reliable events.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="s5" class="card">
+    <h2>Section 5<span class="big">The money waterfall</span></h2>
+    <p>Money flows in a layered waterfall; the funding behind it flows the opposite way.</p>
+    <div class="fall">
+      <div class="node">customer</div>
+      <div class="arrow">↓</div>
+      <div class="node">partner float (with GME)</div>
+      <div class="arrow">↓</div>
+      <div class="node">GME scheme float</div>
+      <div class="arrow">↓</div>
+      <div class="node pay">merchant · full payout</div>
+    </div>
+    <ul class="plain">
+      <li><b class="lab">Only the partner charges the customer</b> — GME never debits the end customer.</li>
+      <li><b class="lab">GME submits to the scheme last</b> — the irreversible merchant payment happens only after the partner confirms.</li>
+      <li><b class="lab">Double prefund</b> — partner floats with GME; GME floats with the scheme.</li>
+      <li><b class="lab">Refund is a mirror</b> — full reversal at the originally locked rate.</li>
+    </ul>
+  </section>
+
+  <section id="s6" class="card">
+    <h2>Section 6<span class="big">Coordination non-negotiables</span></h2>
+    <ul class="plain">
+      <li><b class="lab">Submit last, and only once</b> — the scheme submission is the single irreversible step.</li>
+      <li><b class="lab">Never double-charge on failover</b> — confirm the first partner didn’t already pay before trying the next.</li>
+      <li><b class="lab">Idempotency everywhere</b> — the same payment key never charges twice.</li>
+      <li><b class="lab">One database per service</b> — services talk only via APIs and events.</li>
+      <li><b class="lab">Maker-checker on configuration</b> — every partner/pricing/scheme change needs a second approver, and is audited.</li>
+      <li><b class="lab">Reliable events</b> — business writes + their events recorded together, so revenue, webhooks and reporting never miss one.</li>
+    </ul>
+  </section>
+
+  <section id="s7" class="card">
+    <h2>Section 7<span class="big">Phasing &amp; external dependencies</span></h2>
+    <h3>Delivery phases</h3>
+    <ul class="plain">
+      <li><b class="lab">Phase 1</b> — GME Remit (domestic) + SendMN (overseas inbound) over ZeroPay.</li>
+      <li><b class="lab">Phase 2+</b> — more partners &amp; schemes (incl. Nepal/Khalti), automatic QR-based routing, multi-partner failover.</li>
+    </ul>
+    <h3>Depends on external parties</h3>
+    <p style="color:var(--muted);font-size:14px;margin-top:2px">Specifiable now; live only when the third party is ready.</p>
+    <div>
+      <span class="pill">ZeroPay / KFTC cert</span>
+      <span class="pill">Khalti live endpoint + signing</span>
+      <span class="pill">BOK · Hometax · KoFIU channels</span>
+      <span class="pill">Production infra</span>
+    </div>
+  </section>
+
+  <div class="foot">GMEPay+ · End-to-end feature specification · v1.0 · 1 Jul 2026<br><a class="up" href="#s1">↑ back to top</a></div>
+</div>

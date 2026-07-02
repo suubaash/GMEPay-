@@ -13,3 +13,6 @@ apps/*/.claude/launch.json
 
 # local whole-platform smoke evidence
 .smoke/
+
+# docx generator deps (not source)
+outputs/docgen/node_modules/
