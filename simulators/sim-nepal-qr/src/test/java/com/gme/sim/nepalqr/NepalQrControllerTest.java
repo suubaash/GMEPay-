@@ -99,18 +99,50 @@ class NepalQrControllerTest {
                 .andExpect(status().isForbidden());
     }
 
-    // T05 — parse accepts a raw {qs} body (not encrypted)
+    // T05 — parse accepts a raw {qs} body (not encrypted); returns the full
+    // decoded merchant/currency shape AND records request+response.
     @Test
     void t05_parseReturnsMerchantFields() throws Exception {
         mvc.perform(post("/qrscan-thirdparty/parse/")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"qs\":\"" + FONEPAY_QR + "\"}"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.format").value("EMVCo"))
+                .andExpect(jsonPath("$.initMethod").value("static"))
+                .andExpect(jsonPath("$.network").value("fonepay"))
+                .andExpect(jsonPath("$.merchantId").value("4089720000001783"))
+                .andExpect(jsonPath("$.merchantInfoExtra").value("fonepay.com"))
                 .andExpect(jsonPath("$.merchantName").value("SudanMerchant"))
                 .andExpect(jsonPath("$.merchantCity").value("AathraiTriveni"))
                 .andExpect(jsonPath("$.merchantCountry").value("NP"))
                 .andExpect(jsonPath("$.trxCurrency").value("NPR"))
+                .andExpect(jsonPath("$.trxAmount").doesNotExist()) // static -> null
                 .andExpect(jsonPath("$.merchantCategoryCode").value("5412"));
+
+        // record-store still captures the parse request + response
+        mvc.perform(get("/sim/nepal-qr/records").param("endpoint", "/qrscan-thirdparty/parse/"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].endpoint").value("/qrscan-thirdparty/parse/"))
+                .andExpect(jsonPath("$[0].responseStatus").value(200));
+    }
+
+    // T05b — /api/qr/validate/ returns the merchant-network shape for the exact QR
+    @Test
+    void t05b_validateFonepayFullShape() throws Exception {
+        mvc.perform(post("/api/qr/validate/")
+                        .header("Authorization", "Token abc123")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"qr\":\"" + FONEPAY_QR + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.network").value("fonepay"))
+                .andExpect(jsonPath("$.name").value("SudanMerchant"))
+                .andExpect(jsonPath("$.merchant_id").value("4089720000001783"))
+                .andExpect(jsonPath("$.amount").doesNotExist()) // static -> null paisa
+                .andExpect(jsonPath("$.currency").value("NPR"))
+                .andExpect(jsonPath("$.purpose").isNotEmpty())
+                .andExpect(jsonPath("$.extra.merchant_city").value("AathraiTriveni"))
+                .andExpect(jsonPath("$.extra.mcc").value("5412"))
+                .andExpect(jsonPath("$.extra.country").value("NP"));
     }
 
     // T06 — pay creates txn + stores record

@@ -77,6 +77,8 @@ public class IssuanceExtensionController {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("format", p.format);
         r.put("initMethod", p.initMethod);
+        r.put("network", p.network);
+        r.put("merchantId", p.merchantId);
         r.put("merchantInfoExtra", p.merchantInfoExtra);
         r.put("merchantCategoryCode", p.merchantCategoryCode);
         r.put("trxCurrency", p.trxCurrency);

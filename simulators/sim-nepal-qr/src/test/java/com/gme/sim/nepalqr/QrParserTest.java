@@ -26,6 +26,28 @@ class QrParserTest {
         assertNull(p.amountPaisa);
     }
 
+    /**
+     * Full field-by-field assertion against the exact real Fonepay wallet QR,
+     * covering EVERY decoded field: network, initMethod, merchantId (MAI sub-tag
+     * 07), MCC, currency, country, name+city (off-by-one declared lengths) and a
+     * static (null) amount. Ground-truth hand-parsed from the EMVCo TLV.
+     */
+    @Test
+    void decodesExactRealFonepayQr() {
+        QrParseResult p = QrParser.parse(FONEPAY_QR);
+        assertEquals("fonepay", p.network, "network");
+        assertEquals("static", p.initMethod, "initMethod (POI tag 01 = 11)");
+        assertEquals("4089720000001783", p.merchantId, "merchantId (template 26 sub-tag 07)");
+        assertEquals("fonepay.com", p.merchantInfoExtra, "GUID (template 26 sub-tag 00)");
+        assertEquals("5412", p.merchantCategoryCode, "MCC (tag 52)");
+        assertEquals("NPR", p.trxCurrency, "currency (tag 53 = 524)");
+        assertEquals("NP", p.merchantCountry, "country (tag 58)");
+        assertEquals("SudanMerchant", p.merchantName, "name (tag 59, off-by-one long)");
+        assertEquals("AathraiTriveni", p.merchantCity, "city (tag 60, off-by-one long)");
+        assertNull(p.amountPaisa, "no tag 54 -> static, null amount");
+        assertNull(p.amountRupees(), "static amount surfaces as null rupees");
+    }
+
     @Test
     void looksValidRejectsShortAndUnknown() {
         assertFalse(QrParser.looksValid(null));
