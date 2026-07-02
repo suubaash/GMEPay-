@@ -47,11 +47,18 @@ import java.time.Instant;
  * Content-Type: application/json
  * {
  *   "qrPayload"  : "&lt;raw EMVCo QR string scanned by wallet&gt;",
- *   "amountKrw"  : "50000",
+ *   "amountKrw"  : "50000",      // amount in `currency` (name kept for wire compat)
  *   "partner"    : "GMEREMIT" | "SENDMN",
- *   "userRef"    : "&lt;wallet user ID&gt;"
+ *   "userRef"    : "&lt;wallet user ID&gt;",
+ *   "currency"   : "NPR"          // OPTIONAL, defaults to KRW; drives the cross-border pay currency
  * }
  * </pre>
+ *
+ * <p>{@code currency} is additive and defaults to {@code KRW} (full back-compat). For a non-ZeroPay
+ * scheme routed via {@link FailoverPaymentRouter} (e.g. Nepal Fonepay) the amount is executed in
+ * {@code currency} (NPR) rather than assumed KRW; the response then carries {@code payCurrency} +
+ * {@code payAmount}. The ZeroPay/GMEREMIT domestic KRW path (currency absent or {@code KRW}) is
+ * unchanged, keeping the ₩500 fee. No KRW→foreign FX happens here.
  */
 @RestController
 @RequestMapping("/v1/pay")
@@ -145,7 +152,11 @@ public class WalletPayController {
 
         if (routeViaFailover) {
             // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
-            result = failoverPaymentRouter.pay(req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS");
+            // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
+            // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
+            // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
+            result = failoverPaymentRouter.pay(
+                    req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency());
         } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
             result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
                     req.userRef(), SENDMN_PARTNER_ID);
@@ -178,7 +189,12 @@ public class WalletPayController {
                 result.declineReason(),
                 result.fxApplied(),
                 result.fxRate() != null ? result.fxRate().toPlainString() : null,
-                result.payAmountMnt() != null ? result.payAmountMnt().toPlainString() : null
+                result.payAmountMnt() != null ? result.payAmountMnt().toPlainString() : null,
+                // Cross-border pay currency + amount (e.g. NPR) so the wallet shows the right figures;
+                // null (omitted) for the domestic KRW path, leaving that response shape unchanged.
+                result.payCurrency(),
+                result.payCurrency() != null && result.payAmountKrw() != null
+                        ? result.payAmountKrw().toPlainString() : null
         );
 
         HttpStatus status = result.approved() ? HttpStatus.CREATED : HttpStatus.UNPROCESSABLE_ENTITY;

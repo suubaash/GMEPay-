@@ -241,7 +241,9 @@ class WalletPayControllerTest {
                 new BigDecimal("1000"),
                 "2026-07-01T10:00:00+09:00");
         // partner is GMEREMIT (the wallet's issuing partner) — the QR's network decides routing.
-        when(failoverPaymentRouter.pay(eq(fonepayQr), eq(new BigDecimal("1000")), eq("user-np-1"), anyString()))
+        // No `currency` in the body → payCurrency() defaults to KRW (back-compat).
+        when(failoverPaymentRouter.pay(eq(fonepayQr), eq(new BigDecimal("1000")), eq("user-np-1"),
+                anyString(), eq("KRW")))
                 .thenReturn(foApproved);
 
         String body = """
@@ -261,6 +263,53 @@ class WalletPayControllerTest {
                 .andExpect(jsonPath("$.schemeTxnRef", is("NP-SCHEME-777")));
 
         // The ZeroPay domestic path must NOT be touched for a non-ZeroPay QR.
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    // ---- Test: Fonepay QR + currency=NPR → failover router receives NPR amount, response carries NPR ----
+
+    @Test
+    @DisplayName("POST /v1/pay — Fonepay QR + currency=NPR: routes NPR amount to failover, response carries NPR")
+    void walletPay_fonepayQr_currencyNpr_executedInNpr() throws Exception {
+        String fonepayQr = "00020101021126150011fonepay.com5802NP5910KINAUN PVT6304ABCD";
+
+        // Approved in NPR (no fee, no FX) — the wallet already sent the amount in NPR.
+        WalletResult nprApproved = WalletResult.approvedInCurrency(
+                "NEPAL-abc",
+                "NP-SCHEME-999",
+                "Nepal Merchant",
+                new BigDecimal("1300"),
+                BigDecimal.ZERO,
+                new BigDecimal("1300"),
+                "2026-07-02T10:00:00+09:00",
+                "NPR");
+        when(failoverPaymentRouter.pay(eq(fonepayQr), eq(new BigDecimal("1300")),
+                eq("user-np-2"), anyString(), eq("NPR")))
+                .thenReturn(nprApproved);
+
+        String body = """
+                {
+                  "qrPayload": "%s",
+                  "amountKrw": "1300",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-np-2",
+                  "currency": "NPR"
+                }
+                """.formatted(fonepayQr);
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("NP-SCHEME-999")))
+                .andExpect(jsonPath("$.payCurrency", is("NPR")))
+                .andExpect(jsonPath("$.payAmount", is("1300")));
+
+        // The pay currency (NPR) must be threaded to the failover router — NOT treated as KRW.
+        verify(failoverPaymentRouter).pay(eq(fonepayQr), eq(new BigDecimal("1300")),
+                eq("user-np-2"), anyString(), eq("NPR"));
+        // Domestic ZeroPay path untouched for a cross-border scan.
         verifyNoInteractions(gmeremitPaymentService);
     }
 

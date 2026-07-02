@@ -2,6 +2,31 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/pay-currency] — 2026-07-02 (wallet /v1/pay accepts a pay currency; Nepal executes in NPR)
+
+### Added
+- **Optional `currency` on `POST /v1/pay`** (`WalletPaymentRequest.currency`, ISO-4217, default
+  **`KRW`** when absent — full back-compat). The existing `amountKrw` value is interpreted as the
+  amount in `currency` (field name kept for wire compatibility). New `payCurrency()` accessor resolves
+  the value (upper-cased, KRW fallback) and validates it as a 3-letter code.
+- **Cross-border pay currency threaded through the failover route.** `WalletPayController` passes
+  `req.payCurrency()` into a new `FailoverPaymentRouter.pay(qr, amount, userRef, direction, payCurrency)`
+  overload; the wallet-supplied currency is authoritative (falls back to the scheme-derived currency
+  when null via `resolveCurrency`). A **Nepal (Fonepay) scan with `currency=NPR`** now submits the
+  amount to `scheme-adapter-nepal` **as NPR** (the adapter converts NPR→paisa) instead of assuming KRW,
+  and records the transaction as OVERSEAS/NPR.
+- **Response reflects the pay currency.** `WalletPaymentResponse` gains additive `payCurrency` +
+  `payAmount` (`@JsonInclude(NON_NULL)`), populated for a non-KRW scheme via the new
+  `WalletResult.approvedInCurrency(...)` factory. The domestic KRW path leaves them null → its response
+  shape is byte-for-byte unchanged.
+
+### Unchanged
+- **ZeroPay / GMEREMIT domestic path** (currency absent or `KRW`): identical routing, amount treated as
+  KRW, ₩500 fixed fee, no `payCurrency`/`payAmount` in the response. No KRW→foreign FX is performed here
+  (the wallet computes the KRW debit; corridor FX via rate-fx is a separate item).
+- The 4-arg `FailoverPaymentRouter.pay(...)` overload is retained (delegates with `payCurrency=null`),
+  so existing callers/tests are unaffected.
+
 ## [fix/payment-executor] — 2026-07-02 (harden kill-switch: fail-CLOSED for security + DECLINE_SPIKE)
 
 ### Fixed

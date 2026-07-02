@@ -260,7 +260,13 @@ public class GmeremitPaymentService {
             // FX-specific fields (null for domestic KRW→KRW payments)
             Boolean fxApplied,
             BigDecimal fxRate,
-            BigDecimal payAmountMnt
+            BigDecimal payAmountMnt,
+            /**
+             * ISO-4217 currency the payment was executed in. Null for the domestic KRW→KRW path
+             * (the response then keeps its existing KRW-only shape); set (e.g. "NPR") for a
+             * cross-border scheme so the wallet can display the amount in the merchant currency.
+             */
+            String payCurrency
     ) {
         /** Factory for domestic KRW→KRW approved results. */
         public static WalletResult approved(String txnRef,
@@ -272,7 +278,25 @@ public class GmeremitPaymentService {
                                             String committedAt) {
             return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
                     payAmountKrw, feeKrw, chargedKrw, committedAt, null,
-                    null, null, null);
+                    null, null, null, null);
+        }
+
+        /**
+         * Factory for a cross-border scheme approved result executed in {@code payCurrency}
+         * (e.g. Nepal Fonepay in NPR). {@code payAmount} is the amount in that currency; no FX is
+         * applied by the hub. Distinct from {@link #approvedFx} (SENDMN KRW→MNT with an fx rate).
+         */
+        public static WalletResult approvedInCurrency(String txnRef,
+                                                      String schemeTxnRef,
+                                                      String merchantName,
+                                                      BigDecimal payAmount,
+                                                      BigDecimal feeAmount,
+                                                      BigDecimal chargedAmount,
+                                                      String committedAt,
+                                                      String payCurrency) {
+            return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
+                    payAmount, feeAmount, chargedAmount, committedAt, null,
+                    null, null, null, payCurrency);
         }
 
         /** Factory for FX (overseas) approved results. */
@@ -286,13 +310,13 @@ public class GmeremitPaymentService {
                                               BigDecimal payAmountMnt) {
             return new WalletResult(true, null, schemeTxnRef, merchantName,
                     payAmountKrw, feeKrw, chargedKrw, committedAt, null,
-                    true, fxRate, payAmountMnt);
+                    true, fxRate, payAmountMnt, null);
         }
 
         public static WalletResult declined(String merchantName, String reason) {
             return new WalletResult(false, null, null, merchantName,
                     null, null, null, null, reason,
-                    null, null, null);
+                    null, null, null, null);
         }
     }
 }
