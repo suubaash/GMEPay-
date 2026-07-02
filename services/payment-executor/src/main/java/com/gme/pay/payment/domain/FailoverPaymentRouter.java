@@ -117,12 +117,26 @@ public class FailoverPaymentRouter {
      * Executes a scanned-QR MPM payment with QR-classified failover routing.
      *
      * @param qrPayload raw EMVCo/JSON QR scanned by the wallet
-     * @param amount    wallet amount (currency depends on the resolved scheme; ZeroPay=KRW)
+     * @param amount    wallet amount, expressed in {@code payCurrency}
      * @param userRef   wallet user reference (for logging)
      * @param direction {@code DOMESTIC} / {@code OVERSEAS} filter context for resolution
      * @return {@link WalletResult} — approved with scheme refs, or declined with a reason.
      */
     public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction) {
+        // Back-compat overload: no explicit pay currency → derive per resolved scheme (ZeroPay=KRW,
+        // NEPAL=NPR). Preserves the exact pre-currency behaviour for existing callers/tests.
+        return pay(qrPayload, amount, userRef, direction, null);
+    }
+
+    /**
+     * As {@link #pay(String, BigDecimal, String, String)} but with an explicit wallet-supplied pay
+     * {@code currency}. When non-null it is the authoritative pay currency (e.g. NPR for a Fonepay
+     * scan); {@code amount} is then interpreted in that currency and passed straight through to the
+     * scheme adapter (the Nepal adapter converts NPR→paisa). When null the currency is derived from
+     * the resolved scheme, keeping the ZeroPay/KRW path identical. No KRW→foreign FX is done here.
+     */
+    public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction,
+                            @Nullable String payCurrency) {
 
         Classification classification = QrSchemeClassifier.classify(qrPayload);
         if (!classification.isKnown()) {
@@ -148,6 +162,9 @@ public class FailoverPaymentRouter {
         for (int i = 0; i < hops; i++) {
             PartnerSchemeView candidate = candidates.get(i);
             String reference = "FO-" + candidate.schemeId() + "-" + UUID.randomUUID();
+            // Wallet-supplied pay currency is authoritative when present (e.g. NPR for Fonepay);
+            // otherwise fall back to the scheme-derived currency (ZeroPay=KRW). No FX is applied.
+            String currency = resolveCurrency(payCurrency, candidate.schemeId());
 
             try {
                 SchemeClient.MpmSubmitResponse resp = schemeClient.submitMpm(
@@ -155,13 +172,13 @@ public class FailoverPaymentRouter {
                                 reference,
                                 null,                 // merchant resolved by the adapter from the QR
                                 amount,
-                                currencyFor(candidate.schemeId()),
+                                currency,
                                 candidate.schemeId(),
                                 qrPayload));
 
                 if (isApproved(resp)) {
                     recordAttempt(candidate, reference, PaymentStatus.APPROVED, resp.schemeTxnRef(), null);
-                    return approvedResult(candidate, resp, amount);
+                    return approvedResult(candidate, resp, amount, currency);
                 }
 
                 // Adapter returned a non-2xx-mapped-to-success but a non-APPROVED status body:
@@ -248,17 +265,32 @@ public class FailoverPaymentRouter {
 
     private WalletResult approvedResult(PartnerSchemeView candidate,
                                         SchemeClient.MpmSubmitResponse resp,
-                                        BigDecimal amount) {
-        recordTransaction(candidate, resp, amount);
+                                        BigDecimal amount,
+                                        String currency) {
+        recordTransaction(candidate, resp, amount, currency);
         String committedAt = KST_FMT.format(resp.approvedAt() != null ? resp.approvedAt() : Instant.now());
-        return WalletResult.approved(
+        // A KRW (domestic ZeroPay) approval keeps the existing KRW-only response shape (payCurrency
+        // omitted); a non-KRW scheme (Nepal/NPR) carries its pay currency + amount so the wallet
+        // shows the right figures. No fee is applied on this cross-border pass-through.
+        if ("KRW".equalsIgnoreCase(currency)) {
+            return WalletResult.approved(
+                    resp.schemeTxnRef(),
+                    resp.schemeTxnRef(),
+                    candidate.partnerName(),
+                    amount,
+                    BigDecimal.ZERO,
+                    amount,
+                    committedAt);
+        }
+        return WalletResult.approvedInCurrency(
                 resp.schemeTxnRef(),
                 resp.schemeTxnRef(),
                 candidate.partnerName(),
                 amount,
                 BigDecimal.ZERO,
                 amount,
-                committedAt);
+                committedAt,
+                currency);
     }
 
     private static boolean isApproved(SchemeClient.MpmSubmitResponse resp) {
@@ -302,15 +334,27 @@ public class FailoverPaymentRouter {
         return "KRW";
     }
 
+    /**
+     * The wallet-supplied pay currency wins when present (authoritative intent from the scan);
+     * otherwise derive it from the resolved scheme. Keeps the KRW/ZeroPay path unchanged when the
+     * wallet sends no currency.
+     */
+    private static String resolveCurrency(@Nullable String payCurrency, String schemeId) {
+        if (payCurrency != null && !payCurrency.isBlank()) {
+            return payCurrency.toUpperCase(Locale.ROOT);
+        }
+        return currencyFor(schemeId);
+    }
+
     private void recordTransaction(PartnerSchemeView candidate,
                                    SchemeClient.MpmSubmitResponse resp,
-                                   BigDecimal amount) {
+                                   BigDecimal amount,
+                                   String currency) {
         if (transactionClient == null) {
             return;
         }
         try {
-            String currency = currencyFor(candidate.schemeId());
-            String dir = "KRW".equals(currency) ? "DOMESTIC" : "OVERSEAS";
+            String dir = "KRW".equalsIgnoreCase(currency) ? "DOMESTIC" : "OVERSEAS";
             TransactionClient.CreateResult created = transactionClient.createPending(
                     new TransactionClient.CreateRequest(
                             candidate.partnerId(), resp.schemeTxnRef(), candidate.schemeId(),

@@ -36,5 +36,13 @@ public record WalletPaymentResponse(
         /** Offer FX rate applied (MNT per KRW, string), null for domestic. */
         @JsonProperty("fxRate")          String fxRate,
         /** MNT amount credited to the recipient, null for domestic. */
-        @JsonProperty("payAmountMnt")    String payAmountMnt
+        @JsonProperty("payAmountMnt")    String payAmountMnt,
+        /**
+         * ISO-4217 currency the payment was executed in. Present (e.g. "NPR") for a cross-border
+         * scheme so the wallet can display the right figures; null (omitted) for the domestic
+         * KRW path, which keeps its existing {@code payAmountKrw}-based shape unchanged.
+         */
+        @JsonProperty("payCurrency")     String payCurrency,
+        /** Amount paid to the merchant expressed in {@code payCurrency} (string); null for domestic KRW. */
+        @JsonProperty("payAmount")       String payAmount
 ) {}
