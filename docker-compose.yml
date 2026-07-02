@@ -430,6 +430,9 @@ services:
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
       GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://scheme-adapter-zeropay:8080
+      # Nepal corridor adapter (only reachable under the `full` profile; inert on
+      # the Korea-only `core` path so no depends_on — a bare config string).
+      GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
     depends_on:
@@ -488,6 +491,38 @@ services:
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["core", "full"]
+
+  # ─────────── NEPAL CORRIDOR (profile: full) ───────────
+  # Second live corridor. sim-nepal-qr stands in for the real Nepal partner
+  # (Khalti/Fonepay) endpoint; scheme-adapter-nepal is the real GME-side adapter
+  # that translates the hub's /submit contract onto the partner API. In a real
+  # cloud deploy the sim is dropped and GMEPAY_SCHEME_NEPAL_BASE_URL points at
+  # the live partner (see Helm — the adapter ships, the sim does not).
+  sim-nepal-qr:
+    build: { context: ., dockerfile: simulators/sim-nepal-qr/Dockerfile }
+    image: gmepay/sim-nepal-qr:dev
+    ports: ["9103:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx256m -XX:+ExitOnOutOfMemoryError"
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
+
+  scheme-adapter-nepal:
+    build: { context: ., dockerfile: services/scheme-adapter-nepal/Dockerfile }
+    image: gmepay/scheme-adapter-nepal:dev
+    ports: ["8092:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Downstream partner endpoint (sim in single-host; real partner in cloud).
+      GMEPAY_SCHEME_NEPAL_BASE_URL: http://sim-nepal-qr:8080
+    depends_on:
+      sim-nepal-qr: { condition: service_healthy }
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
 
   notification-webhook:
     build: { context: ., dockerfile: services/notification-webhook/Dockerfile }

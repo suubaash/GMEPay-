@@ -1,5 +1,21 @@
 # deploy — CHANGELOG
 
+## 2026-07-02 — Wire Nepal corridor into deploy manifests
+
+### Added
+- **`scheme-adapter-nepal` + `sim-nepal-qr` now in `docker-compose.yml`** (profile
+  `full`). Previously the Nepal rail had a Dockerfile but was in no manifest, so a
+  deploy booted everything *except* Nepal — a scanned Fonepay QR had no rail.
+  - New `simulators/sim-nepal-qr/Dockerfile` (standalone Gradle build via root
+    wrapper `-p`; runs on 8080 in-container for the shared TCP health probe).
+  - `scheme-adapter-nepal` → `sim-nepal-qr` via `GMEPAY_SCHEME_NEPAL_BASE_URL`.
+  - `payment-executor` gets `GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL` (env only, **no**
+    `depends_on` — keeps the Korea-only `core` profile bootable).
+- **Helm chart**: `scheme-adapter-nepal` added to `values.yaml` (real service ships
+  to cloud; the `sim-nepal-qr` simulator does **not** — override
+  `GMEPAY_SCHEME_NEPAL_BASE_URL` per overlay to the live Nepal partner endpoint).
+- Both `bootJar`s verified green; both YAML manifests parse.
+
 ## 2026-06-30 — Cloud-agnostic Helm umbrella chart + overlays (agent/cloud-deploy)
 
 ### Added

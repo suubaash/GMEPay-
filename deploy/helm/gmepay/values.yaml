@@ -193,6 +193,7 @@ services:
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
       GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://scheme-adapter-zeropay:8080
+      GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
 
@@ -212,6 +213,18 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/zpadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+
+  # Nepal corridor adapter (stateless). Ships to cloud; the sim-nepal-qr
+  # simulator does NOT — override GMEPAY_SCHEME_NEPAL_BASE_URL per overlay to the
+  # real Nepal partner (Khalti/Fonepay) endpoint. token/key belong in the Secret.
+  scheme-adapter-nepal:
+    image: scheme-adapter-nepal
+    probe: { type: tcp }
+    envSecretKeys: [GMEPAY_SCHEME_NEPAL_TOKEN, GMEPAY_SCHEME_NEPAL_KEY]
+    env:
+      SERVER_PORT: "8080"
+      # REQUIRED override — no simulator in cloud; point at the live partner.
+      GMEPAY_SCHEME_NEPAL_BASE_URL: https://REPLACE-with-nepal-partner-endpoint
 
   notification-webhook:
     image: notification-webhook
