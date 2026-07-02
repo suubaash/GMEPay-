@@ -2,6 +2,7 @@ package com.gme.pay.bff.client.rest;
 
 import com.gme.pay.bff.client.TransactionMgmtClient.Filter;
 import com.gme.pay.bff.client.TransactionMgmtClient.Page;
+import com.gme.pay.bff.client.TransactionMgmtClient.SearchQuery;
 import com.gme.pay.bff.client.TransactionMgmtClient.TransactionSummary;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -108,6 +109,50 @@ class RestTransactionMgmtClientTest {
         assertThat(s.txnId()).isEqualTo("TXN-9");
         assertThat(s.amount()).isEqualByComparingTo("100.00");
         assertThat(s.currency()).isEqualTo("USD");
+    }
+
+    @Test
+    void search_forwardsUserRefAndReference() {
+        RestTransactionMgmtClient client = newClient();
+        String body = "{\"content\":[],\"page\":0,\"size\":20,\"totalElements\":0}";
+        server.expect(requestTo(containsString("/v1/transactions/search?")))
+                .andExpect(method(GET))
+                .andExpect(queryParam("q", "TXN-7"))
+                .andExpect(queryParam("userRef", "wallet-123"))
+                .andExpect(queryParam("reference", "PARTNER-REF-9"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        Page<TransactionSummary> page = client.search(
+                new SearchQuery("TXN-7", null, null, "wallet-123", "PARTNER-REF-9", 0, 20));
+        server.verify();
+        assertThat(page.content()).isEmpty();
+    }
+
+    @Test
+    void getTransaction_mapsCsFieldsAndStatusHistory() {
+        RestTransactionMgmtClient client = newClient();
+        String body = """
+                {"txnRef":"TXN-2","partnerRef":"P1","status":"FAILED",
+                 "targetPayout":"10.00","targetCcy":"USD","createdAt":"2026-06-09T10:15:30Z",
+                 "failureReason":"SCHEME_DECLINED","statusLabel":"Declined",
+                 "declineReasonText":"Insufficient funds at issuer",
+                 "statusHistory":[
+                   {"status":"CREATED","statusLabel":"Created","at":"2026-06-09T10:15:30Z","note":null},
+                   {"status":"FAILED","statusLabel":"Declined","at":"2026-06-09T10:15:32Z","note":"issuer NSF"}]}
+                """;
+        server.expect(requestTo(containsString("/v1/transactions/TXN-2")))
+                .andExpect(method(GET))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        TransactionSummary s = client.getTransaction("TXN-2");
+        server.verify();
+        assertThat(s.failureReason()).isEqualTo("SCHEME_DECLINED");
+        assertThat(s.statusLabel()).isEqualTo("Declined");
+        assertThat(s.declineReasonText()).isEqualTo("Insufficient funds at issuer");
+        assertThat(s.statusHistory()).hasSize(2);
+        assertThat(s.statusHistory().get(1).status()).isEqualTo("FAILED");
+        assertThat(s.statusHistory().get(1).statusLabel()).isEqualTo("Declined");
+        assertThat(s.statusHistory().get(1).note()).isEqualTo("issuer NSF");
     }
 
     @Test

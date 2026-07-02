@@ -45,7 +45,7 @@ class PartnerCrudControllerTest {
         SettlementClient settlement = new StubSettlementClient();
 
         AdminDashboardController controller = new AdminDashboardController(
-                configRegistry, transactions, prefunding, revenue, settlement);
+                configRegistry, transactions, prefunding, revenue, settlement, new OpsRbacGuard(false));
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())

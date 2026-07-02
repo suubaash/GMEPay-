@@ -33,7 +33,14 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
                     "ZP-TXN-1001-CONF",                // schemeTxnRef (scheme settlement id)
                     "AUTH-1001",                       // schemeApprovalCode
                     "M0000000001",                     // merchantId
-                    Instant.parse("2026-06-09T10:15:31Z")),  // approvedAt
+                    Instant.parse("2026-06-09T10:15:31Z"),  // approvedAt
+                    null,                              // failureReason (approved txn)
+                    "Approved",                        // statusLabel
+                    null,                              // declineReasonText
+                    List.of(                           // statusHistory (non-null)
+                            StatusEntry.of("CREATED", Instant.parse("2026-06-09T10:15:30Z")),
+                            new StatusEntry("COMMITTED", "Approved",
+                                    Instant.parse("2026-06-09T10:15:31Z"), "scheme confirmed"))),
             TransactionSummary.of("TXN-1002", "partner_test_001", "COMMITTED",
                     new BigDecimal("75.00"), "USD",
                     Instant.parse("2026-06-09T11:02:11Z")),
@@ -78,7 +85,9 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
                 existing.qrSchemeId(), existing.krwAmount(), existing.payerCurrency(),
                 existing.payerCurrencyAmount(), existing.appliedFxRate(), existing.rateTimestamp(),
                 existing.prefundingDeductedUsd(), existing.schemeTxnRef(), existing.schemeApprovalCode(),
-                existing.merchantId(), existing.approvedAt());
+                existing.merchantId(), existing.approvedAt(),
+                existing.failureReason(), existing.statusLabel(), existing.declineReasonText(),
+                existing.statusHistory());
     }
 
     @Override

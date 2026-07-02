@@ -1,5 +1,8 @@
 package com.gme.pay.bff.web;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -24,6 +27,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
+
 /**
  * Standalone MockMvc test for the Phase-C2 transactions search + detail
  * endpoints on {@link AdminDashboardController}. Uses the real stub clients so
@@ -42,7 +49,7 @@ class TransactionsControllerTest {
         SettlementClient settlement = new StubSettlementClient();
 
         AdminDashboardController controller = new AdminDashboardController(
-                configRegistry, transactions, prefunding, revenue, settlement);
+                configRegistry, transactions, prefunding, revenue, settlement, new OpsRbacGuard(false));
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
@@ -105,5 +112,66 @@ class TransactionsControllerTest {
     void detail_unknownReturns404() throws Exception {
         mvc.perform(get("/v1/admin/transactions/{id}", "TXN-DOES-NOT-EXIST"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("CS: detail surfaces failureReason/statusLabel/declineReasonText/statusHistory")
+    void detail_carriesCsFields() throws Exception {
+        TransactionMgmtClient txns = mock(TransactionMgmtClient.class);
+        TransactionMgmtClient.TransactionSummary summary = new TransactionMgmtClient.TransactionSummary(
+                "TXN-FAIL", "partner_test_001", "FAILED",
+                new BigDecimal("10.00"), "USD", Instant.parse("2026-06-09T10:15:30Z"),
+                null, null, null, null, null, null, null, null, null, null, null,
+                "SCHEME_DECLINED", "Declined", "Insufficient funds at issuer",
+                List.of(
+                        TransactionMgmtClient.StatusEntry.of("CREATED", Instant.parse("2026-06-09T10:15:30Z")),
+                        new TransactionMgmtClient.StatusEntry("FAILED", "Declined",
+                                Instant.parse("2026-06-09T10:15:32Z"), "issuer NSF")));
+        when(txns.getTransaction("TXN-FAIL")).thenReturn(summary);
+
+        AdminDashboardController controller = new AdminDashboardController(
+                new StubConfigRegistryClient(), txns, new StubPrefundingClient(),
+                new StubRevenueLedgerClient(), new StubSettlementClient(), new OpsRbacGuard(false));
+        ObjectMapper om = new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        MockMvc local = standaloneSetup(controller)
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(om)).build();
+
+        local.perform(get("/v1/admin/transactions/{id}", "TXN-FAIL"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.failureReason").value("SCHEME_DECLINED"))
+                .andExpect(jsonPath("$.statusLabel").value("Declined"))
+                .andExpect(jsonPath("$.declineReasonText").value("Insufficient funds at issuer"))
+                .andExpect(jsonPath("$.statusHistory.length()").value(2))
+                .andExpect(jsonPath("$.statusHistory[1].status").value("FAILED"))
+                .andExpect(jsonPath("$.statusHistory[1].statusLabel").value("Declined"))
+                .andExpect(jsonPath("$.statusHistory[1].note").value("issuer NSF"));
+    }
+
+    @Test
+    @DisplayName("CS: txn.view can read detail; missing permission is 403 (fail-closed)")
+    void detail_requiresTxnView() throws Exception {
+        TransactionMgmtClient txns = mock(TransactionMgmtClient.class);
+        when(txns.getTransaction(any())).thenReturn(
+                TransactionMgmtClient.TransactionSummary.of("TXN-1001", "partner_test_001",
+                        "COMMITTED", new BigDecimal("1.00"), "USD", Instant.parse("2026-06-09T10:15:30Z")));
+        // enforce=true → fail-closed on txn.view.
+        AdminDashboardController controller = new AdminDashboardController(
+                new StubConfigRegistryClient(), txns, new StubPrefundingClient(),
+                new StubRevenueLedgerClient(), new StubSettlementClient(), new OpsRbacGuard(true));
+        ObjectMapper om = new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        MockMvc local = standaloneSetup(controller)
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(om)).build();
+
+        // txn.view (support agent, no ops:operate) CAN read the detail.
+        local.perform(get("/v1/admin/transactions/{id}", "TXN-1001")
+                        .header("X-Gme-Permissions", "txn.view"))
+                .andExpect(status().isOk());
+        // No permission presented → denied.
+        local.perform(get("/v1/admin/transactions/{id}", "TXN-1001"))
+                .andExpect(status().isForbidden());
     }
 }

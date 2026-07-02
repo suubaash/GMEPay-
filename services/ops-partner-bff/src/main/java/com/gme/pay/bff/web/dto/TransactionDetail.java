@@ -46,8 +46,15 @@ public record TransactionDetail(
         String merchantId,
         /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
         String merchantName,
-        /** Ordered status-transition history, oldest first. TODO: wire status-history tracking. */
-        List<TransactionMgmtClient.StatusEntry> statusHistory
+        /** Ordered status-transition history, oldest first. Non-null from transaction-mgmt; null on older txns. */
+        List<TransactionMgmtClient.StatusEntry> statusHistory,
+        // --- CS support-read additive fields (surfaced from the read-side summary) ---
+        /** Machine failure reason code for a failed/declined txn. Null for successful / older txns. */
+        String failureReason,
+        /** Plain-language label for the transaction status. Null on older txns. */
+        String statusLabel,
+        /** Human-readable decline reason from the scheme. Null when not declined / older txns. */
+        String declineReasonText
 ) {
     /**
      * Convenience factory preserving the original 8-arg wire shape.
@@ -66,6 +73,7 @@ public record TransactionDetail(
                 summary, schemeTxnRef, schemeApprovalCode,
                 prefundDeductedUsd, approvedAt,
                 bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                null, null, null,
                 null, null, null);
     }
 }

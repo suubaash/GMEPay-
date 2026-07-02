@@ -128,7 +128,7 @@ public class ControlTowerController {
 
     private long countByStatus(String status) {
         TransactionMgmtClient.Page<TransactionMgmtClient.TransactionSummary> page =
-                transactions.search(new TransactionMgmtClient.SearchQuery(null, null, status, 0, 1));
+                transactions.search(new TransactionMgmtClient.SearchQuery(null, null, status, null, null, 0, 1));
         return page == null ? 0 : page.total();
     }
 

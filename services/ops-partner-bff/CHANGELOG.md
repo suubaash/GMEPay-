@@ -2,6 +2,35 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-02 — Customer-support transaction read surface
+
+Additive. Turns the Ops transaction proxy into a usable customer-support read surface and
+stops CS reads from needing the dangerous `ops:operate` permission. Libs + other services
+untouched.
+
+### Added
+- **Customer-search pass-through** — `GET /v1/admin/transactions/search` now forwards two new
+  optional params to transaction-mgmt's `GET /v1/transactions/search`: `userRef` (the end-customer
+  / wallet id) and `reference` (the partner's own reference). A support agent can now find every
+  transaction of one customer, or look up by the partner's reference. The previously **silently
+  dropped `q`** is retained as the free-text term (transaction-mgmt matches it against `txnRef`) —
+  `q`, `status`, `partnerId` all still forwarded; the mystery-drop is gone.
+- **New CS response fields** — transaction search/detail now surface `failureReason`,
+  `statusLabel` (plain language), `declineReasonText`, and an ordered `statusHistory`
+  (`{status, statusLabel, at, note}`) mapped from transaction-mgmt. All null-safe for older
+  transactions (`@JsonInclude(NON_NULL)`), so pre-existing txns/consumers are unaffected.
+  `StatusEntry` enriched from `{status, at}` to `{status, statusLabel, at, note}` (back-compat
+  `StatusEntry.of(status, at)` factory retained).
+
+### Changed (security)
+- **Support-scoped read auth** — the CS **read** endpoints (`GET /v1/admin/transactions/search`,
+  `.../transactions`, `.../transactions/recent`, `.../transactions/{id}`) are now gated on the
+  support-appropriate **`txn.view`** permission (fail-closed via `OpsRbacGuard.requireTxnView`)
+  instead of the money/state-affecting `ops:operate`. `ops:operate` still implies read access.
+  The `ops:operate` gate on state-changing actions (transaction resolve, pause/resume,
+  maintenance, alert-ack, etc.) is **unchanged**. Net: `txn.view` ⇒ look up + read a transaction;
+  `ops:operate` still required for force-resolve / kill-switch.
+
 ## 2026-07-02 — Wire ops alerts to real on-call paging
 
 Closes the paging gap: `gmepay.ops.alert` was consumed into an in-memory store + exposed at
