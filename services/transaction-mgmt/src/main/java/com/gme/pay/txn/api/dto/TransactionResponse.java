@@ -2,11 +2,13 @@ package com.gme.pay.txn.api.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.gme.pay.txn.domain.model.CustomerStatusText;
 import com.gme.pay.txn.domain.model.Transaction;
 import com.gme.pay.txn.domain.model.TransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -98,15 +100,36 @@ public record TransactionResponse(
          * Scheme approval code — the QR scheme's authorization id (used for refund/cancel). Persisted at
          * APPROVED; null until then. Surfaced alongside {@code schemeTxnRef} as the merchant-paid evidence.
          */
-        String schemeApprovalCode
+        String schemeApprovalCode,
+
+        // --- CS quick-wins additive fields ---
+        /**
+         * OI-01 failure-reason code recorded when the txn entered FAILED (e.g. "APPROVAL_TIMEOUT").
+         * Exposed from the domain aggregate (previously not serialized). Null unless FAILED with a reason.
+         */
+        String failureReason,
+        /** Plain-language label for {@code status} (e.g. APPROVED → "Payment approved"). */
+        String statusLabel,
+        /**
+         * Customer-friendly sentence mapped from {@code failureReason} (falls back to the raw reason).
+         * Null unless a failure reason is present.
+         */
+        String declineReasonText,
+        /**
+         * End-customer / wallet identifier carried on the wallet payment (captured at create, V011).
+         * Lets support look a payment up by what the CUSTOMER holds. Null on legacy rows.
+         */
+        String userRef
 ) {
     /**
      * One entry in the status transition history.
      *
-     * @param status  the {@link com.gme.pay.txn.domain.model.TransactionStatus} name at this point
-     * @param at      UTC instant the status was entered
+     * @param status      the {@link TransactionStatus} name at this point
+     * @param statusLabel plain-language label for the status
+     * @param at          UTC instant the status was entered
+     * @param note        optional context (e.g. the decline reason, or who force-resolved it)
      */
-    public record StatusEntry(String status, Instant at) {}
+    public record StatusEntry(String status, String statusLabel, Instant at, String note) {}
 
     /**
      * Maps from domain aggregate — includes V003 Phase-4 fields.
@@ -144,13 +167,84 @@ public record TransactionResponse(
                 fxRate,             // appliedFxRate
                 null,               // rateTimestamp — TODO: lock at commit-time
                 txn.prefundDeductedUsd(),   // prefundingDeductedUsd
-                null,               // statusHistory — TODO: wire status-history tracking
+                buildStatusHistory(txn),    // statusHistory — derived from stored timestamps
                 txn.merchantId(),   // merchantId — from V003
                 null,               // merchantName — TODO: from scheme-adapter
                 txn.merchantFeeRate(),  // merchantFeeRate — V005 snapshot
                 txn.approvedAt(),       // approvedAt — drives settlement window cutoff
                 txn.schemeTxnRef(),     // schemeTxnRef — real scheme settlement id (merchant-paid proof)
-                txn.schemeApprovalCode() // schemeApprovalCode — real scheme authorization id
+                txn.schemeApprovalCode(), // schemeApprovalCode — real scheme authorization id
+                // --- CS quick-wins ---
+                txn.failureReason(),                                    // failureReason (from domain)
+                CustomerStatusText.statusLabel(txn.status()),           // statusLabel
+                CustomerStatusText.declineReasonText(txn.failureReason()), // declineReasonText
+                txn.userRef()                                           // userRef (V011)
         );
+    }
+
+    /**
+     * Derives an ordered status timeline from the timestamps already stored on the aggregate — no
+     * separate transition-log table is needed. Entries are emitted only for milestones we have a
+     * real {@code at} for, then sorted oldest-first:
+     * <ul>
+     *   <li>CREATED — always ({@code createdAt}).</li>
+     *   <li>APPROVED — when {@code approvedAt} / {@code committedAt} is set.</li>
+     *   <li>REVERSED / REFUNDED — when {@code refundedAt} is set (money-terminal); labelled by the
+     *       current status so a reversed txn reads "Reversed / refunded".</li>
+     *   <li>Current status — a final entry stamped at {@code updatedAt} when the txn has moved past
+     *       CREATED and the current status was not already emitted above (covers FAILED with its
+     *       decline reason as the note, UNCERTAIN, CANCELLED, etc.). For a force-resolved txn the
+     *       resolution reason rides as the note.</li>
+     * </ul>
+     * Never returns null — a freshly-CREATED txn yields a single-entry list.
+     */
+    static List<StatusEntry> buildStatusHistory(Transaction txn) {
+        List<StatusEntry> history = new ArrayList<>();
+        TransactionStatus current = txn.status();
+
+        // 1) Creation — always present.
+        history.add(entry(TransactionStatus.CREATED, txn.createdAt(), null));
+
+        // 2) Approval milestone — the commit instant (approvedAt, else committedAt).
+        Instant approvedInstant = txn.approvedAt() != null ? txn.approvedAt() : txn.committedAt();
+        if (approvedInstant != null) {
+            history.add(entry(TransactionStatus.APPROVED, approvedInstant, null));
+        }
+
+        // 3) Reversal / refund milestone — refundedAt is stamped for both REVERSED and REFUNDED.
+        if (txn.refundedAt() != null
+                && (current == TransactionStatus.REVERSED || current == TransactionStatus.REFUNDED)) {
+            history.add(entry(current, txn.refundedAt(), noteForCurrent(txn)));
+        }
+
+        // 4) Current status as a terminal marker, when it is not one of the milestones already
+        //    emitted (e.g. FAILED / UNCERTAIN / CANCELLED / SCHEME_SENT / PENDING_DEBIT). Skipped
+        //    for a bare CREATED txn (already in the list) to avoid a duplicate entry.
+        if (current != TransactionStatus.CREATED
+                && current != TransactionStatus.APPROVED
+                && !(current == TransactionStatus.REVERSED || current == TransactionStatus.REFUNDED)) {
+            Instant at = txn.updatedAt() != null ? txn.updatedAt() : txn.createdAt();
+            history.add(entry(current, at, noteForCurrent(txn)));
+        }
+
+        // Oldest-first; null instants sort last defensively.
+        history.sort((a, b) -> {
+            if (a.at() == null) return 1;
+            if (b.at() == null) return -1;
+            return a.at().compareTo(b.at());
+        });
+        return history;
+    }
+
+    private static StatusEntry entry(TransactionStatus status, Instant at, String note) {
+        return new StatusEntry(status.name(), CustomerStatusText.statusLabel(status), at, note);
+    }
+
+    /** Note for the current-status entry: decline reason for FAILED, else the operator resolution reason. */
+    private static String noteForCurrent(Transaction txn) {
+        if (txn.status() == TransactionStatus.FAILED) {
+            return CustomerStatusText.declineReasonText(txn.failureReason());
+        }
+        return txn.resolutionReason();
     }
 }

@@ -60,9 +60,15 @@ public record CreateTransactionRequest(
         BigDecimal collectionUsd,
         BigDecimal payoutUsdCost,
         BigDecimal collectionMarginUsd,
-        BigDecimal payoutMarginUsd
+        BigDecimal payoutMarginUsd,
+        /**
+         * CS quick-wins (V011): the end-customer / wallet identifier carried on the wallet payment.
+         * Optional — persisted onto the txn so customer support can look a payment up by what the
+         * CUSTOMER holds. Null / omitted leaves it empty (current behaviour).
+         */
+        String userRef
 ) {
-    /** Backwards-compatible 12-arg constructor (pre-Wave-3 shape); pool fields default null. */
+    /** Backwards-compatible 12-arg constructor (pre-Wave-3 shape); pool + userRef fields default null. */
     public CreateTransactionRequest(
             long partnerId,
             String partnerTxnRef,
@@ -78,6 +84,34 @@ public record CreateTransactionRequest(
             BigDecimal merchantFeeRate) {
         this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
                 payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
-                merchantFeeRate, null, null, null, null, null, null, null, null);
+                merchantFeeRate, null, null, null, null, null, null, null, null, null);
+    }
+
+    /** Back-compat 20-arg constructor (Wave-3 shape, pre CS quick-wins); userRef defaults null. */
+    public CreateTransactionRequest(
+            long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            BigDecimal targetPayout,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId,
+            BigDecimal merchantFeeRate,
+            BigDecimal offerRateColl,
+            BigDecimal crossRate,
+            BigDecimal costRateColl,
+            BigDecimal costRatePay,
+            BigDecimal collectionUsd,
+            BigDecimal payoutUsdCost,
+            BigDecimal collectionMarginUsd,
+            BigDecimal payoutMarginUsd) {
+        this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                merchantFeeRate, offerRateColl, crossRate, costRateColl, costRatePay,
+                collectionUsd, payoutUsdCost, collectionMarginUsd, payoutMarginUsd, null);
     }
 }

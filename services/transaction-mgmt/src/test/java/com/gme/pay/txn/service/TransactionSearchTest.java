@@ -66,6 +66,36 @@ class TransactionSearchTest {
         assertEquals(2, page.getTotalElements());
     }
 
+    @Test
+    @DisplayName("search by userRef returns only the matching customer's transaction")
+    void searchFiltersByUserRef() {
+        Transaction a = txn("M-1"); a.applyUserRef("WALLET-AAA");
+        Transaction b = txn("M-2"); b.applyUserRef("WALLET-BBB");
+        repo.rows.add(a);
+        repo.rows.add(b);
+
+        Page<Transaction> page = service.queryTransactions(
+                null, null, null, null, null, null, null, "WALLET-AAA", null, 0, 20);
+
+        assertEquals(1, page.getTotalElements());
+        assertEquals("WALLET-AAA", page.getContent().get(0).userRef());
+        assertEquals("WALLET-AAA", repo.lastUserRef);
+    }
+
+    @Test
+    @DisplayName("search by reference matches the partner's own reference (partnerTxnRef)")
+    void searchFiltersByReference() {
+        repo.rows.add(txn("M-1")); // partnerTxnRef = "PARTNER-M-1"
+        repo.rows.add(txn("M-2")); // partnerTxnRef = "PARTNER-M-2"
+
+        Page<Transaction> page = service.queryTransactions(
+                null, null, null, null, null, null, null, null, "PARTNER-M-2", 0, 20);
+
+        assertEquals(1, page.getTotalElements());
+        assertEquals("PARTNER-M-2", page.getContent().get(0).partnerTxnRef());
+        assertEquals("PARTNER-M-2", repo.lastReference);
+    }
+
     private static final class RecordingRepo implements TransactionRepository {
         final List<Transaction> rows = new ArrayList<>();
         String lastMerchantId;
@@ -75,17 +105,25 @@ class TransactionSearchTest {
         @Override public Transaction save(Transaction txn) { rows.add(txn); return txn; }
         @Override public Optional<Transaction> findByTxnRef(String txnRef) { return Optional.empty(); }
 
+        String lastUserRef;
+        String lastReference;
+
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
                                                          String txnRef, String schemeTxnRef, String merchantId,
+                                                         String userRef, String reference,
                                                          Pageable pageable) {
             this.lastMerchantId = merchantId;
             this.lastSchemeTxnRef = schemeTxnRef;
             this.lastTxnRef = txnRef;
+            this.lastUserRef = userRef;
+            this.lastReference = reference;
             List<Transaction> filtered = rows.stream()
                     .filter(t -> merchantId == null || merchantId.equals(t.merchantId()))
                     .filter(t -> txnRef == null || txnRef.equals(t.txnRef()))
                     .filter(t -> partnerId == null || partnerId.equals(t.partnerId()))
+                    .filter(t -> userRef == null || userRef.equals(t.userRef()))
+                    .filter(t -> reference == null || reference.equals(t.partnerTxnRef()))
                     .toList();
             return new PageImpl<>(filtered, pageable, filtered.size());
         }

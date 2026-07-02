@@ -323,6 +323,88 @@ class TransactionContractIT {
     }
 
     // =========================================================================
+    // 2d. CS quick-wins — statusLabel + statusHistory on GET, userRef search
+    // =========================================================================
+
+    @Test
+    @DisplayName("CS: GET exposes statusLabel + a non-null ordered statusHistory; APPROVED reads friendly")
+    void getExposesStatusLabelAndTimeline() throws Exception {
+        String txnRef = createTxn("PE-CS-LABEL", 9101L);
+        // CREATED → statusLabel + single-entry history.
+        JsonNode created = getTxn(txnRef);
+        assertEquals("Payment created", created.get("statusLabel").asText());
+        assertTrue(created.get("statusHistory").isArray());
+        assertEquals(1, created.get("statusHistory").size());
+        assertEquals("CREATED", created.get("statusHistory").get(0).get("status").asText());
+        assertEquals("Payment created", created.get("statusHistory").get(0).get("statusLabel").asText());
+
+        // Approve it → label becomes "Payment approved", timeline gains an APPROVED entry (ordered).
+        patchStatus(txnRef, "APPROVED");
+        JsonNode approved = getTxn(txnRef);
+        assertEquals("APPROVED", approved.get("status").asText());
+        assertEquals("Payment approved", approved.get("statusLabel").asText());
+        JsonNode hist = approved.get("statusHistory");
+        assertTrue(hist.isArray() && hist.size() >= 2, "timeline must have CREATED + APPROVED");
+        assertEquals("CREATED", hist.get(0).get("status").asText());
+        assertEquals("APPROVED", hist.get(hist.size() - 1).get("status").asText());
+    }
+
+    @Test
+    @DisplayName("CS: search by userRef returns the matching customer's transaction")
+    void searchByUserRef() throws Exception {
+        String body = """
+                {
+                  "partnerId": 9200,
+                  "partnerTxnRef": "PE-CS-USERREF",
+                  "schemeId": "zeropay_kr",
+                  "direction": "INBOUND",
+                  "paymentMode": "QR",
+                  "targetPayout": "10000.00",
+                  "payoutCurrency": "KRW",
+                  "collectionAmount": "7.50",
+                  "collectionCurrency": "USD",
+                  "merchantId": null,
+                  "quoteId": null,
+                  "userRef": "WALLET-CUST-42"
+                }
+                """;
+        String txnRef = objectMapper.readTree(mockMvc.perform(post("/v1/transactions")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated()).andReturn()
+                .getResponse().getContentAsString()).get("txnRef").asText();
+
+        // userRef must round-trip onto the GET projection.
+        assertEquals("WALLET-CUST-42", getTxn(txnRef).get("userRef").asText());
+
+        // Search by the end-customer identifier finds it.
+        MvcResult result = mockMvc.perform(get("/v1/transactions/search")
+                        .param("userRef", "WALLET-CUST-42"))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode resp = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertTrue(resp.get("totalElements").asLong() >= 1, "search by userRef must find the txn");
+        assertEquals("WALLET-CUST-42", resp.get("content").get(0).get("userRef").asText());
+    }
+
+    @Test
+    @DisplayName("CS: search by reference matches the partner's own reference (partnerTxnRef)")
+    void searchByReference() throws Exception {
+        createTxn("PE-CS-REFERENCE", 9300L);
+
+        MvcResult result = mockMvc.perform(get("/v1/transactions/search")
+                        .param("reference", "PE-CS-REFERENCE"))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode resp = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertTrue(resp.get("totalElements").asLong() >= 1, "search by reference must find the txn");
+        assertEquals("PE-CS-REFERENCE", resp.get("content").get(0).get("partnerRef").asText());
+    }
+
+    private JsonNode getTxn(String txnRef) throws Exception {
+        MvcResult result = mockMvc.perform(get("/v1/transactions/{ref}", txnRef))
+                .andExpect(status().isOk()).andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    // =========================================================================
     // 3. GET /v1/transactions — filters + pagination
     // =========================================================================
 
