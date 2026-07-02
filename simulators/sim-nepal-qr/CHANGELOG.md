@@ -2,6 +2,13 @@
 
 All notable changes to the Nepal QR partner simulator.
 
+## [2026-07-02] Fix — accept pay nonce from X-KhaltiNonce header
+- `/qrscan-thirdparty/pay/` required `nonce` **inside the signed body** and 400'd
+  (`validation_error`) otherwise. The real caller (`scheme-adapter-nepal`) sends the
+  nonce as the **`X-KhaltiNonce` header**, not in the body — so every live payment
+  declined (the "full payment cycle failed" symptom). Now falls back to the header
+  when the body omits it. Existing body-nonce callers unaffected. Regression test T06b.
+
 ## [Unreleased]
 
 ### Added

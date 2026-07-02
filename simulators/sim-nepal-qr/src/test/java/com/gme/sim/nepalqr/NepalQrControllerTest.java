@@ -171,6 +171,26 @@ class NepalQrControllerTest {
                 .andExpect(jsonPath("$.amountPaisa").value(1000));
     }
 
+    // T06b — nonce supplied ONLY in the X-KhaltiNonce header (the real scheme-adapter-nepal
+    // contract: nonce is a signed-API header, not a body field). Must still succeed.
+    @Test
+    void t06b_payWithNonceInHeaderOnly() throws Exception {
+        String ref = "PAY-T06b-" + System.nanoTime();
+        String body = signedBody(Map.of(          // NOTE: no "nonce" field in the body
+                "qs", FONEPAY_QR, "amount", "1000", "reference", ref, "purpose", "ServicePayment"));
+        mvc.perform(post("/qrscan-thirdparty/pay/")
+                        .header("Authorization", "Key testkey")
+                        .header("X-KhaltiNonce", "1700000000")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.idx").isNotEmpty());
+
+        mvc.perform(get("/sim/nepal-qr/txns/{ref}", ref))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("APPROVED"));
+    }
+
     // T07 — duplicate reference
     @Test
     void t07_duplicateReference() throws Exception {

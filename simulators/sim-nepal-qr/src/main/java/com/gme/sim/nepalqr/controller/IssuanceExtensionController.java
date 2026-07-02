@@ -112,6 +112,10 @@ public class IssuanceExtensionController {
         String purpose = text(payload, "purpose");
         Long amountPaisa = longVal(payload, "amount");
         String nonce = text(payload, "nonce");
+        // A signed-API nonce legitimately arrives in the X-KhaltiNonce header — real callers
+        // (scheme-adapter-nepal) put it there, not inside the signed body. Accept the header as the
+        // source of truth when the body omits it, so the live adapter→sim pay contract succeeds.
+        if (nonce == null) nonce = http.getHeader("X-KhaltiNonce");
 
         Map<String, Object> missing = new LinkedHashMap<>();
         if (amountPaisa == null) missing.put("amount", new String[]{"This field is required."});
