@@ -118,6 +118,37 @@ public class TransactionService {
                                                   BigDecimal costRateColl,
                                                   BigDecimal costRatePay,
                                                   BigDecimal payoutUsdCost) {
+        return createFromPaymentExecutor(partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                targetPayout, payoutCurrency, collectionAmount, collectionCurrency, merchantId,
+                quoteId, merchantFeeRate, collectionMarginUsd, payoutMarginUsd, collectionUsd,
+                costRateColl, costRatePay, payoutUsdCost, null);
+    }
+
+    /**
+     * CS quick-wins create overload: additionally captures {@code userRef} (the end-customer /
+     * wallet identifier) onto the txn so support can look the payment up by what the customer holds.
+     * All prior behaviour unchanged; {@code userRef} nullable.
+     */
+    @Transactional
+    public Transaction createFromPaymentExecutor(Long partnerId,
+                                                  String partnerTxnRef,
+                                                  String schemeId,
+                                                  String direction,
+                                                  String paymentMode,
+                                                  BigDecimal targetPayout,
+                                                  String payoutCurrency,
+                                                  BigDecimal collectionAmount,
+                                                  String collectionCurrency,
+                                                  String merchantId,
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate,
+                                                  BigDecimal collectionMarginUsd,
+                                                  BigDecimal payoutMarginUsd,
+                                                  BigDecimal collectionUsd,
+                                                  BigDecimal costRateColl,
+                                                  BigDecimal costRatePay,
+                                                  BigDecimal payoutUsdCost,
+                                                  String userRef) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -149,6 +180,8 @@ public class TransactionService {
         // Wave-3: persist the rate-lock pool snapshot if carried at creation (margin-accurate FX1015).
         txn.applyRateLockPool(collectionMarginUsd, payoutMarginUsd, collectionUsd,
                 costRateColl, costRatePay, payoutUsdCost);
+        // CS quick-wins (V011): capture the end-customer / wallet identifier for support lookup.
+        txn.applyUserRef(userRef);
         return repository.save(txn);
     }
 
@@ -252,20 +285,36 @@ public class TransactionService {
     }
 
     /**
-     * 360° operator search (GET /v1/transactions and /v1/transactions/search). Extends the paged
-     * query with the flexible drill-down filters {@code txnRef} (exact), {@code schemeTxnRef}
-     * (exact) and {@code merchantId} (exact) alongside the existing date / status / partner
-     * filters. All filters optional; a null / blank value is ignored.
+     * Back-compat overload (pre CS quick-wins): the 7-filter search without the customer-identifier
+     * filters. Delegates with {@code userRef}/{@code reference} null.
      */
     public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
                                                TransactionStatus status, Long partnerId,
                                                String txnRef, String schemeTxnRef, String merchantId,
                                                int page, int size) {
+        return queryTransactions(from, to, status, partnerId,
+                txnRef, schemeTxnRef, merchantId, null, null, page, size);
+    }
+
+    /**
+     * 360° operator search (GET /v1/transactions and /v1/transactions/search). Extends the paged
+     * query with the flexible drill-down filters {@code txnRef} (exact), {@code schemeTxnRef}
+     * (exact) and {@code merchantId} (exact) alongside the existing date / status / partner
+     * filters. CS quick-wins adds two customer-identifier filters: {@code userRef} (the end-customer
+     * / wallet id) and {@code reference} (the partner's own reference, i.e. partnerTxnRef), so
+     * support can look a payment up by what the customer / partner holds. All filters optional; a
+     * null / blank value is ignored.
+     */
+    public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
+                                               TransactionStatus status, Long partnerId,
+                                               String txnRef, String schemeTxnRef, String merchantId,
+                                               String userRef, String reference,
+                                               int page, int size) {
         int safeSize = Math.min(size, 500);
         PageRequest pageRequest = PageRequest.of(page, safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         return repository.findByFilters(from, to, status, partnerId,
-                txnRef, schemeTxnRef, merchantId, pageRequest);
+                txnRef, schemeTxnRef, merchantId, userRef, reference, pageRequest);
     }
 
     /**

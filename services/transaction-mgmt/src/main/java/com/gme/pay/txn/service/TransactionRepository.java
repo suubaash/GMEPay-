@@ -38,6 +38,7 @@ public interface TransactionRepository {
     Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                     TransactionStatus status, Long partnerId,
                                     String txnRef, String schemeTxnRef, String merchantId,
+                                    String userRef, String reference,
                                     Pageable pageable);
 
     /**

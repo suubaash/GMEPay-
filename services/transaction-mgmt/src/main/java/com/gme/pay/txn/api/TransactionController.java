@@ -93,11 +93,14 @@ public class TransactionController {
             @RequestParam(required = false) String txnRef,
             @RequestParam(required = false) String schemeTxnRef,
             @RequestParam(required = false) String merchantId,
+            @RequestParam(required = false) String userRef,
+            @RequestParam(required = false) String reference,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         return ResponseEntity.ok(runSearch(
-                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size));
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
+                userRef, reference, page, size));
     }
 
     // -------------------------------------------------------------------------
@@ -107,8 +110,10 @@ public class TransactionController {
     /**
      * 360° transaction search for operator drill-down. Same flexible optional filters as the list
      * endpoint — {@code txnRef}, {@code partnerId}, {@code schemeTxnRef}, {@code status},
-     * {@code merchantId}, {@code from}/{@code to} date — returning the paged transaction
-     * projection. A literal path segment, so it never collides with {@code GET /{txnRef}}.
+     * {@code merchantId}, {@code from}/{@code to} date — plus the CS customer-identifier filters
+     * {@code userRef} (end-customer / wallet id) and {@code reference} (the partner's own reference)
+     * — returning the paged transaction projection. A literal path segment, so it never collides
+     * with {@code GET /{txnRef}}.
      */
     @GetMapping("/search")
     public ResponseEntity<TransactionQueryPageResponse> search(
@@ -119,19 +124,24 @@ public class TransactionController {
             @RequestParam(required = false) String txnRef,
             @RequestParam(required = false) String schemeTxnRef,
             @RequestParam(required = false) String merchantId,
+            @RequestParam(required = false) String userRef,
+            @RequestParam(required = false) String reference,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         return ResponseEntity.ok(runSearch(
-                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size));
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
+                userRef, reference, page, size));
     }
 
     /** Shared paged-search implementation behind both {@code GET /} and {@code GET /search}. */
     private TransactionQueryPageResponse runSearch(
             LocalDate from, LocalDate to, TransactionStatus status, Long partnerId,
-            String txnRef, String schemeTxnRef, String merchantId, int page, int size) {
+            String txnRef, String schemeTxnRef, String merchantId,
+            String userRef, String reference, int page, int size) {
         Page<Transaction> result = transactionService.queryTransactions(
-                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId, page, size);
+                from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
+                userRef, reference, page, size);
         List<TransactionResponse> content = result.getContent().stream()
                 .map(TransactionResponse::from)
                 .toList();
@@ -265,7 +275,8 @@ public class TransactionController {
                 req.collectionUsd(),
                 req.costRateColl(),
                 req.costRatePay(),
-                req.payoutUsdCost());
+                req.payoutUsdCost(),
+                req.userRef());
         return CreateTransactionResponse.from(txn);
     }
 

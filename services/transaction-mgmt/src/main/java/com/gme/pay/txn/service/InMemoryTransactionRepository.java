@@ -54,6 +54,7 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                            TransactionStatus status, Long partnerId,
                                            String txnRef, String schemeTxnRef, String merchantId,
+                                           String userRef, String reference,
                                            Pageable pageable) {
         var fromInstant = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         // 'to' is inclusive: advance to start of next day for < comparison
@@ -62,6 +63,7 @@ public class InMemoryTransactionRepository implements TransactionRepository {
         return jpaRepository
                 .findByFilters(fromInstant, toInstant, statusStr, partnerId,
                         blankToNull(txnRef), blankToNull(schemeTxnRef), blankToNull(merchantId),
+                        blankToNull(userRef), blankToNull(reference),
                         pageable)
                 .map(TransactionEntityMapper::toDomain);
     }

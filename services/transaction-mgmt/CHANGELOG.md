@@ -1,5 +1,44 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-02 — CS quick-wins: decline reason + plain-language status/timeline + customer search
+
+Customer-support-facing read enrichment on `TransactionResponse` plus two customer-identifier
+search filters. All additive; edits confined to `services/transaction-mgmt/`; libs/other services
+untouched.
+
+### Added
+- **`failureReason` exposed** on `TransactionResponse` (existed on the domain aggregate since V004,
+  was never serialized). Null-safe.
+- **Plain-language `statusLabel` + `declineReasonText`.** New `CustomerStatusText` maps the FSM
+  `TransactionStatus` → a human label (APPROVED→"Payment approved", SCHEME_SENT→"Sent to scheme,
+  awaiting confirmation", UNCERTAIN→"Pending verification", REVERSED→"Reversed / refunded",
+  FAILED→"Declined", …) and the internal `failureReason` code → a customer-friendly sentence
+  (e.g. `APPROVAL_TIMEOUT`→"The payment timed out waiting for the payment network to confirm."),
+  falling back to the raw reason for an unmapped code. Both null when their source is null.
+- **`statusHistory` wired** (was hard-coded null / TODO). `TransactionResponse.buildStatusHistory`
+  DERIVES an ordered `{status, statusLabel, at, note}` timeline from timestamps already on the
+  aggregate — no new table: CREATED (`createdAt`) → APPROVED (`approvedAt`/`committedAt`) →
+  REVERSED/REFUNDED (`refundedAt`), with the current terminal status (FAILED/UNCERTAIN/CANCELLED/…)
+  appended at `updatedAt`; FAILED carries the decline reason as its note, a force-resolved txn its
+  resolution reason. Sorted oldest-first; never null (a fresh CREATED txn yields one entry).
+- **Customer-identifier search.** `GET /v1/transactions/search` (and `GET /v1/transactions`) gain
+  optional `userRef` (end-customer / wallet id) and `reference` (partner's own reference =
+  `partnerTxnRef`, already persisted since V003) filters. `reference` needed no new storage;
+  `userRef` was NOT persisted → added `user_ref` column (Flyway `V011`), captured from the create
+  request (`CreateTransactionRequest.userRef`, nullable) and threaded create→domain→entity→search.
+- Flyway `V011__add_user_ref.sql` — nullable `user_ref` column + indexes on `user_ref` and
+  `partner_txn_ref` (additive; H2 PG-mode one ALTER per column).
+
+### Tests
+- `TransactionResponseCsTest` — failureReason/statusLabel/declineReasonText populated for a FAILED
+  txn; APPROVED label + no decline fields; ordered non-null `statusHistory` for a committed
+  (CREATED→APPROVED) and a failed txn (terminal FAILED entry carries the decline reason as note).
+- `TransactionSearchTest` — search by `userRef` and by `reference` return only the matching txn.
+- `TransactionContractIT` — GET exposes `statusLabel` + non-null ordered `statusHistory`
+  (CREATED, then +APPROVED after patch); search by `userRef` (round-trips on create) and by
+  `reference` finds the txn over H2.
+- `./gradlew :services:transaction-mgmt:test` green.
+
 ## 2026-07-01 — Ops: force-resolve UNCERTAIN + stuck-txn alerts + 360° search
 
 Adds three Operations capabilities. Edits confined to `services/transaction-mgmt/`; shared

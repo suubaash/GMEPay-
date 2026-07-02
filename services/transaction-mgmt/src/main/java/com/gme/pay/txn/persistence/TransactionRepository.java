@@ -36,13 +36,15 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
      */
     @Query("""
             SELECT t FROM TransactionEntity t
-            WHERE (:fromInstant  IS NULL OR t.createdAt    >= :fromInstant)
-              AND (:toInstant    IS NULL OR t.createdAt    <  :toInstant)
-              AND (:status       IS NULL OR t.status       =  :status)
-              AND (:partnerId    IS NULL OR t.partnerId    =  :partnerId)
-              AND (:txnRef       IS NULL OR t.txnRef       =  :txnRef)
-              AND (:schemeTxnRef IS NULL OR t.schemeTxnRef =  :schemeTxnRef)
-              AND (:merchantId   IS NULL OR t.merchantId   =  :merchantId)
+            WHERE (:fromInstant  IS NULL OR t.createdAt     >= :fromInstant)
+              AND (:toInstant    IS NULL OR t.createdAt     <  :toInstant)
+              AND (:status       IS NULL OR t.status        =  :status)
+              AND (:partnerId    IS NULL OR t.partnerId     =  :partnerId)
+              AND (:txnRef       IS NULL OR t.txnRef        =  :txnRef)
+              AND (:schemeTxnRef IS NULL OR t.schemeTxnRef  =  :schemeTxnRef)
+              AND (:merchantId   IS NULL OR t.merchantId    =  :merchantId)
+              AND (:userRef      IS NULL OR t.userRef       =  :userRef)
+              AND (:reference    IS NULL OR t.partnerTxnRef =  :reference)
             """)
     Page<TransactionEntity> findByFilters(
             @Param("fromInstant")  Instant fromInstant,
@@ -52,6 +54,8 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
             @Param("txnRef")       String txnRef,
             @Param("schemeTxnRef") String schemeTxnRef,
             @Param("merchantId")   String merchantId,
+            @Param("userRef")      String userRef,
+            @Param("reference")    String reference,
             Pageable pageable);
 
     /**

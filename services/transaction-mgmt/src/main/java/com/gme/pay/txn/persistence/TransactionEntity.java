@@ -119,6 +119,10 @@ public class TransactionEntity {
     @Column(name = "failure_reason", length = 64)
     private String failureReason;
 
+    /** CS quick-wins (V011): end-customer / wallet identifier for support lookup. Nullable. */
+    @Column(name = "user_ref", length = 128)
+    private String userRef;
+
     // --- V007: committed-FX projection columns (captured best-effort at commit) ---
 
     @Column(name = "offer_rate_coll", precision = 20, scale = 8)
@@ -280,6 +284,9 @@ public class TransactionEntity {
 
     public String getFailureReason() { return failureReason; }
     public void setFailureReason(String failureReason) { this.failureReason = failureReason; }
+
+    public String getUserRef() { return userRef; }
+    public void setUserRef(String userRef) { this.userRef = userRef; }
 
     // --- V007 accessors ---
 

@@ -157,6 +157,7 @@ class ForceResolveEventEmissionTest {
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
                                                          String txnRef, String schemeTxnRef, String merchantId,
+                                                         String userRef, String reference,
                                                          Pageable pageable) {
             return Page.empty(pageable);
         }

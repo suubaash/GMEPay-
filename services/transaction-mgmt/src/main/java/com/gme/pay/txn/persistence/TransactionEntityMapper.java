@@ -54,6 +54,8 @@ public final class TransactionEntityMapper {
         e.setPrefundDeductedUsd(txn.prefundDeductedUsd());
         e.setApprovedAt(txn.approvedAt());
         e.setFailureReason(txn.failureReason());
+        // V011 (CS): end-customer / wallet identifier for support lookup.
+        e.setUserRef(txn.userRef());
         // V007: committed-FX projection + refund enrichment
         e.setOfferRateColl(txn.offerRateColl());
         e.setCrossRate(txn.crossRate());
@@ -116,6 +118,8 @@ public final class TransactionEntityMapper {
                 e.getFailureReason());
         // V005: snapshot field has no constructor slot — replay it post-construction.
         txn.applyMerchantFeeRate(e.getMerchantFeeRate());
+        // V011 (CS): end-customer / wallet identifier — replayed post-construction (no updatedAt bump).
+        txn.applyUserRef(e.getUserRef());
         // V007: committed-FX projection + refund enrichment — replayed post-construction.
         txn.applyCommittedFx(
                 e.getOfferRateColl(), e.getCrossRate(),

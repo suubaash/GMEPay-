@@ -64,6 +64,13 @@ public class Transaction {
     // OI-01: reason code set when a transaction enters FAILED (e.g. "APPROVAL_TIMEOUT").
     private String failureReason;
 
+    // CS quick-wins (V011): end-customer / wallet identifier carried on the wallet payment,
+    // captured from the create request. Lets customer support look a payment up by what the
+    // CUSTOMER holds (distinct from partnerRef/partnerTxnRef, the PARTNER's own reference).
+    // Nullable on legacy rows and creates that omit it. Snapshot — set on create, replayed on
+    // rehydration; does NOT bump updatedAt.
+    private String userRef;
+
     // V005: gross merchant fee rate snapshot (config-registry merchant_fee_schedule, V032),
     // captured at creation — the rate that applied then. Nullable on legacy / pre-resolution rows.
     private BigDecimal merchantFeeRate;
@@ -436,6 +443,15 @@ public class Transaction {
     }
 
     /**
+     * Captures the end-customer / wallet identifier (CS quick-wins, V011). Set on the create path
+     * and replayed during rehydration from the DB. A creation-time snapshot, so it does NOT bump
+     * {@code updatedAt}. Null-tolerant — a null leaves the field empty (current behaviour).
+     */
+    public void applyUserRef(String userRef) {
+        this.userRef = userRef;
+    }
+
+    /**
      * Snapshots the gross merchant fee rate resolved at creation (V005). Set on the create
      * path and on rehydration from the DB. The rate is immutable for the life of the txn (the
      * rate that applied at creation), so settlement always reads a stable value. Does NOT bump
@@ -653,6 +669,7 @@ public class Transaction {
     public BigDecimal prefundDeductedUsd() { return prefundDeductedUsd; }
     public Instant approvedAt()          { return approvedAt; }
     public String failureReason()        { return failureReason; }
+    public String userRef()              { return userRef; }
     public BigDecimal merchantFeeRate()  { return merchantFeeRate; }
 
     // V007 committed-FX accessors
