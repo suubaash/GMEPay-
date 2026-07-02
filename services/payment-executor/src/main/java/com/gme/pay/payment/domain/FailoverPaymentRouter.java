@@ -225,6 +225,48 @@ public class FailoverPaymentRouter {
     }
 
     /**
+     * Classifies a scanned QR without executing a payment: GMEPay+ is the authority for what the QR
+     * <em>is</em> — its network, country, presentment mode, and the currency GME will charge in
+     * (ZeroPay→KRW, Nepal Fonepay→NPR). The wallet calls this to display the corridor/currency that
+     * GMEPay+ resolved, rather than guessing locally. Currency is derived from the resolved scheme,
+     * so it reflects the actual route (incl. failover roster), not just the raw QR.
+     *
+     * @param direction {@code OUTBOUND} for a customer paying a merchant abroad (Nepal), etc.
+     * @return a {@link QrClassification}; {@code supported=false} when unclassifiable or unroutable.
+     */
+    public QrClassification classifyQr(String qrPayload, String direction) {
+        Classification c = QrSchemeClassifier.classify(qrPayload);
+        if (!c.isKnown()) {
+            return QrClassification.unsupported(null, null);
+        }
+        List<PartnerSchemeView> candidates = smartRouterClient.resolve(
+                c.networkIdentifier(), c.country(), c.mode().name(), direction);
+        if (candidates == null || candidates.isEmpty()) {
+            // Recognised network but no live route → report the corridor, no chargeable currency.
+            return QrClassification.unsupported(c.networkIdentifier(), c.country());
+        }
+        String schemeId = candidates.get(0).schemeId();
+        return new QrClassification(true, c.networkIdentifier(), c.country(),
+                currencyFor(schemeId), c.mode().name(), schemeId);
+    }
+
+    /**
+     * GMEPay+'s authoritative answer to "what is this QR?" — surfaced to the wallet for display.
+     */
+    public record QrClassification(
+            boolean supported,
+            @Nullable String network,   // QR network identifier, e.g. "fonepay.com"
+            @Nullable String country,   // ISO-3166 alpha-2, e.g. "NP"
+            @Nullable String currency,  // GME-authoritative pay currency, e.g. "NPR" (null if unroutable)
+            @Nullable String mode,      // presentment mode: "MPM" / "CPM"
+            @Nullable String scheme     // resolved scheme id, e.g. "NEPAL" (null if unroutable)
+    ) {
+        static QrClassification unsupported(@Nullable String network, @Nullable String country) {
+            return new QrClassification(false, network, country, null, null, null);
+        }
+    }
+
+    /**
      * Anti-double-charge guard (ADR-016 §4). On a technical failure, ask the scheme whether the
      * reference was in fact paid/pending. Returns the {@link LookupStatus} that must short-circuit
      * the loop (APPROVED / PENDING), or {@code null} when it is safe to fail over

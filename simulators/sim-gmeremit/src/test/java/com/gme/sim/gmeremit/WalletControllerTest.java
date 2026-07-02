@@ -174,6 +174,9 @@ class WalletControllerTest {
 
     @Test
     void nepalQrScanShowsRealMerchantAndNpr() throws Exception {
+        // GMEPay+ is the authority for the corridor + currency: the wallet displays what the hub says.
+        given(hub.classify(anyString())).willReturn(new HubClient.HubClassification(
+                true, "fonepay.com", "NP", "NPR", "MPM", "NEPAL"));
         given(nepalQr.decode(anyString())).willReturn(new NepalQrClient.NepalParse(
                 "EMVCo", "static", "Sudan Merchant", "Aathrai Triveni", "NP",
                 "NPR", null   // static QR → user enters the NPR amount
@@ -183,10 +186,15 @@ class WalletControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"qrPayload\":\"" + NEPAL_QR + "\"}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.network",      equalTo("FONEPAY")))
+           // Currency/network/country/scheme come from GMEPay+, not hardcoded by the wallet.
            .andExpect(jsonPath("$.currency",     equalTo("NPR")))
+           .andExpect(jsonPath("$.network",      equalTo("fonepay.com")))
+           .andExpect(jsonPath("$.country",      equalTo("NP")))
+           .andExpect(jsonPath("$.scheme",       equalTo("NEPAL")))
+           .andExpect(jsonPath("$.detectedBy",   equalTo("GMEPAY+")))
+           .andExpect(jsonPath("$.supported",    equalTo(true)))
+           // Merchant details still come from the partner decode.
            .andExpect(jsonPath("$.merchantName", equalTo("Sudan Merchant")))
-           .andExpect(jsonPath("$.merchantName", not(equalTo("Unknown Merchant"))))
            .andExpect(jsonPath("$.merchantCity", equalTo("Aathrai Triveni")))
            .andExpect(jsonPath("$.mode",         equalTo("static")));
 

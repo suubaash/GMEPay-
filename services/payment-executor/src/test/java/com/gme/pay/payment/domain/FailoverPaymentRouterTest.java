@@ -59,6 +59,36 @@ class FailoverPaymentRouterTest {
         // whatever the test sets, so classification is not under test here.
     }
 
+    // classifyQr: GMEPay+ is authoritative — a Fonepay QR resolves to Nepal / NPR.
+    @Test
+    @DisplayName("classifyQr: Fonepay QR → supported, network fonepay.com, country NP, currency NPR")
+    void classifyQr_fonepayResolvesToNepalNpr() {
+        when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
+                .thenReturn(List.of(primary));   // primary = NEPAL scheme
+
+        FailoverPaymentRouter.QrClassification c = router.classifyQr(QR, "OVERSEAS");
+
+        assertTrue(c.supported());
+        assertEquals("fonepay.com", c.network());
+        assertEquals("NP", c.country());
+        assertEquals("NPR", c.currency());
+        assertEquals("NEPAL", c.scheme());
+    }
+
+    // classifyQr: a recognised network with no live route → unsupported, no chargeable currency.
+    @Test
+    @DisplayName("classifyQr: no routing candidates → unsupported, currency null")
+    void classifyQr_noRoute_unsupported() {
+        when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
+                .thenReturn(List.of());
+
+        FailoverPaymentRouter.QrClassification c = router.classifyQr(QR, "OVERSEAS");
+
+        assertFalse(c.supported());
+        assertEquals("NP", c.country());   // corridor still reported
+        assertEquals(null, c.currency());  // but nothing chargeable
+    }
+
     // (a) primary technical-fail + lookup NOT_FOUND → secondary APPROVED
     @Test
     @DisplayName("(a) primary technical failure, lookup NOT_FOUND → fails over, secondary APPROVED")

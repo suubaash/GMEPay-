@@ -1,5 +1,29 @@
 # Changelog
 
+## GMEPay+-authoritative QR classification (branch `feat/hub-qr-classify`)
+
+Makes GMEPay+ — not the wallet — the authority for what a scanned QR *is*. Before,
+the GMERemit wallet hardcoded `network=FONEPAY, currency=NPR` locally and asked the
+partner sim directly; the hub was never consulted for the corridor/currency.
+
+### Added
+- **`POST /v1/pay/classify`** on payment-executor — given a raw QR payload, returns
+  `{supported, network, country, currency, mode, scheme}` using the same
+  `QrSchemeClassifier` + smart-router routing the pay path uses (Fonepay → NP / NPR /
+  NEPAL; ZeroPay → KR / KRW). No payment executed.
+- `FailoverPaymentRouter.classifyQr(...)` + `QrClassification` record (currency
+  derived from the resolved scheme, so it reflects the actual route incl. failover).
+
+### Changed
+- **GMERemit wallet** now calls `/v1/pay/classify` and displays the currency/network/
+  country/scheme **GMEPay+ returns** (`detectedBy=GMEPAY+`), falling back to Fonepay/NPR
+  labels only if the hub is unreachable. Merchant name/city/amount still come from the
+  partner decode. UI is unchanged (it keys off `currency==='NPR'`).
+
+### Tests
+- `classifyQr` → Fonepay resolves to NP/NPR/NEPAL; no-route → unsupported, null currency.
+- Wallet scan test now stubs `hub.classify` and asserts the hub-driven fields. All green.
+
 ## admin-ui Operations console (branch `feat/ops-console`)
 
 Adds the native React Operations console — the #1 Ops sign-off blocker (backend
