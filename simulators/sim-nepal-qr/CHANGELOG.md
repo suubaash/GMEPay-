@@ -22,6 +22,24 @@ All notable changes to the Nepal QR partner simulator.
   the inspection store. No signature/nonce required (same-origin, no CORS).
 - MockMvc test **T11** covering the UI pay endpoint (txn created + recorded).
 
+### Changed
+- `POST /qrscan-thirdparty/parse/` response now also carries `network` and
+  `merchantId` (previously only the GUID was surfaced via `merchantInfoExtra`),
+  completing the decoded merchant shape.
+- `GET /sim/nepal-qr/records` accepts an optional `?endpoint=` filter (in addition
+  to `?reference=`) so read-only calls (e.g. parse) can be located in the store.
+
+### Verified / hardened
+- Proved `QrParser.parse` decodes the exact real Fonepay wallet QR
+  (`...26350011fonepay.com07164089720000001783...5914SudanMerchant6015AathraiTriveni...`)
+  field-by-field: network=fonepay, initMethod=static, merchantId=4089720000001783
+  (MAI template 26 sub-tag 07), MCC=5412, currency=NPR (tag 53=524), country=NP,
+  name=SudanMerchant + city=AathraiTriveni (both declared one char too long — the
+  resync heuristic trims the trailing digit instead of eating the next tag),
+  amount=null (no tag 54, static). No parser change was needed — added a
+  full-field parser test (`decodesExactRealFonepayQr`) plus endpoint tests
+  (T05 extended + T05b) asserting the parse and `/api/qr/validate/` responses.
+
 ## [0.0.1] - 2026-07-01
 
 ### Added

@@ -30,10 +30,18 @@ public class NepalQrStore {
 
     /** Newest-first, optionally filtered by reference. */
     public List<SimRecord> records(String referenceFilter) {
+        return records(referenceFilter, null);
+    }
+
+    /** Newest-first, optionally filtered by reference and/or endpoint. */
+    public List<SimRecord> records(String referenceFilter, String endpointFilter) {
         List<SimRecord> out = new ArrayList<>(records);
         java.util.Collections.reverse(out);
         if (referenceFilter != null && !referenceFilter.isBlank()) {
             out.removeIf(r -> !referenceFilter.equals(r.reference));
+        }
+        if (endpointFilter != null && !endpointFilter.isBlank()) {
+            out.removeIf(r -> !endpointFilter.equals(r.endpoint));
         }
         return out;
     }

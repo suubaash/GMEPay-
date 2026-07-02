@@ -27,8 +27,9 @@ public class InspectionController {
     }
 
     @GetMapping("/records")
-    public List<SimRecord> records(@RequestParam(required = false) String reference) {
-        return store.records(reference);
+    public List<SimRecord> records(@RequestParam(required = false) String reference,
+                                   @RequestParam(required = false) String endpoint) {
+        return store.records(reference, endpoint);
     }
 
     @GetMapping("/records/{id}")
