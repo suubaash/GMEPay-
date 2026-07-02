@@ -98,10 +98,17 @@ public class WalletController {
 
     /** Cross-border Nepal decode via sim-nepal-qr — resolves the REAL merchant + NPR amount. */
     private Map<String, Object> scanNepal(String qrPayload) {
+        // GMEPay+ is the AUTHORITY for the corridor + currency: ask the hub what this QR is, and
+        // display what it answers. We only fall back to Fonepay/NPR labels if the hub is unreachable.
+        HubClient.HubClassification cls = hub.classify(qrPayload);
         NepalQrClient.NepalParse parse = nepalQr.decode(qrPayload);
         Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("network",  "FONEPAY");
-        resp.put("currency", "NPR");
+        resp.put("network",    cls != null && cls.network()  != null ? cls.network()  : "FONEPAY");
+        resp.put("currency",   cls != null && cls.currency() != null ? cls.currency() : "NPR");
+        resp.put("country",    cls != null ? cls.country() : "NP");
+        resp.put("scheme",     cls != null ? cls.scheme()  : null);
+        resp.put("supported",  cls == null || cls.supported());
+        resp.put("detectedBy", cls != null ? "GMEPAY+" : "wallet-fallback");
         if (parse == null) {
             // Nepal sim down — do NOT masquerade as a known merchant.
             resp.put("merchantId",   "UNKNOWN");

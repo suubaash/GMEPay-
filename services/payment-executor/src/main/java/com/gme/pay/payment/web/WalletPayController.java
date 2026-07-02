@@ -201,6 +201,37 @@ public class WalletPayController {
         return ResponseEntity.status(status).body(response);
     }
 
+    /**
+     * POST /v1/pay/classify — GMEPay+ is the authority for what a scanned QR is. Given a raw QR
+     * payload it returns the network, country, presentment mode and the currency GME will charge in
+     * (Nepal Fonepay → NPR, ZeroPay → KRW), resolved through the same classifier + routing the pay
+     * path uses. The wallet calls this BEFORE amount entry to display the corridor/currency that
+     * GMEPay+ resolved, instead of guessing locally. No payment is executed and nothing is charged.
+     *
+     * <pre>{ "qrPayload": "&lt;raw EMVCo QR&gt;" }  →  { supported, network, country, currency, mode, scheme }</pre>
+     */
+    @PostMapping("/classify")
+    public ResponseEntity<FailoverPaymentRouter.QrClassification> classify(
+            @RequestBody WalletPaymentRequest req) {
+        if (req.qrPayload() == null || req.qrPayload().isBlank()) {
+            throw new IllegalArgumentException("qrPayload is required");
+        }
+        // Use the same direction the failover pay path uses (OVERSEAS) so classify resolves the
+        // exact route the payment will take.
+        if (failoverPaymentRouter != null) {
+            return ResponseEntity.ok(
+                    failoverPaymentRouter.classifyQr(req.qrPayload(), "OVERSEAS"));
+        }
+        // Router unavailable (minimal config): fall back to static classification, currency by
+        // country. Still GMEPay+-sourced — the wallet must not hardcode it.
+        Classification c = QrSchemeClassifier.classify(req.qrPayload());
+        String currency = "NP".equalsIgnoreCase(c.country()) ? "NPR"
+                : "KR".equalsIgnoreCase(c.country()) ? "KRW" : null;
+        return ResponseEntity.ok(new FailoverPaymentRouter.QrClassification(
+                c.isKnown(), c.networkIdentifier(), c.country(), currency,
+                c.isKnown() ? c.mode().name() : null, null));
+    }
+
     /** True when the classified QR network is ZeroPay (domestic path stays on the existing services). */
     private static boolean isZeroPayNetwork(String networkIdentifier) {
         return networkIdentifier != null

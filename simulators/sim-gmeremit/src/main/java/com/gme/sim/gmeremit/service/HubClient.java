@@ -55,6 +55,27 @@ public class HubClient {
         }
     }
 
+    /**
+     * Asks GMEPay+ to classify a scanned QR — GMEPay+ is the authority for the corridor + currency.
+     * Returns {@code null} if the hub is unreachable, so the wallet can degrade gracefully.
+     */
+    public HubClassification classify(String qrPayload) {
+        try {
+            return restClient.post()
+                    .uri("/v1/pay/classify")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("qrPayload", qrPayload))
+                    .retrieve()
+                    .body(HubClassification.class);
+        } catch (ResourceAccessException e) {
+            log.warn("Hub unreachable for QR classify: {}", e.getMessage());
+            return null;
+        } catch (Exception e) {
+            log.warn("QR classify failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Payment execution
     // -------------------------------------------------------------------------
@@ -142,6 +163,17 @@ public class HubClient {
             @JsonProperty("chargedKrw")    String chargedKrw,
             @JsonProperty("committedAt")   String committedAt,
             @JsonProperty("declineReason") String declineReason
+    ) {}
+
+    /** GMEPay+'s authoritative classification of a scanned QR (from {@code POST /v1/pay/classify}). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record HubClassification(
+            @JsonProperty("supported") boolean supported,
+            @JsonProperty("network")   String network,   // e.g. "fonepay.com"
+            @JsonProperty("country")   String country,   // e.g. "NP"
+            @JsonProperty("currency")  String currency,  // GME-authoritative, e.g. "NPR"
+            @JsonProperty("mode")      String mode,       // "MPM" / "CPM"
+            @JsonProperty("scheme")    String scheme      // e.g. "NEPAL"
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
