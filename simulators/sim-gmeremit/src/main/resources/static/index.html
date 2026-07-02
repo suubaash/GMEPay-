@@ -117,6 +117,7 @@
     }
     .preview-card.visible { display: block; }
     .preview-card .merchant { font-size: 16px; font-weight: 700; color: #1a237e; }
+    .preview-card .merchant-city { font-size: 12px; color: #888; margin-top: 2px; }
     .preview-card .mode-badge {
       display: inline-block;
       font-size: 11px;
@@ -127,6 +128,27 @@
       margin-left: 6px;
       vertical-align: middle;
     }
+    .preview-card .nepal-badge {
+      display: inline-block;
+      font-size: 11px;
+      background: #fff3e0;
+      color: #e65100;
+      border-radius: 4px;
+      padding: 2px 6px;
+      margin-left: 6px;
+      vertical-align: middle;
+      font-weight: 600;
+    }
+    .preview-card .krw-est {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #555;
+      background: #eef2ff;
+      border-radius: 6px;
+      padding: 8px 10px;
+      line-height: 1.4;
+    }
+    .preview-card .krw-est b { color: #1a237e; }
     .preview-card .amount-row {
       margin-top: 8px;
       display: flex;
@@ -285,7 +307,7 @@
   <!-- Header -->
   <div class="header">
     <h1>GMERemit Wallet</h1>
-    <div class="subtitle">ZeroPay QR Payments</div>
+    <div class="subtitle">ZeroPay (KRW) &amp; Fonepay Nepal (NPR)</div>
   </div>
 
   <!-- User picker -->
@@ -299,8 +321,8 @@
 
   <!-- QR section -->
   <div class="qr-section">
-    <label>Paste ZeroPay QR payload</label>
-    <div class="hint">Copy it from the Merchant Terminal simulator or another QR source.</div>
+    <label>Paste a QR payload</label>
+    <div class="hint">ZeroPay (Korea, KRW) or Fonepay (Nepal, NPR). Copy it from a Merchant Terminal or QR source.</div>
     <textarea id="qrInput" placeholder="00020101021226370016A000000642..."></textarea>
     <button class="btn btn-scan" onclick="doScan()">Scan QR</button>
   </div>
@@ -309,12 +331,15 @@
   <div class="preview-card" id="previewCard">
     <span class="merchant" id="previewMerchant">—</span>
     <span class="mode-badge" id="previewMode">static</span>
+    <span class="nepal-badge" id="previewNepalBadge" style="display:none">Nepal · Fonepay</span>
+    <div class="merchant-city" id="previewCity" style="display:none"></div>
     <div class="amount-row">
-      <span class="amount-label">Amount (KRW)</span>
+      <span class="amount-label" id="amountLabel">Amount (KRW)</span>
       <span class="amount-static" id="previewAmountStatic" style="display:none"></span>
       <input type="number" id="amountInput" placeholder="e.g. 50000" min="1" step="1" style="display:none"/>
     </div>
-    <button class="btn btn-pay" onclick="doPay()">Pay ₩</button>
+    <div class="krw-est" id="krwEst" style="display:none"></div>
+    <button class="btn btn-pay" onclick="doPay()">Pay</button>
     <button class="btn btn-clear" onclick="clearAll()">Clear</button>
   </div>
 
@@ -396,29 +421,86 @@ async function doScan() {
   }
 }
 
+// Currency helpers — KRW uses the ₩ sign; NPR is shown as "NPR 1,000".
+function isNepal(data) { return data && data.currency === 'NPR'; }
+function ccySymbol(ccy) { return ccy === 'NPR' ? 'NPR ' : '₩'; }
+function ccyFmt(ccy, val) {
+  if (val == null) return '—';
+  return ccy === 'NPR' ? 'NPR ' + Number(val).toLocaleString()
+                       : '₩' + Number(val).toLocaleString();
+}
+
 function showPreview(data) {
-  document.getElementById('previewMerchant').textContent = data.merchantName || 'Unknown';
-  const modeBadge = document.getElementById('previewMode');
-  modeBadge.textContent = data.mode || 'static';
+  const nepal = isNepal(data);
+  const ccy   = data.currency || 'KRW';
+
+  document.getElementById('previewMerchant').textContent =
+    data.merchantName || (nepal ? 'Unknown Nepal Merchant' : 'Unknown');
+
+  document.getElementById('previewMode').textContent = data.mode || 'static';
+
+  // Nepal tag + merchant city
+  const nepalBadge = document.getElementById('previewNepalBadge');
+  const cityEl     = document.getElementById('previewCity');
+  nepalBadge.style.display = nepal ? 'inline-block' : 'none';
+  if (nepal && data.merchantCity) {
+    cityEl.textContent = data.merchantCity + (data.merchantCountry ? '' : ', Nepal');
+    cityEl.style.display = 'block';
+  } else {
+    cityEl.style.display = 'none';
+  }
+
+  // Currency-aware amount label
+  document.getElementById('amountLabel').textContent = 'Amount (' + ccy + ')';
 
   const staticEl = document.getElementById('previewAmountStatic');
   const inputEl  = document.getElementById('amountInput');
+  const krwEst   = document.getElementById('krwEst');
 
   if (data.amount) {
-    // Dynamic QR — amount is fixed
-    staticEl.textContent = '₩' + Number(data.amount).toLocaleString();
+    // Dynamic QR — amount is fixed (in merchant currency)
+    staticEl.textContent = ccyFmt(ccy, data.amount);
     staticEl.style.display = 'inline';
     inputEl.style.display  = 'none';
     inputEl.value = data.amount;
   } else {
-    // Static QR — user enters amount
+    // Static QR — user enters the amount in the merchant currency
     staticEl.style.display = 'none';
     inputEl.style.display  = 'flex';
     inputEl.value          = '';
     inputEl.focus();
   }
 
+  // KRW-debit estimate for Nepal payments
+  if (nepal) {
+    krwEst.style.display = 'block';
+    updateKrwEstimate(data);
+    // Recompute the estimate live as the user types an NPR amount.
+    inputEl.oninput = () => updateKrwEstimate(data);
+  } else {
+    krwEst.style.display = 'none';
+    inputEl.oninput = null;
+  }
+
   document.getElementById('previewCard').classList.add('visible');
+}
+
+// Show "You pay ≈ ₩X (incl. fee) → merchant receives NPR Y" for the Nepal corridor.
+function updateKrwEstimate(data) {
+  const krwEst = document.getElementById('krwEst');
+  const rate   = Number(data.krwPerNpr || 0);
+  const inputEl = document.getElementById('amountInput');
+  const npr = data.amount ? Number(data.amount)
+                          : (inputEl.value ? Number(inputEl.value) : 0);
+  if (!npr || npr <= 0) {
+    krwEst.innerHTML = 'Sim FX rate: <b>₩' + rate.toFixed(4) + '</b> per NPR (incl. margin). '
+      + 'Enter an NPR amount to see the KRW you\'ll pay.';
+    return;
+  }
+  const fee = 500;
+  const krw = Math.round(npr * rate) + fee;
+  krwEst.innerHTML = 'You pay ≈ <b>₩' + krw.toLocaleString() + '</b> (incl. ₩' + fee
+    + ' fee) → merchant receives <b>NPR ' + npr.toLocaleString() + '</b>';
 }
 
 // ---- Pay ----
@@ -427,12 +509,13 @@ async function doPay() {
   const qr = document.getElementById('qrInput').value.trim();
   if (!qr) { alert('QR payload is missing.'); return; }
 
-  let amountKrw;
+  // Amount is in the merchant currency (KRW domestic / NPR Nepal).
+  let amount;
   if (previewData && previewData.amount) {
-    amountKrw = previewData.amount;
+    amount = previewData.amount;
   } else {
-    amountKrw = document.getElementById('amountInput').value.trim();
-    if (!amountKrw || isNaN(amountKrw) || Number(amountKrw) <= 0) {
+    amount = document.getElementById('amountInput').value.trim();
+    if (!amount || isNaN(amount) || Number(amount) <= 0) {
       alert('Please enter a valid amount.'); return;
     }
   }
@@ -445,7 +528,7 @@ async function doPay() {
     const res = await fetch(API + '/users/' + currentUser.userId + '/pay', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ qrPayload: qr, amountKrw: String(amountKrw) })
+      body: JSON.stringify({ qrPayload: qr, amount: String(amount) })
     });
     const data = await res.json();
 
@@ -461,7 +544,7 @@ async function doPay() {
   } catch(e) {
     alert('Payment failed: ' + e.message);
   } finally {
-    btn.innerHTML = 'Pay ₩';
+    btn.innerHTML = 'Pay';
     btn.disabled = false;
   }
 }
@@ -469,27 +552,43 @@ async function doPay() {
 // ---- Confirmation screens ----
 function showConfirmSuccess(data) {
   const r = data.receipt || {};
+  const nepal = r.currency === 'NPR';
   const card = document.getElementById('confirmCard');
   card.className = 'confirm-card success';
+
+  // Nepal: merchant receives NPR; the wallet is debited KRW. Domestic: everything in KRW.
+  const amountPaidRow = nepal
+    ? `<div class="receipt-row">
+         <span class="rl">Merchant receives</span>
+         <span class="rv highlight">NPR ${fmt(r.payAmount)}</span>
+       </div>
+       <div class="receipt-row">
+         <span class="rl">Converted to</span>
+         <span class="rv">&#8361;${fmt(r.payAmountKrw)}</span>
+       </div>`
+    : `<div class="receipt-row">
+         <span class="rl">Amount paid</span>
+         <span class="rv highlight">&#8361;${fmt(r.payAmountKrw)}</span>
+       </div>`;
+
   card.innerHTML = `
     <div class="big-icon">&#10003;</div>
     <div class="confirm-title">Payment successful</div>
-    <div class="confirm-subtitle">Your payment has been processed via ZeroPay.</div>
+    <div class="confirm-subtitle">${nepal
+      ? 'Your cross-border payment to Nepal (Fonepay) has been processed.'
+      : 'Your payment has been processed via ZeroPay.'}</div>
 
     <div class="receipt-row">
       <span class="rl">Merchant</span>
       <span class="rv">${esc(r.merchantName || '—')}</span>
     </div>
-    <div class="receipt-row">
-      <span class="rl">Amount paid</span>
-      <span class="rv highlight">&#8361;${fmt(r.payAmountKrw)}</span>
-    </div>
+    ${amountPaidRow}
     <div class="receipt-row">
       <span class="rl">Service fee</span>
       <span class="rv">&#8361;${fmt(r.feeKrw)}</span>
     </div>
     <div class="receipt-row">
-      <span class="rl">Total charged</span>
+      <span class="rl">Total charged (KRW)</span>
       <span class="rv highlight">&#8361;${fmt(r.chargedKrw)}</span>
     </div>
     <div class="receipt-row">
@@ -542,18 +641,24 @@ async function refreshTxns() {
     }
     // Most recent first
     const reversed = [...txns].reverse();
-    el.innerHTML = reversed.map(t => `
+    el.innerHTML = reversed.map(t => {
+      const nepal = t.currency === 'NPR';
+      // Merchant-currency line for Nepal; KRW debit is always shown as the amount charged.
+      const merchantLine = nepal
+        ? `<span class="ti-merchant">${esc(t.merchantName || '—')} <span style="color:#e65100;font-size:11px">· NPR ${fmt(t.payAmount)}</span></span>`
+        : `<span class="ti-merchant">${esc(t.merchantName || '—')}</span>`;
+      return `
       <div class="txn-item">
         <div class="ti-top">
-          <span class="ti-merchant">${esc(t.merchantName || '—')}</span>
+          ${merchantLine}
           <span class="ti-amount">-&#8361;${fmt(t.chargedKrw)}</span>
         </div>
         <div class="ti-bottom">
           <span class="ti-ref">${esc((t.schemeTxnRef || '').substring(0,20))}</span>
           <span class="ti-date">${esc((t.committedAt || '').substring(0,16).replace('T',' '))}</span>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } catch (e) { /* ignore */ }
 }
 

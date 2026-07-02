@@ -1,13 +1,31 @@
 # sim-gmeremit — GMERemit Wallet Simulator
 
 A standalone Spring Boot simulator that demonstrates a consumer wallet paying via
-ZeroPay QR codes through the GMEPay+ hub.
+QR codes through the GMEPay+ hub — both **domestic ZeroPay (KRW)** and, when a
+GMERemit user is "in Nepal", **cross-border Fonepay / NepalPay (NPR)**.
 
 ## What it is
 
-Three seeded users (Alice, Bob, Chloe — ₩500,000 each) can scan / paste ZeroPay
-QR payloads, preview the merchant, and pay. The hub charges ₩500 fee on top of the
-payment amount. A green confirmation card shows on success; a red card on decline.
+Three seeded users (Alice, Bob, Chloe — ₩500,000 each) can scan / paste QR
+payloads, preview the merchant, and pay. The wallet always debits the user's **KRW**
+balance; the ₩500 service fee is added on top. A green confirmation card shows on
+success; a red card on decline.
+
+### Cross-border (Nepal) awareness
+
+The wallet detects the QR network from the payload:
+
+- Contains `fonepay.com` / `nepalpay.com` / the EMVCo Nepal country tag `5802NP`
+  → **Nepal (NPR)**. Decoded via the Nepal QR partner sim (`sim-nepal-qr`,
+  `POST /qrscan-thirdparty/parse/`), which returns the **real merchant** (name / city)
+  and the NPR amount (rupees; `null` for a static QR → the user enters the NPR amount).
+- Anything else → **domestic ZeroPay (KRW)**, decoded via the scheme sim (unchanged).
+
+For a Nepal payment the wallet shows the amount in **NPR**, computes the **KRW debit**
+= `NPR × krw-per-npr × (1 + margin) + ₩500 fee` using a **sim FX rate**, and displays
+_"You pay ≈ ₩X (incl. fee) → merchant receives NPR Y"_. It calls the hub `/v1/pay`
+with the **NPR amount** and `currency=NPR`. (Production FX comes from `rate-fx`; the
+rate here is a sim-only mock.)
 
 ## How to run
 
@@ -39,6 +57,23 @@ cd C:/Users/GME/.claude/GMEPay+/code
 ```
 
 Then open **http://localhost:9105** in a browser.
+
+> **For Nepal (NPR) payments** you also need the Nepal QR partner sim running:
+> ```
+> ./gradlew -p simulators/sim-nepal-qr bootRun   # port 9103
+> ```
+> and the hub's **NEPAL route** must be wired to accept `currency=NPR` on `/v1/pay`
+> (being added in parallel). Domestic ZeroPay works without either.
+
+## Configuration
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `gmepay.sim.gmeremit.gmepay-base-url` | `http://localhost:8084` | Payment-executor hub (`POST /v1/pay`) |
+| `gmepay.sim.gmeremit.scheme-base-url` | `http://localhost:9102` | ZeroPay scheme sim (domestic QR decode) |
+| `gmepay.sim.nepal-qr.base-url` | `http://localhost:9103` | Nepal QR partner sim (Fonepay/NepalPay decode) |
+| `gmepay.sim.fx.krw-per-npr` | `1.05` | Sim FX: KRW per 1 NPR (mock; prod uses `rate-fx`) |
+| `gmepay.sim.fx.npr-margin` | `0.02` | Sim FX margin added on top of the mid rate (2%) |
 
 ## User journey
 
@@ -78,30 +113,23 @@ cd C:/Users/GME/.claude/GMEPay+/code
 
 ## Hub contract (POST /v1/pay)
 
+The request now carries `amount` (in the **merchant currency**) plus a `currency` field.
+`amountKrw` is still populated for domestic KRW payments (backward compatibility).
+
 ```json
-// Request
-{
-  "qrPayload":  "<raw EMVCo string>",
-  "amountKrw":  "50000",
-  "partner":    "GMEREMIT",
-  "userRef":    "user-001"
-}
+// Request — domestic (KRW)
+{ "qrPayload":"<QR>", "amount":"50000", "amountKrw":"50000", "currency":"KRW", "partner":"GMEREMIT", "userRef":"user-001" }
 
-// Response APPROVED (201)
-{
-  "status":       "APPROVED",
-  "schemeTxnRef": "TXN-AABB1122...",
-  "merchantName": "Coffee Shop",
-  "payAmountKrw": "50000",
-  "feeKrw":       "500",
-  "chargedKrw":   "50500",
-  "committedAt":  "2026-06-13T11:23:45+09:00"
-}
+// Request — Nepal (NPR)
+{ "qrPayload":"<Fonepay QR>", "amount":"1000", "currency":"NPR", "partner":"GMEREMIT", "userRef":"user-001" }
 
-// Response DECLINED (422)
+// Response APPROVED (201) — hub may echo currency/payAmount; the wallet computes the KRW debit
 {
-  "status":        "DECLINED",
-  "merchantName":  "Coffee Shop",
-  "declineReason": "MERCHANT_INACTIVE"
+  "status":"APPROVED", "schemeTxnRef":"TXN-...", "merchantName":"Sudan Merchant",
+  "currency":"NPR", "payAmount":"1000", "payAmountKrw":"1071",
+  "feeKrw":"500", "chargedKrw":"1571", "committedAt":"2026-07-02T15:00:00+09:00"
 }
 ```
+
+The wallet's own `/pay` **receipt** carries `currency`, `payAmount` (merchant currency),
+`payAmountKrw` (KRW value of the payment leg), `feeKrw`, and `chargedKrw` (KRW debited).
