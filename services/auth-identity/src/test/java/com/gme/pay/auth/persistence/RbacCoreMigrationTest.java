@@ -45,6 +45,22 @@ class RbacCoreMigrationTest {
     }
 
     @Test
+    void v006_seedsSupportRole_withScopedPermissions_andNoDangerousGrants() {
+        Long supportId = roles.findByCode("SUPPORT").orElseThrow().getId();
+
+        var granted = rolePermissions.findByRoleId(supportId);
+        var codes = granted.stream()
+                .map(rp -> permissions.findById(rp.getPermissionId()).orElseThrow().getCode())
+                .toList();
+
+        // exactly the scoped set: read transactions + tier-1 (safe) refund
+        assertThat(codes).containsExactlyInAnyOrder("txn.view", "refund.approve_l1");
+        // and explicitly NONE of the dangerous operator permissions
+        assertThat(codes).doesNotContain(
+                "ops:operate", "partner.activate", "settlement.resolve_exception", "rbac.manage");
+    }
+
+    @Test
     void temporalUserRole_roundTrips_andResolvesActiveWindow() {
         PrincipalEntity p = principals.save(new PrincipalEntity(
                 PrincipalEntity.Type.OPERATOR, "rbac.smoke", "RBAC Smoke", null, Instant.now()));

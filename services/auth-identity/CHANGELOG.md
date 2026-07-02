@@ -2,6 +2,27 @@
 
 All notable changes to the auth-identity service. Newest first.
 
+## 2026-07-02 — SUPPORT role (scoped customer-support access)
+
+### Added
+- **`SUPPORT` RBAC role** (Flyway `V006__support_role.sql`) for customer-support
+  staff. Scoped, additive seed only — no schema change. Granted exactly:
+  - `txn.view` — look up and read transactions.
+  - `refund.approve_l1` — act on refunds within the tier-1 band (the SELF_SERVE
+    <$1k band auto-approves with no permission, so this is the meaningful "handle
+    a refund up to a limit" grant). Reuses the existing V005 permission rather than
+    minting a new `refund.request`/`refund.view` code, keeping the DB-driven
+    catalogue count (and its test invariants) stable.
+  - Explicitly **NOT** granted `ops:operate`, `partner.activate`,
+    `settlement.resolve_exception`, or `rbac.manage` — support never touches partner
+    lifecycle, settlement exceptions, hub operate actions, or role administration.
+- Idempotent guarded inserts (`WHERE NOT EXISTS`); portable across H2 PG-compat + PostgreSQL 16.
+
+### Tests
+- `RbacCoreMigrationTest.v006_seedsSupportRole_withScopedPermissions_andNoDangerousGrants`:
+  SUPPORT resolves to exactly `{txn.view, refund.approve_l1}` and to none of the
+  dangerous operator permissions.
+
 ## 2026-06-30 — JWT token surface + DB-backed credential lookup + key rotation
 
 ### Added
