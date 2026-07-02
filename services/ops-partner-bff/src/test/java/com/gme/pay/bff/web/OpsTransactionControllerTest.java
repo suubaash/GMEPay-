@@ -62,7 +62,8 @@ class OpsTransactionControllerTest {
                 .thenReturn(new TransactionMgmtClient.Page<>(List.of(row), 0, 20, 1));
 
         mvc.perform(get("/v1/admin/transactions/search")
-                        .param("q", "TXN-1001").param("status", "UNCERTAIN"))
+                        .param("q", "TXN-1001").param("status", "UNCERTAIN")
+                        .param("userRef", "wallet-123").param("reference", "PARTNER-REF-9"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.content[0].txnId").value("TXN-1001"))
@@ -72,6 +73,29 @@ class OpsTransactionControllerTest {
         verify(transactions).search(cap.capture());
         assertThat(cap.getValue().q()).isEqualTo("TXN-1001");
         assertThat(cap.getValue().status()).isEqualTo("UNCERTAIN");
+        assertThat(cap.getValue().userRef()).isEqualTo("wallet-123");
+        assertThat(cap.getValue().reference()).isEqualTo("PARTNER-REF-9");
+    }
+
+    @Test
+    void txnViewCanSearch_butCannotResolve() throws Exception {
+        // A support agent presents txn.view but NOT ops:operate.
+        when(transactions.search(any(SearchQuery.class)))
+                .thenReturn(new TransactionMgmtClient.Page<>(List.of(), 0, 20, 0));
+
+        // CAN search with txn.view (fail-closed guard passes on txn.view).
+        mvc.perform(get("/v1/admin/transactions/search")
+                        .param("q", "TXN-1001")
+                        .header("X-Gme-Permissions", "txn.view"))
+                .andExpect(status().isOk());
+
+        // CANNOT force-resolve — that still requires ops:operate → 403.
+        mvc.perform(post("/v1/admin/transactions/TXN-1001/resolve")
+                        .header("X-Gme-Permissions", "txn.view")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"resolution\":\"FORCE_APPROVE\"}"))
+                .andExpect(status().isForbidden());
+        assertThat(audit.captured()).isEmpty();
     }
 
     @Test

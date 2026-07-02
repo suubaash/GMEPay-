@@ -33,6 +33,14 @@ public class OpsRbacGuard {
     /** Permission required to invoke an ops operator action. */
     static final String OPS_PERMISSION = "ops:operate";
 
+    /**
+     * Support-appropriate READ permission for the customer-support read surface
+     * (transaction search + detail/status). A support agent holding {@code txn.view}
+     * can look up and read a transaction WITHOUT the dangerous {@link #OPS_PERMISSION};
+     * money/state-affecting actions still require {@link #OPS_PERMISSION}.
+     */
+    static final String TXN_VIEW_PERMISSION = "txn.view";
+
     /** When true (default) an absent permissions header is denied; false = dev gate-off. */
     private final boolean enforce;
 
@@ -46,22 +54,45 @@ public class OpsRbacGuard {
      * @param permissionsHeader the raw {@code X-Gme-Permissions} header value (may be null)
      */
     public void requireOps(String permissionsHeader) {
+        require(permissionsHeader, "ops operator action", OPS_PERMISSION);
+    }
+
+    /**
+     * Authorize a customer-support READ (transaction search + detail/status) or throw
+     * {@link ResponseStatusException} 403. Fail-closed on {@value #TXN_VIEW_PERMISSION}:
+     * an absent header is denied (unless dev gate-off), and a present-but-lacking header
+     * is always denied. {@link #OPS_PERMISSION} implies read access, so an ops operator
+     * passes this gate too.
+     *
+     * @param permissionsHeader the raw {@code X-Gme-Permissions} header value (may be null)
+     */
+    public void requireTxnView(String permissionsHeader) {
+        require(permissionsHeader, "transaction read", TXN_VIEW_PERMISSION, OPS_PERMISSION);
+    }
+
+    /**
+     * Fail-closed check that {@code permissionsHeader} carries at least one of
+     * {@code accepted}. Absent header is denied when {@link #enforce}; present-but-lacking
+     * is always denied.
+     */
+    private void require(String permissionsHeader, String actionLabel, String... accepted) {
         boolean present = permissionsHeader != null && !permissionsHeader.isBlank();
+        String required = accepted[0];
         if (!present) {
             if (enforce) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                        "ops operator action requires the '" + OPS_PERMISSION
+                        actionLabel + " requires the '" + required
                                 + "' permission (no permissions presented)");
             }
             // Dev gate-off: absent header allowed.
             return;
         }
-        boolean hasOps = Arrays.stream(permissionsHeader.split(","))
+        boolean granted = Arrays.stream(permissionsHeader.split(","))
                 .map(String::trim)
-                .anyMatch(OPS_PERMISSION::equals);
-        if (!hasOps) {
+                .anyMatch(p -> Arrays.asList(accepted).contains(p));
+        if (!granted) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "ops operator action requires the '" + OPS_PERMISSION + "' permission");
+                    actionLabel + " requires the '" + required + "' permission");
         }
     }
 }

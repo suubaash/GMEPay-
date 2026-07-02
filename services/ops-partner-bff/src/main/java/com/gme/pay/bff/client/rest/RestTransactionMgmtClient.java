@@ -150,6 +150,14 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (query.status() != null && !query.status().isBlank()) {
                 uri.queryParam("status", query.status());
             }
+            // CS support-read: forward the customer's wallet id and the partner's own reference
+            // so a support agent can search by either. transaction-mgmt matches them as filters.
+            if (query.userRef() != null && !query.userRef().isBlank()) {
+                uri.queryParam("userRef", query.userRef());
+            }
+            if (query.reference() != null && !query.reference().isBlank()) {
+                uri.queryParam("reference", query.reference());
+            }
             Long numericPartner = parseLongOrNull(query.partnerId());
             if (numericPartner != null) {
                 uri.queryParam("partnerId", numericPartner);
@@ -229,9 +237,16 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             String merchantId,
-            Instant approvedAt
+            Instant approvedAt,
+            // CS support-read fields from transaction-mgmt's TransactionResponse
+            String failureReason,
+            String statusLabel,
+            String declineReasonText,
+            List<WireStatusEntry> statusHistory
     ) {
         TransactionSummary toSummary() {
+            List<StatusEntry> history = statusHistory == null ? null
+                    : statusHistory.stream().map(WireStatusEntry::toEntry).toList();
             return new TransactionSummary(
                     txnRef,
                     partnerRef,
@@ -249,7 +264,19 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
                     schemeTxnRef,
                     schemeApprovalCode,
                     merchantId,
-                    approvedAt);
+                    approvedAt,
+                    failureReason,
+                    statusLabel,
+                    declineReasonText,
+                    history);
+        }
+    }
+
+    /** transaction-mgmt's status-history entry wire shape ({@code {status,statusLabel,at,note}}). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record WireStatusEntry(String status, String statusLabel, Instant at, String note) {
+        StatusEntry toEntry() {
+            return new StatusEntry(status, statusLabel, at, note);
         }
     }
 

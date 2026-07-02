@@ -47,17 +47,32 @@ public class OpsTransactionController {
         this.rbac = rbac;
     }
 
-    /** 360° search proxy — mapped result page for the Ops drill-down. */
+    /**
+     * 360° search proxy — mapped result page for the Ops / customer-support drill-down.
+     *
+     * <p>CS support-read: this is a READ endpoint, so it is gated on {@code txn.view}
+     * (fail-closed) rather than the dangerous {@code ops:operate}. A support agent can
+     * search by {@code userRef} (the customer's / wallet id) or {@code reference} (the
+     * partner's own reference), in addition to {@code q} (free-text on txnRef),
+     * {@code status} and {@code partnerId}. {@code userRef}/{@code reference} are
+     * forwarded to transaction-mgmt's search; the formerly-dropped {@code q} is still
+     * forwarded (transaction-mgmt matches it against txnRef).
+     */
     @GetMapping("/search")
     public Page<TransactionSummary> search(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String partnerId,
+            @RequestParam(required = false) String userRef,
+            @RequestParam(required = false) String reference,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
+        rbac.requireTxnView(permissions);
         int safeSize = size <= 0 ? DEFAULT_SIZE : size;
         TransactionMgmtClient.Page<TransactionSummary> upstream = transactions.search(
-                new TransactionMgmtClient.SearchQuery(q, partnerId, status, Math.max(0, page), safeSize));
+                new TransactionMgmtClient.SearchQuery(
+                        q, partnerId, status, userRef, reference, Math.max(0, page), safeSize));
         if (upstream == null) {
             return new Page<>(java.util.List.of(), Math.max(0, page), safeSize, 0L);
         }

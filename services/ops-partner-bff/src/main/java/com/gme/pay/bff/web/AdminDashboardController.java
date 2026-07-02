@@ -22,7 +22,9 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import com.gme.pay.rbac.RbacHeaders;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -78,18 +80,21 @@ public class AdminDashboardController {
     private final PrefundingClient prefunding;
     private final RevenueLedgerClient revenue;
     private final SettlementClient settlement;
+    private final OpsRbacGuard rbac;
 
     public AdminDashboardController(
             ConfigRegistryClient configRegistry,
             TransactionMgmtClient transactions,
             PrefundingClient prefunding,
             RevenueLedgerClient revenue,
-            SettlementClient settlement) {
+            SettlementClient settlement,
+            OpsRbacGuard rbac) {
         this.configRegistry = configRegistry;
         this.transactions = transactions;
         this.prefunding = prefunding;
         this.revenue = revenue;
         this.settlement = settlement;
+        this.rbac = rbac;
     }
 
     @GetMapping("/dashboard")
@@ -264,7 +269,9 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/transactions/recent")
-    public List<TransactionMgmtClient.TransactionSummary> recentTransactions() {
+    public List<TransactionMgmtClient.TransactionSummary> recentTransactions(
+            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
+        rbac.requireTxnView(permissions);
         return transactions.recent(null, RECENT_LIMIT);
     }
 
@@ -276,7 +283,9 @@ public class AdminDashboardController {
             @RequestParam(required = false) LocalDate fromDate,
             @RequestParam(required = false) LocalDate toDate,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
+        rbac.requireTxnView(permissions);
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size <= 0 ? DEFAULT_PAGE_SIZE : size), MAX_PAGE_SIZE);
         TransactionMgmtClient.Page<TransactionMgmtClient.TransactionSummary> upstream =
@@ -286,7 +295,10 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/transactions/{txnId}")
-    public TransactionDetail transactionDetail(@PathVariable String txnId) {
+    public TransactionDetail transactionDetail(
+            @PathVariable String txnId,
+            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
+        rbac.requireTxnView(permissions);
         TransactionMgmtClient.TransactionSummary summary = transactions.getTransaction(txnId);
         if (summary == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -353,6 +365,9 @@ public class AdminDashboardController {
                 null,   // roundingResidual — locked at settlement time
                 summary.merchantId(),
                 null,   // merchantName — not persisted on the txn yet (wallet response carries it)
-                null);  // statusHistory — not yet tracked
+                summary.statusHistory(),   // CS: ordered status history from transaction-mgmt (null-safe)
+                summary.failureReason(),   // CS: null-safe on older txns
+                summary.statusLabel(),     // CS: plain-language status label (null-safe)
+                summary.declineReasonText());  // CS: human-readable decline reason (null-safe)
     }
 }

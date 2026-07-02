@@ -58,6 +58,16 @@ public interface TransactionMgmtClient {
     }
 
     /**
+     * Convenience overload retaining the old 5-arg {@link SearchQuery} shape (no
+     * {@code userRef} / {@code reference}). Kept so existing callers / test fakes that
+     * only know txnRef/partnerId/status keep compiling. Delegates to the full
+     * {@link #search(SearchQuery)}.
+     */
+    default Page<TransactionSummary> search(String q, String partnerId, String status, int page, int size) {
+        return search(new SearchQuery(q, partnerId, status, null, null, page, size));
+    }
+
+    /**
      * Operator resolution of an UNCERTAIN / stuck transaction. Routes to
      * transaction-mgmt's {@code POST /v1/transactions/{ref}/resolve} carrying the
      * operator's resolution (e.g. {@code FORCE_APPROVE} | {@code FORCE_FAIL} |
@@ -73,11 +83,22 @@ public interface TransactionMgmtClient {
     /**
      * Free-text + facet search criteria for {@link #search(SearchQuery)}. All fields
      * optional; {@code page} 0-indexed.
+     *
+     * <p>CS support-read additive fields (forwarded to transaction-mgmt's
+     * {@code GET /v1/transactions/search}):
+     * <ul>
+     *   <li>{@code userRef}   – the end-customer / wallet id, so a support agent can look up
+     *       every transaction of one customer.</li>
+     *   <li>{@code reference} – the partner's own reference for the transaction.</li>
+     * </ul>
+     * {@code q} remains the free-text term (matched by transaction-mgmt against txnRef).
      */
     record SearchQuery(
             String q,
             String partnerId,
             String status,
+            String userRef,
+            String reference,
             int page,
             int size
     ) {}
@@ -132,28 +153,45 @@ public interface TransactionMgmtClient {
             /** Merchant terminal/store id from the QR scheme. */
             String merchantId,
             /** UTC instant the scheme approved the payment. Null until APPROVED. */
-            Instant approvedAt
+            Instant approvedAt,
+            // --- CS support-read additive fields (from transaction-mgmt) ---
+            /** Machine failure reason code for a failed/declined txn. Null for successful / older txns. */
+            String failureReason,
+            /** Plain-language label for {@code state} (e.g. "Approved", "Declined"). Null on older txns. */
+            String statusLabel,
+            /** Human-readable decline reason from the scheme. Null when not declined / older txns. */
+            String declineReasonText,
+            /** Ordered status-transition history, oldest first. Non-null from transaction-mgmt; null on older txns. */
+            List<StatusEntry> statusHistory
     ) {
         /**
          * Convenience factory for existing stub/test code that only knows the original 6 fields.
-         * New UC-10 + scheme-confirmation fields default to {@code null}.
+         * New UC-10 + scheme-confirmation + CS support-read fields default to {@code null}.
          */
         public static TransactionSummary of(
                 String txnId, String partnerId, String state,
                 BigDecimal amount, String currency, Instant committedAt) {
             return new TransactionSummary(txnId, partnerId, state, amount, currency, committedAt,
                     null, null, null, null, null, null, null,
+                    null, null, null, null,
                     null, null, null, null);
         }
     }
 
     /**
-     * One entry in the status-transition history (UC-10-03).
+     * One entry in the status-transition history (UC-10-03; enriched for CS support-read).
      *
-     * @param status  TransactionStatus name at this point (e.g. "APPROVED")
-     * @param at      UTC instant the status was entered
+     * @param status       TransactionStatus name at this point (e.g. "APPROVED")
+     * @param statusLabel  plain-language label for {@code status} (e.g. "Approved"); null on older txns
+     * @param at           UTC instant the status was entered
+     * @param note         free-text note attached to the transition; null when none
      */
-    record StatusEntry(String status, Instant at) {}
+    record StatusEntry(String status, String statusLabel, Instant at, String note) {
+        /** Back-compat factory for the original 2-arg shape (no label / note). */
+        public static StatusEntry of(String status, Instant at) {
+            return new StatusEntry(status, null, at, null);
+        }
+    }
 
     /**
      * Filter shape for {@link #list(Filter)}. All criterion fields are optional;

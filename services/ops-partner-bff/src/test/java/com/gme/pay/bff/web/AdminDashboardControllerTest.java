@@ -149,7 +149,8 @@ class AdminDashboardControllerTest {
         };
 
         AdminDashboardController controller =
-                new AdminDashboardController(configRegistry, transactions, prefunding, revenue, settlement);
+                new AdminDashboardController(configRegistry, transactions, prefunding, revenue, settlement,
+                        new OpsRbacGuard(false));
 
         // Jackson with JavaTimeModule + ISO strings for Instant/LocalDate (not arrays of numbers).
         ObjectMapper om = new ObjectMapper()

@@ -244,6 +244,9 @@ public class PartnerPortalController {
                 null,
                 summary.merchantId(),
                 null,
-                null);
+                summary.statusHistory(),      // ordered status history (null-safe)
+                summary.failureReason(),      // null-safe on older txns
+                summary.statusLabel(),        // plain-language status label (null-safe)
+                summary.declineReasonText()); // human-readable decline reason (null-safe)
     }
 }
