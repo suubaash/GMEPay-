@@ -1,7 +1,6 @@
 package com.gme.pay.payment.client.rest;
 
 import com.gme.pay.payment.domain.client.SchemeClient;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -24,6 +23,10 @@ import java.util.Map;
  *       (ZeroPay). Its behaviour and base-url default are <strong>unchanged</strong>.</li>
  * </ul>
  *
+ * <p>This router is no longer the {@code @Primary} {@link SchemeClient}: {@link ResilientSchemeClient}
+ * decorates it (per-scheme circuit breaker + bulkhead) and is the primary bean. The router's own
+ * scheme-keyed dispatch behaviour is unchanged.
+ *
  * <p>The scheme code is read from {@code request.schemeId()} on submit and from the
  * explicit {@code schemeId} arg on {@code checkBalance}. {@code cancelPayment} carries no
  * scheme code and is single-phase-N/A for Nepal, so it always routes to the default
@@ -35,7 +38,6 @@ import java.util.Map;
  * {@code gmepay.scheme-adapter-zeropay.base-url} key untouched.
  */
 @Component
-@Primary
 public class SchemeClientRouter implements SchemeClient {
 
     private final SchemeClient defaultClient;

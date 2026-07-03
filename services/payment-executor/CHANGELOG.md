@@ -2,6 +2,40 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/resilience-scheme-breaker] — 2026-07-03 (per-scheme circuit breaker + bulkhead on the scheme edge)
+
+### Added
+- **Production-grade resilience on the OUTBOUND scheme calls** — a per-scheme **circuit breaker +
+  bulkhead (semaphore)** plus a hard **synchronous call timeout**, so a dead or slow QR scheme fails
+  fast and triggers failover instead of hanging/hammering the adapter. Purely additive; the money
+  model, two-phase authorize/confirm, anti-double-charge guard, and business-decline terminality are
+  unchanged.
+- **`ResilientSchemeClient`** (new `@Primary` `SchemeClient`) decorates `SchemeClientRouter`. Every
+  `submitMpm / submitCpm / lookupStatus / checkBalance` is wrapped by a breaker + bulkhead **keyed on
+  the scheme id** (instance name = schemeId, e.g. `NEPAL`, `ZEROPAY`), obtained programmatically from
+  `CircuitBreakerRegistry` / `BulkheadRegistry` (the scheme id is dynamic, so no blanket annotations).
+  One dead scheme does NOT trip the others.
+- **Failover contract preserved**: an OPEN breaker (`CallNotPermittedException`) or a saturated
+  bulkhead (`BulkheadFullException`) is translated to `SchemeTimeoutException` (a `PaymentException`),
+  the exact technical-failure type `FailoverPaymentRouter` already fails over on — never a business
+  decline, never a success, never a hard 500 to the wallet. An open breaker short-circuits BEFORE any
+  HTTP call, so no charge occurs and no double-charge is possible.
+- **`SchemeFailureRecordPredicate`** — keeps authoritative `SchemeDeclinedException` business declines
+  OUT of the breaker's failure tally (a healthy scheme correctly declining bad QRs must not trip);
+  timeouts / 5xx / connect failures still count.
+- **Synchronous call timeout** on the scheme `RestClient`s (`RestSchemeClient` / `NepalRestSchemeClient`):
+  connect ~2s / read ~5s via `ClientHttpRequestFactorySettings`, so a hung socket aborts as
+  `SchemeTimeoutException` rather than hanging forever. (resilience4j `TimeLimiter` intentionally NOT
+  used — these calls are synchronous, not `CompletableFuture`-based.)
+- **Dependency**: `io.github.resilience4j:resilience4j-spring-boot3:2.2.0` (matches Spring Boot 3.3.x).
+- **Config** (`application.properties`, all override-able): breaker sliding-window 10, failure-rate 50%,
+  wait-in-open 10s, half-open permitted 3; bulkhead max-concurrent 16 per scheme; RestClient connect
+  2000ms / read 5000ms.
+- **Tests**: `ResilientSchemeClientTest` (breaker opens then short-circuits; open→`SchemeTimeoutException`;
+  per-scheme isolation; business declines don't trip; healthy pass-through) and
+  `ResilientFailoverIntegrationTest` (open primary breaker → fails over to healthy secondary and
+  approves; open breaker never approves and never delegates a submit; secondary scheme unaffected).
+
 ## [feat/e2e-runner-be] — 2026-07-03 (sandbox E2E payment test runner)
 
 ### Added

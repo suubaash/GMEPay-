@@ -7,6 +7,8 @@ import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -15,6 +17,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -47,8 +50,17 @@ public class NepalRestSchemeClient implements SchemeClient {
     @Autowired
     public NepalRestSchemeClient(
             RestClient.Builder builder,
-            @Value("${gmepay.scheme-adapters.NEPAL.base-url:http://localhost:18091}") String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+            @Value("${gmepay.scheme-adapters.NEPAL.base-url:http://localhost:18091}") String baseUrl,
+            @Value("${gmepay.scheme.connect-timeout-millis:2000}") long connectTimeoutMillis,
+            @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis) {
+        // Hard connect + read timeout (see RestSchemeClient): a hung Nepal adapter socket aborts fast
+        // as ResourceAccessException → SchemeTimeoutException rather than stalling the pay path.
+        ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
+                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
+        this.restClient = builder.baseUrl(baseUrl)
+                .requestFactory(ClientHttpRequestFactories.get(timeouts))
+                .build();
     }
 
     NepalRestSchemeClient(RestClient restClient) {
