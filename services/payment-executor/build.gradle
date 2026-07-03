@@ -7,6 +7,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    // Resilience hardening on the OUTBOUND scheme edge (feat/resilience-scheme-breaker):
+    // per-scheme circuit breaker + bulkhead so one dead/slow QR scheme fails fast and triggers
+    // failover instead of hanging/hammering. 2.2.0 is the resilience4j line for Spring Boot 3.3.x.
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3:2.2.0'
     implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')

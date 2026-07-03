@@ -7,6 +7,8 @@ import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -15,6 +17,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -43,8 +46,19 @@ public class RestSchemeClient implements SchemeClient {
     @Autowired
     public RestSchemeClient(
             RestClient.Builder builder,
-            @Value("${gmepay.scheme-adapter-zeropay.base-url:http://scheme-adapter-zeropay:8080}") String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+            @Value("${gmepay.scheme-adapter-zeropay.base-url:http://scheme-adapter-zeropay:8080}") String baseUrl,
+            @Value("${gmepay.scheme.connect-timeout-millis:2000}") long connectTimeoutMillis,
+            @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis) {
+        // Hard connect + read timeout so a HUNG scheme socket aborts in a few seconds (surfacing as
+        // ResourceAccessException → SchemeTimeoutException) instead of hanging the pay path forever.
+        // These sync timeouts are the call-timeout leg of the resilience trio (breaker+bulkhead live
+        // in ResilientSchemeClient); resilience4j TimeLimiter is intentionally NOT used (sync calls).
+        ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
+                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
+        this.restClient = builder.baseUrl(baseUrl)
+                .requestFactory(ClientHttpRequestFactories.get(timeouts))
+                .build();
     }
 
     RestSchemeClient(RestClient restClient) {
