@@ -5,6 +5,7 @@ import { Box, Tab, Tabs, Typography, Alert } from '@mui/material';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import ServiceTrace from '@/components/ServiceTrace';
 import NepalQrConsole from './NepalQrConsole';
+import E2eTestConsole from './E2eTestConsole';
 
 const SIM_MERCHANT_URL =
   process.env.NEXT_PUBLIC_SIM_MERCHANT_URL ?? 'http://localhost:9104';
@@ -47,6 +48,13 @@ const TABS = [
     sim: 'sim-nepal-qr',
     caption:
       'Nepal QR partner simulator (Khalti/Fonepay) — decode a Nepali QR, enter the amount, pay, and inspect the stored request/response the partner API exchanges with GMEPay+. Native console: data calls are proxied same-origin (/sim-nepal-qr) so it works remotely.',
+  },
+  {
+    label: 'E2E Test',
+    component: E2eTestConsole,
+    sim: 'payment-executor',
+    caption:
+      'Run the full payment journey end-to-end for a country/partner and see exactly where it passes or fails. Every run is saved below. Native console: data calls are proxied same-origin (/e2e) so it works remotely.',
   },
 ];
 
@@ -105,7 +113,10 @@ export default function SandboxPage() {
             (5) Consult <em>FX Rate Board</em> at any time to inspect the live KRW rates used
             for settlement. &nbsp;
             (6) Open <em>Nepal QR</em> to decode a Nepali QR (Khalti/Fonepay), pay in NPR, and
-            inspect the request/response the partner API exchanges with GMEPay+.
+            inspect the request/response the partner API exchanges with GMEPay+. &nbsp;
+            (7) Or skip the manual walk-through entirely: open <em>E2E Test</em>, pick a
+            country/partner/amount, and run the whole payment journey automatically — a
+            step-by-step pass/fail log shows exactly where it succeeds or breaks.
           </Typography>
         </Alert>
       </Box>
