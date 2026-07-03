@@ -75,7 +75,8 @@ $fleet = @(
             '--gmepay.scheme-adapter-zeropay.base-url=http://localhost:18090'
             '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
             '--gmepay.revenue-ledger.base-url=http://localhost:18092'
-            '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094') }
+            '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094'
+            '--gmepay.self.base-url=http://localhost:18084') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
     @{ name = 'reporting-compliance';       type = 'service'; port = 18087 }
