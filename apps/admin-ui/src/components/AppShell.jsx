@@ -49,6 +49,7 @@ import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import PolicyIcon from '@mui/icons-material/Policy';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import DescriptionIcon from '@mui/icons-material/Description';
+import TuneIcon from '@mui/icons-material/Tune';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -67,6 +68,8 @@ const navItems = [
   { label: 'Operations', href: '/operations', icon: <HealthAndSafetyIcon /> },
   // Delivery: product-delivery analytics — are payments actually succeeding?
   { label: 'Delivery', href: '/delivery', icon: <TaskAltIcon /> },
+  // Platform Settings: hard-coded values exposed as editable tunables (Goal #3).
+  { label: 'Platform Settings', href: '/settings', icon: <TuneIcon /> },
   // Journal: the posted double-entry ledger — every money movement, both sides.
   { label: 'Journal', href: '/journal', icon: <MenuBookIcon /> },
   // Scheme Statements: per-scheme reconciliation statement to hand the scheme.
