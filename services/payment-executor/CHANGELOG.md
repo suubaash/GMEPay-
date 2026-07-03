@@ -2,6 +2,38 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/e2e-runner-be] — 2026-07-03 (sandbox E2E payment test runner)
+
+### Added
+- **Sandbox End-to-End (E2E) payment test runner** — drives the REAL payment journey over loopback
+  HTTP against this service's own `POST /v1/pay/classify` + `POST /v1/pay`, and persists each run +
+  ordered steps for later review. Purely additive; no existing endpoint changed.
+- **New API, base path `/v1/sandbox/e2e`** (`SandboxE2eController`):
+  - `GET /options` → `{countries:[{code,label,currency}], partners:[{code,label}], mpmTypes:["STATIC","DYNAMIC"]}`
+    (countries NP/Nepal/NPR, KR/Korea/KRW; partners GMEREMIT, SENDMN).
+  - `POST /run` body `{country,partner,amount,mpmType}` → 200 `RunDetail` (summary + `steps`); persists the run.
+  - `GET /runs?limit=50` → newest-first `[RunSummary]`.
+  - `GET /runs/{id}` → `RunDetail` (404 when absent).
+- **`E2eRunner`** — currency NP→NPR / KR→KRW; persists the run FIRST (id → `userRef=e2e-<id>`), then
+  executes 4 ordered steps, each recording PASS/FAIL/SKIP + a human detail + `latencyMs` + `httpStatus`,
+  stopping at the first FAIL (remaining SKIP): **Resolve QR** (picks the (country,mpmType) QR; DYNAMIC
+  injects an EMVCo tag-54 amount + a recomputed tag-63 CRC), **Classify** (PASS iff `supported && currency==expected`),
+  **Pay** (PASS iff HTTP 201 && `status==APPROVED`), **Verify receipt** (PASS iff a non-blank `schemeTxnRef`).
+  Overall status FAIL if any step failed; `failedStep` = first failed step name.
+- **`SelfPayClient`** — loopback HTTP client to `${gmepay.self.base-url:http://localhost:8080}`; unlike the
+  other adapters it does NOT throw on non-2xx (the runner needs a 422 decline's status + raw body).
+- **`Crc16Ccitt`** — CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`) for the DYNAMIC tag-63 checksum;
+  **`SandboxQrCatalog`** holds the NP/KR static QRs + the DYNAMIC builder.
+- **Flyway `V004__create_sandbox_e2e.sql`** — `sandbox_e2e_run` + `sandbox_e2e_step` (portable DDL:
+  `BIGSERIAL`/`TEXT`/`NUMERIC`/`TIMESTAMP WITH TIME ZONE`, applies on both PostgreSQL and the H2 slice).
+  New JPA entities `SandboxE2eRunEntity`/`SandboxE2eStepEntity` + `SandboxE2eRunRepository`.
+
+### Tests
+- `E2eRunnerTest` (4): classify+pay-approved → PASS with 4 PASS steps; pay-declined → FAIL, failedStep=Pay,
+  Verify SKIP; classify currency-mismatch → FAIL at Classify; DYNAMIC CRC round-trips through the real
+  `QrSchemeClassifier`. `SandboxE2eControllerTest` (3): options catalog, run JSON shape, 404 on missing run.
+  Full module suite green.
+
 ## [feat/pay-currency] — 2026-07-02 (wallet /v1/pay accepts a pay currency; Nepal executes in NPR)
 
 ### Added
