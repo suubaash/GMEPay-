@@ -6,6 +6,8 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Actuator (feat/actuator-health): /actuator/health + liveness/readiness probes + /actuator/metrics.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // Redis-backed config cache (17.3-G03). Optional at runtime: the cache beans are
     // gated on spring.data.redis.host and fall back to a no-op pass-through without it.

@@ -5,6 +5,8 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Actuator (feat/actuator-health): /actuator/health + liveness/readiness probes + /actuator/metrics.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     // Resilience hardening on the OUTBOUND scheme edge (feat/resilience-scheme-breaker):

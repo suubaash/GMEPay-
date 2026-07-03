@@ -1,5 +1,34 @@
 # Changelog
 
+## Actuator health/readiness/liveness + metrics fleet-wide (branch `feat/actuator-health`)
+
+Maturity hardening: every Spring Boot core service now exposes proper probes and a metrics
+surface, not just api-gateway + auth-identity. Purely additive — no business logic, controller,
+or money-path change. No new external dependency: uses only the already-cached
+`spring-boot-starter-actuator` (no `micrometer-registry-prometheus`), so the build resolves fully
+offline from the Gradle cache.
+
+### Added
+- **`spring-boot-starter-actuator`** added to the 15 boot services that lacked it: transaction-mgmt,
+  prefunding, revenue-ledger, config-registry, rate-fx, settlement-reconciliation, merchant-qr-data,
+  ops-partner-bff, scheme-adapter-zeropay, scheme-adapter-nepal, smart-router, qr-service,
+  notification-webhook, reporting-compliance, payment-executor. Declared per-service (the root
+  `subprojects {}` block also covers libs/e2e/simulators, so a shared declaration would pollute
+  non-boot modules).
+- **Consistent management config** across the whole fleet (incl. api-gateway + auth-identity):
+  `management.endpoints.web.exposure.include=health,info,metrics`,
+  `management.endpoint.health.probes.enabled=true` (enables `/actuator/health/liveness` +
+  `/actuator/health/readiness`), `management.endpoint.health.show-details=never` (no auth wiring
+  assumed in the sandbox; no internals leak). env/beans/heapdump/shutdown stay off. Management
+  runs on the app port (no separate port) so fleet/compose probes hit the app port.
+
+### Changed
+- **scheme-adapter-nepal** — removed its separate management port (`management.server.port=8093`);
+  probes now serve on the app port (8092), matching the fleet convention.
+- **notification-webhook** / **api-gateway** — normalized their pre-existing management config to the
+  fleet standard (added `metrics`/`info`, `probes.enabled`, `show-details=never`; api-gateway's
+  `prometheus` exposure dropped since no registry artifact is on the classpath).
+
 ## Self-serve developer onboarding (branch `feat/selfserve-onboard`)
 
 Gives partners a self-serve front door so integration no longer needs one engineer per
