@@ -1,13 +1,17 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.RevenueLedgerClient;
+import com.gme.pay.bff.web.dto.JournalPage;
+import com.gme.pay.bff.web.dto.JournalView;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -69,5 +73,23 @@ public class StubRevenueLedgerClient implements RevenueLedgerClient {
         byCurrency.put("JPY", new BigDecimal("142.46"));
 
         return new RevenueBreakdown(byPartner, byScheme, byCurrency);
+    }
+
+    @Override
+    public JournalPage listJournals(Instant from, Instant to, String reference, Integer page, Integer size) {
+        int p = page == null ? 0 : page;
+        int s = size == null ? 50 : size;
+        // Two deterministic balanced journals so the Admin UI journal view renders standalone.
+        Instant now = Instant.now();
+        JournalView j1 = new JournalView("jrnl-stub-0001", "TXN-00001", now, List.of(
+                new JournalView.Line("RECEIVABLE_PARTNER", "DEBIT", new BigDecimal("12.34000000"), "USD"),
+                new JournalView.Line("REVENUE_FX_MARGIN", "CREDIT", new BigDecimal("12.34000000"), "USD")));
+        JournalView j2 = new JournalView("jrnl-stub-0002", "TXN-00002", now.minusSeconds(3600), List.of(
+                new JournalView.Line("RECEIVABLE_PARTNER", "DEBIT", new BigDecimal("500.00000000"), "KRW"),
+                new JournalView.Line("REVENUE_SERVICE_CHARGE", "CREDIT", new BigDecimal("500.00000000"), "KRW")));
+        List<JournalView> items = (reference == null || reference.isBlank())
+                ? List.of(j1, j2)
+                : List.of(j1, j2).stream().filter(j -> reference.equals(j.reference())).toList();
+        return new JournalPage(items, p, s, items.size());
     }
 }

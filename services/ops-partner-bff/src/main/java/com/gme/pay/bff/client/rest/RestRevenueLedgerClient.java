@@ -2,6 +2,7 @@ package com.gme.pay.bff.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.bff.client.RevenueLedgerClient;
+import com.gme.pay.bff.web.dto.JournalPage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,7 +16,9 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -107,6 +110,43 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
         // breakdown across the system. Return empty maps until an upstream
         // multi-axis endpoint exists (INTEGRATION REQUEST #3).
         return new RevenueBreakdown(Map.of(), Map.of(), Map.of());
+    }
+
+    @Override
+    public JournalPage listJournals(Instant from, Instant to, String reference, Integer page, Integer size) {
+        try {
+            UriComponentsBuilder b = UriComponentsBuilder.fromPath("/v1/journals");
+            if (from != null) {
+                b.queryParam("from", from.toString());
+            }
+            if (to != null) {
+                b.queryParam("to", to.toString());
+            }
+            if (reference != null && !reference.isBlank()) {
+                b.queryParam("reference", reference);
+            }
+            if (page != null) {
+                b.queryParam("page", page);
+            }
+            if (size != null) {
+                b.queryParam("size", size);
+            }
+            JournalPage body = restClient.get()
+                    .uri(b.build().toUriString())
+                    .retrieve()
+                    .body(JournalPage.class);
+            return body == null ? emptyJournals(page, size) : body;
+        } catch (RestClientResponseException e) {
+            log.warn("revenue-ledger error on listJournals (status={}): {}", e.getStatusCode(), e.getMessage());
+            return emptyJournals(page, size);
+        } catch (ResourceAccessException e) {
+            log.warn("revenue-ledger unreachable on listJournals: {}", e.getMessage());
+            return emptyJournals(page, size);
+        }
+    }
+
+    private static JournalPage emptyJournals(Integer page, Integer size) {
+        return new JournalPage(List.of(), page == null ? 0 : page, size == null ? 50 : size, 0L);
     }
 
     private WireRevenue fetch(long partnerId, LocalDate from, LocalDate to) {

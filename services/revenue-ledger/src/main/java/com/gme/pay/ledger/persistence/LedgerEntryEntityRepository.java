@@ -6,6 +6,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -25,6 +26,14 @@ public interface LedgerEntryEntityRepository extends JpaRepository<LedgerEntryEn
 
     /** All entries posted to a specific account (used by aggregation queries). */
     List<LedgerEntryEntity> findByAccountOrderByIdAsc(String account);
+
+    /**
+     * Batch-load the lines for a page of journals in ONE query (avoids the N+1 that a
+     * per-journal {@link #findByJournalIdOrderByIdAsc(String)} loop would cause). Ordered by
+     * {@code journalId} then {@code id} so a caller can group consecutively by journal and keep
+     * each journal's lines in insertion order. Used by {@code GET /v1/journals}.
+     */
+    List<LedgerEntryEntity> findByJournalIdInOrderByJournalIdAscIdAsc(Collection<String> journalIds);
 
     /**
      * Net signed total for {@code account} in {@code currency} over a journal {@code posted_at}

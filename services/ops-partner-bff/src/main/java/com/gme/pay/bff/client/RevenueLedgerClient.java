@@ -1,6 +1,9 @@
 package com.gme.pay.bff.client;
 
+import com.gme.pay.bff.web.dto.JournalPage;
+
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Map;
 
@@ -26,6 +29,19 @@ public interface RevenueLedgerClient {
 
     /** Returns the by-partner / by-scheme / by-currency breakdown for the range. */
     RevenueBreakdown breakdown(LocalDate from, LocalDate to);
+
+    /**
+     * Lists posted double-entry journals (with their DR/CR lines) for the Admin UI journal view,
+     * proxying revenue-ledger's {@code GET /v1/journals}. All args optional (null = upstream default:
+     * last 30 days, size cap 200); the returned {@link JournalPage} carries the same shape upstream
+     * produced. {@code from}/{@code to} are ISO-8601 instants bounding {@code createdAt}.
+     *
+     * <p>Default is an empty page so pre-existing anonymous {@link RevenueLedgerClient} impls (test
+     * doubles) stay source-compatible; the Rest and Stub beans override it.
+     */
+    default JournalPage listJournals(Instant from, Instant to, String reference, Integer page, Integer size) {
+        return new JournalPage(java.util.List.of(), page == null ? 0 : page, size == null ? 50 : size, 0L);
+    }
 
     record RevenueSummary(
             LocalDate date,
