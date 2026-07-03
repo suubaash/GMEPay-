@@ -72,14 +72,20 @@ function fmtTime(iso) {
  *   { balanced:boolean, byCurrency:[{ currency, debit, credit }] }
  * balanced === Σ DR == Σ CR for every currency present.
  */
+// Normalize the ledger side across representations: the backend emits the DB
+// column verbatim ("DEBIT"/"CREDIT"); older/stub data may use "DR"/"CR". Match
+// on the leading letter so both forms (and any case) resolve correctly.
+const isDebit = (l) => String(l?.side ?? '').trim().toUpperCase().startsWith('D');
+const isCredit = (l) => String(l?.side ?? '').trim().toUpperCase().startsWith('C');
+
 function summarize(lines) {
   const map = new Map();
   for (const l of lines ?? []) {
     const ccy = l.currency ?? '—';
     const cur = map.get(ccy) ?? { currency: ccy, debit: 0, credit: 0 };
     const amt = Number(l.amount) || 0;
-    if (l.side === 'DR') cur.debit += amt;
-    else if (l.side === 'CR') cur.credit += amt;
+    if (isDebit(l)) cur.debit += amt;
+    else if (isCredit(l)) cur.credit += amt;
     map.set(ccy, cur);
   }
   const byCurrency = [...map.values()];
@@ -94,8 +100,8 @@ function JournalRow({ entry }) {
   const [open, setOpen] = useState(false);
   const lines = entry.lines ?? [];
   const { balanced, byCurrency } = summarize(lines);
-  const debits = lines.filter((l) => l.side === 'DR');
-  const credits = lines.filter((l) => l.side === 'CR');
+  const debits = lines.filter(isDebit);
+  const credits = lines.filter(isCredit);
 
   return (
     <Fragment>
