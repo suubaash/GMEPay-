@@ -1,5 +1,50 @@
 # Changelog
 
+## End-to-end correlation-ID propagation (branch `feat/correlation-id`)
+
+Maturity hardening: one payment can now be traced across every service by a single id present in
+both logs (SLF4J MDC) and HTTP responses. Implemented once in the shared `libs/lib-errors`
+auto-config, so all 18 dependent services get it automatically. Purely additive — no change to
+error semantics, RBAC, internal-auth, or the trace tap's behaviour. No new external dependency
+(servlet `Filter` + SLF4J `MDC` + a `ClientHttpRequestInterceptor` only), so the build resolves
+fully offline from the Gradle cache.
+
+A NEW id was added rather than reusing the trace tap's header: the trace tap's
+`X-Gme-Trace-Caller` carries the *caller's identity* for the trace-console graph and propagates no
+request/correlation id, so there was nothing to reuse. The two are complementary and independent.
+
+### Added
+- **`com.gme.pay.correlation.CorrelationIdFilter`** (servlet `OncePerRequestFilter`): reads the
+  inbound `X-Correlation-Id` (also accepts the `X-Request-Id` alias); if absent/blank, generates a
+  UUID. Puts it in SLF4J MDC under key `correlationId`, echoes it back on the `X-Correlation-Id`
+  response header, and ALWAYS clears the MDC key in a `finally` (no leakage across pooled request
+  threads).
+- **`com.gme.pay.correlation.CorrelationIdClientHttpInterceptor`** (`ClientHttpRequestInterceptor`):
+  when the `correlationId` is present in MDC, stamps `X-Correlation-Id` on outbound requests so the
+  downstream service's filter reuses the SAME id → one id spans the whole call chain. No-op when MDC
+  is empty (schedulers/async) or the header is already set.
+- **`com.gme.pay.correlation.CorrelationIdAutoConfiguration`** (`@AutoConfiguration`, appended to
+  `AutoConfiguration.imports`): registers the filter via a `FilterRegistrationBean` at
+  `Ordered.HIGHEST_PRECEDENCE` (BEFORE `InternalAuthFilter` at +10 and the RBAC context filter at
+  +20, so even auth-rejection logs carry the id); exposes the interceptor as a plain bean; and
+  registers `RestClientCustomizer` / `RestTemplateCustomizer` that apply it to the Spring-Boot
+  builders. Gated by `gmepay.correlation.enabled` (defaults TRUE, `matchIfMissing`).
+- **`com.gme.pay.correlation.CorrelationHeaders`** — shared header/MDC key constants.
+
+### Opt-in for services that build their own `RestClient`
+Services that construct a `RestClient` directly (not via the shared `RestClient.Builder`) add the
+id to outbound calls with one line:
+`.requestInterceptor(correlationIdClientHttpInterceptor)` (inject the auto-configured bean).
+Rewiring every service's client is a deliberate follow-up; this iteration ships the filter, the
+reusable interceptor, and auto-registration on the shared builders.
+
+### Log visibility
+The MDC value is present regardless of log config. Setting `logging.pattern.level` from the
+auto-config was deliberately NOT done — injecting default properties fleet-wide is fragile (each
+service's `application.yml` can silently override it, and it needs a heavier `EnvironmentPostProcessor`).
+Instead, services surface the id by adopting this property (recommended for `application.yml`):
+`logging.pattern.level=%5p [%X{correlationId}]`.
+
 ## Actuator health/readiness/liveness + metrics fleet-wide (branch `feat/actuator-health`)
 
 Maturity hardening: every Spring Boot core service now exposes proper probes and a metrics
