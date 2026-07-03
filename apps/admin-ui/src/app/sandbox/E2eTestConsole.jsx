@@ -80,7 +80,10 @@ async function api(path, opts) {
 function timeStr(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString('en-GB', { hour12: false });
+  if (isNaN(d.getTime())) return iso;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+    + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function stepColor(status) {
