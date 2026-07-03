@@ -91,6 +91,7 @@ public class WalletService {
                 result.committedAt()
         );
         user.debit(debit, txn);
+        store.persist(user);   // snapshot the mutated user so balance + history survive restart
 
         return PayResult.approved(
                 result.schemeTxnRef(),

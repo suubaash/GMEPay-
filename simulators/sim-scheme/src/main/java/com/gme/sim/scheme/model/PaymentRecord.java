@@ -1,10 +1,18 @@
 package com.gme.sim.scheme.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
  * In-memory payment record maintained by the FSM.
+ * <p>
+ * Jackson annotations are additive so this mutable class can round-trip through
+ * JSONL persistence (SchemeStore). The package-private all-args {@link JsonCreator}
+ * constructor rebuilds a record — including mutable FSM state — on load; runtime
+ * code continues to use the public 7-arg constructor + capture()/refund().
  */
 public class PaymentRecord {
 
@@ -33,6 +41,37 @@ public class PaymentRecord {
         this.schemeRef    = schemeRef;
         this.authorizedAt = authorizedAt;
         this.state        = PaymentState.AUTHORIZED;
+    }
+
+    /**
+     * All-args constructor used only by Jackson to rehydrate a persisted record,
+     * including mutable FSM state. Not for runtime use.
+     */
+    @JsonCreator
+    PaymentRecord(@JsonProperty("authId")       String authId,
+                  @JsonProperty("merchantId")   String merchantId,
+                  @JsonProperty("amount")       BigDecimal amount,
+                  @JsonProperty("currency")     String currency,
+                  @JsonProperty("payerRef")     String payerRef,
+                  @JsonProperty("schemeRef")    String schemeRef,
+                  @JsonProperty("authorizedAt") Instant authorizedAt,
+                  @JsonProperty("state")        PaymentState state,
+                  @JsonProperty("schemeTxnRef") String schemeTxnRef,
+                  @JsonProperty("committedAt")  Instant committedAt,
+                  @JsonProperty("refundId")     String refundId,
+                  @JsonProperty("refundedAt")   Instant refundedAt) {
+        this.authId       = authId;
+        this.merchantId   = merchantId;
+        this.amount       = amount;
+        this.currency     = currency;
+        this.payerRef     = payerRef;
+        this.schemeRef    = schemeRef;
+        this.authorizedAt = authorizedAt;
+        this.state        = state;
+        this.schemeTxnRef = schemeTxnRef;
+        this.committedAt  = committedAt;
+        this.refundId     = refundId;
+        this.refundedAt   = refundedAt;
     }
 
     public String getAuthId()       { return authId; }

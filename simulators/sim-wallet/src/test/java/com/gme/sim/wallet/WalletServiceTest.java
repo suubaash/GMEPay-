@@ -1,21 +1,25 @@
 package com.gme.sim.wallet;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gme.sim.wallet.config.WalletProperties;
 import com.gme.sim.wallet.model.MpmPreview;
 import com.gme.sim.wallet.model.PartnerProfile;
 import com.gme.sim.wallet.model.Receipt;
+import com.gme.sim.wallet.model.ReceiptStore;
 import com.gme.sim.wallet.service.RateClient;
 import com.gme.sim.wallet.service.SchemeClient;
 import com.gme.sim.wallet.service.SimDownException;
 import com.gme.sim.wallet.service.WalletService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -30,7 +34,7 @@ class WalletServiceTest {
     WalletService walletService;
 
     @BeforeEach
-    void setUp() {
+    void setUp(@TempDir Path tmp) {
         // Build WalletProperties with test defaults via the @Autowired ctor
         WalletProperties props = new WalletProperties(
                 "GMEREMIT",
@@ -39,7 +43,9 @@ class WalletServiceTest {
                 "500",
                 "0.02"
         );
-        walletService = new WalletService(props, schemeClient, rateClient);
+        ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        ReceiptStore receipts = new ReceiptStore(mapper, tmp.toString());
+        walletService = new WalletService(props, schemeClient, rateClient, receipts);
     }
 
     // ------------------------------------------------------------------

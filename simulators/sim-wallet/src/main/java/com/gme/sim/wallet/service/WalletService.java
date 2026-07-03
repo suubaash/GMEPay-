@@ -4,6 +4,7 @@ import com.gme.sim.wallet.config.WalletProperties;
 import com.gme.sim.wallet.model.MpmPreview;
 import com.gme.sim.wallet.model.PartnerProfile;
 import com.gme.sim.wallet.model.Receipt;
+import com.gme.sim.wallet.model.ReceiptStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -12,9 +13,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Core wallet business logic.
@@ -37,14 +36,16 @@ public class WalletService {
     private final SchemeClient schemeClient;
     private final RateClient rateClient;
 
-    // In-memory receipt store (dev harness — no DB needed)
-    private final ConcurrentHashMap<String, Receipt> receipts = new ConcurrentHashMap<>();
+    // File-backed (JSONL) receipt store — survives process restarts
+    private final ReceiptStore receipts;
 
     @Autowired
-    public WalletService(WalletProperties props, SchemeClient schemeClient, RateClient rateClient) {
+    public WalletService(WalletProperties props, SchemeClient schemeClient,
+                         RateClient rateClient, ReceiptStore receipts) {
         this.props = props;
         this.schemeClient = schemeClient;
         this.rateClient = rateClient;
+        this.receipts = receipts;
     }
 
     // ------------------------------------------------------------------
@@ -100,7 +101,7 @@ public class WalletService {
                     txnRef,
                     ZonedDateTime.ofInstant(Instant.now(), KST)
             );
-            receipts.put(receiptId, receipt);
+            receipts.save(receipt);
             return receipt;
 
         } else {
@@ -136,7 +137,7 @@ public class WalletService {
                     txnRef,
                     ZonedDateTime.ofInstant(Instant.now(), KST)
             );
-            receipts.put(receiptId, receipt);
+            receipts.save(receipt);
             return receipt;
         }
     }

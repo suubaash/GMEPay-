@@ -13,6 +13,7 @@ gmepay:
   sim:
     scheme:
       profile: ZEROPAY   # KHQR | ZEROPAY
+      data-dir: data/sim-scheme   # JSONL persistence dir (merchants/payments/feed survive restart)
 
 logging:
   level:

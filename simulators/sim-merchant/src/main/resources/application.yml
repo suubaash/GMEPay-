@@ -13,6 +13,8 @@ gmepay:
   sim:
     merchant:
       scheme-base-url: http://localhost:9102
+      # Directory for JSONL-backed persistence (registered shops survive restart)
+      data-dir: data/sim-merchant
 
 logging:
   level:

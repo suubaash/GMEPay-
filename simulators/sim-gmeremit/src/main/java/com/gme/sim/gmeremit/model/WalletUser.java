@@ -30,4 +30,14 @@ public class WalletUser {
         balanceKrw = balanceKrw.subtract(charged);
         transactions.add(txn);
     }
+
+    /**
+     * Restore persisted state (balance + full transaction history) after a restart.
+     * Package-private, additive — used only by {@link WalletStore} when replaying the JSONL snapshot.
+     */
+    synchronized void restore(BigDecimal balance, List<WalletTransaction> txns) {
+        this.balanceKrw = balance;
+        this.transactions.clear();
+        if (txns != null) this.transactions.addAll(txns);
+    }
 }
