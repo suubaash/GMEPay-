@@ -156,16 +156,65 @@ class RestTransactionMgmtClientTest {
     }
 
     @Test
-    void list_forwardsNumericPartnerIdButOmitsNonNumeric() {
+    void list_forwardsNumericPartnerId() {
         RestTransactionMgmtClient client = newClient();
-        String body = "{\"content\":[],\"page\":0,\"size\":20,\"totalElements\":0}";
-        // A non-numeric partner code must NOT be forwarded as the numeric partnerId param.
+        String body = """
+                {"content":[
+                  {"txnRef":"TXN-77","partnerRef":"P-42","status":"APPROVED",
+                   "targetPayout":"12.00","targetCcy":"USD",
+                   "createdAt":"2026-06-09T10:15:30Z"}],
+                 "page":0,"size":20,"totalElements":1}
+                """;
+        // A numeric partner id MUST be forwarded as the partnerId query param so the
+        // upstream scopes the result to that partner (partner-scoping, security).
         server.expect(requestTo(containsString("/v1/transactions?")))
                 .andExpect(method(GET))
+                .andExpect(queryParam("partnerId", "42"))
                 .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
 
         Page<TransactionSummary> page = client.list(
+                new Filter("42", null, null, null, null, 0, 20));
+        server.verify();
+        assertThat(page.total()).isEqualTo(1L);
+        assertThat(page.content()).hasSize(1);
+        assertThat(page.content().get(0).txnId()).isEqualTo("TXN-77");
+    }
+
+    @Test
+    void recent_forwardsNumericPartnerIdAsFilter() {
+        RestTransactionMgmtClient client = newClient();
+        String body = "{\"content\":[],\"page\":0,\"size\":20,\"totalElements\":0}";
+        // recent(partnerId, limit) is the Portal's live-transactions call — it MUST carry
+        // the partner filter to the upstream.
+        server.expect(requestTo(containsString("/v1/transactions?")))
+                .andExpect(method(GET))
+                .andExpect(queryParam("partnerId", "42"))
+                .andExpect(queryParam("size", "10"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        client.recent("42", 10);
+        server.verify();
+    }
+
+    @Test
+    void list_failsClosedOnNonNumericPartnerId() {
+        RestTransactionMgmtClient client = newClient();
+        // SECURITY: a supplied-but-non-numeric partnerId must NEVER produce an unscoped
+        // (all-partners) query. The client fails closed — no HTTP call is made and an
+        // empty page is returned. server.verify() asserts NO request was issued.
+        Page<TransactionSummary> page = client.list(
                 new Filter("GMEREMIT", null, null, null, null, 0, 20));
+        server.verify();
+        assertThat(page.content()).isEmpty();
+        assertThat(page.total()).isZero();
+    }
+
+    @Test
+    void search_failsClosedOnNonNumericPartnerId() {
+        RestTransactionMgmtClient client = newClient();
+        // Same fail-closed rule for the 360° search path.
+        Page<TransactionSummary> page = client.search(
+                new SearchQuery(null, "GMEREMIT", null, null, null, 0, 20));
         server.verify();
         assertThat(page.content()).isEmpty();
         assertThat(page.total()).isZero();

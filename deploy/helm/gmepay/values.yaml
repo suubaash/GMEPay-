@@ -272,6 +272,9 @@ services:
       SERVER_PORT: "8080"
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      # Live partner transactions: activate the real REST transaction-mgmt client
+      # (default is the in-memory stub). Portal then shows LIVE txns from transaction-mgmt.
+      GMEPAY_TRANSACTION_MGMT_CLIENT: "rest"
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080

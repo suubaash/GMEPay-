@@ -40,11 +40,15 @@ import java.util.List;
  * from {@code createdAt}, and whose {@code amount}/{@code currency} are the payout
  * leg {@code targetPayout}/{@code targetCcy}). Unknown wire fields are ignored.
  *
- * <p><b>partnerId handling.</b> transaction-mgmt filters by the numeric partner id;
- * the BFF {@link Filter#partnerId()} is a free-form string. We forward it as the
- * {@code partnerId} query param only when it parses as a long, otherwise we omit
- * the filter (rather than passing a value the upstream would reject) — see
- * {@link #parseLongOrNull(String)}.
+ * <p><b>partnerId handling (partner-scoping, security-critical).</b> transaction-mgmt
+ * filters by the numeric partner id; the BFF {@link Filter#partnerId()} is a free-form
+ * string that in live deploys carries the caller's numeric partner id (JWT/path-derived).
+ * When a partnerId filter is present we forward it as the {@code partnerId} query param
+ * <em>iff</em> it parses as a long. If a partnerId was supplied but does NOT parse
+ * numerically we <b>fail closed</b> — returning an empty page rather than issuing an
+ * unfiltered query that would leak every partner's transactions. Only a truly absent
+ * (null/blank) partnerId means "all partners" (the Admin surface). See
+ * {@link #parseLongOrNull(String)} and {@link #hasText(String)}.
  */
 @Component
 @Primary
@@ -110,8 +114,15 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (filter.state() != null && !filter.state().isBlank()) {
                 uri.queryParam("status", filter.state());
             }
-            Long numericPartner = parseLongOrNull(filter.partnerId());
-            if (numericPartner != null) {
+            // Partner-scoping (security-critical): a supplied-but-non-numeric partnerId
+            // must NOT degrade to an unfiltered (all-partners) query — fail closed.
+            if (hasText(filter.partnerId())) {
+                Long numericPartner = parseLongOrNull(filter.partnerId());
+                if (numericPartner == null) {
+                    log.warn("list: non-numeric partnerId '{}' — failing closed (empty page) "
+                            + "rather than querying transaction-mgmt unscoped", filter.partnerId());
+                    return new Page<>(List.of(), page, size, 0L);
+                }
                 uri.queryParam("partnerId", numericPartner);
             }
 
@@ -158,8 +169,15 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (query.reference() != null && !query.reference().isBlank()) {
                 uri.queryParam("reference", query.reference());
             }
-            Long numericPartner = parseLongOrNull(query.partnerId());
-            if (numericPartner != null) {
+            // Partner-scoping (security-critical): same fail-closed rule as list() — a
+            // supplied-but-non-numeric partnerId never widens the search to all partners.
+            if (hasText(query.partnerId())) {
+                Long numericPartner = parseLongOrNull(query.partnerId());
+                if (numericPartner == null) {
+                    log.warn("search: non-numeric partnerId '{}' — failing closed (empty page)",
+                            query.partnerId());
+                    return new Page<>(List.of(), page, size, 0L);
+                }
                 uri.queryParam("partnerId", numericPartner);
             }
             WirePage resp = restClient.get()
@@ -243,6 +261,10 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatusCode.valueOf(e.getStatusCode().value()), e.getMessage());
         }
+    }
+
+    private static boolean hasText(String s) {
+        return s != null && !s.isBlank();
     }
 
     private static Long parseLongOrNull(String s) {

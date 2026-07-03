@@ -615,6 +615,10 @@ services:
       # application.properties (read by the Rest* adapters once activated).
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      # Live partner transactions: use the real REST client (talks to transaction-mgmt over
+      # HTTP) instead of the in-memory stub, so the Partner Portal shows LIVE txns. Empty
+      # until real payments exist — that is the point of "live".
+      GMEPAY_TRANSACTION_MGMT_CLIENT: rest
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
