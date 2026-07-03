@@ -864,6 +864,34 @@ export const adminApi = {
       body: JSON.stringify(body),
     }),
 
+  // ---------- Platform settings (config-registry, owner Goal #3) ----------
+  /**
+   * GET /v1/admin/settings -> SettingView[]
+   * SettingView: {
+   *   key:        string,   // canonical dotted key, e.g. "settlement.cutoff.hour"
+   *   value:      string,   // current value as a string (always a string on the wire)
+   *   valueType:  'STRING'|'NUMBER'|'BOOLEAN'|string,
+   *   description:string,   // plain-language explanation of the tunable
+   *   updatedAt:  ISO|null,
+   *   updatedBy:  string|null
+   * }
+   * Hard-coded platform values exposed as editable tunables so operators can
+   * change them without a redeploy. Every edit is audited server-side.
+   */
+  listSettings: () => request('/v1/admin/settings'),
+
+  /**
+   * PUT /v1/admin/settings/{key}  body { value, updatedBy? } -> SettingView
+   * Updates one platform tunable and returns the refreshed row (with new
+   * updatedAt/updatedBy). `value` is always sent as a string; the backend
+   * coerces per the setting's valueType and 400s on a bad value.
+   */
+  updateSetting: (key, value, updatedBy) =>
+    request(`/v1/admin/settings/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updatedBy ? { value, updatedBy } : { value }),
+    }),
+
   // ---------- System health ----------
   /**
    * GET /v1/admin/system/health -> SystemHealth
