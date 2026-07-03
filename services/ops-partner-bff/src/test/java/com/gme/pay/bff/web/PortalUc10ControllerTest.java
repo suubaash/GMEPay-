@@ -67,7 +67,9 @@ class PortalUc10ControllerTest {
 
         PartnerPortalController controller = new PartnerPortalController(
                 transactions, prefunding, settlement, configRegistry,
-                new StubApiKeyClient(), new StubStatementClient());
+                new StubApiKeyClient(),
+                new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
+                new StubStatementClient());
 
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())

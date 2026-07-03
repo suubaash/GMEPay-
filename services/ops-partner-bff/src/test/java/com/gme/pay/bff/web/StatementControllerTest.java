@@ -45,7 +45,9 @@ class StatementControllerTest {
 
         PartnerPortalController controller = new PartnerPortalController(
                 transactions, prefunding, settlement, configRegistry,
-                new StubApiKeyClient(), new StubStatementClient());
+                new StubApiKeyClient(),
+                new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
+                new StubStatementClient());
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())

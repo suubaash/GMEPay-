@@ -1,5 +1,23 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-03 — Delivery-dashboard stats endpoint
+
+Additive, read-only. New product-analytics aggregate over the existing `transactions` rows; no
+migration. Edits confined to `services/transaction-mgmt/`.
+
+### Added
+- **`GET /v1/transactions/stats?from=<ISO>&to=<ISO>`** (both optional ISO-8601 instants; default
+  last 30 days) → `{ window, totals, byPartner, byCorridor, declineReasons }`. "approved" =
+  `APPROVED` (V006 CHECK); "declined" = `FAILED/CANCELLED/REVERSED`; corridor = `scheme_id`
+  (null → `"UNKNOWN"`); declineReasons uses the real `failure_reason` column (V004), a null reason
+  on a declined row labelled by its status; `successRatePct` = round(approved/total*100, 1), 0 when
+  total = 0. Backed by single grouped SQL queries (never loads all rows).
+- **`GET /v1/transactions/first-approved`** → `{ partnerRef: firstApprovedInstant }` — earliest
+  APPROVED `created_at` per partner (activation signal for the ops-partner-bff delivery overview).
+- Repository aggregate queries + `TransactionService.computeStats` / `firstApprovedByPartner`
+  + `TransactionStatsResponse` DTO. New domain-port methods are `default`-returning-empty so
+  existing test fakes keep compiling.
+
 ## 2026-07-02 — CS quick-wins: decline reason + plain-language status/timeline + customer search
 
 Customer-support-facing read enrichment on `TransactionResponse` plus two customer-identifier

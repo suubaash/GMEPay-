@@ -199,6 +199,38 @@ export const portalApi = {
   },
 
   /**
+   * POST /v1/portal/{partnerId}/sandbox-keys
+   *
+   * Self-serve issuance of a SANDBOX API key for the Get-Started flow. Returns
+   * the ONE-TIME plaintext `apiKey` — it is shown to the partner exactly once
+   * and never returned again (the backend stores only a hash). The key is
+   * SANDBOX-scoped and cannot authorize production calls.
+   *
+   * @param {string} partnerId
+   * @param {string} [name] - optional human label for the key
+   * @returns {Promise<{ keyId:string, apiKey:string, prefix:string, scope:'SANDBOX', createdAt:string }>}
+   */
+  issueSandboxKey(partnerId, name) {
+    return request(`/v1/portal/${encodeURIComponent(partnerId)}/sandbox-keys`, {
+      method: 'POST',
+      body: JSON.stringify({ name: name ?? null })
+    });
+  },
+
+  /**
+   * GET /v1/portal/{partnerId}/sandbox-keys
+   *
+   * Lists the SANDBOX keys already minted for this partner — id, prefix, scope,
+   * createdAt. Never returns the plaintext secret.
+   *
+   * @param {string} partnerId
+   * @returns {Promise<Array<{ keyId:string, prefix:string, scope:'SANDBOX', createdAt:string }>>}
+   */
+  listSandboxKeys(partnerId) {
+    return request(`/v1/portal/${encodeURIComponent(partnerId)}/sandbox-keys`);
+  },
+
+  /**
    * GET /v1/portal/{partnerId}/statement?from=YYYY-MM-DD&to=YYYY-MM-DD
    *
    * Returns the partner's transaction statement as CSV (text/csv with

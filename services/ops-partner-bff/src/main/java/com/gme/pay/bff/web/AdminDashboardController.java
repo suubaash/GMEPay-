@@ -6,6 +6,7 @@ import com.gme.pay.bff.client.RevenueLedgerClient;
 import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.web.dto.AdminDashboard;
+import com.gme.pay.bff.web.dto.DeliveryOverview;
 import com.gme.pay.bff.web.dto.DraftPartnerRequest;
 import com.gme.pay.bff.web.dto.DraftPartnerStep1Request;
 import com.gme.pay.bff.web.dto.DraftPartnerStep2Request;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -305,6 +307,65 @@ public class AdminDashboardController {
                     "no transaction with id " + txnId);
         }
         return buildDetail(summary);
+    }
+
+    // -------- Delivery dashboard (product analytics) -------------------------
+
+    /**
+     * Dashboard-shaped delivery overview — "is the platform actually delivering payments?".
+     * Orchestrates transaction-mgmt's {@code GET /v1/transactions/stats} (success rate + decline
+     * reasons) and {@code GET /v1/transactions/first-approved} with the config-registry partner
+     * list to compute per-partner activation latency (onboardedAt → firstApprovedAt).
+     *
+     * <p>Query params {@code from}/{@code to} are optional ISO-8601 instants forwarded to
+     * transaction-mgmt (which defaults to the last 30 days when both are omitted). The returned
+     * {@code window} echoes the upstream-resolved window.
+     */
+    @GetMapping("/delivery/overview")
+    public DeliveryOverview deliveryOverview(
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
+
+        TransactionMgmtClient.DeliveryStats stats = transactions.stats(from, to);
+        Map<String, Instant> firstApproved = transactions.firstApprovedByPartner();
+
+        DeliveryOverview.SuccessRate successRate = new DeliveryOverview.SuccessRate(
+                new DeliveryOverview.Slice(
+                        stats.totals().total(), stats.totals().approved(),
+                        stats.totals().declined(), stats.totals().successRatePct()),
+                stats.byPartner().stream()
+                        .map(p -> new DeliveryOverview.PartnerSlice(
+                                p.partner(), p.total(), p.approved(), p.declined(), p.successRatePct()))
+                        .toList(),
+                stats.byCorridor().stream()
+                        .map(c -> new DeliveryOverview.CorridorSlice(
+                                c.corridor(), c.total(), c.approved(), c.declined(), c.successRatePct()))
+                        .toList());
+
+        List<DeliveryOverview.DeclineReason> declineReasons = stats.declineReasons().stream()
+                .map(d -> new DeliveryOverview.DeclineReason(d.reason(), d.count()))
+                .toList();
+
+        // Activation: one row per partner, joining the partner list's onboarded timestamp to the
+        // earliest approved-transaction instant (keyed by partner code / ref).
+        List<DeliveryOverview.Activation> activation = configRegistry.listPartnerViews().stream()
+                .map(pv -> {
+                    Instant onboardedAt = pv.validFrom();
+                    Instant firstApprovedAt = firstApproved.get(pv.partnerCode());
+                    Long activationHours = (onboardedAt != null && firstApprovedAt != null)
+                            ? ChronoUnit.HOURS.between(onboardedAt, firstApprovedAt)
+                            : null;
+                    String status = firstApprovedAt != null ? "activated" : "pending";
+                    return new DeliveryOverview.Activation(
+                            pv.partnerCode(), onboardedAt, firstApprovedAt, activationHours, status);
+                })
+                .toList();
+
+        return new DeliveryOverview(
+                new DeliveryOverview.Window(stats.window().from(), stats.window().to()),
+                successRate,
+                declineReasons,
+                activation);
     }
 
     @GetMapping("/settlement/recent")

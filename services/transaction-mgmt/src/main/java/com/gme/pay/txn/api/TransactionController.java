@@ -153,6 +153,50 @@ public class TransactionController {
     }
 
     // -------------------------------------------------------------------------
+    // GET /v1/transactions/stats  (delivery-dashboard analytics)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Delivery-dashboard statistics — "is the platform actually delivering payments?". Aggregates
+     * the transactions created in the window {@code [from, to)} into platform totals, per-partner
+     * and per-corridor success slices, and a decline-reason tally.
+     *
+     * <p>Query params (both optional ISO-8601 instants, e.g. {@code 2026-07-01T00:00:00Z}):
+     * <ul>
+     *   <li>{@code from} — window start (inclusive). Defaults to 30 days before {@code to}.</li>
+     *   <li>{@code to}   — window end (exclusive). Defaults to now.</li>
+     * </ul>
+     *
+     * <p>Response {@link com.gme.pay.txn.api.dto.TransactionStatsResponse}: approved =
+     * {@code APPROVED}; declined = {@code FAILED/CANCELLED/REVERSED}; corridor = {@code scheme_id}
+     * (null → {@code "UNKNOWN"}); declineReasons uses the {@code failure_reason} column (a null
+     * reason on a declined row is labelled by its status). A literal path segment, so it never
+     * collides with {@code GET /{txnRef}}.
+     */
+    @GetMapping("/stats")
+    public ResponseEntity<com.gme.pay.txn.api.dto.TransactionStatsResponse> stats(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) java.time.Instant from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) java.time.Instant to) {
+        return ResponseEntity.ok(transactionService.computeStats(from, to));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /v1/transactions/first-approved  (activation signal — per partner)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Earliest APPROVED {@code created_at} per partner across all time — the activation signal the
+     * delivery overview folds against each partner's onboarded timestamp. Returns a map keyed by
+     * {@code partner_ref} → the first-approved ISO-8601 instant. A literal path segment.
+     */
+    @GetMapping("/first-approved")
+    public ResponseEntity<java.util.Map<String, java.time.Instant>> firstApproved() {
+        return ResponseEntity.ok(transactionService.firstApprovedByPartner());
+    }
+
+    // -------------------------------------------------------------------------
     // GET /v1/transactions/{txnRef}
     // -------------------------------------------------------------------------
 

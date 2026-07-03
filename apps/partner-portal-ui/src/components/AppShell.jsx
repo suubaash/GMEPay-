@@ -43,6 +43,7 @@ import { useSnackbar } from '@/components/SnackbarProvider';
  * dispatches the redux logout action, and redirects to `/login`.
  */
 const NAV = [
+  { label: 'Get Started', href: '/get-started' },
   { label: 'Overview', href: '/' },
   { label: 'Balance', href: '/balance' },
   { label: 'Transactions', href: '/transactions' },

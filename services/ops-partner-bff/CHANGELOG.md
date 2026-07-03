@@ -2,6 +2,40 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — Delivery dashboard overview
+
+Additive. Orchestrates transaction-mgmt delivery stats with the partner list into a
+dashboard-shaped overview. Libs + other services untouched.
+
+### Added
+- **`GET /v1/admin/delivery/overview?from=&to=`** → `{ window, successRate:{overall,byPartner,
+  byCorridor}, declineReasons, activation }`. successRate + declineReasons come from
+  transaction-mgmt's `GET /v1/transactions/stats`; `activation` joins each partner's onboarded
+  timestamp (config-registry `listPartnerViews().validFrom`) to its earliest approved-transaction
+  instant (`GET /v1/transactions/first-approved`), computing `activationHours` and
+  `status` = `activated`|`pending`.
+- `TransactionMgmtClient.stats(from,to)` + `firstApprovedByPartner()` (additive default methods;
+  RestTransactionMgmtClient overrides both against the existing
+  `gmepay.transaction-mgmt.base-url` RestClient). New `DeliveryOverview` DTO.
+## 2026-07-03 — Self-serve SANDBOX key issuance (Partner Portal "Get Started")
+
+Additive. Lets a logged-in partner mint their own SANDBOX API key from the Partner Portal
+Get-Started page — no account-manager / 4-eyes step. The production-key issuance path
+(auth-identity `/internal/auth/keys` + the 4-eyes rotation workflow) is untouched.
+
+### Added
+- **`POST /v1/portal/{partnerId}/sandbox-keys`** `{name?}` → `201 { keyId, apiKey, prefix,
+  scope:"SANDBOX", createdAt }`. `apiKey` is the ONE-TIME plaintext secret — returned exactly
+  once; the store keeps only a salted one-way hash (SEC-09 §4). The key is `SANDBOX`-scoped
+  (test-prefixed `pk_test_`/`sk_test_`) so it cannot authorize real-money production calls.
+- **`GET /v1/portal/{partnerId}/sandbox-keys`** → `[{ keyId, prefix, scope, createdAt }]`
+  (never the plaintext) so the portal can list a partner's existing sandbox keys.
+- New `SandboxKeyClient` port + default in-memory `StubSandboxKeyClient` reproducing the
+  one-time-plaintext / hash-only / SANDBOX-scope contract without booting auth-identity.
+  (Prod: forward to auth-identity `POST /internal/auth/keys` with `environment=SANDBOX`.)
+- `SandboxKeyControllerTest` pins: 201 + plaintext once, hash-only persistence, SANDBOX scope,
+  distinct-secret-per-call, and `toString()` redaction.
+
 ## 2026-07-02 — Customer-support transaction read surface
 
 Additive. Turns the Ops transaction proxy into a usable customer-support read surface and

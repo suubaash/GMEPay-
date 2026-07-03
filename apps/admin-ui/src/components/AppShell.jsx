@@ -39,6 +39,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import HistoryIcon from '@mui/icons-material/History';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import HealthAndSafetyIcon from '@mui/icons-material/HealthAndSafety';
+import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import ScienceIcon from '@mui/icons-material/Science';
 import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
@@ -62,6 +63,8 @@ const navItems = [
   // Operations sits near the top: it's the live control surface (control
   // tower + kill-switches + txn recovery) operators reach for first.
   { label: 'Operations', href: '/operations', icon: <HealthAndSafetyIcon /> },
+  // Delivery: product-delivery analytics — are payments actually succeeding?
+  { label: 'Delivery', href: '/delivery', icon: <TaskAltIcon /> },
   { label: 'Partners', href: '/partners', icon: <GroupsIcon /> },
   { label: 'Approvals', href: '/approvals', icon: <HowToVoteIcon /> },
   { label: 'Compliance', href: '/compliance', icon: <PolicyIcon /> },

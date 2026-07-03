@@ -73,4 +73,50 @@ public interface TransactionRepository {
      * ({@code refundedAt} in that day's instant window). Used by GET /v1/transactions/refunded.
      */
     List<Transaction> findRefundedOn(LocalDate refundedOn);
+
+    // -------------------------------------------------------------------------
+    // Delivery-dashboard aggregates (GET /v1/transactions/stats). Grouped, read-only
+    // counts over the instant window {@code [from, to)} — never load all rows.
+    // -------------------------------------------------------------------------
+
+    // Additive default methods (return empty) so existing test-fake implementations of this port
+    // keep compiling without change; the production JPA adapter overrides all five.
+
+    /** Per-status counts in the window (one entry per distinct status present). */
+    default List<StatusCount> countByStatus(Instant from, Instant to) {
+        return List.of();
+    }
+
+    /** Per-(partner_ref, status) counts in the window. */
+    default List<GroupCount> countByPartnerAndStatus(Instant from, Instant to) {
+        return List.of();
+    }
+
+    /** Per-(scheme_id, status) counts in the window; a null scheme rides as {@code null} grp. */
+    default List<GroupCount> countByCorridorAndStatus(Instant from, Instant to) {
+        return List.of();
+    }
+
+    /**
+     * Decline-reason tally over the declined transactions in the window. {@code grp} is the
+     * {@code failure_reason} (nullable); {@code bucket} is the status so the caller can label a
+     * null reason by its status.
+     */
+    default List<GroupCount> countDeclineReasons(Instant from, Instant to, List<String> declinedStatuses) {
+        return List.of();
+    }
+
+    /** Earliest APPROVED {@code created_at} per partner_ref across all time (activation signal). */
+    default List<FirstApproved> findFirstApprovedByPartner() {
+        return List.of();
+    }
+
+    /** A status name and its count. */
+    record StatusCount(String status, long count) {}
+
+    /** A group key (partner / corridor / reason), a status bucket, and the count. */
+    record GroupCount(String grp, String status, long count) {}
+
+    /** A partner_ref and the earliest instant it had an APPROVED transaction. */
+    record FirstApproved(String partner, Instant firstApprovedAt) {}
 }

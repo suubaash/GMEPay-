@@ -1,5 +1,21 @@
 # Changelog
 
+## Self-serve developer onboarding (branch `feat/selfserve-onboard`)
+
+Gives partners a self-serve front door so integration no longer needs one engineer per
+partner. Additive across the Partner Portal + the Ops/Partner BFF only.
+
+### Added
+- **Partner Portal "Get Started" page** (`apps/partner-portal-ui/src/app/get-started`) — a new
+  first nav item where a logged-in partner (1) generates a SANDBOX API key (shown ONCE, with a
+  "copy it now" warning; existing keys listed by prefix), (2) copies a curl quickstart for
+  `POST /v1/pay/classify` and `POST /v1/pay` pre-filled with the new key + a configurable
+  `NEXT_PUBLIC_SANDBOX_API_BASE`, and (3) reads a compact endpoint reference.
+- **`POST/GET /v1/portal/{partnerId}/sandbox-keys`** on ops-partner-bff — self-serve SANDBOX
+  key issuance. Plaintext returned once; store keeps only a hash; `scope="SANDBOX"` so the key
+  cannot authorize production calls. The production 4-eyes key flow is untouched. See the
+  ops-partner-bff CHANGELOG for the wire detail.
+
 ## GMEPay+-authoritative QR classification (branch `feat/hub-qr-classify`)
 
 Makes GMEPay+ — not the wallet — the authority for what a scanned QR *is*. Before,

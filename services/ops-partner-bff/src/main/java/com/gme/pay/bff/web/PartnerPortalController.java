@@ -3,6 +3,7 @@ package com.gme.pay.bff.web;
 import com.gme.pay.bff.client.ApiKeyClient;
 import com.gme.pay.bff.client.ConfigRegistryClient;
 import com.gme.pay.bff.client.PrefundingClient;
+import com.gme.pay.bff.client.SandboxKeyClient;
 import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.StatementClient;
 import com.gme.pay.bff.client.TransactionMgmtClient;
@@ -17,6 +18,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -69,6 +72,7 @@ public class PartnerPortalController {
     private final SettlementClient settlement;
     private final ConfigRegistryClient configRegistry;
     private final ApiKeyClient apiKeys;
+    private final SandboxKeyClient sandboxKeys;
     private final StatementClient statements;
 
     public PartnerPortalController(
@@ -77,12 +81,14 @@ public class PartnerPortalController {
             SettlementClient settlement,
             ConfigRegistryClient configRegistry,
             ApiKeyClient apiKeys,
+            SandboxKeyClient sandboxKeys,
             StatementClient statements) {
         this.transactions = transactions;
         this.prefunding = prefunding;
         this.settlement = settlement;
         this.configRegistry = configRegistry;
         this.apiKeys = apiKeys;
+        this.sandboxKeys = sandboxKeys;
         this.statements = statements;
     }
 
@@ -198,6 +204,40 @@ public class PartnerPortalController {
         List<ApiKeyClient.ApiKeyView> keys = apiKeys.listForPartner(partnerId);
         return keys == null ? List.of() : keys;
     }
+
+    /**
+     * Self-serve SANDBOX key issuance for the Partner Portal "Get Started"
+     * flow. A logged-in partner mints their own sandbox credential — no
+     * account-manager / 4-eyes step (that gate is reserved for PRODUCTION keys
+     * and is NOT reachable here).
+     *
+     * <p>Returns 201 with the ONE-TIME plaintext {@code apiKey}: it is shown to
+     * the partner exactly once and never returned again (the store keeps only a
+     * salted hash — SEC-09 §4). The key is {@code SANDBOX}-scoped so it cannot
+     * authorize real-money production calls.
+     */
+    @PostMapping("/{partnerId}/sandbox-keys")
+    public ResponseEntity<SandboxKeyClient.IssuedSandboxKey> issueSandboxKey(
+            @PathVariable String partnerId,
+            @RequestBody(required = false) IssueSandboxKeyRequest body) {
+        String name = body == null ? null : body.name();
+        SandboxKeyClient.IssuedSandboxKey issued = sandboxKeys.issue(partnerId, name);
+        return ResponseEntity.status(HttpStatus.CREATED).body(issued);
+    }
+
+    /**
+     * Lists the SANDBOX keys already minted for this partner (id, prefix,
+     * scope, createdAt) — never the plaintext secret. Backs the Get-Started
+     * page's "you already have sandbox keys" list.
+     */
+    @GetMapping("/{partnerId}/sandbox-keys")
+    public List<SandboxKeyClient.SandboxKeyView> sandboxKeys(@PathVariable String partnerId) {
+        List<SandboxKeyClient.SandboxKeyView> keys = sandboxKeys.listForPartner(partnerId);
+        return keys == null ? List.of() : keys;
+    }
+
+    /** Optional request body for {@link #issueSandboxKey}. {@code name} is a human label. */
+    public record IssueSandboxKeyRequest(String name) {}
 
     @GetMapping("/{partnerId}/statement")
     public ResponseEntity<byte[]> statement(

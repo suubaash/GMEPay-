@@ -129,4 +129,45 @@ public class InMemoryTransactionRepository implements TransactionRepository {
                 .map(TransactionEntityMapper::toDomain)
                 .collect(Collectors.toList());
     }
+
+    // -------------------------------------------------------------------------
+    // Delivery-dashboard aggregates — thin mapping from the JPA projections to the
+    // domain-port records. All grouping happens in SQL (single grouped query each).
+    // -------------------------------------------------------------------------
+
+    @Override
+    public List<StatusCount> countByStatus(Instant from, Instant to) {
+        return jpaRepository.countByStatus(from, to).stream()
+                .map(r -> new StatusCount(r.getBucket(), r.getCnt()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<GroupCount> countByPartnerAndStatus(Instant from, Instant to) {
+        return jpaRepository.countByPartnerAndStatus(from, to).stream()
+                .map(r -> new GroupCount(r.getGrp(), r.getBucket(), r.getCnt()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<GroupCount> countByCorridorAndStatus(Instant from, Instant to) {
+        return jpaRepository.countByCorridorAndStatus(from, to).stream()
+                .map(r -> new GroupCount(r.getGrp(), r.getBucket(), r.getCnt()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<GroupCount> countDeclineReasons(Instant from, Instant to,
+                                                List<String> declinedStatuses) {
+        return jpaRepository.countDeclineReasons(from, to, declinedStatuses).stream()
+                .map(r -> new GroupCount(r.getGrp(), r.getBucket(), r.getCnt()))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<FirstApproved> findFirstApprovedByPartner() {
+        return jpaRepository.findFirstApprovedByPartner().stream()
+                .map(r -> new FirstApproved(r.getGrp(), r.getFirstApproved()))
+                .collect(Collectors.toList());
+    }
 }

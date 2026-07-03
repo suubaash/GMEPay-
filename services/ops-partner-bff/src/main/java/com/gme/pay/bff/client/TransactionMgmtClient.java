@@ -80,6 +80,58 @@ public interface TransactionMgmtClient {
                 "resolve is not implemented by " + getClass().getName());
     }
 
+    // -------- Delivery-dashboard: stats + activation signal ----------------------
+    //
+    // Additive default methods so existing anonymous test fakes / stubs keep compiling.
+    // Both real implementations (rest) and the stub override them.
+
+    /**
+     * Delivery-dashboard statistics. Routes to transaction-mgmt's
+     * {@code GET /v1/transactions/stats?from=&to=} (ISO-8601 instants, both optional →
+     * upstream defaults to the last 30 days). Returns the platform totals + per-partner /
+     * per-corridor success slices + decline-reason tally. Default returns an empty stats block.
+     */
+    default DeliveryStats stats(Instant from, Instant to) {
+        return DeliveryStats.empty();
+    }
+
+    /**
+     * Earliest APPROVED instant per partner (keyed by the partner's partner_ref) across all time —
+     * the activation signal. Routes to {@code GET /v1/transactions/first-approved}. Default empty.
+     */
+    default java.util.Map<String, Instant> firstApprovedByPartner() {
+        return java.util.Map.of();
+    }
+
+    /**
+     * Delivery statistics as surfaced by transaction-mgmt's {@code GET /v1/transactions/stats}.
+     * Field names mirror the upstream wire shape so the REST client deserializes straight into it.
+     */
+    record DeliveryStats(
+            Window window,
+            Totals totals,
+            List<PartnerStat> byPartner,
+            List<CorridorStat> byCorridor,
+            List<DeclineReason> declineReasons) {
+
+        public static DeliveryStats empty() {
+            return new DeliveryStats(new Window(null, null), new Totals(0, 0, 0, 0d),
+                    List.of(), List.of(), List.of());
+        }
+
+        public record Window(Instant from, Instant to) {}
+
+        public record Totals(long total, long approved, long declined, double successRatePct) {}
+
+        public record PartnerStat(String partner, long total, long approved, long declined,
+                                  double successRatePct) {}
+
+        public record CorridorStat(String corridor, long total, long approved, long declined,
+                                   double successRatePct) {}
+
+        public record DeclineReason(String reason, long count) {}
+    }
+
     /**
      * Free-text + facet search criteria for {@link #search(SearchQuery)}. All fields
      * optional; {@code page} 0-indexed.

@@ -131,4 +131,101 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     List<TransactionEntity> findRefundedOn(
             @Param("from") Instant from,
             @Param("to") Instant to);
+
+    // -------------------------------------------------------------------------
+    // Delivery-dashboard aggregates (GET /v1/transactions/stats). Read-only,
+    // single grouped queries over the existing rows in the half-open instant
+    // window {@code [from, to)} — never load all rows into the app.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Per-status counts in the window (one row per distinct status present). The service
+     * folds these into totals / approved / declined so the math lives in one place and the
+     * "approved" / "declined" status sets stay a single source of truth.
+     */
+    @Query("""
+            SELECT t.status AS bucket, COUNT(t) AS cnt
+            FROM TransactionEntity t
+            WHERE t.createdAt >= :from AND t.createdAt < :to
+            GROUP BY t.status
+            """)
+    List<CountByBucket> countByStatus(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * Per-(partner, status) counts in the window, grouped by {@code partner_ref} (always
+     * populated, unlike the nullable numeric {@code partner_id}). The service pivots each
+     * partner's status rows into total / approved / declined + success rate.
+     */
+    @Query("""
+            SELECT t.partnerRef AS grp, t.status AS bucket, COUNT(t) AS cnt
+            FROM TransactionEntity t
+            WHERE t.createdAt >= :from AND t.createdAt < :to
+            GROUP BY t.partnerRef, t.status
+            """)
+    List<GroupStatusCount> countByPartnerAndStatus(
+            @Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * Per-(corridor, status) counts in the window. Corridor = {@code scheme_id} (the QR
+     * scheme / network column that exists on the row); rows with a null scheme_id collapse
+     * under a single null group the service labels {@code "UNKNOWN"}.
+     */
+    @Query("""
+            SELECT t.schemeId AS grp, t.status AS bucket, COUNT(t) AS cnt
+            FROM TransactionEntity t
+            WHERE t.createdAt >= :from AND t.createdAt < :to
+            GROUP BY t.schemeId, t.status
+            """)
+    List<GroupStatusCount> countByCorridorAndStatus(
+            @Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * Decline-reason tally over the DECLINED transactions in the window. Uses the real
+     * {@code failure_reason} column (V004) as the reason; declined rows with a null
+     * failure_reason collapse under a null key the service labels by their status
+     * (e.g. {@code "CANCELLED"}). {@code declinedStatuses} is the terminal not-approved set.
+     */
+    @Query("""
+            SELECT t.failureReason AS grp, t.status AS bucket, COUNT(t) AS cnt
+            FROM TransactionEntity t
+            WHERE t.createdAt >= :from AND t.createdAt < :to
+              AND t.status IN :declinedStatuses
+            GROUP BY t.failureReason, t.status
+            """)
+    List<GroupStatusCount> countDeclineReasons(
+            @Param("from") Instant from,
+            @Param("to") Instant to,
+            @Param("declinedStatuses") List<String> declinedStatuses);
+
+    /**
+     * Earliest APPROVED {@code created_at} per partner ({@code partner_ref}) across ALL time —
+     * the activation "first approved" signal the delivery overview folds against the partner's
+     * onboarded timestamp. One row per partner that has at least one APPROVED transaction.
+     */
+    @Query("""
+            SELECT t.partnerRef AS grp, MIN(t.createdAt) AS firstApproved
+            FROM TransactionEntity t
+            WHERE t.status = 'APPROVED'
+            GROUP BY t.partnerRef
+            """)
+    List<FirstApprovedByPartner> findFirstApprovedByPartner();
+
+    /** Projection: a status bucket and its count. */
+    interface CountByBucket {
+        String getBucket();
+        long getCnt();
+    }
+
+    /** Projection: a group key (partner / corridor / reason), a status bucket, and the count. */
+    interface GroupStatusCount {
+        String getGrp();
+        String getBucket();
+        long getCnt();
+    }
+
+    /** Projection: a partner and the earliest instant it had an APPROVED transaction. */
+    interface FirstApprovedByPartner {
+        String getGrp();
+        Instant getFirstApproved();
+    }
 }

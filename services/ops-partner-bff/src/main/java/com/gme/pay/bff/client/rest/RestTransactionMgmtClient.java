@@ -183,6 +183,49 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
     }
 
     @Override
+    public DeliveryStats stats(Instant from, Instant to) {
+        try {
+            UriComponentsBuilder uri = UriComponentsBuilder.fromPath("/v1/transactions/stats");
+            if (from != null) {
+                uri.queryParam("from", from.toString());
+            }
+            if (to != null) {
+                uri.queryParam("to", to.toString());
+            }
+            DeliveryStats resp = restClient.get()
+                    .uri(uri.build().toUriString())
+                    .retrieve()
+                    .body(DeliveryStats.class);
+            return resp == null ? DeliveryStats.empty() : resp;
+        } catch (RestClientResponseException e) {
+            log.warn("transaction-mgmt error on stats (status={}): {}", e.getStatusCode(), e.getMessage());
+            return DeliveryStats.empty();
+        } catch (ResourceAccessException e) {
+            log.warn("transaction-mgmt unreachable on stats: {}", e.getMessage());
+            return DeliveryStats.empty();
+        }
+    }
+
+    @Override
+    public java.util.Map<String, Instant> firstApprovedByPartner() {
+        try {
+            java.util.Map<String, Instant> resp = restClient.get()
+                    .uri("/v1/transactions/first-approved")
+                    .retrieve()
+                    .body(new org.springframework.core.ParameterizedTypeReference<
+                            java.util.Map<String, Instant>>() {});
+            return resp == null ? java.util.Map.of() : resp;
+        } catch (RestClientResponseException e) {
+            log.warn("transaction-mgmt error on first-approved (status={}): {}",
+                    e.getStatusCode(), e.getMessage());
+            return java.util.Map.of();
+        } catch (ResourceAccessException e) {
+            log.warn("transaction-mgmt unreachable on first-approved: {}", e.getMessage());
+            return java.util.Map.of();
+        }
+    }
+
+    @Override
     public TransactionSummary resolve(String txnRef, String resolution, String actor, String reason) {
         try {
             WireTxn t = restClient.post()

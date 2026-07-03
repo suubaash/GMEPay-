@@ -37,6 +37,15 @@ import java.util.Objects;
 @Service
 public class TransactionService {
 
+    /** Terminal success status the FSM uses (V006 CHECK). "approved" in the delivery stats. */
+    private static final String APPROVED_STATUS = TransactionStatus.APPROVED.name();
+
+    /** Terminal not-approved failure statuses counted as "declined" in the delivery stats. */
+    private static final List<String> DECLINED_STATUSES = List.of(
+            TransactionStatus.FAILED.name(),
+            TransactionStatus.CANCELLED.name(),
+            TransactionStatus.REVERSED.name());
+
     private final TransactionRepository repository;
     private final TransactionStateMachine stateMachine;
 
@@ -373,6 +382,134 @@ public class TransactionService {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "refundedOn is required");
         }
         return repository.findRefundedOn(refundedOn);
+    }
+
+    /**
+     * Delivery-dashboard statistics (GET /v1/transactions/stats). Computes platform-wide,
+     * per-partner and per-corridor delivery slices plus a decline-reason tally over the
+     * transactions created in {@code [from, to)}. Backed by grouped SQL counts (never loads
+     * all rows).
+     *
+     * <p>"approved" = the terminal success status {@link TransactionStatus#APPROVED}. "declined"
+     * = the terminal not-approved failures {@link #DECLINED_STATUSES}. corridor = {@code scheme_id}
+     * (null → {@code "UNKNOWN"}). declineReasons uses the real {@code failure_reason} column; a
+     * declined row with a null reason is labelled by its status. successRatePct = round(approved /
+     * total * 100, 1); 0 when total = 0.
+     *
+     * @param from window lower bound (inclusive); defaults to 30 days before {@code to} when null
+     * @param to   window upper bound (exclusive); defaults to now when null
+     */
+    public com.gme.pay.txn.api.dto.TransactionStatsResponse computeStats(Instant from, Instant to) {
+        Instant end = to != null ? to : Instant.now();
+        Instant start = from != null ? from : end.minus(java.time.Duration.ofDays(30));
+
+        // Totals: fold the per-status counts into total / approved / declined.
+        long total = 0;
+        long approved = 0;
+        long declined = 0;
+        for (TransactionRepository.StatusCount sc : repository.countByStatus(start, end)) {
+            total += sc.count();
+            if (APPROVED_STATUS.equals(sc.status())) {
+                approved += sc.count();
+            } else if (DECLINED_STATUSES.contains(sc.status())) {
+                declined += sc.count();
+            }
+        }
+
+        List<com.gme.pay.txn.api.dto.TransactionStatsResponse.PartnerStat> byPartner =
+                repository.countByPartnerAndStatus(start, end).stream()
+                        .collect(java.util.stream.Collectors.groupingBy(
+                                g -> label(g.grp()),
+                                java.util.LinkedHashMap::new,
+                                java.util.stream.Collectors.toList()))
+                        .entrySet().stream()
+                        .map(e -> {
+                            long[] c = fold(e.getValue());
+                            return new com.gme.pay.txn.api.dto.TransactionStatsResponse.PartnerStat(
+                                    e.getKey(), c[0], c[1], c[2], successRate(c[1], c[0]));
+                        })
+                        .sorted((a, b) -> Long.compare(b.total(), a.total()))
+                        .toList();
+
+        List<com.gme.pay.txn.api.dto.TransactionStatsResponse.CorridorStat> byCorridor =
+                repository.countByCorridorAndStatus(start, end).stream()
+                        .collect(java.util.stream.Collectors.groupingBy(
+                                g -> label(g.grp()),
+                                java.util.LinkedHashMap::new,
+                                java.util.stream.Collectors.toList()))
+                        .entrySet().stream()
+                        .map(e -> {
+                            long[] c = fold(e.getValue());
+                            return new com.gme.pay.txn.api.dto.TransactionStatsResponse.CorridorStat(
+                                    e.getKey(), c[0], c[1], c[2], successRate(c[1], c[0]));
+                        })
+                        .sorted((a, b) -> Long.compare(b.total(), a.total()))
+                        .toList();
+
+        // Decline reasons: group by failure_reason, labelling a null reason by its status.
+        java.util.Map<String, Long> reasonTally = new java.util.LinkedHashMap<>();
+        for (TransactionRepository.GroupCount g :
+                repository.countDeclineReasons(start, end, DECLINED_STATUSES)) {
+            String reason = g.grp() != null ? g.grp() : g.status();
+            reasonTally.merge(reason, g.count(), Long::sum);
+        }
+        List<com.gme.pay.txn.api.dto.TransactionStatsResponse.DeclineReason> declineReasons =
+                reasonTally.entrySet().stream()
+                        .map(e -> new com.gme.pay.txn.api.dto.TransactionStatsResponse.DeclineReason(
+                                e.getKey(), e.getValue()))
+                        .sorted((a, b) -> Long.compare(b.count(), a.count()))
+                        .toList();
+
+        return new com.gme.pay.txn.api.dto.TransactionStatsResponse(
+                new com.gme.pay.txn.api.dto.TransactionStatsResponse.Window(start, end),
+                new com.gme.pay.txn.api.dto.TransactionStatsResponse.Totals(
+                        total, approved, declined, successRate(approved, total)),
+                byPartner,
+                byCorridor,
+                declineReasons);
+    }
+
+    /** Folds a group's per-status rows into {@code [total, approved, declined]}. */
+    private static long[] fold(List<TransactionRepository.GroupCount> rows) {
+        long total = 0, approved = 0, declined = 0;
+        for (TransactionRepository.GroupCount r : rows) {
+            total += r.count();
+            if (APPROVED_STATUS.equals(r.status())) {
+                approved += r.count();
+            } else if (DECLINED_STATUSES.contains(r.status())) {
+                declined += r.count();
+            }
+        }
+        return new long[] {total, approved, declined};
+    }
+
+    /** {@code round(approved / total * 100, 1)}; 0 when total = 0. */
+    private static double successRate(long approved, long total) {
+        if (total == 0) {
+            return 0d;
+        }
+        return java.math.BigDecimal.valueOf(approved)
+                .multiply(java.math.BigDecimal.valueOf(100))
+                .divide(java.math.BigDecimal.valueOf(total), 1, java.math.RoundingMode.HALF_UP)
+                .doubleValue();
+    }
+
+    /** A null group key (partner / corridor) surfaces as {@code "UNKNOWN"} rather than a null JSON key. */
+    private static String label(String grp) {
+        return grp != null ? grp : "UNKNOWN";
+    }
+
+    /**
+     * First-approved instant per partner across all time (activation signal for the delivery
+     * overview). Keyed by {@code partner_ref}. Consumed by ops-partner-bff to compute activation
+     * latency (onboardedAt → firstApprovedAt).
+     */
+    public java.util.Map<String, Instant> firstApprovedByPartner() {
+        java.util.Map<String, Instant> out = new java.util.LinkedHashMap<>();
+        for (TransactionRepository.FirstApproved fa : repository.findFirstApprovedByPartner()) {
+            out.put(fa.partner(), fa.firstApprovedAt());
+        }
+        return out;
     }
 
     /**

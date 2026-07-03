@@ -125,6 +125,7 @@ class PartnerPortalControllerTest {
         PartnerPortalController controller =
                 new PartnerPortalController(transactions, prefunding, settlement, configRegistry,
                         partnerId -> java.util.List.of(),
+                        new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
                         (partnerId, from, to) -> new byte[0]);
 
         // Configure Jackson with JavaTimeModule + ISO strings for Instant/LocalDate (not arrays of numbers).

@@ -183,6 +183,25 @@ export const adminApi = {
    */
   fetchDashboard: () => request('/v1/admin/dashboard'),
 
+  // ---------- Delivery analytics ----------
+  /**
+   * GET /v1/admin/delivery/overview?from=<ISO>&to=<ISO> -> DeliveryOverview
+   * {
+   *   window: { from, to },
+   *   successRate: {
+   *     overall:     { total, approved, declined, successRatePct },
+   *     byPartner:  [{ partner, total, approved, declined, successRatePct }],
+   *     byCorridor: [{ corridor, total, approved, declined, successRatePct }]
+   *   },
+   *   declineReasons: [{ reason, count }],
+   *   activation:     [{ partner, onboardedAt, firstApprovedAt, activationHours,
+   *                      status: 'activated' | 'pending' }]
+   * }
+   * successRatePct is a number 0..100; counts are integers.
+   */
+  getDeliveryOverview: (range) =>
+    request(`/v1/admin/delivery/overview${qs(range)}`),
+
   // ---------- Partners ----------
   /**
    * GET /v1/admin/partners -> PartnerSummary[]
