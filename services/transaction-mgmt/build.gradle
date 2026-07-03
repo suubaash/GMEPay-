@@ -6,6 +6,8 @@ plugins {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Actuator (feat/actuator-health): /actuator/health + liveness/readiness probes + /actuator/metrics.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     // Redis-backed idempotency-key store (17.3-G02). Lettuce client; activates only
     // when spring.data.redis.host is set — in-memory store is the local fallback.

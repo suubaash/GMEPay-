@@ -18,6 +18,20 @@ spring:
 server:
   port: 8085
 
+# Actuator (feat/actuator-health): health + liveness/readiness probes + metrics on the app port.
+# Only health/info/metrics exposed; env/beans/heapdump/shutdown stay off. show-details=never
+# so no internals leak (no auth wiring assumed in the sandbox).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
 gme:
   auth:
     jwt:

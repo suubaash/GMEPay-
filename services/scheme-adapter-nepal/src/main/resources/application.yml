@@ -5,12 +5,19 @@ spring:
 server:
   port: 8092
 
+# Actuator (feat/actuator-health): health + liveness/readiness probes + metrics on the app port.
+# Management port intentionally NOT overridden — the fleet/compose probes assume the app port
+# (8092). Only health/info/metrics exposed; env/beans/heapdump/shutdown stay off; show-details=never.
 management:
-  server:
-    port: 8093
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
   endpoint:
     health:
-      show-details: always
+      probes:
+        enabled: true
+      show-details: never
 
 # Nepal QR scheme (Khalti/Fonepay) — targets sim-nepal-qr :9103.
 # Override in production with GMEPAY_SCHEME_NEPAL_* environment variables.

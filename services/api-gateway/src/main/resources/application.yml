@@ -31,11 +31,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,prometheus
+        # feat/actuator-health: fleet-standard surface (health,info,metrics). prometheus dropped —
+        # micrometer-registry-prometheus is not on the classpath (offline env), so the endpoint
+        # never existed; env/beans/heapdump/shutdown stay off.
+        include: health,info,metrics
   endpoint:
     health:
       probes:
         enabled: true
+      show-details: never
   health:
     redis:
       enabled: true
