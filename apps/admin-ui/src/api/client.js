@@ -202,6 +202,20 @@ export const adminApi = {
   getDeliveryOverview: (range) =>
     request(`/v1/admin/delivery/overview${qs(range)}`),
 
+  // ---------- Journal (double-entry ledger) ----------
+  /**
+   * GET /v1/admin/journals?from=<ISO>&to=<ISO>&reference=<str>&page=0&size=50
+   * -> { items:[JournalEntry], page, size, total }
+   * JournalEntry: {
+   *   journalId, reference, createdAt (ISO),
+   *   lines:[{ account, side:'DR'|'CR', amount (decimal string), currency }]
+   * }
+   * Every money movement posts one balanced double-entry journal; `reference`
+   * is the money-movement / transaction reference. `amount` is a BigDecimal on
+   * the wire — treat as an opaque decimal string, never Number()-cast for money.
+   */
+  getJournals: (params) => request(`/v1/admin/journals${qs(params)}`),
+
   // ---------- Partners ----------
   /**
    * GET /v1/admin/partners -> PartnerSummary[]
