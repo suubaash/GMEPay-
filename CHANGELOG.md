@@ -1,5 +1,25 @@
 # Changelog
 
+## Correlation id in API error responses (branch `feat/error-correlation`)
+
+Maturity hardening: every GMEPay+ API error body now carries a `requestId` that is NEVER null and
+prefers the per-request correlation id, so a partner's error and the server logs share ONE id (error
+id == trace id). Purely additive/behavior-preserving except `requestId` sourcing; an explicit
+caller-supplied id still wins. No new external dependency (SLF4J `MDC` already on the classpath) —
+build resolves fully offline from the Gradle cache.
+
+### Changed
+- **`com.gme.pay.errors.ApiError`** (`libs/lib-errors`): the static factories now resolve `requestId`
+  via `explicit non-blank → MDC.get(CorrelationHeaders.MDC_KEY) → UUID`. The record itself stays pure
+  (no MDC in the canonical constructor). Existing `of(ErrorCode, message, requestId)` keeps working
+  (now with the fallback when the id is null/blank); ADDED convenience `of(ErrorCode, message)`.
+- **Call sites** aligned so null ids disappear and random UUIDs no longer diverge from the trace id:
+  `merchant-qr-data` `MerchantController` and `transaction-mgmt` `TransactionController` dropped
+  `UUID.randomUUID()` in favour of the 2-arg factory (MDC → UUID); `payment-executor`
+  `PaymentExceptionHandler.newRequestId()` now prefers the MDC correlation id before generating a
+  UUID. The five handlers passing `null` (`config-registry`, `prefunding`, `rate-fx`,
+  `scheme-adapter-nepal`, `smart-router`) are now filled by the factory with no source change needed.
+
 ## Platform-wide defaults: graceful shutdown + log correlation (branch `feat/platform-defaults`)
 
 Maturity hardening delivered once in the shared `libs/lib-errors` module so all 18 GMEPay+ services
