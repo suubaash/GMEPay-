@@ -2,6 +2,23 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — Platform-settings pass-through (feat/platform-settings-be)
+
+Additive. Thin proxy so the admin UI (which only talks to this BFF) can reach config-registry's
+generic platform-settings store (owner Goal #3).
+
+### Added
+- **Client** `PlatformSettingsClient` (+ `RestPlatformSettingsClient` on
+  `gmepay.config-registry.client=rest`, in-memory `StubPlatformSettingsClient` otherwise; stub
+  seeds the same five tunables config-registry V039 seeds) and BFF DTO `PlatformSettingView`.
+- **Endpoints** `PlatformSettingsController` under `/v1/admin/settings`:
+  `GET /`, `GET /{key}`, `PUT /{key}` (body `{value, updatedBy?}`) — each proxies the matching
+  config-registry endpoint. Reads gated on `txn.view`, the mutating PUT on `ops:operate`
+  (fail-closed via `OpsRbacGuard`, matching neighbouring ops admin surfaces). The authenticated
+  principal is forwarded as `updatedBy`.
+- **Test** `PlatformSettingsControllerTest` (3, Mockito): the three proxy calls map through with
+  the right arguments; principal forwarded as `updatedBy`.
+
 ## 2026-07-03 — QR-scheme reconciliation statement (feat/scheme-statement-be)
 
 Additive, read-only, admin-facing. GME produces a per-scheme statement so a QR-scheme partner

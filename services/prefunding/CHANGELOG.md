@@ -1,5 +1,24 @@
 # prefunding — CHANGELOG
 
+## 2026-07-03 (feat/platform-settings-be — tier boundaries from config-registry)
+
+### Changed — TierAlertEvaluator reads float alert tiers from config-registry (owner Goal #3)
+- `TierAlertEvaluator` no longer hard-codes the 95/85/70 tier boundaries as a static list.
+  Each boundary is now read on every evaluation from config-registry's generic platform-settings
+  store via `ConfigRegistryClient.getSettingValue(key)` — keys `prefunding.alert.tier1/2/3.pct`.
+- **Fallback (unchanged behaviour).** The historical 95/85/70 remain as hard-coded fallback
+  defaults, used whenever the store is unreachable, the key is absent (`null`), or the value is
+  non-numeric. So standalone/offline behaviour is identical to before.
+- **Resilient.** The settings read never fails an alert evaluation: the client contract swallows
+  (returns `null`), and the evaluator additionally guards against throws + malformed values,
+  logging and falling back. Simple fetch-with-fallback, no caching.
+- **Client** `ConfigRegistryClient` gained a `default String getSettingValue(String key)`
+  (stub uses the default → always fallback; `RestConfigRegistryClient` GETs
+  `/v1/admin/settings/{key}` and returns `null` on 404/unreachable).
+- **Tests** new `TierAlertEvaluatorSettingsTest` (4, Mockito): config values (tier2=80) suppress a
+  crossing the fallback (85) would fire; null / throw / malformed all fall back to 85. Existing
+  `TierAlertEvaluatorTest` (5) unchanged — no regression.
+
 ## 2026-07-02 (fix/prefunding — harden: release-on-reversal + FLOAT_LOW ops alert + ShedLock)
 
 ### Fixed — #1 release the held float on payment reversal
