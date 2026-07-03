@@ -48,6 +48,7 @@ import AssessmentIcon from '@mui/icons-material/Assessment';
 import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import PolicyIcon from '@mui/icons-material/Policy';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import DescriptionIcon from '@mui/icons-material/Description';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -68,6 +69,8 @@ const navItems = [
   { label: 'Delivery', href: '/delivery', icon: <TaskAltIcon /> },
   // Journal: the posted double-entry ledger — every money movement, both sides.
   { label: 'Journal', href: '/journal', icon: <MenuBookIcon /> },
+  // Scheme Statements: per-scheme reconciliation statement to hand the scheme.
+  { label: 'Scheme Statements', href: '/scheme-statements', icon: <DescriptionIcon /> },
   { label: 'Partners', href: '/partners', icon: <GroupsIcon /> },
   { label: 'Approvals', href: '/approvals', icon: <HowToVoteIcon /> },
   { label: 'Compliance', href: '/compliance', icon: <PolicyIcon /> },

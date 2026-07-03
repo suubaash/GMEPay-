@@ -365,6 +365,27 @@ export const adminApi = {
    */
   listSchemes: () => request('/v1/admin/schemes'),
 
+  /**
+   * GET /v1/admin/schemes/{schemeId}/statement?from=<ISO>&to=<ISO>&page=0&size=50
+   * -> SchemeStatement — a reconciliation statement for one QR scheme over a
+   *    date window, to hand the scheme partner.
+   * {
+   *   schemeId,
+   *   window: { from, to },
+   *   totals: [{ currency, count, gross }],   // per-currency headline; gross is a decimal STRING
+   *   items:  [{ txnRef, occurredAt, merchantId, partnerId, amount, currency, status }],
+   *   page, size, total
+   * }
+   * Money fields (gross, amount) are BigDecimal serialised as strings — never
+   * Number()-cast for display (docs/MONEY_CONVENTION.md).
+   *
+   * @param {{schemeId:string, from:string, to:string, page?:number, size?:number}} p
+   */
+  getSchemeStatement: ({ schemeId, from, to, page, size }) =>
+    request(
+      `/v1/admin/schemes/${encodeURIComponent(schemeId)}/statement${qs({ from, to, page, size })}`,
+    ),
+
   // ---------- Transactions ----------
   /**
    * GET /v1/admin/transactions?partnerId&schemeId&status&fromDate&toDate&page&size
