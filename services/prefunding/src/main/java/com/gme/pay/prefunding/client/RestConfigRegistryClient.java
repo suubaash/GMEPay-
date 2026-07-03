@@ -70,4 +70,24 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
                     partnerCode, ex.getMessage());
         }
     }
+
+    /** Wire shape of config-registry's {@code GET /v1/admin/settings/{key}} response (subset). */
+    record SettingResponse(String key, String value) { }
+
+    @Override
+    public String getSettingValue(String key) {
+        try {
+            SettingResponse r = restClient.get()
+                    .uri("/v1/admin/settings/{key}", key)
+                    .retrieve()
+                    .body(SettingResponse.class);
+            return r == null ? null : r.value();
+        } catch (RestClientException ex) {
+            // Absent key (404) or unreachable store: signal "use the fallback default".
+            // Never propagate — an alert must never fail because a tunable couldn't be read.
+            log.warn("failed to read platform setting {} from config-registry: {}",
+                    key, ex.getMessage());
+            return null;
+        }
+    }
 }

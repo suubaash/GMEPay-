@@ -69,13 +69,25 @@ public class TierAlertEvaluator {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
+    // ---- Tier boundaries: config-registry keys + hard-coded fallback defaults --------------
+    //
+    // The three boundary percentages are runtime-tunable via config-registry's generic
+    // platform-settings store (owner Goal #3 — operators change platform values without a
+    // redeploy). Each is read from its key on every evaluation via
+    // ConfigRegistryClient.getSettingValue, FALLING BACK to the historical hard-coded default
+    // (95/85/70) whenever the store is unreachable, the key is absent, or the value does not
+    // parse — so standalone/offline behaviour is unchanged and an alert NEVER fails because a
+    // tunable could not be fetched.
+    static final String KEY_TIER_95 = "prefunding.alert.tier1.pct";
+    static final String KEY_TIER_85 = "prefunding.alert.tier2.pct";
+    static final String KEY_TIER_70 = "prefunding.alert.tier3.pct";
+
+    private static final BigDecimal FALLBACK_TIER_95 = new BigDecimal("95");
+    private static final BigDecimal FALLBACK_TIER_85 = new BigDecimal("85");
+    private static final BigDecimal FALLBACK_TIER_70 = new BigDecimal("70");
+
     /** Boundaries evaluated mild → severe; each fires independently on its own crossing. */
     private record TierBoundary(String tier, BigDecimal boundaryPct) { }
-
-    private static final List<TierBoundary> TIERS = List.of(
-            new TierBoundary(TIER_95, new BigDecimal("95")),
-            new TierBoundary(TIER_85, new BigDecimal("85")),
-            new TierBoundary(TIER_70, new BigDecimal("70")));
 
     private final BalanceAlertRepository alerts;
     private final OutboxWriter outbox;
@@ -105,7 +117,7 @@ public class TierAlertEvaluator {
         BigDecimal threshold = row.getLowBalanceThreshold();
 
         if (threshold != null && threshold.signum() > 0) {
-            for (TierBoundary tier : TIERS) {
+            for (TierBoundary tier : resolveTiers()) {
                 // boundary value in money terms: threshold * pct / 100. Compare
                 // balance*100 against threshold*pct so the arithmetic stays exact.
                 BigDecimal cut = threshold.multiply(tier.boundaryPct());
@@ -124,6 +136,45 @@ public class TierAlertEvaluator {
             configRegistry.proposePartnerSuspension(partnerCode,
                     "prefunding balance breached: " + newBalance.toPlainString() + " "
                             + row.getCurrency());
+        }
+    }
+
+    /**
+     * Resolve the three tier boundaries (mild → severe) from config-registry's platform
+     * settings, each falling back to its historical hard-coded default (95/85/70) when the
+     * store is unreachable, the key is absent, or the value does not parse. Read fresh on
+     * every evaluation (simple fetch-with-fallback; no caching), and never throws.
+     */
+    private List<TierBoundary> resolveTiers() {
+        return List.of(
+                new TierBoundary(TIER_95, boundaryPct(KEY_TIER_95, FALLBACK_TIER_95)),
+                new TierBoundary(TIER_85, boundaryPct(KEY_TIER_85, FALLBACK_TIER_85)),
+                new TierBoundary(TIER_70, boundaryPct(KEY_TIER_70, FALLBACK_TIER_70)));
+    }
+
+    /**
+     * Read one boundary percentage from config-registry, falling back to {@code fallback} on
+     * any absence / unreachability / parse failure. Resilient by contract: the settings read
+     * itself never throws (it returns {@code null}), and a malformed value is treated as absent.
+     */
+    private BigDecimal boundaryPct(String key, BigDecimal fallback) {
+        String raw;
+        try {
+            raw = configRegistry.getSettingValue(key);
+        } catch (RuntimeException e) {
+            // Defence in depth — the client contract already swallows, but never let a
+            // settings read fail an alert evaluation.
+            log.warn("platform setting {} read failed, using fallback {}: {}", key, fallback, e.toString());
+            return fallback;
+        }
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return new BigDecimal(raw.trim());
+        } catch (NumberFormatException e) {
+            log.warn("platform setting {} is not a number ({}), using fallback {}", key, raw, fallback);
+            return fallback;
         }
     }
 

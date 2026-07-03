@@ -25,4 +25,22 @@ public interface ConfigRegistryClient {
      * the balance mutation that detected the breach. Implementations log and swallow.
      */
     void proposePartnerSuspension(String partnerCode, String reason);
+
+    /**
+     * Read one platform setting's raw value from config-registry's generic settings store
+     * ({@code GET /v1/admin/settings/{key}}), or {@code null} when the key is absent or the
+     * store is unreachable. Used by {@link com.gme.pay.prefunding.alert.TierAlertEvaluator}
+     * to read the float low-balance alert tier boundaries at runtime, always with a
+     * code-side fallback default when this returns {@code null}.
+     *
+     * <p>Like {@link #proposePartnerSuspension}, must never throw: the evaluator runs inside
+     * the balance-mutation transaction and an alert must never fail because a tunable could
+     * not be fetched. Implementations log and return {@code null} on any error/absence.
+     *
+     * @param key the dotted setting key (e.g. {@code prefunding.alert.tier1.pct})
+     * @return the setting value as a string, or {@code null} to signal "use the fallback"
+     */
+    default String getSettingValue(String key) {
+        return null;
+    }
 }

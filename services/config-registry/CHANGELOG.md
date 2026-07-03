@@ -2,6 +2,30 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-07-03 — Generic platform-settings store (feat/platform-settings-be)
+
+Additive. A single generic key/value store so operators can change platform tunables from
+the admin UI without a redeploy (owner Goal #3).
+
+### Added
+- **Persistence** (`V039__create_platform_settings.sql`, additive/new): `platform_settings`
+  — `("key" PK, "value" NOT NULL, value_type DEFAULT 'STRING', description, updated_at,
+  updated_by)`. `key`/`value` are double-quoted (reserved words in PostgreSQL + H2). Seeds
+  five real tunables: `prefunding.alert.tier1/2/3.pct` (95/85/70), `wallet.fee.krw` (500),
+  `fx.quote.ttl.seconds` (900) — all NUMBER.
+- **Entity/repo** `PlatformSettingEntity` + `PlatformSettingRepository`
+  (`findAllByOrderByKeyAsc`); `key`/`value` mapped as Hibernate-quoted columns.
+- **Service** `PlatformSettingService` — list / get (404) / upsert. Upsert validates a NUMBER
+  value parses (400 otherwise) and writes one hash-chained audit row (ADR-007, aggregate
+  `platform-setting`/key) via the shared `AuditLogService`, same mechanism as the ops
+  kill-switch.
+- **Endpoints** `PlatformSettingController` under `/v1/admin/settings`:
+  `GET /` (key-sorted list), `GET /{key}` (404 if absent),
+  `PUT /{key}` body `{value, updatedBy?}` (X-Actor wins over body.updatedBy). Reached via the
+  BFF; edge-gated there.
+- **Tests** `PlatformSettingServiceTest` (5) + `PlatformSettingControllerTest` (5) — CRUD,
+  seed list, NUMBER validation, 404, audit-row count. Offline/H2.
+
 ## 2026-07-01 — Ops kill-switch (global pause / maintenance / suspend) (ops/config-registry)
 
 ### Added
