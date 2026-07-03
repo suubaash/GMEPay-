@@ -45,6 +45,7 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
               AND (:merchantId   IS NULL OR t.merchantId    =  :merchantId)
               AND (:userRef      IS NULL OR t.userRef       =  :userRef)
               AND (:reference    IS NULL OR t.partnerTxnRef =  :reference)
+              AND (:schemeId     IS NULL OR t.schemeId      =  :schemeId)
             """)
     Page<TransactionEntity> findByFilters(
             @Param("fromInstant")  Instant fromInstant,
@@ -56,6 +57,7 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
             @Param("merchantId")   String merchantId,
             @Param("userRef")      String userRef,
             @Param("reference")    String reference,
+            @Param("schemeId")     String schemeId,
             Pageable pageable);
 
     /**

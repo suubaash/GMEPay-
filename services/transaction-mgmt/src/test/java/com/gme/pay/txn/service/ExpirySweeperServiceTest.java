@@ -336,7 +336,7 @@ class ExpirySweeperServiceTest {
         public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                TransactionStatus status, Long partnerId,
                                                String txnRef, String schemeTxnRef, String merchantId,
-                                               String userRef, String reference,
+                                               String userRef, String reference, String schemeId,
                                                Pageable pageable) {
             throw new UnsupportedOperationException("not needed in sweeper tests");
         }

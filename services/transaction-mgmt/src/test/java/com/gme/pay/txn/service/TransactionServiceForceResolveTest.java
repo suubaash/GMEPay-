@@ -121,7 +121,7 @@ class TransactionServiceForceResolveTest {
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
                                                          String txnRef, String schemeTxnRef, String merchantId,
-                                                         String userRef, String reference,
+                                                         String userRef, String reference, String schemeId,
                                                          Pageable pageable) {
             return Page.empty(pageable);
         }
