@@ -18,17 +18,29 @@ import java.time.Instant;
  * @param keyId           the public key identifier ({@code api_keys.api_key})
  *                        — safe to display and persist.
  * @param secretPlaintext the one-time plaintext secret. Forward once, drop.
+ * @param prefix          non-secret display prefix of the key id (safe to
+ *                        show/persist). Lets a self-serve caller (ops-partner-bff
+ *                        Get-Started flow) render the key without re-deriving it.
+ * @param environment     {@code SANDBOX | PRODUCTION} the credential was issued
+ *                        under (echoed from the request) — so a sandbox key is
+ *                        visibly scoped and never mistaken for a production one.
+ * @param createdAt       issuance instant recorded on the {@code api_keys} row.
  * @param expiresAt       hard expiry as persisted; {@code null} = never.
  */
 public record IssueKeyResponse(
         String keyId,
         String secretPlaintext,
+        String prefix,
+        String environment,
+        Instant createdAt,
         Instant expiresAt) {
 
     /** Redacting override (SEC-09 §4) — see the class Javadoc. */
     @Override
     public String toString() {
         return "IssueKeyResponse[keyId=" + keyId
-                + ", secretPlaintext=REDACTED, expiresAt=" + expiresAt + "]";
+                + ", secretPlaintext=REDACTED, prefix=" + prefix
+                + ", environment=" + environment + ", createdAt=" + createdAt
+                + ", expiresAt=" + expiresAt + "]";
     }
 }

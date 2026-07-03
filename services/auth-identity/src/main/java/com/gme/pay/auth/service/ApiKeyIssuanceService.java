@@ -3,6 +3,7 @@ package com.gme.pay.auth.service;
 import com.gme.pay.auth.dto.CredentialLookupResponse;
 import com.gme.pay.auth.dto.IssueKeyRequest;
 import com.gme.pay.auth.dto.IssueKeyResponse;
+import com.gme.pay.auth.dto.KeyListItem;
 import com.gme.pay.auth.persistence.ApiKeyEntity;
 import com.gme.pay.auth.persistence.ApiKeyRepository;
 import com.gme.pay.auth.persistence.PrincipalEntity;
@@ -10,6 +11,7 @@ import com.gme.pay.auth.persistence.PrincipalRepository;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -103,7 +105,54 @@ public class ApiKeyIssuanceService {
         apiKeyRepository.saveAndFlush(
                 ApiKeyEntity.issue(principal, keyId, secret, now, expiresAt));
 
-        return new IssueKeyResponse(keyId, secret, expiresAt);
+        return new IssueKeyResponse(
+                keyId, secret, displayPrefix(keyId), request.environment(), now, expiresAt);
+    }
+
+    /**
+     * List the credentials issued for a (partnerId, environment) pair, newest
+     * first. Returns only NON-secret metadata ({@link KeyListItem}) — the
+     * plaintext secret is unrecoverable after issuance (SEC-09 §4).
+     *
+     * <p>Backs the self-serve Get-Started read-back: the Partner Portal (via
+     * ops-partner-bff) lists a partner's already-minted SANDBOX keys. Keys are
+     * matched on the {@code api_keys.principal}'s {@code partner_id} and the
+     * {@code partner:{code}:{environment}} principal username, so a
+     * {@code SANDBOX} query never returns a production credential.
+     *
+     * @param partnerId   config-registry partner surrogate id; required.
+     * @param environment SANDBOX | PRODUCTION; required.
+     */
+    @Transactional(readOnly = true)
+    public List<KeyListItem> listByPartnerAndEnvironment(Long partnerId, String environment) {
+        if (partnerId == null) {
+            throw badRequest("partnerId is required");
+        }
+        if (environment == null || !ENVIRONMENTS.contains(environment)) {
+            throw badRequest("environment must be one of " + ENVIRONMENTS
+                    + ", was: " + environment);
+        }
+        String envSuffix = ":" + environment;
+        return principalRepository.findAll().stream()
+                .filter(p -> p.getType() == PrincipalEntity.Type.PARTNER)
+                .filter(p -> partnerId.equals(p.getPartnerId()))
+                // Environment lives in the principal username suffix
+                // (partner:{code}:{environment}); this pins the scope so a
+                // SANDBOX query cannot surface a PRODUCTION principal's keys.
+                .filter(p -> p.getUsername() != null && p.getUsername().endsWith(envSuffix))
+                .flatMap(p -> apiKeyRepository.findByPrincipalId(p.getId()).stream())
+                .sorted(Comparator.comparing(ApiKeyEntity::getCreatedAt).reversed())
+                .map(k -> new KeyListItem(
+                        k.getApiKey(), displayPrefix(k.getApiKey()), environment, k.getCreatedAt()))
+                .toList();
+    }
+
+    /** Non-secret display prefix of a public key id: first 12 chars (or all). */
+    private static String displayPrefix(String keyId) {
+        if (keyId == null) {
+            return null;
+        }
+        return keyId.length() > 12 ? keyId.substring(0, 12) : keyId;
     }
 
     /**

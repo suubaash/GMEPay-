@@ -2,6 +2,35 @@
 
 All notable changes to the auth-identity service. Newest first.
 
+## 2026-07-03 — self-serve SANDBOX key read-back + issue-response enrichment (feat/sandbox-keys-live)
+
+Additive. Lets ops-partner-bff's Partner-Portal "Get Started" flow issue and list
+REAL SANDBOX credentials from auth-identity. No change to the PRODUCTION 4-eyes /
+rotation path. All web mappings stay on the `/internal/auth/keys` machine surface
+(ADR-011, `WebSurfaceScopeTest`).
+
+### Added
+- **`GET /internal/auth/keys?partnerId=&environment=`** (`ApiKeyAdminController.list`)
+  → `List<KeyListItem>{keyId, prefix, environment, createdAt}`, newest first.
+  NON-secret metadata only — the one-time plaintext is never re-exposed
+  (SEC-09 §4). `ApiKeyIssuanceService.listByPartnerAndEnvironment` matches on the
+  credential's owning PARTNER principal (`partner_id` + `partner:{code}:{env}`
+  username suffix), so a `SANDBOX` query can never surface a PRODUCTION key.
+- **`KeyListItem`** DTO (no secret field by construction).
+
+### Changed
+- **`IssueKeyResponse`** enriched additively with `prefix`, `environment`,
+  `createdAt` (existing `keyId`/`secretPlaintext`/`expiresAt` unchanged). The
+  self-serve caller can render + scope-label the key without re-deriving it. The
+  redacting `toString()` still hides the plaintext.
+
+### Tests
+- `ApiKeyIssuanceServiceTest`:
+  `issue_response_carriesSandboxScopeMetadata_prefixEnvironmentCreatedAt`,
+  `list_returnsSandboxMetadataOnly_neverPlaintext_scopedToEnvironment`
+  (two SANDBOX + one PRODUCTION key for the same partner; SANDBOX list returns
+  only the two, no plaintext), `list_unknownPartner_isEmpty_andValidatesArgs`.
+
 ## 2026-07-02 — SUPPORT role (scoped customer-support access)
 
 ### Added

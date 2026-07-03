@@ -2,6 +2,55 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — live sandbox self-integration keys (feat/sandbox-keys-live)
+
+Additive. The Partner-Portal "Get Started" sandbox API keys are now REAL
+credentials issued by auth-identity instead of the in-memory
+`StubSandboxKeyClient` (which authorized nothing). The stub remains the
+standalone/test default (`matchIfMissing`); no change to the portal response
+shape.
+
+### Added
+- **`RestSandboxKeyClient implements SandboxKeyClient`**
+  (`@Primary @ConditionalOnProperty(name="gmepay.auth-identity.client", havingValue="rest")`).
+  - issue → `POST {auth-identity}/internal/auth/keys` with `environment=SANDBOX`,
+    `purpose=API`, `pk_test_`/`sk_test_` prefixes; forwards the string path
+    partnerId as both numeric `partnerId` and `partnerCode`.
+  - list → `GET /internal/auth/keys?partnerId=&environment=SANDBOX`.
+  - Maps auth-identity's `environment` → the portal's `scope` (guarded to
+    `SANDBOX` if absent). One-time plaintext maps through once; list views are
+    secret-free. Uses `${gmepay.auth-identity.base-url:...}` (the same selector
+    + base-url as `RestRbacAdminClient`).
+
+### Changed
+- `StubSandboxKeyClient` now carries
+  `@ConditionalOnProperty(name="gmepay.auth-identity.client", havingValue="stub", matchIfMissing=true)`
+  so it and the Rest impl are mutually exclusive (the established Rest/Stub idiom).
+  Behaviour unchanged when the selector is unset.
+
+### SANDBOX-scoping (security)
+- Every credential is pinned to `environment=SANDBOX` on issue and every list
+  query filters `SANDBOX`; keys carry `pk_test_`/`sk_test_` prefixes and land
+  under auth-identity's `partner:{code}:SANDBOX` principal — they cannot
+  authorize a PRODUCTION / real-money call. The Rest client never sends
+  `PRODUCTION` and never touches the 4-eyes / rotation production path.
+
+### Changed (deploy config — rest is now the default there)
+- `run-fleet.ps1`: ops-partner-bff gains `--gmepay.auth-identity.client=rest`
+  + `--gmepay.auth-identity.base-url=http://localhost:18085`.
+- `docker-compose.yml`: ops-partner-bff gains `GMEPAY_AUTH_IDENTITY_CLIENT: rest`
+  + `GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080`.
+- `deploy/helm/gmepay/values.yaml`: ops-partner-bff env gains
+  `GMEPAY_AUTH_IDENTITY_CLIENT: "rest"` + `GMEPAY_AUTH_IDENTITY_BASE_URL`.
+
+### Tests
+- `RestSandboxKeyClientTest` (MockRestServiceServer): issue POSTs a
+  SANDBOX-scoped request and maps plaintext/prefix/createdAt + environment→scope;
+  missing-environment response still reads `SANDBOX`; list forwards the
+  `partnerId`+`environment=SANDBOX` filter and returns secret-free views;
+  non-numeric partner short-circuits to empty without a network call.
+- `SandboxKeyControllerTest` (stub-backed) unchanged and still passes.
+
 ## 2026-07-03 — live partner transactions (feat/live-partner-txns)
 
 Additive. Activates the real `RestTransactionMgmtClient` in the real deploys so the Partner
