@@ -230,6 +230,71 @@ class ApiKeyIssuanceServiceTest {
         assertThat(lookup.active()).isFalse();
     }
 
+    @Test
+    void issue_response_carriesSandboxScopeMetadata_prefixEnvironmentCreatedAt() {
+        Instant before = Instant.now().minusSeconds(5);
+        IssueKeyResponse response = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+
+        // SANDBOX-scope metadata now rides on the issue response so the self-serve
+        // ops-partner-bff Get-Started flow can render the key + label its scope.
+        assertThat(response.environment()).isEqualTo("SANDBOX");
+        assertThat(response.prefix()).isEqualTo(response.keyId().substring(0, 12));
+        assertThat(response.prefix()).startsWith("pk_test_");
+        assertThat(response.createdAt()).isNotNull();
+        assertThat(response.createdAt()).isAfter(before);
+        // The enriched toString still redacts the plaintext (SEC-09 §4).
+        assertThat(response.toString())
+                .contains("REDACTED")
+                .contains("environment=SANDBOX")
+                .doesNotContain(response.secretPlaintext());
+    }
+
+    @Test
+    void list_returnsSandboxMetadataOnly_neverPlaintext_scopedToEnvironment() {
+        // Two SANDBOX keys + one PRODUCTION key for the SAME partnerId (42).
+        IssueKeyResponse s1 = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        IssueKeyResponse s2 = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        IssueKeyResponse prod = service.issue(
+                request("GMEREMIT", "PRODUCTION", "API", "pk_live_", "sk_live_", null));
+
+        var sandbox = service.listByPartnerAndEnvironment(42L, "SANDBOX");
+
+        // Exactly the two SANDBOX keys — the PRODUCTION key is NOT surfaced.
+        assertThat(sandbox).hasSize(2);
+        assertThat(sandbox).extracting(com.gme.pay.auth.dto.KeyListItem::keyId)
+                .containsExactlyInAnyOrder(s1.keyId(), s2.keyId())
+                .doesNotContain(prod.keyId());
+        // Every row is SANDBOX-scoped, prefix-only, and carries NO secret.
+        for (var item : sandbox) {
+            assertThat(item.environment()).isEqualTo("SANDBOX");
+            assertThat(item.prefix()).startsWith("pk_test_");
+            assertThat(item.createdAt()).isNotNull();
+            // No secret field exists on KeyListItem; nothing can echo the plaintext.
+            assertThat(item.toString())
+                    .doesNotContain(s1.secretPlaintext())
+                    .doesNotContain(s2.secretPlaintext());
+        }
+
+        // The PRODUCTION query returns only the production key — scopes never bleed.
+        var production = service.listByPartnerAndEnvironment(42L, "PRODUCTION");
+        assertThat(production).extracting(com.gme.pay.auth.dto.KeyListItem::keyId)
+                .containsExactly(prod.keyId());
+    }
+
+    @Test
+    void list_unknownPartner_isEmpty_andValidatesArgs() {
+        assertThat(service.listByPartnerAndEnvironment(999L, "SANDBOX")).isEmpty();
+        assertThatThrownBy(() -> service.listByPartnerAndEnvironment(null, "SANDBOX"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> service.listByPartnerAndEnvironment(42L, "STAGING"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     private void assertBadRequest(IssueKeyRequest request) {
         assertThatThrownBy(() -> service.issue(request))
                 .isInstanceOfSatisfying(ResponseStatusException.class,

@@ -1,6 +1,7 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.SandboxKeyClient;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -32,12 +33,17 @@ import java.util.concurrent.ConcurrentHashMap;
  *       sandbox key is visibly distinct from a production key.</li>
  * </ul>
  *
- * <p>This is the default (@{@code Component}) so the portal Get-Started flow
- * works standalone. A {@code RestSandboxKeyClient} that forwards to
- * auth-identity {@code POST /internal/auth/keys} can be added later behind
- * {@code gmepay.sandbox-key.client=rest} without touching this stub.
+ * <p>This is the default (matchIfMissing) so the portal Get-Started flow works
+ * standalone. When {@code gmepay.auth-identity.client=rest}, the
+ * {@link com.gme.pay.bff.client.rest.RestSandboxKeyClient} (which forwards to
+ * auth-identity {@code POST/GET /internal/auth/keys} with
+ * {@code environment=SANDBOX}) wins as {@code @Primary} and this stub is not
+ * created — matching the established Rest/Stub selector idiom
+ * (see {@code RestRbacAdminClient} / {@code StubRbacAdminClient}).
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub",
+        matchIfMissing = true)
 public class StubSandboxKeyClient implements SandboxKeyClient {
 
     /** SANDBOX scope marker — sandbox keys must not authorize production calls. */

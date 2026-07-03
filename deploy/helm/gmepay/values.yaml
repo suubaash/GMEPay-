@@ -278,6 +278,11 @@ services:
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      # Real self-serve SANDBOX API keys via auth-identity (default is the
+      # in-memory stub). Get-Started keys issued by POST /internal/auth/keys
+      # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient.
+      GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
 
   api-gateway:
     image: api-gateway

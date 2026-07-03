@@ -622,6 +622,12 @@ services:
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      # Real self-serve SANDBOX API keys: activate the live auth-identity clients
+      # (default is the in-memory stub). Get-Started keys are then issued by
+      # auth-identity (POST /internal/auth/keys, environment=SANDBOX) instead of
+      # StubSandboxKeyClient. NOTE: this selector also drives RestRbacAdminClient.
+      GMEPAY_AUTH_IDENTITY_CLIENT: rest
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       # Shared internal-auth token (#90) the BFF presents to auth-identity's internal-only
       # /v1/rbac/** + /v1/approvals/** (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}

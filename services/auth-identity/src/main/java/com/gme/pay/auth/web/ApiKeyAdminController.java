@@ -4,12 +4,16 @@ import com.gme.pay.auth.dto.CredentialLookupRequest;
 import com.gme.pay.auth.dto.CredentialLookupResponse;
 import com.gme.pay.auth.dto.IssueKeyRequest;
 import com.gme.pay.auth.dto.IssueKeyResponse;
+import com.gme.pay.auth.dto.KeyListItem;
 import com.gme.pay.auth.service.ApiKeyIssuanceService;
+import java.util.List;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -49,6 +53,22 @@ public class ApiKeyAdminController {
     @PostMapping
     public ResponseEntity<IssueKeyResponse> issue(@RequestBody IssueKeyRequest request) {
         return ResponseEntity.ok(issuanceService.issue(request));
+    }
+
+    /**
+     * Lists the credentials already issued for {@code partnerId} in
+     * {@code environment} (newest first) — NON-secret metadata only (key id,
+     * prefix, environment, createdAt); the one-time plaintext is never
+     * re-exposed (SEC-09 §4). Backs the ops-partner-bff self-serve Get-Started
+     * read-back. Stays on the {@code /internal/auth/keys} machine surface
+     * (ADR-011).
+     */
+    @GetMapping
+    public ResponseEntity<List<KeyListItem>> list(
+            @RequestParam("partnerId") Long partnerId,
+            @RequestParam("environment") String environment) {
+        return ResponseEntity.ok(
+                issuanceService.listByPartnerAndEnvironment(partnerId, environment));
     }
 
     @PostMapping("/{keyId}/revoke")
