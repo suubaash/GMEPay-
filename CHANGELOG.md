@@ -1,5 +1,27 @@
 # Changelog
 
+## Platform-wide defaults: graceful shutdown + log correlation (branch `feat/platform-defaults`)
+
+Maturity hardening delivered once in the shared `libs/lib-errors` module so all 18 GMEPay+ services
+inherit two behaviours with NO per-service edit: (1) graceful shutdown / connection draining for
+zero-downtime deploys, and (2) the iteration-4 correlation id surfaced in the log pattern. Purely
+additive — no change to error/RBAC/internal-auth/correlation/trace behaviour. No new external
+dependency (Spring Boot's own `EnvironmentPostProcessor` SPI only), so the build resolves fully
+offline from the Gradle cache.
+
+Implemented as an `EnvironmentPostProcessor` (not an auto-config) so the values are contributed as
+DEFAULTS before the context builds. They are added via `addLast(...)` = LOWEST precedence, so a
+service's own `application.yml`, env vars, and CLI args all override them — near-zero blast radius.
+
+### Added
+- **`com.gme.pay.platform.PlatformDefaultsEnvironmentPostProcessor`**: adds a single
+  `MapPropertySource` named `gmepay-platform-defaults` at lowest precedence with defaults
+  `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=25s`, and
+  `logging.pattern.level=%5p [%X{correlationId:-}]` (exact iteration-4 MDC key `correlationId`; `:-`
+  renders empty on non-request threads). Escape hatch: `gmepay.platform-defaults.enabled=false`
+  short-circuits the contribution. Registered via a new `META-INF/spring.factories` under
+  `org.springframework.boot.env.EnvironmentPostProcessor`.
+
 ## End-to-end correlation-ID propagation (branch `feat/correlation-id`)
 
 Maturity hardening: one payment can now be traced across every service by a single id present in
