@@ -9,8 +9,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.UUID;
-
 /**
  * REST controller exposing the merchant lookup endpoint.
  *
@@ -95,7 +93,7 @@ public class MerchantController {
     /** Translates {@link ApiException} into the canonical error envelope. */
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApiException(ApiException ex) {
-        ApiError body = ApiError.of(ex.errorCode(), ex.getMessage(), UUID.randomUUID().toString());
+        ApiError body = ApiError.of(ex.errorCode(), ex.getMessage());
         return ResponseEntity.status(ex.errorCode().httpStatus()).body(body);
     }
 }

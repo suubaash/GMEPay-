@@ -30,7 +30,6 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * REST controller exposing the transaction lifecycle API.
@@ -421,16 +420,13 @@ public class TransactionController {
     @ExceptionHandler(TransitionBlockedException.class)
     public ResponseEntity<ApiError> handleTransitionBlocked(TransitionBlockedException ex) {
         log.warn("Transition blocked: {}", ex.getMessage());
-        ApiError body = ApiError.of(
-                ErrorCode.VALIDATION_ERROR,
-                ex.getMessage(),
-                UUID.randomUUID().toString());
+        ApiError body = ApiError.of(ErrorCode.VALIDATION_ERROR, ex.getMessage());
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
     }
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApiException(ApiException ex) {
-        ApiError body = ApiError.of(ex.errorCode(), ex.getMessage(), UUID.randomUUID().toString());
+        ApiError body = ApiError.of(ex.errorCode(), ex.getMessage());
         return ResponseEntity.status(ex.errorCode().httpStatus()).body(body);
     }
 }

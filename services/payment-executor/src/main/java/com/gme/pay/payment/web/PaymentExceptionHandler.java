@@ -1,5 +1,6 @@
 package com.gme.pay.payment.web;
 
+import com.gme.pay.correlation.CorrelationHeaders;
 import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
@@ -16,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.slf4j.MDC;
 
 import java.util.UUID;
 
@@ -117,7 +119,15 @@ public class PaymentExceptionHandler {
                         ex.getMessage(), newRequestId()));
     }
 
+    /**
+     * Prefer the per-request correlation id from the MDC (so the error id == the trace id and the
+     * partner's error joins the server logs); fall back to a generated UUID so the field is never null.
+     */
     private static String newRequestId() {
+        String correlationId = MDC.get(CorrelationHeaders.MDC_KEY);
+        if (correlationId != null && !correlationId.isBlank()) {
+            return correlationId;
+        }
         return UUID.randomUUID().toString();
     }
 }
