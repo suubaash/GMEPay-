@@ -2,6 +2,27 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-07-03 — journal view read API (feat/journal-view-be)
+
+Additive, read-only. No new dependency, no schema change.
+
+### Added
+- **`GET /v1/journals?from=&to=&reference=&page=0&size=50`** → `{ items:[ { journalId, reference,
+  createdAt, lines:[ { account, side, amount, currency } ] } ], page, size, total }`. Lists posted
+  double-entry journals with their ledger lines so the Admin UI can show the DR/CR breakdown of every
+  money movement. All params optional; default window = last 30 days (`to` = now), `size` capped at 200,
+  newest-first by `createdAt` (= `journals.posted_at`).
+  - `side` = `ledger_entries.entry_type` verbatim (`"DEBIT"`/`"CREDIT"`) — the explicit stored DR/CR
+    column, NOT derived from the sign of `amount` (amount is always the non-negative magnitude).
+  - `currency` = `ledger_entries.currency`; `createdAt` = `journals.posted_at`. Money rides as a
+    decimal string per `MONEY_CONVENTION.md`.
+- **`JournalQueryService`** — pages only the journal HEADS (sorted `posted_at` DESC) then batch-loads
+  that page's lines in ONE query, so `ledger_entries` is never fully loaded into memory.
+- Additive repo finders: `JournalEntityRepository.findByPostedAt…Between` (+ `…AndReference…`) with
+  `Pageable`; `LedgerEntryEntityRepository.findByJournalIdInOrderByJournalIdAscIdAsc` (batch line load).
+- New web DTOs `JournalView` / `JournalPage` and `JournalViewController` (GET on the existing
+  `/v1/journals` base path alongside the POST rounding-residual/reversal endpoints).
+
 ## 2026-07-02 — reversing journal on payment.reversed (fix/revenue-ledger)
 
 ### Added

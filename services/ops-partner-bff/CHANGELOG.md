@@ -2,6 +2,21 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — journal view proxy (feat/journal-view-be)
+
+Additive, read-only. Reuses the existing `gmepay.revenue-ledger.base-url` RestClient; no new dependency.
+
+### Added
+- **`GET /v1/admin/journals?from=&to=&reference=&page=&size=`** → same shape revenue-ledger returns:
+  `{ items:[ { journalId, reference, createdAt, lines:[ { account, side, amount, currency } ] } ],
+  page, size, total }`. Pure pass-through of revenue-ledger's `GET /v1/journals` so the Admin UI can
+  show the DR/CR lines behind every money movement. All params optional (`from`/`to` are ISO-8601
+  instants); upstream applies the defaults (last 30 days, size cap 200).
+- `RevenueLedgerClient.listJournals(from,to,reference,page,size)` — `RestRevenueLedgerClient` proxies
+  the live endpoint (honest empty page on upstream error/unreachable); `StubRevenueLedgerClient`
+  returns two deterministic balanced journals so the BFF renders standalone. New `JournalView` /
+  `JournalPage` DTOs and `AdminJournalsController`.
+
 ## 2026-07-03 — Delivery dashboard overview
 
 Additive. Orchestrates transaction-mgmt delivery stats with the partner list into a
