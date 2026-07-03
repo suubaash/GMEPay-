@@ -24,9 +24,19 @@ const simNepalQrUrl = process.env.SIM_NEPAL_QR_URL || 'http://127.0.0.1:9103';
 // only; default to IPv4 loopback for the same "localhost → ::1" reason.
 const paymentExecutorUrl = process.env.PAYMENT_EXECUTOR_URL || 'http://127.0.0.1:18084';
 
+// The three ZeroPay sandbox tabs (Merchant Terminal / Wallet / Rate Board) are
+// still IFRAMES. Proxy them same-origin (like the rewrites above) so they render
+// over the public tunnel from any PC. Distinct API prefixes, no collision with /api/*.
+const simMerchant = process.env.SIM_MERCHANT_PROXY || 'http://127.0.0.1:9104';
+const simWallet   = process.env.SIM_WALLET_PROXY   || 'http://127.0.0.1:9105';
+const simRates    = process.env.SIM_RATE_PROXY     || 'http://127.0.0.1:9101';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Keep trailing slash on /sims/<x>/ (don't 308-redirect) so the iframed sims'
+  // relative assets resolve under the subpath. App-wide but benign.
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     return [
       {
@@ -41,6 +51,16 @@ const nextConfig = {
         source: '/e2e/:path*',
         destination: `${paymentExecutorUrl}/v1/sandbox/e2e/:path*`,
       },
+      // --- ZeroPay sandbox sim UIs served under same-origin subpaths ---
+      { source: '/sims/merchant/:path*', destination: `${simMerchant}/:path*` },
+      { source: '/sims/wallet/:path*',   destination: `${simWallet}/:path*` },
+      { source: '/sims/rates/:path*',    destination: `${simRates}/:path*` },
+      // --- their APIs (called root-absolute from inside each sim page) ---
+      { source: '/v1/merchant/:path*',   destination: `${simMerchant}/v1/merchant/:path*` },
+      { source: '/v1/gmeremit',          destination: `${simWallet}/v1/gmeremit` },
+      { source: '/v1/gmeremit/:path*',   destination: `${simWallet}/v1/gmeremit/:path*` },
+      { source: '/v1/rates',             destination: `${simRates}/v1/rates` },
+      { source: '/v1/rates/:path*',      destination: `${simRates}/v1/rates/:path*` },
     ];
   },
 };
