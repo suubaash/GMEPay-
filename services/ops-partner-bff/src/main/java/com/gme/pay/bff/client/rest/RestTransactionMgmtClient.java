@@ -114,6 +114,12 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (filter.state() != null && !filter.state().isBlank()) {
                 uri.queryParam("status", filter.state());
             }
+            // Scheme-statement: forward the QR-scheme corridor filter (scheme_id) so a scheme's
+            // reconciliation statement scopes to just its own transactions. transaction-mgmt maps
+            // this to the scheme_id column (additive filter added there).
+            if (filter.schemeId() != null && !filter.schemeId().isBlank()) {
+                uri.queryParam("schemeId", filter.schemeId());
+            }
             // Partner-scoping (security-critical): a supplied-but-non-numeric partnerId
             // must NOT degrade to an unfiltered (all-partners) query — fail closed.
             if (hasText(filter.partnerId())) {

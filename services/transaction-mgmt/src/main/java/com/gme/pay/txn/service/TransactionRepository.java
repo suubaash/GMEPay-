@@ -33,12 +33,13 @@ public interface TransactionRepository {
      * @param to        upper bound (inclusive) on createdAt date (null = no upper bound)
      * @param status    filter by status (null = all)
      * @param partnerId filter by partnerId (null = all)
+     * @param schemeId  filter by scheme_id (the QR scheme identity, e.g. ZEROPAY/NEPAL; null = all)
      * @param pageable  pagination spec
      */
     Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                     TransactionStatus status, Long partnerId,
                                     String txnRef, String schemeTxnRef, String merchantId,
-                                    String userRef, String reference,
+                                    String userRef, String reference, String schemeId,
                                     Pageable pageable);
 
     /**

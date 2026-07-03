@@ -37,8 +37,12 @@ class TransactionSearchTest {
     }
 
     private Transaction txn(String merchantId) {
+        return txn(merchantId, "zeropay");
+    }
+
+    private Transaction txn(String merchantId, String schemeId) {
         return new Transaction(
-                700L, "PARTNER-" + merchantId, "zeropay", "INBOUND", "MPM",
+                700L, "PARTNER-" + merchantId, schemeId, "INBOUND", "MPM",
                 new BigDecimal("45000"), "KRW", new BigDecimal("33.88"), "USD", merchantId, "Q-1");
     }
 
@@ -83,6 +87,35 @@ class TransactionSearchTest {
     }
 
     @Test
+    @DisplayName("schemeId filter returns only that scheme's transactions")
+    void searchFiltersByScheme() {
+        repo.rows.add(txn("M-1", "ZEROPAY"));
+        repo.rows.add(txn("M-2", "ZEROPAY"));
+        repo.rows.add(txn("M-3", "NEPAL"));
+
+        Page<Transaction> page = service.queryTransactions(
+                null, null, null, null, null, null, null, null, null, "ZEROPAY", 0, 20);
+
+        assertEquals(2, page.getTotalElements());
+        assertTrue(page.getContent().stream().allMatch(t -> "ZEROPAY".equals(t.schemeId())));
+        // Service forwarded the schemeId filter verbatim to the repository.
+        assertEquals("ZEROPAY", repo.lastSchemeId);
+    }
+
+    @Test
+    @DisplayName("null schemeId returns all schemes (no regression)")
+    void searchNullSchemeReturnsAll() {
+        repo.rows.add(txn("M-1", "ZEROPAY"));
+        repo.rows.add(txn("M-3", "NEPAL"));
+
+        Page<Transaction> page = service.queryTransactions(
+                null, null, null, null, null, null, null, null, null, null, 0, 20);
+
+        assertEquals(2, page.getTotalElements());
+        assertNull(repo.lastSchemeId);
+    }
+
+    @Test
     @DisplayName("search by reference matches the partner's own reference (partnerTxnRef)")
     void searchFiltersByReference() {
         repo.rows.add(txn("M-1")); // partnerTxnRef = "PARTNER-M-1"
@@ -107,23 +140,26 @@ class TransactionSearchTest {
 
         String lastUserRef;
         String lastReference;
+        String lastSchemeId;
 
         @Override public Page<Transaction> findByFilters(LocalDate from, LocalDate to,
                                                          TransactionStatus status, Long partnerId,
                                                          String txnRef, String schemeTxnRef, String merchantId,
-                                                         String userRef, String reference,
+                                                         String userRef, String reference, String schemeId,
                                                          Pageable pageable) {
             this.lastMerchantId = merchantId;
             this.lastSchemeTxnRef = schemeTxnRef;
             this.lastTxnRef = txnRef;
             this.lastUserRef = userRef;
             this.lastReference = reference;
+            this.lastSchemeId = schemeId;
             List<Transaction> filtered = rows.stream()
                     .filter(t -> merchantId == null || merchantId.equals(t.merchantId()))
                     .filter(t -> txnRef == null || txnRef.equals(t.txnRef()))
                     .filter(t -> partnerId == null || partnerId.equals(t.partnerId()))
                     .filter(t -> userRef == null || userRef.equals(t.userRef()))
                     .filter(t -> reference == null || reference.equals(t.partnerTxnRef()))
+                    .filter(t -> schemeId == null || schemeId.equals(t.schemeId()))
                     .toList();
             return new PageImpl<>(filtered, pageable, filtered.size());
         }

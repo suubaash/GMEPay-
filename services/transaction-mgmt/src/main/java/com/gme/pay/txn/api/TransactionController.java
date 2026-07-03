@@ -77,6 +77,7 @@ public class TransactionController {
      *   <li>{@code to}        – end date inclusive (ISO date). Optional.</li>
      *   <li>{@code status}    – filter by TransactionStatus name. Optional.</li>
      *   <li>{@code partnerId} – filter by numeric partner ID. Optional.</li>
+     *   <li>{@code schemeId}  – filter by scheme_id (QR scheme identity, e.g. ZEROPAY/NEPAL). Optional.</li>
      *   <li>{@code page}      – zero-based page index (default 0).</li>
      *   <li>{@code size}      – page size (default 20, max 500).</li>
      * </ul>
@@ -94,12 +95,13 @@ public class TransactionController {
             @RequestParam(required = false) String merchantId,
             @RequestParam(required = false) String userRef,
             @RequestParam(required = false) String reference,
+            @RequestParam(required = false) String schemeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         return ResponseEntity.ok(runSearch(
                 from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
-                userRef, reference, page, size));
+                userRef, reference, schemeId, page, size));
     }
 
     // -------------------------------------------------------------------------
@@ -125,22 +127,23 @@ public class TransactionController {
             @RequestParam(required = false) String merchantId,
             @RequestParam(required = false) String userRef,
             @RequestParam(required = false) String reference,
+            @RequestParam(required = false) String schemeId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         return ResponseEntity.ok(runSearch(
                 from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
-                userRef, reference, page, size));
+                userRef, reference, schemeId, page, size));
     }
 
     /** Shared paged-search implementation behind both {@code GET /} and {@code GET /search}. */
     private TransactionQueryPageResponse runSearch(
             LocalDate from, LocalDate to, TransactionStatus status, Long partnerId,
             String txnRef, String schemeTxnRef, String merchantId,
-            String userRef, String reference, int page, int size) {
+            String userRef, String reference, String schemeId, int page, int size) {
         Page<Transaction> result = transactionService.queryTransactions(
                 from, to, status, partnerId, txnRef, schemeTxnRef, merchantId,
-                userRef, reference, page, size);
+                userRef, reference, schemeId, page, size);
         List<TransactionResponse> content = result.getContent().stream()
                 .map(TransactionResponse::from)
                 .toList();

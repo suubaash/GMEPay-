@@ -294,6 +294,20 @@ public class TransactionService {
     }
 
     /**
+     * Back-compat overload: the 9-filter search WITHOUT the {@code schemeId} corridor filter.
+     * Delegates with {@code schemeId} null so every existing caller / test keeps compiling and
+     * behaving exactly as before.
+     */
+    public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
+                                               TransactionStatus status, Long partnerId,
+                                               String txnRef, String schemeTxnRef, String merchantId,
+                                               String userRef, String reference,
+                                               int page, int size) {
+        return queryTransactions(from, to, status, partnerId,
+                txnRef, schemeTxnRef, merchantId, userRef, reference, null, page, size);
+    }
+
+    /**
      * Back-compat overload (pre CS quick-wins): the 7-filter search without the customer-identifier
      * filters. Delegates with {@code userRef}/{@code reference} null.
      */
@@ -311,19 +325,21 @@ public class TransactionService {
      * (exact) and {@code merchantId} (exact) alongside the existing date / status / partner
      * filters. CS quick-wins adds two customer-identifier filters: {@code userRef} (the end-customer
      * / wallet id) and {@code reference} (the partner's own reference, i.e. partnerTxnRef), so
-     * support can look a payment up by what the customer / partner holds. All filters optional; a
-     * null / blank value is ignored.
+     * support can look a payment up by what the customer / partner holds. Scheme-statement adds a
+     * {@code schemeId} filter mapping to the {@code scheme_id} column (the QR scheme identity, e.g.
+     * ZEROPAY/NEPAL) so a scheme's reconciliation statement can scope to just its own transactions.
+     * All filters optional; a null / blank value is ignored. Newest-first ordering unchanged.
      */
     public Page<Transaction> queryTransactions(LocalDate from, LocalDate to,
                                                TransactionStatus status, Long partnerId,
                                                String txnRef, String schemeTxnRef, String merchantId,
-                                               String userRef, String reference,
+                                               String userRef, String reference, String schemeId,
                                                int page, int size) {
         int safeSize = Math.min(size, 500);
         PageRequest pageRequest = PageRequest.of(page, safeSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         return repository.findByFilters(from, to, status, partnerId,
-                txnRef, schemeTxnRef, merchantId, userRef, reference, pageRequest);
+                txnRef, schemeTxnRef, merchantId, userRef, reference, schemeId, pageRequest);
     }
 
     /**

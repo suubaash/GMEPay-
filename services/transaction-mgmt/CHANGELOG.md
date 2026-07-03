@@ -1,5 +1,25 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-03 — Scheme filter on the transaction list/search (feat/scheme-statement-be)
+
+Additive, read-only. Adds an optional `schemeId` filter (maps to the `scheme_id` column, the QR
+scheme identity e.g. ZEROPAY/NEPAL) to the transaction list/search so ops-partner-bff can produce a
+per-scheme reconciliation statement (owner Goal #6). No migration. Edits confined to
+`services/transaction-mgmt/`.
+
+### Added
+- **`GET /v1/transactions?schemeId=<id>`** and **`GET /v1/transactions/search?schemeId=<id>`** —
+  new optional query param filtering by `scheme_id`. When `schemeId` is null/absent, results are
+  exactly as before (no regression). Newest-first (`createdAt DESC`) ordering unchanged.
+- Threaded through `TransactionController.list/search/runSearch` →
+  `TransactionService.queryTransactions` (new trailing `schemeId` param; a back-compat overload
+  delegates with `schemeId=null`) → `TransactionRepository.findByFilters` (port + JPA `@Query`
+  gained a `(:schemeId IS NULL OR t.schemeId = :schemeId)` clause).
+
+### Tests
+- `TransactionSearchTest`: `schemeId` filter returns only that scheme's txns; null `schemeId`
+  returns all (no regression). 6/6 pass offline.
+
 ## 2026-07-03 — Delivery-dashboard stats endpoint
 
 Additive, read-only. New product-analytics aggregate over the existing `transactions` rows; no

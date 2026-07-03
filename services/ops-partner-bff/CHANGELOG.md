@@ -2,6 +2,33 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — QR-scheme reconciliation statement (feat/scheme-statement-be)
+
+Additive, read-only, admin-facing. GME produces a per-scheme statement so a QR-scheme partner
+(e.g. ZEROPAY, NEPAL) can reconcile the transactions GME recorded against its own records
+(owner Goal #6). No new auth surface — gated on `txn.view` (fail-closed) like the other read
+endpoints. Edits confined to `services/ops-partner-bff/`.
+
+### Added
+- **`GET /v1/admin/schemes/{schemeId}/statement?from=<ISO>&to=<ISO>&page=0&size=50`**
+  (`SchemeStatementController`) → `{ schemeId, window:{from,to}, totals:[{currency,count,gross}],
+  items:[{txnRef,occurredAt,merchantId,partnerId,amount,currency,status}], page, size, total }`.
+  `from`/`to` optional (default last 30 days); `size` capped at 200.
+- `SchemeStatement` DTO (money as decimal strings, MONEY_CONVENTION).
+- Fetches via the existing `TransactionMgmtClient` over the `gmepay.transaction-mgmt.base-url`
+  RestClient. `RestTransactionMgmtClient.list` now forwards the (previously-dropped) `Filter.schemeId`
+  as the `schemeId` query param to transaction-mgmt's newly scheme-filterable list endpoint.
+- **`totals` sourcing:** transaction-mgmt's `/stats` groups `byCorridor` (= scheme_id) but returns
+  only per-corridor *counts* — no currency, no gross. Rather than change that shared aggregate,
+  the lighter path for a single-scheme statement is taken: page the scheme's window via
+  `GET /v1/transactions?schemeId=&from=&to=` in bounded 200-row chunks and fold per currency
+  (bounded — one scheme's window, capped chunk count; never loads unbounded rows).
+
+### Tests
+- `SchemeStatementControllerTest` (mocks `TransactionMgmtClient`): items scoped to the scheme +
+  newest-first shape; per-currency totals correct over the full window (USD 3/220.50, KRW 1/50000);
+  size capped at 200; empty scheme → empty totals/items. 3/3 pass offline.
+
 ## 2026-07-03 — live sandbox self-integration keys (feat/sandbox-keys-live)
 
 Additive. The Partner-Portal "Get Started" sandbox API keys are now REAL
