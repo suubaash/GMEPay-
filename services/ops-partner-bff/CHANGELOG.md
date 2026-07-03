@@ -2,6 +2,34 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-03 — live partner transactions (feat/live-partner-txns)
+
+Additive. Activates the real `RestTransactionMgmtClient` in the real deploys so the Partner
+Portal shows a partner's LIVE transactions from transaction-mgmt (empty until real payments
+exist). The in-memory `StubTransactionMgmtClient` remains the standalone/test default
+(`matchIfMissing`); no change to transaction-mgmt.
+
+### Fixed (security-critical — partner-scoping)
+- `RestTransactionMgmtClient.list(Filter)` / `search(SearchQuery)` now **fail closed** when a
+  partnerId filter is *supplied but non-numeric*: they return an empty page instead of issuing
+  an unscoped (all-partners) query to transaction-mgmt. Previously a non-numeric partnerId was
+  silently dropped, which would have returned every partner's transactions — a cross-partner
+  leak on the Portal list/recent path. transaction-mgmt filters strictly on the numeric
+  `partnerId` column, so live deploys must pass the numeric partner id (JWT/path-derived); only
+  a truly absent (null/blank) partnerId means "all partners" (the Admin surface).
+- Transaction *detail* scoping was already enforced at the controller layer
+  (`PartnerPortalController.transactionDetail` 404s when `summary.partnerId()` != path partnerId,
+  covering both unknown and wrong-partner) and is unchanged.
+
+### Changed (deploy config — live is now the default there)
+- `run-fleet.ps1`: ops-partner-bff entry gains `--gmepay.transaction-mgmt.client=rest`.
+- `docker-compose.yml`: ops-partner-bff service gains `GMEPAY_TRANSACTION_MGMT_CLIENT: rest`.
+- `deploy/helm/gmepay/values.yaml`: ops-partner-bff env gains `GMEPAY_TRANSACTION_MGMT_CLIENT: "rest"`.
+
+### Tests
+- `RestTransactionMgmtClientTest`: numeric partnerId is forwarded as the `partnerId` query param
+  (`list` + `recent`); non-numeric partnerId fails closed with no HTTP call (`list` + `search`).
+
 ## 2026-07-03 — journal view proxy (feat/journal-view-be)
 
 Additive, read-only. Reuses the existing `gmepay.revenue-ledger.base-url` RestClient; no new dependency.
