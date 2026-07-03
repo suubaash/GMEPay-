@@ -628,6 +628,9 @@ services:
       # StubSandboxKeyClient. NOTE: this selector also drives RestRbacAdminClient.
       GMEPAY_AUTH_IDENTITY_CLIENT: rest
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
+      # Activates RestConfigRegistryClient / RestPlatformSettingsClient / RestAuditTrailClient.
+      GMEPAY_CONFIG_REGISTRY_CLIENT: rest
       # Shared internal-auth token (#90) the BFF presents to auth-identity's internal-only
       # /v1/rbac/** + /v1/approvals/** (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}

@@ -87,7 +87,7 @@ $fleet = @(
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }
-    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @('--gmepay.transaction-mgmt.client=rest', '--gmepay.auth-identity.client=rest', '--gmepay.auth-identity.base-url=http://localhost:18085') }
+    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @('--gmepay.transaction-mgmt.client=rest', '--gmepay.auth-identity.client=rest', '--gmepay.auth-identity.base-url=http://localhost:18085', '--gmepay.config-registry.client=rest') }
     @{ name = 'kyb-adapter';                type = 'service'; port = 18098 }
     @{ name = 'rate-fx';                    type = 'service'; port = 18101 }
     @{ name = 'api-gateway';                type = 'service'; port = 18080 }

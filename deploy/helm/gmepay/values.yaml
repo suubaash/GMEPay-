@@ -283,6 +283,8 @@ services:
       # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient.
       GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
+      GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
 
   api-gateway:
     image: api-gateway
