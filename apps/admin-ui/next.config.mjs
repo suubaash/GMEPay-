@@ -18,6 +18,12 @@ const bffBaseUrl = process.env.NEXT_PUBLIC_BFF_BASE_URL || 'http://127.0.0.1:809
 // reason as the BFF rewrite above (Node resolves "localhost" to ::1 first).
 const simNepalQrUrl = process.env.SIM_NEPAL_QR_URL || 'http://127.0.0.1:9103';
 
+// The E2E Test sandbox tab is a NATIVE admin-ui page whose data calls go through
+// this SAME-ORIGIN rewrite to the payment-executor's sandbox e2e API, so it works
+// over the Cloudflare tunnel too (see the Nepal QR note above). Server-side env
+// only; default to IPv4 loopback for the same "localhost → ::1" reason.
+const paymentExecutorUrl = process.env.PAYMENT_EXECUTOR_URL || 'http://127.0.0.1:18084';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -30,6 +36,10 @@ const nextConfig = {
       {
         source: '/sim-nepal-qr/:path*',
         destination: `${simNepalQrUrl}/:path*`,
+      },
+      {
+        source: '/e2e/:path*',
+        destination: `${paymentExecutorUrl}/v1/sandbox/e2e/:path*`,
       },
     ];
   },
