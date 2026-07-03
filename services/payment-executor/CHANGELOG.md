@@ -2,6 +2,42 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/pay-idempotency] — 2026-07-03 (request-level idempotency on POST /v1/pay)
+
+### Added
+- **Stripe-style request idempotency on the wallet payment endpoint** (`WalletPayController`
+  `POST /v1/pay`), so a client retry (network timeout, double-tap) NEVER creates a duplicate payment.
+  Revives the previously-DEAD `idempotency_keys` table (Flyway V002) + `IdempotencyRecordEntity` /
+  `IdempotencyRecordRepository` — no new table, migration, or dependency. Purely additive; the money
+  model, two-phase authorize/confirm, anti-double-charge guard, and business-decline handling are
+  unchanged.
+- **Optional `Idempotency-Key` header** (also accepts `X-Idempotency-Key`). **Absent → behaviour is
+  byte-for-byte identical to before** (the existing `partner_txn_ref` dedup still applies); the key is
+  not required.
+- **Insert-first concurrency claim** over `UNIQUE(partner_id, idempotency_key)`: the first request
+  inserts a claim row (`request_hash`, `created_at`, `expires_at = now+24h`, no response yet), executes
+  the existing `pay()` logic exactly once, then records `response_status + response_body (serialized
+  WalletPaymentResponse JSON) + txn_ref` onto the row.
+  - Duplicate-key collision with a **different `request_hash`** → **422 `idempotency_key_reuse`** (same
+    key reused for a different payload — a client bug we refuse to mis-serve).
+  - Collision, **same hash + recorded response** → **verbatim REPLAY** (same HTTP status + body) with
+    ZERO side effects (no second scheme submit / txn / ledger entry).
+  - Collision, **same hash but no response yet** (concurrent in-flight first request) → **409
+    `idempotency_in_progress`**; the caller retries shortly. Not executed.
+- **`request_hash`** = SHA-256 over a canonical serialization of the payment-defining fields
+  (`qrPayload`, amount, resolved currency, partner, userRef).
+- **Server-error key-poisoning decision**: if the first execution throws (5xx), the claim row is
+  **deleted** so the key is NOT poisoned and a genuine retry can re-claim and execute. Only a completed
+  outcome (201 APPROVED / 422 business DECLINE) finalises the key for replay. (Chosen as the safer of
+  the two options — a transient server error must never permanently block the payment.)
+- **Partner-id resolution** reuses the well-known sandbox constants (`GMEREMIT=1` — matching the
+  `X-Partner-Id` default used by `PaymentController`/`BalanceController` — and the existing
+  `SENDMN_PARTNER_ID=2`); any other alias derives a STABLE positive id from the upper-cased alias hash,
+  so keys stay partner-scoped without a config-registry round-trip.
+- **Tests** (`WalletPayControllerTest`): same key+body → executed once + replay (asserts exactly one
+  `gmeremitPaymentService.pay`); same key+different body → 422; concurrent claim with no stored
+  response → 409; no header → unchanged, store untouched. Full suite: **173 passing, 0 failures**.
+
 ## [feat/resilience-scheme-breaker] — 2026-07-03 (per-scheme circuit breaker + bulkhead on the scheme edge)
 
 ### Added

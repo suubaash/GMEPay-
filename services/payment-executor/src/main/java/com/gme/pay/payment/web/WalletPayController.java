@@ -12,23 +12,34 @@ import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
+import com.gme.pay.payment.persistence.IdempotencyRecordEntity;
+import com.gme.pay.payment.persistence.IdempotencyRecordRepository;
 import com.gme.pay.payment.web.dto.WalletPaymentRequest;
 import com.gme.pay.payment.web.dto.WalletPaymentResponse;
 import com.gme.pay.payment.web.dto.WalletRefundRequest;
 import com.gme.pay.payment.web.dto.WalletRefundResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.lang.Nullable;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * Wallet payment entry point at {@code POST /v1/pay}.
@@ -70,10 +81,20 @@ public class WalletPayController {
     private static final String PARTNER_SENDMN   = "SENDMN";
 
     /**
+     * GMEREMIT sandbox partner ID. Matches the {@code X-Partner-Id} default of {@code 1} used by
+     * {@link PaymentController}/{@link BalanceController}, so idempotency keys are scoped to the
+     * same numeric partner across endpoints.
+     */
+    private static final long GMEREMIT_PARTNER_ID = 1L;
+
+    /**
      * SENDMN sandbox partner ID. A real deployment would look this up from config-registry
      * but for the sandbox we use a well-known constant so no DB round-trip is needed.
      */
     private static final long SENDMN_PARTNER_ID = 2L;
+
+    /** Idempotency-key retention window: recorded outcomes replay for 24h, then GC'd. */
+    private static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);
 
     private final GmeremitPaymentService gmeremitPaymentService;
     private final SendmnPaymentService sendmnPaymentService;
@@ -85,6 +106,14 @@ public class WalletPayController {
     @Nullable private final OperationalGate operationalGate;
     /** DECLINE_SPIKE monitor (defect #5) — records each outcome; null when the feature is off. */
     @Nullable private final DeclineSpikeMonitor declineSpikeMonitor;
+    /**
+     * Request-level idempotency store ({@code idempotency_keys}). When null (minimal config) or the
+     * {@code Idempotency-Key} header is absent, the endpoint keeps its exact pre-idempotency
+     * behaviour — full back-compat.
+     */
+    @Nullable private final IdempotencyRecordRepository idempotencyRepository;
+    /** Serialiser for the replayed response snapshot; paired with {@link #idempotencyRepository}. */
+    @Nullable private final ObjectMapper objectMapper;
 
     /**
      * Production constructor — all collaborators injected.
@@ -98,7 +127,9 @@ public class WalletPayController {
                                @Nullable TransactionClient transactionClient,
                                @Nullable RevenueLedgerClient revenueLedgerClient,
                                @Nullable OperationalGate operationalGate,
-                               @Nullable DeclineSpikeMonitor declineSpikeMonitor) {
+                               @Nullable DeclineSpikeMonitor declineSpikeMonitor,
+                               @Nullable IdempotencyRecordRepository idempotencyRepository,
+                               @Nullable ObjectMapper objectMapper) {
         this.gmeremitPaymentService = gmeremitPaymentService;
         this.sendmnPaymentService = sendmnPaymentService;
         this.failoverPaymentRouter = failoverPaymentRouter;
@@ -107,21 +138,154 @@ public class WalletPayController {
         this.revenueLedgerClient = revenueLedgerClient;
         this.operationalGate = operationalGate;
         this.declineSpikeMonitor = declineSpikeMonitor;
+        this.idempotencyRepository = idempotencyRepository;
+        this.objectMapper = objectMapper;
     }
 
     /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
-        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null, null, null);
+        this(gmeremitPaymentService, sendmnPaymentService, null, null, null, null, null, null, null, null);
     }
 
     /**
      * POST /v1/pay — dispatches to GMEREMIT domestic or SENDMN overseas path.
+     *
+     * <p>Optional request-level idempotency (Stripe-style). The client MAY send an
+     * {@code Idempotency-Key} (or {@code X-Idempotency-Key}) header so that a retry — a network
+     * timeout, a double-tap — NEVER creates a second payment. When the header is <b>absent</b> the
+     * behaviour is byte-for-byte identical to before (the existing {@code partner_txn_ref} dedup
+     * still applies downstream); the key is <b>not</b> required.
+     *
+     * <p>When present, an insert-first claim over the {@code UNIQUE(partner_id, idempotency_key)}
+     * constraint serialises concurrent retries:
+     * <ul>
+     *   <li>Claim SUCCEEDS → this is the first request: {@link #execute(WalletPaymentRequest)} runs,
+     *       then the response (status + JSON body + txnRef) is recorded onto the row.
+     *   <li>Claim FAILS (duplicate key) → a prior request used this key:
+     *     <ul>
+     *       <li>Different {@code request_hash} → 422 {@code idempotency_key_reuse} (client bug: the
+     *           same key was reused for a different payload — we must not mis-serve it).
+     *       <li>Same hash + recorded response → REPLAY it verbatim (same HTTP status + body),
+     *           re-executing NOTHING (no second scheme submit / txn / ledger entry).
+     *       <li>Same hash but no response yet → 409 {@code idempotency_in_progress} (a concurrent
+     *           in-flight first request; the client retries shortly).
+     *     </ul>
+     * </ul>
+     *
+     * <p>Server-error key handling: if the first execution throws (5xx), the claim row is deleted so
+     * the key is NOT poisoned — a genuine retry can re-claim and execute. Only a completed response
+     * (2xx/4xx business outcome) finalises the key for replay.
      */
     @PostMapping
-    public ResponseEntity<WalletPaymentResponse> pay(@RequestBody WalletPaymentRequest req) {
+    public ResponseEntity<?> pay(
+            @RequestBody WalletPaymentRequest req,
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestHeader(name = "X-Idempotency-Key", required = false) String idempotencyKeyAlt) {
         req.validate();
 
+        String key = firstNonBlank(idempotencyKey, idempotencyKeyAlt);
+        // No key (or store unavailable) → unchanged legacy path, full back-compat.
+        if (key == null || idempotencyRepository == null || objectMapper == null) {
+            return execute(req);
+        }
+        return payIdempotent(req, key.trim());
+    }
+
+    /**
+     * Idempotent wrapper: claim → execute+record | replay | conflict. See {@link #pay} for the
+     * full contract.
+     */
+    private ResponseEntity<?> payIdempotent(WalletPaymentRequest req, String key) {
+        long partnerId = resolvePartnerId(req.partner());
+        String requestHash = requestHash(req);
+
+        // Insert-first claim. The UNIQUE(partner_id, idempotency_key) constraint is the concurrency
+        // arbiter: exactly one caller inserts, everyone else collides.
+        IdempotencyRecordEntity claim = new IdempotencyRecordEntity(
+                partnerId, key, requestHash, Instant.now());
+        claim.setExpiresAt(Instant.now().plus(IDEMPOTENCY_TTL));
+        try {
+            idempotencyRepository.saveAndFlush(claim);
+        } catch (DataIntegrityViolationException dup) {
+            return replayOrConflict(partnerId, key, requestHash);
+        }
+
+        // We own the claim — execute exactly once.
+        final ResponseEntity<WalletPaymentResponse> response;
+        try {
+            response = execute(req);
+        } catch (RuntimeException ex) {
+            // Server-error safety: do NOT poison the key. Drop the claim so a genuine retry can
+            // re-execute. (Business declines return normally as a 422 body and DO finalise below.)
+            try {
+                idempotencyRepository.delete(claim);
+            } catch (RuntimeException cleanupEx) {
+                log.warn("failed to release idempotency claim after error (partner={} key={}): {}",
+                        partnerId, key, cleanupEx.getMessage());
+            }
+            throw ex;
+        }
+
+        // Record the completed outcome for future replays.
+        try {
+            claim.setTxnRef(response.getBody() != null ? response.getBody().txnRef() : null);
+            claim.recordOutcome(
+                    toPaymentStatus(response.getStatusCode().value()),
+                    objectMapper.writeValueAsString(response.getBody()));
+            idempotencyRepository.saveAndFlush(claim);
+        } catch (Exception recordEx) {
+            // Recording failed but the payment already happened; return the real response rather
+            // than error. A later retry with the same key hits the recorded-but-null path (409) or
+            // this same row without a body → conflict, never a second payment.
+            log.warn("failed to record idempotency outcome (partner={} key={}): {}",
+                    partnerId, key, recordEx.getMessage());
+        }
+        return response;
+    }
+
+    /** Handles a claim collision: reuse-detection, verbatim replay, or in-progress conflict. */
+    private ResponseEntity<?> replayOrConflict(long partnerId, String key, String requestHash) {
+        Optional<IdempotencyRecordEntity> existing =
+                idempotencyRepository.findByPartnerIdAndIdempotencyKey(partnerId, key);
+        if (existing.isEmpty()) {
+            // Extremely rare race (row vanished between collision and read) — treat as in-progress.
+            return conflict();
+        }
+        IdempotencyRecordEntity row = existing.get();
+        if (!requestHash.equals(row.getRequestHash())) {
+            // Same key, different payload → client bug. 422; never re-serve.
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(java.util.Map.of("error", "idempotency_key_reuse"));
+        }
+        if (row.getResponseBody() == null || row.getResponseStatus() == null) {
+            // First request still in-flight — nothing to replay yet.
+            return conflict();
+        }
+        // Verbatim replay: same HTTP status + stored body, ZERO side effects.
+        try {
+            WalletPaymentResponse body =
+                    objectMapper.readValue(row.getResponseBody(), WalletPaymentResponse.class);
+            return ResponseEntity.status(toHttpStatus(row.getResponseStatus()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body);
+        } catch (Exception ex) {
+            log.warn("failed to deserialize recorded idempotent response (partner={} key={}): {}",
+                    partnerId, key, ex.getMessage());
+            return conflict();
+        }
+    }
+
+    private ResponseEntity<?> conflict() {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(java.util.Map.of("error", "idempotency_in_progress"));
+    }
+
+    /**
+     * The original {@code POST /v1/pay} execution — dispatches to GMEREMIT domestic, SENDMN
+     * overseas, or the failover router. Unchanged money semantics; called once per accepted request.
+     */
+    private ResponseEntity<WalletPaymentResponse> execute(WalletPaymentRequest req) {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
@@ -236,6 +400,79 @@ public class WalletPayController {
     private static boolean isZeroPayNetwork(String networkIdentifier) {
         return networkIdentifier != null
                 && networkIdentifier.toLowerCase(java.util.Locale.ROOT).contains("zeropay");
+    }
+
+    // ---- idempotency helpers ----
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) {
+            return a;
+        }
+        if (b != null && !b.isBlank()) {
+            return b;
+        }
+        return null;
+    }
+
+    /**
+     * Resolves a partner alias to the STABLE numeric partner id used to scope the idempotency key.
+     * Reuses the well-known sandbox constants ({@code GMEREMIT=1}, {@code SENDMN=2}); any other
+     * alias (e.g. a failover-routed cross-border partner) derives a stable positive id from the
+     * upper-cased alias hash so keys stay scoped without a config-registry round-trip.
+     */
+    private static long resolvePartnerId(String partner) {
+        if (PARTNER_GMEREMIT.equalsIgnoreCase(partner)) {
+            return GMEREMIT_PARTNER_ID;
+        }
+        if (PARTNER_SENDMN.equalsIgnoreCase(partner)) {
+            return SENDMN_PARTNER_ID;
+        }
+        String alias = partner == null ? "" : partner.toUpperCase(java.util.Locale.ROOT);
+        // Fold the alias hash into a stable large positive id, kept clear of the 1/2 reserved ids.
+        return 1_000_000L + (Integer.toUnsignedLong(alias.hashCode()));
+    }
+
+    /**
+     * SHA-256 over a canonical serialization of the fields that DEFINE the payment: qrPayload,
+     * amount, resolved currency, partner alias, userRef. Stable field order + explicit separators so
+     * an identical retry hashes identically while any payload change flips the hash (→ 422 reuse).
+     */
+    private static String requestHash(WalletPaymentRequest req) {
+        String canonical = String.join("\n",
+                "qrPayload=" + nullSafe(req.qrPayload()),
+                "amount=" + nullSafe(req.amountKrw()),
+                "currency=" + req.payCurrency(),
+                "partner=" + nullSafe(req.partner()),
+                "userRef=" + nullSafe(req.userRef()));
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : digest) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16))
+                        .append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e); // never on a JVM
+        }
+    }
+
+    private static String nullSafe(String s) {
+        return s == null ? "" : s;
+    }
+
+    /**
+     * Maps the recorded HTTP status back for replay. Only the two outcomes this endpoint produces
+     * are stored: 201 CREATED (APPROVED) and 422 (business DECLINED). We persist an enum
+     * ({@link PaymentStatus}) on the row, so APPROVED↔CREATED and everything else↔422.
+     */
+    private static PaymentStatus toPaymentStatus(int httpStatus) {
+        return httpStatus == HttpStatus.CREATED.value() ? PaymentStatus.APPROVED : PaymentStatus.FAILED;
+    }
+
+    private static HttpStatus toHttpStatus(PaymentStatus status) {
+        return status == PaymentStatus.APPROVED ? HttpStatus.CREATED : HttpStatus.UNPROCESSABLE_ENTITY;
     }
 
     /**

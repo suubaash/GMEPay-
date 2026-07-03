@@ -11,15 +11,20 @@ import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
+import com.gme.pay.payment.persistence.IdempotencyRecordEntity;
+import com.gme.pay.payment.persistence.IdempotencyRecordRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.hamcrest.Matchers.is;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +33,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -79,6 +85,9 @@ class WalletPayControllerTest {
 
     @MockBean
     private OperationalGate operationalGate;
+
+    @MockBean
+    private IdempotencyRecordRepository idempotencyRepository;
 
     // ---- Test 1: APPROVED happy path ----
 
@@ -470,5 +479,150 @@ class WalletPayControllerTest {
 
         // The gate must never be consulted on the in-flight refund path.
         verifyNoInteractions(operationalGate);
+    }
+
+    // ---- Request-level idempotency (Idempotency-Key header) ----
+
+    private static final String IDEM_BODY = """
+            {
+              "qrPayload": "ZPQR0001",
+              "amountKrw": "50000",
+              "partner": "GMEREMIT",
+              "userRef": "user-007"
+            }
+            """;
+
+    private void stubApproved() {
+        WalletResult approved = WalletResult.approved(
+                "GMEREMIT-9001", "TXN-AABB1122", "Coffee Shop",
+                new BigDecimal("50000"), new BigDecimal("500"), new BigDecimal("50500"),
+                "2026-06-13T11:23:45+09:00");
+        when(gmeremitPaymentService.pay(eq("ZPQR0001"), eq(new BigDecimal("50000")), eq("user-007")))
+                .thenReturn(approved);
+    }
+
+    /**
+     * Same key + same body twice: the payment executes exactly ONCE and the second call REPLAYS the
+     * identical recorded response without re-hitting the payment service.
+     */
+    @Test
+    @DisplayName("POST /v1/pay — same Idempotency-Key + same body: executed once, second call replays")
+    void idempotency_sameKeySameBody_executesOnce_replays() throws Exception {
+        stubApproved();
+
+        // The claim row the controller inserts; captured so the replay can find it with a recorded body.
+        AtomicReference<IdempotencyRecordEntity> stored = new AtomicReference<>();
+        when(idempotencyRepository.saveAndFlush(any(IdempotencyRecordEntity.class)))
+                .thenAnswer(inv -> {
+                    IdempotencyRecordEntity e = inv.getArgument(0);
+                    if (stored.get() == null) {
+                        stored.set(e);          // first save = the claim
+                        return e;
+                    }
+                    // subsequent saveAndFlush on the SAME instance = recordOutcome; keep it.
+                    stored.set(e);
+                    return e;
+                });
+        // First request: no existing row (claim succeeds).
+        when(idempotencyRepository.findByPartnerIdAndIdempotencyKey(anyLong(), eq("KEY-1")))
+                .thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/v1/pay")
+                        .header("Idempotency-Key", "KEY-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("TXN-AABB1122")));
+
+        // Second (retry) request: claim collides, and the recorded row is now found for replay.
+        when(idempotencyRepository.saveAndFlush(any(IdempotencyRecordEntity.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_idempotency_partner_key"));
+        when(idempotencyRepository.findByPartnerIdAndIdempotencyKey(anyLong(), eq("KEY-1")))
+                .thenReturn(Optional.of(stored.get()));
+
+        mockMvc.perform(post("/v1/pay")
+                        .header("Idempotency-Key", "KEY-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("TXN-AABB1122")));
+
+        // The non-negotiable: exactly ONE payment executed across both calls.
+        verify(gmeremitPaymentService, times(1))
+                .pay(eq("ZPQR0001"), eq(new BigDecimal("50000")), eq("user-007"));
+    }
+
+    /** Same key but a DIFFERENT payload → 422 idempotency_key_reuse; payment NOT executed. */
+    @Test
+    @DisplayName("POST /v1/pay — same key + different body: 422 idempotency_key_reuse, no execution")
+    void idempotency_sameKeyDifferentBody_422() throws Exception {
+        // Existing row was claimed with a DIFFERENT payload (different amount → different hash).
+        IdempotencyRecordEntity priorRow = new IdempotencyRecordEntity(
+                1L, "KEY-2", "hash-of-a-different-payload", java.time.Instant.now());
+        when(idempotencyRepository.saveAndFlush(any(IdempotencyRecordEntity.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_idempotency_partner_key"));
+        when(idempotencyRepository.findByPartnerIdAndIdempotencyKey(anyLong(), eq("KEY-2")))
+                .thenReturn(Optional.of(priorRow));
+
+        mockMvc.perform(post("/v1/pay")
+                        .header("Idempotency-Key", "KEY-2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error", is("idempotency_key_reuse")));
+
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    /** Concurrent duplicate claim, same hash, no stored response yet → 409 idempotency_in_progress. */
+    @Test
+    @DisplayName("POST /v1/pay — concurrent claim, no recorded response yet: 409 idempotency_in_progress")
+    void idempotency_inProgress_409() throws Exception {
+        // Compute the hash the controller will compute for IDEM_BODY by letting the first (real)
+        // request run through — simplest: the in-flight row carries the SAME hash but no response.
+        // We stub the collision then return a row whose request_hash matches this exact body.
+        AtomicReference<String> hash = new AtomicReference<>();
+        when(idempotencyRepository.saveAndFlush(any(IdempotencyRecordEntity.class)))
+                .thenAnswer(inv -> {
+                    hash.set(((IdempotencyRecordEntity) inv.getArgument(0)).getRequestHash());
+                    throw new DataIntegrityViolationException("uq_idempotency_partner_key");
+                });
+        when(idempotencyRepository.findByPartnerIdAndIdempotencyKey(anyLong(), eq("KEY-3")))
+                .thenAnswer(inv -> {
+                    // In-flight first request: same hash, response_body still null.
+                    IdempotencyRecordEntity inFlight = new IdempotencyRecordEntity(
+                            1L, "KEY-3", hash.get(), java.time.Instant.now());
+                    return Optional.of(inFlight);
+                });
+
+        mockMvc.perform(post("/v1/pay")
+                        .header("Idempotency-Key", "KEY-3")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error", is("idempotency_in_progress")));
+
+        verifyNoInteractions(gmeremitPaymentService);
+    }
+
+    /** No header → behaviour identical to today; idempotency store is never touched (back-compat). */
+    @Test
+    @DisplayName("POST /v1/pay — no Idempotency-Key header: unchanged behaviour, store untouched")
+    void idempotency_noHeader_backCompat() throws Exception {
+        stubApproved();
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", is("APPROVED")))
+                .andExpect(jsonPath("$.schemeTxnRef", is("TXN-AABB1122")));
+
+        verify(gmeremitPaymentService, times(1))
+                .pay(eq("ZPQR0001"), eq(new BigDecimal("50000")), eq("user-007"));
+        // Without the header the idempotency path is entirely bypassed.
+        verifyNoInteractions(idempotencyRepository);
     }
 }
