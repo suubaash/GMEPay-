@@ -27,7 +27,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * <ul>
  *   <li>{@code totalElements} — page wrapper (NOT snake_case total_elements)</li>
  *   <li>{@code txnRef}        — item field</li>
- *   <li>{@code partnerRef}    — item field (→ schemeRef)</li>
+ *   <li>{@code schemeTxnRef}  — item field (→ schemeRef; falls back to {@code partnerRef} when absent)</li>
  *   <li>{@code targetPayout}  — item field  (→ targetPayoutKrw BigDecimal)</li>
  *   <li>{@code sendCcy}       — item field  (→ settlementType derivation)</li>
  *   <li>{@code status}        — item field</li>
@@ -98,11 +98,47 @@ class RestTransactionQueryClientTest {
 
         TransactionRecord r = records.get(0);
         assertThat(r.txnRef()).isEqualTo("TXN-001");
-        assertThat(r.schemeRef()).isEqualTo("ZP-SCH-001");     // partnerRef → schemeRef
+        assertThat(r.schemeRef()).isEqualTo("ZP-SCH-001");     // no schemeTxnRef in body → falls back to partnerRef
         assertThat(r.merchantId()).isEqualTo("MRC001");         // key for ReconDiffEngine
         assertThat(r.targetPayoutKrw()).isEqualByComparingTo(new BigDecimal("34720")); // targetPayout → targetPayoutKrw
         assertThat(r.status()).isEqualTo("APPROVED");
         assertThat(r.settlementType()).isEqualTo('N');           // KRW sendCcy → NET
+    }
+
+    @Test
+    @DisplayName("findUnbatchedApproved: schemeTxnRef (ZeroPay TXN-…) wins over partnerRef for schemeRef")
+    void findUnbatchedApproved_schemeTxnRefWinsOverPartnerRef() throws Exception {
+        LocalDate date = LocalDate.of(2026, 6, 15);
+
+        // Both present: the ZeroPay-assigned scheme id must be chosen — it is what the ZP0065/ZP0066
+        // detail files carry in zeropay_txn_ref (AN20); the 45-char internal partnerRef would overflow it.
+        String body = """
+                {
+                  "content": [
+                    {
+                      "txnRef":       "TXN-001",
+                      "partnerRef":   "GMEREMIT-3f2a1b6c-8d4e-4a90-bc12-9f0e1d2c3b4a",
+                      "schemeTxnRef": "TXN-9A3F1C0B2D",
+                      "sendCcy":      "KRW",
+                      "targetPayout": "34720",
+                      "status":       "APPROVED",
+                      "merchantId":   "MRC001"
+                    }
+                  ],
+                  "page": 0,
+                  "size": 500,
+                  "totalElements": 1
+                }
+                """;
+
+        mockServer.expect(requestTo(org.hamcrest.Matchers.containsString("/v1/transactions")))
+                  .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        List<TransactionRecord> records = client.findUnbatchedApproved(date);
+
+        mockServer.verify();
+        assertThat(records).hasSize(1);
+        assertThat(records.get(0).schemeRef()).isEqualTo("TXN-9A3F1C0B2D"); // schemeTxnRef, not partnerRef
     }
 
     @Test

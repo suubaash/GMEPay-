@@ -78,7 +78,8 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
      * <p>Field mapping (canonical TransactionResponse → internal TransactionRecord):
      * <ul>
      *   <li>{@code txnRef}       → txnRef</li>
-     *   <li>{@code partnerRef}   → schemeRef (closest available field)</li>
+     *   <li>{@code schemeTxnRef} → schemeRef (ZeroPay "TXN-…" settlement id; falls back to
+     *       {@code partnerRef} when the scheme ref is absent)</li>
      *   <li>{@code merchantId}   → merchantId  <strong>(ReconDiffEngine key)</strong></li>
      *   <li>{@code targetPayout} → targetPayoutKrw (BigDecimal-as-string parsed to BigDecimal)</li>
      *   <li>{@code status}       → status</li>
@@ -180,10 +181,17 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
         // or not yet approved → the batch fails OPEN (no cutoff drop) for that row.
         OffsetDateTime completedAt = parseInstantOrNull(r.approvedAt(), r.txnRef());
 
+        // schemeRef = the ZeroPay-assigned settlement id ("TXN-…", set at APPROVED) — the value the
+        // ZP0065/ZP0066 detail files must carry in zeropay_txn_ref. Fall back to partnerRef only when the
+        // scheme ref is absent (legacy / pre-resolution rows); partnerRef is the internal ref, not ZeroPay's.
+        String schemeRef = (r.schemeTxnRef() != null && !r.schemeTxnRef().isBlank())
+                ? r.schemeTxnRef()
+                : r.partnerRef();
+
         return new TransactionRecord(
                 null,                           // id — not available in REST response
                 r.txnRef(),                     // txnRef
-                r.partnerRef(),                 // schemeRef (closest available)
+                schemeRef,                      // schemeRef ← schemeTxnRef (ZeroPay TXN-…), else partnerRef
                 r.merchantId(),                 // merchantId  ← ReconDiffEngine key
                 targetPayoutKrw,                // targetPayoutKrw  ← ReconDiffEngine amount
                 settlementType,                 // settlementType
@@ -274,6 +282,9 @@ public class RestTransactionQueryClient implements TransactionQueryPort {
             String merchantId,
             String merchantName,
             String merchantFeeRate,
-            String approvedAt
+            String approvedAt,
+            // Scheme-assigned settlement id ("TXN-…") set at APPROVED — the real ZeroPay txn ref for the
+            // ZP0065/ZP0066 detail files. Additive; older producers omit it (→ null, handled by fallback).
+            String schemeTxnRef
     ) {}
 }

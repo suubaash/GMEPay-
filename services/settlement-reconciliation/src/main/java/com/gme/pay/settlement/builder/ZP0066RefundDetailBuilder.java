@@ -29,8 +29,8 @@ import java.util.List;
  *   <li><b>refund_amount_krw sign</b> — {@code num()} forbids negatives, so the ABSOLUTE KRW amount is
  *       emitted; the claw-back sign lives in the aggregate {@code settlement_lines}, not this report. The
  *       file-level sign convention (leading minus vs absolute) is IDD-pending.</li>
- *   <li><b>original_zeropay_txn_ref</b> — sourced from {@code schemeRef} (closest available); confirm it
- *       carries the ORIGINAL payment's ref, not a refund-specific one.</li>
+ *   <li><b>original_zeropay_txn_ref</b> — sourced from {@code schemeRef}, now the ZeroPay-assigned
+ *       settlement id ("TXN-…"); confirm it carries the ORIGINAL payment's ref, not a refund-specific one.</li>
  * </ul>
  */
 public class ZP0066RefundDetailBuilder extends AbstractZeroPayFileBuilder {
@@ -78,7 +78,7 @@ public class ZP0066RefundDetailBuilder extends AbstractZeroPayFileBuilder {
                     : BigDecimal.ZERO;
             lines.add(
                     an(t.merchantId(), W_MERCHANT_ID)
-                            + an(t.schemeRef(), W_ORIG_TXN_REF)           // original payment scheme ref (closest avail.)
+                            + an(t.schemeRef(), W_ORIG_TXN_REF)           // ZeroPay-assigned scheme ref ("TXN-…")
                             + refundDate(t, ctx)
                             + num(amt, W_AMOUNT)
                             + num(feeAdj, W_FEE)
