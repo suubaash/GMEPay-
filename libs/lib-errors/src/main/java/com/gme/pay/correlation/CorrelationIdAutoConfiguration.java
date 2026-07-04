@@ -38,18 +38,35 @@ import org.springframework.core.Ordered;
 public class CorrelationIdAutoConfiguration {
 
     /**
-     * Runs before {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context filter
-     * (HIGHEST_PRECEDENCE+20), so the correlation id is in MDC before any auth/RBAC logging occurs.
+     * Servlet-only wiring, isolated in a nested configuration gated by
+     * {@code @ConditionalOnClass("jakarta.servlet.Filter")}. That guard is evaluated from class
+     * metadata (ASM) <em>without loading the class</em>, so on a reactive (WebFlux) service such as
+     * api-gateway — where {@code jakarta.servlet.Filter} is absent from the classpath — this nested
+     * config is skipped and its servlet-referencing {@code @Bean} method
+     * ({@link FilterRegistrationBean}, {@link CorrelationIdFilter}) is never introspected. Keeping
+     * those references out of the enclosing class avoids the {@code NoClassDefFoundError:
+     * jakarta/servlet/Filter} that otherwise fails the whole reactive ApplicationContext at startup.
+     * (A reactive {@code WebFilter} equivalent can be added later; the interceptor beans below
+     * already cover outbound propagation on both stacks.)
      */
-    @Bean
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "jakarta.servlet.Filter")
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    public FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
-        FilterRegistrationBean<CorrelationIdFilter> reg =
-                new FilterRegistrationBean<>(new CorrelationIdFilter());
-        reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
-        reg.addUrlPatterns("/*");
-        reg.setName("correlationIdFilter");
-        return reg;
+    static class ServletCorrelationIdConfiguration {
+
+        /**
+         * Runs before {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context filter
+         * (HIGHEST_PRECEDENCE+20), so the correlation id is in MDC before any auth/RBAC logging occurs.
+         */
+        @Bean
+        public FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
+            FilterRegistrationBean<CorrelationIdFilter> reg =
+                    new FilterRegistrationBean<>(new CorrelationIdFilter());
+            reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
+            reg.addUrlPatterns("/*");
+            reg.setName("correlationIdFilter");
+            return reg;
+        }
     }
 
     /** Shared interceptor bean — usable directly on service-built {@code RestClient}s. */

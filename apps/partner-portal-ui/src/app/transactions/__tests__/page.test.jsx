@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Provider as ReduxProvider } from 'react-redux';
@@ -88,7 +88,20 @@ function renderWithItems(items, extraState = {}) {
   );
 }
 
+// The page's default date filter is "last 30 days from today" (thirtyDaysAgoISO()..todayISO()),
+// and the fixtures below use fixed June 2026 dates. Pin the clock to 2026-06-15 (the "today" the
+// fixtures were authored against) so the rows stay inside the default window regardless of the
+// real wall-clock date — otherwise these tests rot: once >30 days pass, every row is filtered out
+// and the table falls to its empty state. shouldAdvanceTime lets userEvent's internal timers run.
 describe('TransactionsPage — UC-10-02', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-06-15T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders the page heading', () => {
     renderWithItems([]);
     expect(screen.getByRole('heading', { name: /Transactions/i, level: 1 })).toBeInTheDocument();
@@ -164,7 +177,7 @@ describe('TransactionsPage — UC-10-02', () => {
 
   it('sorts rows by timestamp when header is clicked', async () => {
     renderWithItems(UC10_ITEMS);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const sortBtn = screen.getByTestId('sort-created');
 
     // Default is desc (TXN-B2 first), click for asc
