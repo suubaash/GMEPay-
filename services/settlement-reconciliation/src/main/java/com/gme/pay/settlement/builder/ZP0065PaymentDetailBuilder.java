@@ -17,7 +17,7 @@ import java.util.List;
  * {@link #build(BuildContext)} is intentionally unsupported here).
  *
  * <p>DATA layout (placeholder widths — IDD-pending, isolated as constants, same convention as
- * {@link ZP0061RequestBuilder}): merchant_id AN(10) · zeropay_txn_ref AN(20) · txn_date(8) · txn_time(6)
+ * {@link ZP0061RequestBuilder}): merchant_id AN(16) · zeropay_txn_ref AN(20) · txn_date(8) · txn_time(6)
  * · payout_amount_krw N(12) · merchant_fee_amt N(12) · van_fee_amt N(10) · partner_type(1) ·
  * settlement_batch_ref AN(20). KRW fields are zero-padded integers (scale 0). merchant_fee_amt = Σ rounded
  * payout×rate for NET ('N'); 0 for GROSS ('G').
@@ -34,8 +34,8 @@ import java.util.List;
  *   <li><b>txn_time</b> — only the scheme approval instant ({@code completedAt} = approvedAt) exists; its
  *       HHMMSS is used as a proxy ({@code 000000} when null). Confirm against the final IDD.</li>
  * </ul>
- * Field widths are also IDD-pending (note {@code ZP0062}'s merchant_id is 16 vs the 10 specced here — to
- * be reconciled against the final ZeroPay IDD).
+ * merchant_id is now 16 to match {@code ZP0062}'s merchant_id width (the reconciliation counterpart);
+ * remaining widths to be confirmed against the final ZeroPay IDD.
  */
 public class ZP0065PaymentDetailBuilder extends AbstractZeroPayFileBuilder {
 
@@ -46,8 +46,10 @@ public class ZP0065PaymentDetailBuilder extends AbstractZeroPayFileBuilder {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyyMMdd");   // YYYYMMDD
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HHmmss");
 
-    // IDD-pending placeholder widths (service-backlog 7.1-T12), isolated for one-place correction.
-    static final int W_MERCHANT_ID = 10;
+    // Fixed-width fields (service-backlog 7.1-T12), isolated for one-place correction.
+    // merchant_id aligned to ZeroPay's ZP0062 response-file width (16); the prior AN(10) placeholder
+    // overflowed the AN(20) 가맹점ID (e.g. "M0000000001").
+    static final int W_MERCHANT_ID = 16;
     static final int W_TXN_REF = 20;
     static final int W_AMOUNT = 12;
     static final int W_FEE = 12;

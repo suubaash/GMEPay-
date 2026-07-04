@@ -25,7 +25,7 @@ class ZP0065PaymentDetailBuilderTest {
     private static final Charset EUC_KR = Charset.forName("EUC-KR");
     // KST 2026-06-26 14:30:00 → txn_date 20260626, txn_time 143000.
     private static final OffsetDateTime APPROVED = OffsetDateTime.of(2026, 6, 26, 14, 30, 0, 0, ZoneOffset.ofHours(9));
-    private static final int ROW_WIDTH = 10 + 20 + 8 + 6 + 12 + 12 + 10 + 1 + 32;   // 111
+    private static final int ROW_WIDTH = 16 + 20 + 8 + 6 + 12 + 12 + 10 + 1 + 32;   // 117
     private static final String BATCH_REF = "ZP0061-20260626-MORNING";
 
     private static TransactionRecord txn(String ref, String merchant, long payout, char type,
@@ -50,15 +50,15 @@ class ZP0065PaymentDetailBuilderTest {
 
         String row = f.lines().get(1);
         assertEquals(ROW_WIDTH, row.length());
-        assertEquals("M001", row.substring(0, 10).trim());
-        assertEquals("ZP-T1", row.substring(10, 30).trim());
-        assertEquals("20260626", row.substring(30, 38));            // txn_date
-        assertEquals("143000", row.substring(38, 44));              // txn_time (KST HHmmss)
-        assertEquals("000000035000", row.substring(44, 56));        // payout_amount_krw
-        assertEquals("000000000280", row.substring(56, 68));        // merchant_fee_amt = 35000*0.008
-        assertEquals("0000000000", row.substring(68, 78));          // van_fee_amt placeholder
-        assertEquals("D", row.substring(78, 79));                   // partner_type (NET=domestic)
-        assertEquals(BATCH_REF, row.substring(79, 111).trim());     // settlement_batch_ref (request batch id)
+        assertEquals("M001", row.substring(0, 16).trim());
+        assertEquals("ZP-T1", row.substring(16, 36).trim());
+        assertEquals("20260626", row.substring(36, 44));            // txn_date
+        assertEquals("143000", row.substring(44, 50));              // txn_time (KST HHmmss)
+        assertEquals("000000035000", row.substring(50, 62));        // payout_amount_krw
+        assertEquals("000000000280", row.substring(62, 74));        // merchant_fee_amt = 35000*0.008
+        assertEquals("0000000000", row.substring(74, 84));          // van_fee_amt placeholder
+        assertEquals("D", row.substring(84, 85));                   // partner_type (NET=domestic)
+        assertEquals(BATCH_REF, row.substring(85, 117).trim());     // settlement_batch_ref (request batch id)
     }
 
     @Test
@@ -68,8 +68,8 @@ class ZP0065PaymentDetailBuilderTest {
                 ctx(List.of(txn("T2", "M002", 50000, 'G', "0.008", APPROVED))));
 
         String row = f.lines().get(1);
-        assertEquals("000000000000", row.substring(56, 68), "GROSS books no merchant fee");
-        assertEquals("I", row.substring(78, 79), "GROSS=international");
+        assertEquals("000000000000", row.substring(62, 74), "GROSS books no merchant fee");
+        assertEquals("I", row.substring(84, 85), "GROSS=international");
     }
 
     @Test
@@ -101,7 +101,7 @@ class ZP0065PaymentDetailBuilderTest {
     void feeRoundingHalfUp() {
         BuiltFile f = new ZP0065PaymentDetailBuilder().build(
                 ctx(List.of(txn("T1", "M001", 12345, 'N', "0.008", APPROVED))));
-        assertEquals("000000000099", f.lines().get(1).substring(56, 68));
+        assertEquals("000000000099", f.lines().get(1).substring(62, 74));
     }
 
     @Test
@@ -120,12 +120,12 @@ class ZP0065PaymentDetailBuilderTest {
         BuiltFile f = new ZP0065PaymentDetailBuilder().build(
                 ctx(List.of(txn("T1", "M001", 35000, 'N', "0", null))));
         String row = f.lines().get(1);
-        assertEquals("20260626", row.substring(30, 38), "txn_date falls back to ctx business date");
-        assertEquals("000000", row.substring(38, 44), "txn_time placeholder when no approval instant");
+        assertEquals("20260626", row.substring(36, 44), "txn_date falls back to ctx business date");
+        assertEquals("000000", row.substring(44, 50), "txn_time placeholder when no approval instant");
     }
 
     @Test
-    @DisplayName("field overflow throws (merchant_id > 10 bytes)")
+    @DisplayName("field overflow throws (merchant_id > 16 bytes)")
     void overflowThrows() {
         assertThrows(IllegalStateException.class, () -> new ZP0065PaymentDetailBuilder().build(
                 ctx(List.of(txn("T1", "MERCHANT-TOO-LONG", 100, 'N', "0", APPROVED)))));

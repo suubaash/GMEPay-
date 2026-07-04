@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class ZP0066RefundDetailBuilderTest {
 
     private static final OffsetDateTime REFUNDED = OffsetDateTime.of(2026, 6, 26, 9, 0, 0, 0, ZoneOffset.ofHours(9));
-    private static final int ROW_WIDTH = 10 + 20 + 8 + 12 + 12 + 32;   // 94
+    private static final int ROW_WIDTH = 16 + 20 + 8 + 12 + 12 + 32;   // 100
     private static final String BATCH_REF = "ZP0063-20260626-AFTERNOON";
 
     private static TransactionRecord refund(String ref, String merchant, long payout, char type, String rate) {
@@ -44,12 +44,12 @@ class ZP0066RefundDetailBuilderTest {
 
         String row = f.lines().get(1);
         assertEquals(ROW_WIDTH, row.length());
-        assertEquals("M001", row.substring(0, 10).trim());
-        assertEquals("ZP-R1", row.substring(10, 30).trim());
-        assertEquals("20260626", row.substring(30, 38));            // refund_date
-        assertEquals("000000005000", row.substring(38, 50));        // refund_amount_krw (absolute)
-        assertEquals("000000000040", row.substring(50, 62));        // merchant_fee_adj_amt
-        assertEquals(BATCH_REF, row.substring(62, 94).trim());      // settlement_batch_ref (request batch id)
+        assertEquals("M001", row.substring(0, 16).trim());
+        assertEquals("ZP-R1", row.substring(16, 36).trim());
+        assertEquals("20260626", row.substring(36, 44));            // refund_date
+        assertEquals("000000005000", row.substring(44, 56));        // refund_amount_krw (absolute)
+        assertEquals("000000000040", row.substring(56, 68));        // merchant_fee_adj_amt
+        assertEquals(BATCH_REF, row.substring(68, 100).trim());      // settlement_batch_ref (request batch id)
     }
 
     @Test
@@ -57,7 +57,7 @@ class ZP0066RefundDetailBuilderTest {
     void goldenRowGross() {
         BuiltFile f = new ZP0066RefundDetailBuilder().build(
                 ctx(List.of(refund("R2", "M002", 8000, 'G', "0.008"))));
-        assertEquals("000000000000", f.lines().get(1).substring(50, 62));
+        assertEquals("000000000000", f.lines().get(1).substring(56, 68));
     }
 
     @Test
@@ -65,7 +65,7 @@ class ZP0066RefundDetailBuilderTest {
     void absoluteAmount() {
         BuiltFile f = new ZP0066RefundDetailBuilder().build(
                 ctx(List.of(refund("R3", "M001", -5000, 'N', "0"))));   // clawback intent negative
-        assertEquals("000000005000", f.lines().get(1).substring(38, 50));
+        assertEquals("000000005000", f.lines().get(1).substring(44, 56));
     }
 
     @Test

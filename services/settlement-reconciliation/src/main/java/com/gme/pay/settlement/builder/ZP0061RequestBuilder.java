@@ -13,7 +13,8 @@ import java.util.List;
  * (+ refunds). GROSS ('G'): merchant_fee_total = 0, net = gross. KRW fields are zero-padded integer
  * strings with no decimal point (KRW scale = 0).
  *
- * <p>DATA layout (7.1-T09, widths IDD-pending): merchant_id AN(10) · settlement_date(8) · gross_count
+ * <p>DATA layout (7.1-T09): merchant_id AN(16) — aligned to ZeroPay's ZP0062 response-file merchant_id
+ * width (was a placeholder AN(10) that overflowed the AN(20) 가맹점ID) · settlement_date(8) · gross_count
  * N(6) · gross_amount N(14) · refund_count N(6) · refund_amount N(14) · merchant_fee_total N(12) ·
  * net_settlement_amount N(14) · settlement_type(1).
  */
@@ -38,7 +39,7 @@ public class ZP0061RequestBuilder extends AbstractZeroPayFileBuilder {
         BigDecimal netTotal = BigDecimal.ZERO;
         for (BuildContext.MerchantRow m : ctx.rows()) {
             lines.add(
-                    an(m.merchantId(), 10)
+                    an(m.merchantId(), 16)
                             + ctx.yyyymmdd()
                             + num(BigDecimal.valueOf(m.grossTxnCount()), 6)
                             + num(m.grossTxnAmount(), 14)

@@ -40,8 +40,8 @@ class ZP0061RequestBuilderTest {
         assertEquals(17, lines.get(0).length());
 
         String netLine = lines.get(1);
-        assertEquals(85, netLine.length(), "DATA record fixed width");
-        assertTrue(netLine.startsWith("M001      "), "merchant id AN(10) left-justified");
+        assertEquals(91, netLine.length(), "DATA record fixed width");
+        assertTrue(netLine.startsWith("M001            "), "merchant id AN(16) left-justified");
         assertTrue(netLine.contains("00000000035000"), "gross 35000 N(14)");
         assertTrue(netLine.contains("000000000280"), "fee 280 N(12)");
         assertTrue(netLine.contains("00000000034720"), "booked net 34720 N(14)");

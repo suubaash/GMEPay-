@@ -41,8 +41,10 @@ public class ZP0066RefundDetailBuilder extends AbstractZeroPayFileBuilder {
     // formatting a zoned/offset temporal, which would corrupt the fixed-width layout.
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyyMMdd");   // YYYYMMDD
 
-    // IDD-pending placeholder widths (service-backlog 7.1-T13), isolated for one-place correction.
-    static final int W_MERCHANT_ID = 10;
+    // Fixed-width fields (service-backlog 7.1-T13), isolated for one-place correction.
+    // merchant_id aligned to ZeroPay's ZP0062 response-file width (16); the prior AN(10) placeholder
+    // overflowed the AN(20) 가맹점ID (e.g. "M0000000001").
+    static final int W_MERCHANT_ID = 16;
     static final int W_ORIG_TXN_REF = 20;
     static final int W_AMOUNT = 12;
     static final int W_FEE = 12;
