@@ -103,11 +103,13 @@ public class RestSettlementClient implements SettlementClient {
     @Override
     public Integer openReconExceptions() {
         try {
-            WireExceptions ex = restClient.get()
-                    .uri("/v1/settlements/recon/exceptions")
+            // ReConExceptionController: GET /v1/settlement/exceptions (singular), returns a
+            // filterable list — the open count is the size of the OPEN-filtered list.
+            List<WireException> open = restClient.get()
+                    .uri("/v1/settlement/exceptions?exceptionStatus=OPEN")
                     .retrieve()
-                    .body(WireExceptions.class);
-            return ex == null ? null : ex.open();
+                    .body(new ParameterizedTypeReference<List<WireException>>() {});
+            return open == null ? null : open.size();
         } catch (RestClientResponseException e) {
             log.warn("settlement-reconciliation error on recon exceptions (status={}): {}",
                     e.getStatusCode(), e.getMessage());
@@ -121,12 +123,14 @@ public class RestSettlementClient implements SettlementClient {
     @Override
     public ReconRerunResult rerunRecon(String date, String actor, String reason) {
         try {
+            // ReconRerunRequest's canonical field names are settlementDate/operatorId (not
+            // date/actor) — sending the wrong names silently drops operator attribution.
             java.util.Map<String, String> body = new java.util.HashMap<>();
             if (date != null) {
-                body.put("date", date);
+                body.put("settlementDate", date);
             }
             if (actor != null) {
-                body.put("actor", actor);
+                body.put("operatorId", actor);
             }
             if (reason != null) {
                 body.put("reason", reason);
@@ -141,18 +145,23 @@ public class RestSettlementClient implements SettlementClient {
                 return new ReconRerunResult("COMPLETED", null, null, null);
             }
             return new ReconRerunResult(
-                    r.status() == null ? "COMPLETED" : r.status(), r.matched(), r.unmatched(), r.detail());
+                    "COMPLETED",
+                    r.totalMatched(),
+                    r.totalExceptions(),
+                    r.batchesRerun() == null ? null : "batchesRerun=" + r.batchesRerun());
         } catch (RestClientResponseException e) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatusCode.valueOf(e.getStatusCode().value()), e.getMessage());
         }
     }
 
+    /** One row of ReConExceptionController's list response; only presence matters (we count). */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record WireExceptions(Integer open) {}
+    private record WireException(Long id) {}
 
+    /** ReconRerunController's {@code ReconRerunResponse} wire shape. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record WireRerun(String status, Integer matched, Integer unmatched, String detail) {}
+    private record WireRerun(String operatorId, Integer batchesRerun, Integer totalMatched, Integer totalExceptions) {}
 
     /** settlement-reconciliation's {@code SettlementResponse} wire shape. */
     @JsonIgnoreProperties(ignoreUnknown = true)

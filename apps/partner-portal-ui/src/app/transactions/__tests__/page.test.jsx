@@ -37,6 +37,11 @@ import TransactionsPage from '../page';
  * Money MUST render as decimal strings — never Number-cast.
  */
 
+// The page defaults its date filter to the trailing 30 days, so fixture timestamps MUST be
+// relative to "now" — hardcoded dates silently age out of the window and the rows vanish
+// (this exact failure mode broke 4 of these tests on 2026-07-02).
+const daysAgoISO = (n) => new Date(Date.now() - n * 86400000).toISOString();
+
 const UC10_ITEMS = [
   {
     txnId: 'TXN-A1',
@@ -44,13 +49,13 @@ const UC10_ITEMS = [
     state: 'APPROVED',
     amount: '125.50',
     currency: 'USD',
-    committedAt: '2026-06-01T10:00:00Z',
+    committedAt: daysAgoISO(3),
     qrSchemeId: 'ZEROPAY',
     krwAmount: '165000',
     payerCurrency: 'USD',
     payerCurrencyAmount: '125.50',
     appliedFxRate: '1315.00',
-    rateTimestamp: '2026-06-01T09:59:55Z',
+    rateTimestamp: daysAgoISO(3),
     prefundingDeductedUsd: '125.50'
   },
   {
@@ -59,13 +64,13 @@ const UC10_ITEMS = [
     state: 'COMMITTED',
     amount: '200.00',
     currency: 'USD',
-    committedAt: '2026-06-02T11:00:00Z',
+    committedAt: daysAgoISO(2),
     qrSchemeId: 'KAKAOPAY',
     krwAmount: '263000',
     payerCurrency: 'EUR',
     payerCurrencyAmount: '185.00',
     appliedFxRate: '1421.62',
-    rateTimestamp: '2026-06-02T10:59:50Z',
+    rateTimestamp: daysAgoISO(2),
     prefundingDeductedUsd: '200.00'
   }
 ];
@@ -146,14 +151,14 @@ describe('TransactionsPage — UC-10-02', () => {
   });
 
   it('renders — for missing UC-10 fields', () => {
-    // Use a committedAt within the default 30-day filter window (today = 2026-06-15)
+    // committedAt must stay inside the default 30-day filter window — keep it relative.
     const legacyItem = {
       txnId: 'TXN-OLD',
       partnerId: 'GMEREMIT',
       state: 'COMMITTED',
       amount: '50.00',
       currency: 'USD',
-      committedAt: '2026-06-10T09:00:00Z'
+      committedAt: daysAgoISO(5)
       // no UC-10 fields: qrSchemeId, krwAmount, etc. are absent
     };
     renderWithItems([legacyItem]);

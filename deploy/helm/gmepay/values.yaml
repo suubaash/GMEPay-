@@ -277,7 +277,11 @@ services:
       GMEPAY_TRANSACTION_MGMT_CLIENT: "rest"
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      # Live double-entry journals + revenue summary from revenue-ledger.
+      GMEPAY_REVENUE_LEDGER_CLIENT: "rest"
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      # Live settlements + recon-exception count + operator recon re-run.
+      GMEPAY_SETTLEMENT_RECONCILIATION_CLIENT: "rest"
       # Real self-serve SANDBOX API keys via auth-identity (default is the
       # in-memory stub). Get-Started keys issued by POST /internal/auth/keys
       # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient.
@@ -285,6 +289,9 @@ services:
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
       GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
+      # Live kill-switch: pause/suspend must reach config-registry's /v1/ops gate
+      # (enforced by payment-executor) — the stub only flips an in-memory flag.
+      GMEPAY_OPS_CONTROL_CLIENT: "rest"
 
   api-gateway:
     image: api-gateway
