@@ -303,7 +303,9 @@ class TransactionContractIT {
         patchStatus(txnRef, "APPROVED");
         patchStatus(txnRef, "REFUNDED");
 
-        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        // Business day is the KST calendar day (matches findRefundedOn's KST date-boundary filter):
+        // a refund created now is filed under its Asia/Seoul date, not its UTC date.
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
         MvcResult result = mockMvc.perform(get("/v1/transactions/refunded")
                         .param("refundedOn", today.toString()))
                 .andExpect(status().isOk()).andReturn();

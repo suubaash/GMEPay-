@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -32,6 +33,16 @@ import java.util.stream.Collectors;
 public class InMemoryTransactionRepository implements TransactionRepository {
 
     private final com.gme.pay.txn.persistence.TransactionRepository jpaRepository;
+
+    /**
+     * Business-day zone for date-range filters. {@code from}/{@code to} query params are business
+     * DATES, not UTC instants: the settlement day is the KST calendar day (Korean regulatory
+     * convention, and what the settlement scheduler settles). So a transaction created at
+     * 2026-07-04T15:15Z (= 2026-07-05T00:15 KST) belongs to the 2026-07-05 business day. Converting
+     * the date bounds via UTC instead misfiled every txn in the UTC-evening / KST-past-midnight
+     * window, so the settlement generator queried an empty date. Anchor the day boundaries to KST.
+     */
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Seoul");
 
     public InMemoryTransactionRepository(
             com.gme.pay.txn.persistence.TransactionRepository jpaRepository) {
@@ -56,9 +67,9 @@ public class InMemoryTransactionRepository implements TransactionRepository {
                                            String txnRef, String schemeTxnRef, String merchantId,
                                            String userRef, String reference, String schemeId,
                                            Pageable pageable) {
-        var fromInstant = from != null ? from.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        var fromInstant = from != null ? from.atStartOfDay(BUSINESS_ZONE).toInstant() : null;
         // 'to' is inclusive: advance to start of next day for < comparison
-        var toInstant = to != null ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        var toInstant = to != null ? to.plusDays(1).atStartOfDay(BUSINESS_ZONE).toInstant() : null;
         String statusStr = status != null ? status.name() : null;
         return jpaRepository
                 .findByFilters(fromInstant, toInstant, statusStr, partnerId,
@@ -108,11 +119,11 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     public List<Transaction> findCommittedFx(LocalDate from, LocalDate to, Long partnerId) {
         // Default to a wide-open window when a bound is omitted: epoch start .. far future.
         var fromInstant = from != null
-                ? from.atStartOfDay().toInstant(ZoneOffset.UTC)
+                ? from.atStartOfDay(BUSINESS_ZONE).toInstant()
                 : Instant.EPOCH;
         // 'to' is inclusive on the date: advance to start of the next day for the < bound.
         var toInstant = to != null
-                ? to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                ? to.plusDays(1).atStartOfDay(BUSINESS_ZONE).toInstant()
                 : LocalDate.of(9999, 12, 31).atStartOfDay().toInstant(ZoneOffset.UTC);
         return jpaRepository.findCommittedFx(fromInstant, toInstant, partnerId)
                 .stream()
@@ -122,8 +133,8 @@ public class InMemoryTransactionRepository implements TransactionRepository {
 
     @Override
     public List<Transaction> findRefundedOn(LocalDate refundedOn) {
-        var fromInstant = refundedOn.atStartOfDay().toInstant(ZoneOffset.UTC);
-        var toInstant = refundedOn.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        var fromInstant = refundedOn.atStartOfDay(BUSINESS_ZONE).toInstant();
+        var toInstant = refundedOn.plusDays(1).atStartOfDay(BUSINESS_ZONE).toInstant();
         return jpaRepository.findRefundedOn(fromInstant, toInstant)
                 .stream()
                 .map(TransactionEntityMapper::toDomain)
