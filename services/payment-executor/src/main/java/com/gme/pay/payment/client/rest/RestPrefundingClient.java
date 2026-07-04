@@ -1,6 +1,7 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.gme.pay.contracts.PrefundingDeductionHistoryView;
 import com.gme.pay.contracts.PrefundingReleaseRequest;
 import com.gme.pay.contracts.PrefundingReserveRequest;
@@ -363,7 +364,10 @@ public class RestPrefundingClient implements PrefundingClient {
         return v == null ? BigDecimal.ZERO : v;
     }
 
-    record DeductRequest(String txnRef, BigDecimal amountUsd) {}
+    // The public prefunding endpoint (POST /v1/prefunding/{id}/deduct) binds the amount from the
+    // JSON field "amount" (PrefundingController.DeductRequest). Serialize as "amount" so the value
+    // is not dropped to null on the wire — otherwise the deduct 400s with "amount must be positive".
+    record DeductRequest(String txnRef, @JsonProperty("amount") BigDecimal amountUsd) {}
 
     record ReverseRequest(String txnRef) {}
 
