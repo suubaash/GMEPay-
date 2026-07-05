@@ -130,10 +130,18 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 ## 8. Settlement, reconciliation & scheme files
 
 - [~] Net/gross calculators, line matcher, recon API, per-scheme statement + CSV (Goal #6).
-- [ ] **Settlement batch lifecycle**: book/persist per-partner batches; "registration failure
-      blocks settlement" enforced. *(Largest unbuilt MVP capability.)*
-- [ ] Outbound ZeroPay files ZP0011/0021/0061/0063/0065/0066 generated + transmitted over SFTP
-      (sftp-gateway service).
+- [~] **Settlement batch lifecycle**: per-partner batch + line booking, Addendum-001 rounding,
+      window cutoffs, refund claw-back, and ZP0061/0063/0065/0066 generation ALREADY EXIST in
+      settlement-reconciliation (iteration 9 audit corrected the "unbuilt" assumption). Now
+      PROVEN end-to-end by `SettlementLifecycleSliceIT`: txns → booked batch + lines →
+      byte-identical ZP0061 rebuild against the stored checksum → settlement.completed outbox
+      row, on the real context. Still missing: the "registration failure blocks settlement"
+      gate (ZP0061 requires ZP0011 ok + ZP0012 received — spec'd, unbuilt) and consolidation
+      of the duplicate ZP generator in scheme-adapter-zeropay.
+- [ ] Outbound files transmitted over SFTP: **sftp-gateway service does not exist** (spec'd in
+      Documentation/services_backlog/sftp-gateway.md — Mina SSHD client, SFTP↔MinIO bridge,
+      PGP); only a LocalDirSftpTransport stub in scheme-adapter-zeropay. `transmitted_at`
+      written by nothing.
 - [ ] Reconciliation running on real inbound files; breaks alert + operator workflow proven.
 
 ## 9. Compliance & regulatory 🔒 (calendar-bound, external)
