@@ -36,7 +36,10 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
       blocking `e2e` CI job on every PR (iteration 3). *(CPO audit #1.)* The gate immediately
       caught a real regression: the fail-closed kill-switch declined 100% of payments because
       the fleet lacked config-registry — fixed by booting the real registry in the fleet.
-      Remaining for [x]: Nepal-corridor case, ledger/settlement tie-out legs, webhook leg.
+      **Nepal corridor case added iteration 7** (classify → NPR → NEPAL adapter → sim →
+      APPROVED, hub-authoritative currency asserted). Remaining for [x]: ledger/settlement
+      tie-out legs in the same harness (webhook leg proven separately by
+      PaymentApprovedWebhookDeliveryIT).
 - [~] Sandbox E2E payment test runner exists (admin-ui E2E tab + payment-executor backend) —
       complements the CI gate for manual runs.
 - [ ] "Done" for any money-path item = proven by an executed journey + tied to the cent, not code merged.
@@ -44,8 +47,10 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 ## 1. Flagship journey — scan → pay (per corridor)
 
 - [~] **ZeroPay (KR domestic)**: MPM verified against simulator; CPM still a stub; H2/in-memory.
-- [~] **Nepal (Fonepay)**: corridor built, 3 live defects found+fixed 2–3 Jul (fleet wiring,
-      hub-authoritative QR classification, nonce contract); **not re-proven end-to-end since**.
+- [~] **Nepal (Fonepay)**: corridor built, 3 live defects found+fixed 2–3 Jul; **re-proven
+      end-to-end iteration 7** — the golden-path CI gate now executes the full Fonepay journey
+      (classify → NPR → adapter → sim → APPROVED) on every PR. Remaining: prove against the
+      real partner rail (not sim) + CPM + refund.
 - [x] GMEPay+ is authoritative for QR classification (corridor + currency decided by the hub).
 - [~] QR-classified multi-partner failover routing (ADR-016) — code merged, needs E2E proof.
 - [ ] CPM (customer-presented mode) flow implemented end-to-end.

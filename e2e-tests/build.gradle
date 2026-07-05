@@ -28,5 +28,7 @@ tasks.named('e2eTest') {
               ':services:scheme-adapter-zeropay:bootJar',
               ':services:revenue-ledger:bootJar',
               // fail-closed kill-switch: payment-executor's gate reads config-registry /v1/ops
-              ':services:config-registry:bootJar'
+              ':services:config-registry:bootJar',
+              // Nepal corridor leg (adapter; sim-nepal-qr builds on demand like sim-scheme)
+              ':services:scheme-adapter-nepal:bootJar'
 }
