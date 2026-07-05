@@ -102,6 +102,9 @@ class PaymentApprovedWebhookDeliveryIT {
         endpoint.setWebhookUrl("https://partner-77.example.com/webhooks/gmepay");
         endpoint.setEnvironment("SANDBOX");
         endpoint.setActive(true);
+        // created_at/updated_at are NOT NULL with no @PrePersist — the entity expects callers to stamp.
+        endpoint.setCreatedAt(Instant.now());
+        endpoint.setUpdatedAt(Instant.now());
         endpointRepository.save(endpoint);
 
         String txnRef = "TXN-IT-" + System.nanoTime();
