@@ -50,18 +50,29 @@ class ZpBatchPersistencePostgresIT extends AbstractZpBatchPersistenceContract {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    @DisplayName("Flyway migrations V001+V002 apply cleanly on PostgreSQL 16 with stable checksums")
-    void flywayMigrationsApplyOnPostgres16() {
+    @DisplayName("all Flyway migrations apply cleanly on PostgreSQL 16 with stable checksums")
+    void flywayMigrationsApplyOnPostgres16() throws Exception {
         String version = jdbcTemplate.queryForObject("SELECT version()", String.class);
         assertNotNull(version);
         assertTrue(version.startsWith("PostgreSQL 16"), "expected PostgreSQL 16 but was: " + version);
 
+        // Expected versions come from the classpath (V001__x.sql -> "001") so adding a
+        // migration cannot silently break this test with a stale hard-coded count.
+        List<String> expectedVersions = java.util.Arrays.stream(
+                        new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+                                .getResources("classpath*:db/migration/V*.sql"))
+                .map(r -> r.getFilename())
+                .map(f -> f.substring(1, f.indexOf("__")))
+                .sorted()
+                .toList();
+        assertTrue(expectedVersions.size() >= 2, "expected at least the original V001/V002 migrations");
+
         List<Map<String, Object>> applied = jdbcTemplate.queryForList(
                 "SELECT version, checksum, success FROM flyway_schema_history "
                         + "WHERE version IS NOT NULL ORDER BY installed_rank");
-        assertEquals(2, applied.size(), "expected exactly V001 and V002");
-        assertEquals("001", applied.get(0).get("version"));
-        assertEquals("002", applied.get(1).get("version"));
+        assertEquals(expectedVersions,
+                applied.stream().map(row -> String.valueOf(row.get("version"))).toList(),
+                "applied migrations must match the classpath db/migration set, in order");
         for (Map<String, Object> row : applied) {
             assertEquals(Boolean.TRUE, row.get("success"),
                     "migration V" + row.get("version") + " must apply successfully");
