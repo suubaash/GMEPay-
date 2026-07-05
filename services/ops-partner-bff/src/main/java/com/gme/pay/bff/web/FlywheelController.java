@@ -233,9 +233,10 @@ public class FlywheelController {
     }
 
     /**
-     * The {@code flywheel.*} settings parsed as numbers. A missing key or a
-     * non-numeric value yields no entry — the metric renders as "not measured"
-     * rather than a fake zero.
+     * The {@code flywheel.*} settings parsed as numbers. A missing key, a
+     * non-numeric value, or a non-positive value yields no entry — config-registry
+     * seeds the keys at {@code '0'} meaning "not yet measured" (V040), so the
+     * metric renders as a dash rather than a fake zero.
      */
     private Map<String, BigDecimal> numericSettings() {
         Map<String, BigDecimal> parsed = new java.util.HashMap<>();
@@ -248,7 +249,10 @@ public class FlywheelController {
                 continue;
             }
             try {
-                parsed.put(setting.key(), new BigDecimal(setting.value().trim()));
+                BigDecimal value = new BigDecimal(setting.value().trim());
+                if (value.signum() > 0) {
+                    parsed.put(setting.key(), value);
+                }
             } catch (RuntimeException ignored) {
                 // unset or non-numeric — leave the metric null
             }

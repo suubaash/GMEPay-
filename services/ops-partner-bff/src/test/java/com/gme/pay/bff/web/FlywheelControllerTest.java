@@ -178,7 +178,8 @@ class FlywheelControllerTest {
     @Test
     @DisplayName("unset flywheel.* settings render as null, never fake zeros")
     void unsetSettingsAreNull() throws Exception {
-        settings = List.of();   // ops has not entered any flywheel settings yet
+        // V040 seeds the keys at '0' = "not yet measured"; a missing row means the same.
+        settings = List.of(setting(FlywheelController.SETTING_ACCEPTANCE_POINTS, "0"));
         mvc.perform(get("/v1/admin/flywheel"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.network.acceptancePoints").isEmpty())

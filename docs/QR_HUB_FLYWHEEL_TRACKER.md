@@ -10,7 +10,7 @@ partners, regulators — tracked here, fulfilled elsewhere).
 | # | Item | Flywheel ref | Status | Notes |
 |---|---|---|---|---|
 | 1 | Loop-KPI dashboard: BFF `GET /v1/admin/flywheel` + admin-ui Flywheel page (7 metrics, §5) | Turn 0 | ✅ | `FlywheelController` + `apps/admin-ui/src/app/flywheel/`; ops-entered metrics via `flywheel.*` platform settings |
-| 2 | Seed the three `flywheel.*` platform-settings keys with descriptions so ops can fill them | Turn 0 | ⬜ | config-registry settings store |
+| 2 | Seed the three `flywheel.*` platform-settings keys with descriptions so ops can fill them | Turn 0 | ✅ | config-registry `V040__seed_flywheel_settings.sql`; `0` = not yet measured, BFF renders non-positive as unset |
 | 3 | Partner self-service loop: time-to-first-transaction measured per partner and surfaced in partner detail | Loop B | ⬜ | activation join exists in Delivery overview; per-partner drill-down pending |
 | 4 | Scheme Adapter SDK: extract shared adapter contract + certification harness from `scheme-adapter-zeropay`/`-nepal` | Loop A / Turn 2 | ⬜ | start after the second adapter passes its scheme test suite |
 | 5 | Simulator-backed partner sandbox E2E script (`sign up → KYB → keys → E2E → prefund`) | Loop B | ⬜ | builds on `gmepay-test-platform` + `simulators/` |
