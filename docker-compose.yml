@@ -23,6 +23,9 @@ volumes:
   pg-config:
   pg-txn:
   pg-executor:
+  pg-qr:
+  pg-ratefx:
+  pg-reporting:
   pg-prefunding:
   pg-ledger:
   pg-settlement:
@@ -76,6 +79,33 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d executor"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
     profiles: ["core", "full"]
+
+  postgres-qr:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: qrdb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5442:5432"]
+    volumes: ["pg-qr:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d qrdb"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-ratefx:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: ratefx, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5443:5432"]
+    volumes: ["pg-ratefx:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d ratefx"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-reporting:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: reporting, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5444:5432"]
+    volumes: ["pg-reporting:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d reporting"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["full"]
 
   postgres-prefunding:
     image: postgres:16-alpine
@@ -317,9 +347,15 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable rate locks/pool state — H2 in-memory lost them on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ratefx:5432/ratefx
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: rate-fx has no gmepay.config-registry.base-url reader yet.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
     depends_on:
+      postgres-ratefx: { condition: service_healthy }
       config-registry: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
@@ -364,9 +400,16 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable QR parse/merchant caches + CPM prepare sessions + prefund reservations
+      # (V001-V004) — H2 in-memory lost them all on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-qr:5432/qrdb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: qr-service has no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
     depends_on:
+      postgres-qr: { condition: service_healthy }
       merchant-qr-data: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
@@ -612,10 +655,16 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable BOK/regulatory report state — H2 in-memory lost it on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-reporting:5432/reporting
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: no gmepay.*.base-url readers in this module yet.
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
     depends_on:
+      postgres-reporting: { condition: service_healthy }
       revenue-ledger: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
     healthcheck: *tcp-health

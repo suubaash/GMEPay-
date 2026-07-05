@@ -65,9 +65,10 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 ## 3. Persistence & data (DB)
 
 - [~] **PostgreSQL as the default runtime** for all 13 services currently defaulting to H2.
-      Compose now covers 9 (config, txn, prefunding, ledger, settlement, notify, authid,
-      scheme, **executor — wired iteration 1**); still H2 even in compose: qr-service,
-      rate-fx, reporting-compliance, kyb-adapter.
+      Compose now covers 12 (config, txn, prefunding, ledger, settlement, notify, authid,
+      scheme, executor — iteration 1; **qr-service, rate-fx, reporting-compliance —
+      iteration 5**). kyb-adapter is not deployed in compose at all yet (its own gap).
+      H2 remains only the local unit-test default, which is intended.
 - [~] Flyway migrations exist per service (`db/migration`) — verified against H2, not all against PG.
 - [ ] Restart-safety proven: kill any service mid-flight, txn state + outbox recover.
 - [~] Simulators persist to JSONL (survive restart) — demo-grade, fine for sandbox.
