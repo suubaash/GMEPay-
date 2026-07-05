@@ -104,6 +104,38 @@ public class NepalRestSchemeClient implements SchemeClient {
         }
     }
 
+    /**
+     * Pre-submit balance inquiry (SETTLEMENT_FLOW_SPEC §7.2): does GME hold enough prepaid float WITH
+     * the Nepal scheme to fund {@code amount} (NPR)? {@code POST /internal/scheme/nepal/balance-check}.
+     *
+     * <p>Overrides the no-op default so the authorize gate actually fires for Nepal: the adapter now
+     * backs this with a real decrementing float ({@code gme_scheme_balance}), so a drained balance
+     * declines the payout BEFORE the customer is charged. Fails <em>closed</em> — a balance-check
+     * outage throws (mirroring {@link RestSchemeClient}) rather than silently allowing the payout.
+     */
+    @Override
+    public BalanceCheckResult checkBalance(String schemeId, BigDecimal amount, String currency) {
+        try {
+            NepalBalanceResponse body = restClient.post()
+                    .uri("/internal/scheme/nepal/balance-check")
+                    .body(new NepalBalanceRequest(schemeId, amount, currency))
+                    .retrieve()
+                    .body(NepalBalanceResponse.class);
+            if (body == null) {
+                throw new PaymentException("scheme-adapter-nepal returned empty balance-check response");
+            }
+            return new BalanceCheckResult(body.allowed(), body.available());
+        } catch (RestClientResponseException ex) {
+            throw mapSchemeFailure(ex);
+        } catch (ResourceAccessException ex) {
+            throw new SchemeTimeoutException(this.schemeId);
+        } catch (PaymentException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new PaymentException("scheme-adapter-nepal balance-check failed: " + ex.getMessage(), ex);
+        }
+    }
+
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
         // Nepal pay is single-phase (submit = authorize+commit); the adapter exposes no
@@ -213,4 +245,10 @@ public class NepalRestSchemeClient implements SchemeClient {
             String status,
             String reference
     ) {}
+
+    /** Balance-check request — {@code amount} is the payout in NPR (major units). */
+    record NepalBalanceRequest(String schemeId, BigDecimal amount, String currency) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record NepalBalanceResponse(boolean allowed, BigDecimal available) {}
 }

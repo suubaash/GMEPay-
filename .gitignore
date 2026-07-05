@@ -16,3 +16,6 @@ apps/*/.claude/launch.json
 
 # docx generator deps (not source)
 outputs/docgen/node_modules/
+
+# sim-scheme runtime output
+data/

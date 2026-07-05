@@ -1,6 +1,19 @@
 spring:
   application:
     name: scheme-adapter-nepal
+  # Persistence for GME's prepaid float held WITH the Nepal scheme (gme_scheme_balance).
+  # Defaults to in-memory H2 in PostgreSQL-compat mode so tests/local runs need no Docker;
+  # production overrides via SPRING_DATASOURCE_* env vars. Flyway owns the schema (ddl-auto=none).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:nepaladapterdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: true
 
 server:
   port: 8092
@@ -31,6 +44,10 @@ gmepay:
       token: sim-token
       # Authorization: Key <key> for /qrscan-thirdparty/pay/ and /status/
       key: sim-key
+      # GME's opening prepaid float held WITH the Nepal scheme (NPR), seeded once into
+      # gme_scheme_balance. The pre-submit balance-check reads it live; every committed payout
+      # debits it (paisa converted to NPR), top-ups credit it. Default ₨100,000,000.
+      opening-prepaid-balance-npr: 100000000
 
 springdoc:
   api-docs:

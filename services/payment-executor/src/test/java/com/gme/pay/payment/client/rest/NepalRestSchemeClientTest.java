@@ -104,6 +104,36 @@ class NepalRestSchemeClientTest {
     }
 
     @Test
+    @DisplayName("checkBalance: posts amount/currency and maps allowed + available")
+    void checkBalance_mapsResponse() {
+        server.expect(requestTo(BASE + "/internal/scheme/nepal/balance-check"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.schemeId").value("NEPAL"))
+                .andExpect(jsonPath("$.amount").value(5000))
+                .andExpect(jsonPath("$.currency").value("NPR"))
+                .andRespond(withSuccess(
+                        "{\"allowed\":true,\"available\":99000.00}", MediaType.APPLICATION_JSON));
+
+        SchemeClient.BalanceCheckResult result =
+                client.checkBalance("NEPAL", new BigDecimal("5000"), "NPR");
+
+        assertEquals(true, result.allowed());
+        assertEquals(0, result.available().compareTo(new BigDecimal("99000.00")));
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("checkBalance: fails CLOSED — a 503 outage throws SchemeTimeoutException, never silently allows")
+    void checkBalance_failsClosed() {
+        server.expect(requestTo(BASE + "/internal/scheme/nepal/balance-check"))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE).body(""));
+
+        assertThrows(SchemeTimeoutException.class,
+                () -> client.checkBalance("NEPAL", new BigDecimal("5000"), "NPR"));
+        server.verify();
+    }
+
+    @Test
     @DisplayName("lookupStatus: SUCCESS → APPROVED")
     void lookupStatus_approved() {
         server.expect(requestTo(BASE + "/internal/scheme/nepal/status?reference=ref-1"))

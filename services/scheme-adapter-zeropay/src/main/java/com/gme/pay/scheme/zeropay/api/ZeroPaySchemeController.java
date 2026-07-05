@@ -10,7 +10,10 @@ import com.gme.pay.scheme.zeropay.dto.AdapterHealthResponse;
 import com.gme.pay.scheme.zeropay.dto.CpmSubmitRequestDto;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentRequest;
 import com.gme.pay.scheme.zeropay.dto.SubmitPaymentResponse;
-import org.springframework.beans.factory.annotation.Value;
+import com.gme.pay.scheme.zeropay.persistence.GmeSchemeBalanceEntity;
+import com.gme.pay.scheme.zeropay.prefund.GmeSchemeFloatService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Internal REST API exposed by the ZeroPay scheme adapter service.
@@ -30,37 +34,65 @@ import java.time.Instant;
 @RequestMapping("/internal/scheme/zeropay")
 public class ZeroPaySchemeController {
 
+    private static final Logger log = LoggerFactory.getLogger(ZeroPaySchemeController.class);
+
     private final SchemeAdapter schemeAdapter;
+    private final GmeSchemeFloatService floatService;
 
-    /**
-     * SIM stand-in for GME's prepaid balance held WITH the scheme, used by the pre-submit
-     * balance-check until the real 전문 balance inquiry lands with the TCP transport (Step 8).
-     */
-    @Value("${gmepay.scheme.zeropay.sim-prepaid-balance-krw:1000000000}")
-    private long simPrepaidBalanceKrw = 1_000_000_000L;
-
-    public ZeroPaySchemeController(SchemeAdapter schemeAdapter) {
+    public ZeroPaySchemeController(SchemeAdapter schemeAdapter, GmeSchemeFloatService floatService) {
         this.schemeAdapter = schemeAdapter;
+        this.floatService = floatService;
     }
 
     /**
      * Pre-submit balance inquiry (SETTLEMENT_FLOW_SPEC §7.2): does GME hold enough prepaid balance
-     * with the scheme to fund {@code amountKrw}? POST /internal/scheme/zeropay/balance-check.
+     * WITH the scheme to fund {@code amountKrw}? POST /internal/scheme/zeropay/balance-check.
      *
-     * <p>SIM: compares against a configurable balance. The real KFTC 전문 balance inquiry replaces
-     * this in Step 8.
+     * <p>Reads GME's REAL running float (seeded from an opening balance, credited on top-up, debited
+     * on every committed payout) — so a drained float declines the payout at AUTHORIZE, before the
+     * customer is charged. The real KFTC 전문 balance inquiry replaces this local ledger in Step 8.
      */
     @PostMapping("/balance-check")
     public ResponseEntity<BalanceCheckResponse> balanceCheck(@RequestBody BalanceCheckRequest req) {
-        BigDecimal amount = req.amountKrw() == null ? BigDecimal.ZERO : req.amountKrw();
-        BigDecimal available = BigDecimal.valueOf(simPrepaidBalanceKrw);
-        boolean allowed = amount.compareTo(available) <= 0;
-        return ResponseEntity.ok(new BalanceCheckResponse(allowed, available));
+        GmeSchemeFloatService.BalanceCheck result = floatService.check(req.amountKrw());
+        return ResponseEntity.ok(new BalanceCheckResponse(result.allowed(), result.available()));
+    }
+
+    /** GET /internal/scheme/zeropay/balance — how much prepaid float GME currently holds with ZeroPay. */
+    @GetMapping("/balance")
+    public ResponseEntity<BalanceResponse> balance() {
+        GmeSchemeBalanceEntity bal = floatService.currentBalance();
+        List<BalanceEntry> entries = floatService.recentEntries().stream()
+                .map(e -> new BalanceEntry(e.getEntryType(), e.getTxnRef(), e.getAmount(),
+                        e.getBalanceAfter(), e.getCreatedAt()))
+                .toList();
+        return ResponseEntity.ok(new BalanceResponse(
+                bal.getSchemeCode(), bal.getCurrency(), bal.getBalance(), bal.getUpdatedAt(), entries));
+    }
+
+    /**
+     * POST /internal/scheme/zeropay/balance/topup — credit GME's prepaid float (e.g. a deposit to the
+     * scheme). Idempotent on {@code reference}. Returns the new running balance.
+     */
+    @PostMapping("/balance/topup")
+    public ResponseEntity<TopUpResponse> topUp(@RequestBody TopUpRequest req) {
+        BigDecimal newBalance = floatService.credit(req.reference(), req.amountKrw());
+        return ResponseEntity.ok(new TopUpResponse(floatService.schemeCode(), newBalance, floatService.currency()));
     }
 
     public record BalanceCheckRequest(String schemeId, BigDecimal amountKrw, String currency) {}
 
     public record BalanceCheckResponse(boolean allowed, BigDecimal available) {}
+
+    public record BalanceResponse(String schemeCode, String currency, BigDecimal balance,
+                                  Instant updatedAt, List<BalanceEntry> recentEntries) {}
+
+    public record BalanceEntry(String entryType, String txnRef, BigDecimal amount,
+                               BigDecimal balanceAfter, Instant at) {}
+
+    public record TopUpRequest(String reference, BigDecimal amountKrw) {}
+
+    public record TopUpResponse(String schemeCode, BigDecimal balance, String currency) {}
 
     /**
      * Submits a payment to ZeroPay (MPM mode).
@@ -105,6 +137,13 @@ public class ZeroPaySchemeController {
                 "00".equals(domainResponse.resultCode())
         );
 
+        // Committed payout → debit GME's prepaid float. Idempotent on the partner txn ref so a
+        // retried submit never double-debits.
+        if (response.success()) {
+            String ref = request.partnerTxnRef() != null ? request.partnerTxnRef() : request.idempotencyKey();
+            debitFloat(ref, request.amountKrw());
+        }
+
         return ResponseEntity.ok(response);
     }
 
@@ -144,7 +183,24 @@ public class ZeroPaySchemeController {
                 "00".equals(domainResponse.resultCode())
         );
 
+        if (response.success()) {
+            debitFloat(req.txnRef(), req.payoutAmount());
+        }
+
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Debit GME's prepaid float for a committed payout. The payout has already occurred at the scheme,
+     * so a local ledger hiccup must not fail the response — it is logged, not thrown.
+     */
+    private void debitFloat(String reference, BigDecimal amountKrw) {
+        try {
+            floatService.debit(reference, amountKrw);
+        } catch (RuntimeException ex) {
+            log.error("failed to debit ZeroPay prepaid float for committed payout ref={} amount={}: {}",
+                    reference, amountKrw, ex.getMessage(), ex);
+        }
     }
 
     /**

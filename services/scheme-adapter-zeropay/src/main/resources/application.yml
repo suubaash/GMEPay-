@@ -43,6 +43,9 @@ gmepay:
     zeropay:
       # sim-scheme :9102 base URL; override with GMEPAY_SCHEME_ZEROPAY_BASE_URL in production
       base-url: http://localhost:9102/v1/scheme
+      # GME's opening prepaid float held WITH ZeroPay (KRW), seeded once into gme_scheme_balance.
+      # The pre-submit balance-check reads this live; every committed payout debits it, top-ups credit it.
+      opening-prepaid-balance-krw: 1000000000
   batch:
     # Local-dir SFTP stub paths — override in production with real SFTP config
     outbound-dir: ${java.io.tmpdir}/gmepay/outbound
