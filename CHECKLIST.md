@@ -87,8 +87,13 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 
 - [~] Outbox pattern in transaction-mgmt; events defined in lib-events/contracts.
 - [ ] Kafka + Schema Registry as default bus (not log-stub); producer→Kafka→consumer→webhook green.
-- [ ] Event contracts versioned + bound to schema registry; no terminal money transition can emit
-      an event no consumer receives (CTO r2 gate).
+- [~] Event contracts versioned; no terminal money transition can emit an event no consumer
+      receives (CTO r2 gate). **Iteration 11**: every wire envelope now carries `schemaVersion`
+      (stamped by KafkaEventPublisher); `EventCatalog` in lib-api-contracts is the authoritative
+      type→producers→consumers registry with a build-failing test that forbids consumer-less
+      money-terminal events; the `settlement.completed` orphan is CLOSED (ops-partner-bff
+      consumes it → INFO ops alert per booked batch). Remaining for [x]: bind to a real schema
+      registry (Avro/Confluent) instead of the JSON catalogue.
 - [~] `payment.reversed` contract added; reversal emits ledger signal (fix wave) — prove E2E.
 - [~] `payment.approved` emitted and delivered as partner webhook. The chain is wired in
       compose (txn-mgmt outbox→Kafka + consumer + dispatcher enabled) and now PROVEN by ITs:

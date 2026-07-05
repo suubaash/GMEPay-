@@ -98,4 +98,11 @@ public class OpsAlertKafkaConsumerConfig {
     public OpsAlertKafkaConsumer opsAlertKafkaConsumer(OpsAlertEventHandler handler) {
         return new OpsAlertKafkaConsumer(handler);
     }
+
+    /** Closes the settlement.completed orphan: every booked batch surfaces as an INFO ops alert. */
+    @Bean
+    public SettlementCompletedKafkaConsumer settlementCompletedKafkaConsumer(
+            SettlementCompletedEventHandler handler) {
+        return new SettlementCompletedKafkaConsumer(handler);
+    }
 }
