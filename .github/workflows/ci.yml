@@ -85,7 +85,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Integration tests (Testcontainers)
-        run: ./gradlew integrationTest --console=plain --no-daemon --continue
+        # --no-parallel: with org.gradle.parallel=true every module's IT starts its own
+        # postgres:16 + ryuk simultaneously; on the small runner the pile-up starves
+        # container startup and Hikari times out at 30s (observed as "Connection refused"
+        # on qr-service in run 28716522203). Serial module ITs are a few minutes slower
+        # but deterministic.
+        run: ./gradlew integrationTest --console=plain --no-daemon --continue --no-parallel
 
       - name: Upload IT reports on failure
         if: failure()

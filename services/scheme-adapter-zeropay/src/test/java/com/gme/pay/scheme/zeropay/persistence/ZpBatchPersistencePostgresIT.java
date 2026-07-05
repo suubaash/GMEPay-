@@ -50,18 +50,23 @@ class ZpBatchPersistencePostgresIT extends AbstractZpBatchPersistenceContract {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    @DisplayName("Flyway migrations V001+V002 apply cleanly on PostgreSQL 16 with stable checksums")
-    void flywayMigrationsApplyOnPostgres16() {
+    @DisplayName("All Flyway migrations apply cleanly on PostgreSQL 16 with stable checksums")
+    void flywayMigrationsApplyOnPostgres16() throws Exception {
         String version = jdbcTemplate.queryForObject("SELECT version()", String.class);
         assertNotNull(version);
         assertTrue(version.startsWith("PostgreSQL 16"), "expected PostgreSQL 16 but was: " + version);
 
+        // Expected versions come from the classpath, so adding V00N never stales this test
+        // (a hardcoded "exactly 2" broke the moment V003 landed).
+        List<String> expectedVersions = expectedMigrationVersions();
+        assertTrue(expectedVersions.size() >= 2, "sanity: migration scripts present on classpath");
+
         List<Map<String, Object>> applied = jdbcTemplate.queryForList(
                 "SELECT version, checksum, success FROM flyway_schema_history "
                         + "WHERE version IS NOT NULL ORDER BY installed_rank");
-        assertEquals(2, applied.size(), "expected exactly V001 and V002");
-        assertEquals("001", applied.get(0).get("version"));
-        assertEquals("002", applied.get(1).get("version"));
+        assertEquals(expectedVersions,
+                applied.stream().map(r -> String.valueOf(r.get("version"))).toList(),
+                "applied migrations must match the V*.sql scripts on the classpath, in order");
         for (Map<String, Object> row : applied) {
             assertEquals(Boolean.TRUE, row.get("success"),
                     "migration V" + row.get("version") + " must apply successfully");
@@ -69,11 +74,22 @@ class ZpBatchPersistencePostgresIT extends AbstractZpBatchPersistenceContract {
                     "migration V" + row.get("version") + " must record a checksum");
         }
 
-        // Both tables exist in the public schema with PG-native types intact.
+        // All migrated tables exist in the public schema with PG-native types intact.
         Integer tables = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' "
-                        + "AND table_name IN ('zp_batch_files', 'zp_staged_records')",
+                        + "AND table_name IN ('zp_batch_files', 'zp_staged_records', 'zp_committed_txns')",
                 Integer.class);
-        assertEquals(2, tables);
+        assertEquals(3, tables);
+    }
+
+    /** Versions ("001", "002", …) of every {@code db/migration/V*__*.sql} on the classpath, sorted. */
+    private static List<String> expectedMigrationVersions() throws Exception {
+        org.springframework.core.io.Resource[] scripts =
+                new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+                        .getResources("classpath:db/migration/V*__*.sql");
+        return java.util.Arrays.stream(scripts)
+                .map(r -> r.getFilename().substring(1, r.getFilename().indexOf("__")))
+                .sorted()
+                .toList();
     }
 }
