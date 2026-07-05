@@ -622,6 +622,10 @@ services:
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
+      # §8.2 registration gate LIVE in deploy: ZP0061/0063 generation is blocked until the
+      # adapter reports ZP0011 transmitted + ZP0012 received for the date (fail-closed).
+      SCHEME_ADAPTER_ZEROPAY_URL: http://scheme-adapter-zeropay:8080
+      SCHEME_ADAPTER_ZEROPAY_ENABLED: "true"
     depends_on:
       postgres-settlement: { condition: service_healthy }
     healthcheck: *tcp-health

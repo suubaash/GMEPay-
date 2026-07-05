@@ -16,4 +16,7 @@ public interface ZpBatchFileRepository extends JpaRepository<ZpBatchFileEntity, 
             String fileType, LocalDate businessDate, int sequenceNo);
 
     List<ZpBatchFileEntity> findByBusinessDateAndDirection(LocalDate businessDate, String direction);
+
+    /** All rows of one file type on one business date (registration-status projection). */
+    List<ZpBatchFileEntity> findByFileTypeAndBusinessDate(String fileType, LocalDate businessDate);
 }

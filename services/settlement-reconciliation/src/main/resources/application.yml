@@ -71,6 +71,12 @@ gmepay:
       # Gate: enable POSTing the Addendum-001 rounding residual to revenue-ledger.
       # Default false → in-process FixtureRoundingResidualAdapter (logs only) in dev/test.
       enabled: ${REVENUE_LEDGER_ENABLED:false}
+    scheme-adapter-zeropay:
+      base-url: ${SCHEME_ADAPTER_ZEROPAY_URL:http://scheme-adapter-zeropay:8080}
+      # Gate: enable the §8.2 registration prerequisite (ZP0061/0063 blocked until ZP0011
+      # transmitted + ZP0012 received, read from the adapter's registration-status endpoint,
+      # fail-CLOSED on outage). Default false → PermissiveRegistrationStatusAdapter in dev/test.
+      enabled: ${SCHEME_ADAPTER_ZEROPAY_ENABLED:false}
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:

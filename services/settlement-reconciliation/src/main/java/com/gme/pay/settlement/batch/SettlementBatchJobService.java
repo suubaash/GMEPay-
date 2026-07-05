@@ -19,6 +19,7 @@ import com.gme.pay.settlement.persistence.SettlementLineRepository;
 import com.gme.pay.settlement.client.FixtureRefundedTransactionAdapter;
 import com.gme.pay.settlement.port.PartnerConfigPort;
 import com.gme.pay.settlement.port.RefundedTransactionPort;
+import com.gme.pay.settlement.port.RegistrationStatusPort;
 import com.gme.pay.settlement.port.RefundedTransactionPort.RefundLeg;
 import com.gme.pay.settlement.port.TransactionQueryPort;
 import org.slf4j.Logger;
@@ -98,6 +99,8 @@ public class SettlementBatchJobService {
     /** Refund-DATE keyed port: surfaces refunds processed today whose original payment may have been
      *  settled on a PRIOR day, so a cross-date claw-back nets back to the window that credited it. */
     private final RefundedTransactionPort refundedPort;
+    /** §8.2 prerequisite gate: ZP0061/ZP0063 only after ZP0011 transmitted + ZP0012 received. */
+    private final RegistrationStatusPort registrationPort;
 
     /** Window cutoff times (KST). null = no cutoff for that window (include all). */
     private final LocalTime morningCutoff;
@@ -112,6 +115,7 @@ public class SettlementBatchJobService {
                                      SettlementLineRepository lineRepo,
                                      @Qualifier(OutboxAppender.BEAN_NAME) EventPublisher outbox,
                                      RefundedTransactionPort refundedPort,
+                                     RegistrationStatusPort registrationPort,
                                      @Value("${settlement.morning-cutoff:04:30}") String morningCutoff,
                                      @Value("${settlement.afternoon-cutoff:13:30}") String afternoonCutoff) {
         this.txnPort = txnPort;
@@ -122,14 +126,16 @@ public class SettlementBatchJobService {
         this.lineRepo = lineRepo;
         this.outbox = outbox;
         this.refundedPort = refundedPort;
+        this.registrationPort = registrationPort;
         this.morningCutoff = parseCutoff(morningCutoff, "morning-cutoff");
         this.afternoonCutoff = parseCutoff(afternoonCutoff, "afternoon-cutoff");
     }
 
     /**
-     * Backwards-compatible constructor without the refund-date port (defaults to the in-process
-     * {@link FixtureRefundedTransactionAdapter} no-op). Kept so existing call sites/tests that predate the
-     * cross-date refund-date wiring compile unchanged; production DI uses the full constructor above.
+     * Backwards-compatible constructor without the refund-date/registration ports (defaults to the
+     * in-process {@link FixtureRefundedTransactionAdapter} no-op and a permissive registration
+     * status). Kept so existing call sites/tests compile unchanged; production DI uses the full
+     * constructor above.
      */
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -141,7 +147,29 @@ public class SettlementBatchJobService {
                                      String morningCutoff,
                                      String afternoonCutoff) {
         this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
-                new FixtureRefundedTransactionAdapter(), morningCutoff, afternoonCutoff);
+                new FixtureRefundedTransactionAdapter(),
+                date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                morningCutoff, afternoonCutoff);
+    }
+
+    /**
+     * Backwards-compatible constructor with the refund-date port but a permissive registration
+     * status (pre-gate call sites/tests).
+     */
+    public SettlementBatchJobService(TransactionQueryPort txnPort,
+                                     PartnerConfigPort partnerConfigPort,
+                                     SettlementBookingService booking,
+                                     SettlementBatchFactory batchFactory,
+                                     SettlementBatchRepository batchRepo,
+                                     SettlementLineRepository lineRepo,
+                                     EventPublisher outbox,
+                                     RefundedTransactionPort refundedPort,
+                                     String morningCutoff,
+                                     String afternoonCutoff) {
+        this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
+                refundedPort,
+                date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                morningCutoff, afternoonCutoff);
     }
 
     /** @param fileType "ZP0061" (morning) or "ZP0063" (afternoon); @param window e.g. "MORNING"/"AFTERNOON". */
@@ -149,6 +177,20 @@ public class SettlementBatchJobService {
     public SettlementBatchEntity runWindow(String fileType, String window) {
         requireRequestFile(fileType);
         LocalDate date = LocalDate.now(KST);
+
+        // §8.2 prerequisite (tickets 9.1-T18/T19): the settlement REQUEST may not be generated
+        // until the date's payment registration completed both legs — ZP0011 transmitted AND
+        // ZP0012 result received. Checked BEFORE createOrGet so a blocked window persists
+        // nothing and the next scheduled run retries cleanly once registration catches up.
+        RegistrationStatusPort.RegistrationStatus registration = registrationPort.statusFor(date);
+        if (!registration.settlementAllowed()) {
+            throw new BatchPrerequisiteException(
+                    "registration incomplete for " + date + ": zp0011Succeeded="
+                            + registration.zp0011Succeeded() + ", zp0012Received="
+                            + registration.zp0012Received()
+                            + " — " + fileType + "/" + window + " blocked (spec §8.2)");
+        }
+
         SettlementBatchEntity batch = batchFactory.createOrGet(fileType, date, window);
 
         // Generate only for a fresh PENDING batch. A batch that already advanced (GENERATED and beyond)

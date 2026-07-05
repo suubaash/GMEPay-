@@ -135,9 +135,13 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
       settlement-reconciliation (iteration 9 audit corrected the "unbuilt" assumption). Now
       PROVEN end-to-end by `SettlementLifecycleSliceIT`: txns → booked batch + lines →
       byte-identical ZP0061 rebuild against the stored checksum → settlement.completed outbox
-      row, on the real context. Still missing: the "registration failure blocks settlement"
-      gate (ZP0061 requires ZP0011 ok + ZP0012 received — spec'd, unbuilt) and consolidation
-      of the duplicate ZP generator in scheme-adapter-zeropay.
+      row, on the real context. **"Registration failure blocks settlement" gate built
+      iteration 10** (spec §8.2 / 9.1-T18+T19): scheme-adapter-zeropay exposes
+      registration-status over its zp_batch_files lifecycle; settlement-reconciliation's
+      RegistrationStatusPort blocks ZP0061/0063 BEFORE any row persists unless ZP0011
+      transmitted + ZP0012 received — fail-CLOSED on adapter outage, live in compose,
+      permissive in dev/test. Still missing: consolidation of the duplicate ZP generator
+      in scheme-adapter-zeropay.
 - [ ] Outbound files transmitted over SFTP: **sftp-gateway service does not exist** (spec'd in
       Documentation/services_backlog/sftp-gateway.md — Mina SSHD client, SFTP↔MinIO bridge,
       PGP); only a LocalDirSftpTransport stub in scheme-adapter-zeropay. `transmitted_at`
