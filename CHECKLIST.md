@@ -81,8 +81,12 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 - [ ] Event contracts versioned + bound to schema registry; no terminal money transition can emit
       an event no consumer receives (CTO r2 gate).
 - [~] `payment.reversed` contract added; reversal emits ledger signal (fix wave) — prove E2E.
-- [ ] `payment.approved` actually emitted and delivered as partner webhook (webhook stack is
-      built but **dark** — nothing emits into it).
+- [~] `payment.approved` emitted and delivered as partner webhook. The chain is wired in
+      compose (txn-mgmt outbox→Kafka + consumer + dispatcher enabled) and now PROVEN by ITs:
+      outbox→Kafka (`OutboxKafkaPublishIT`) and Kafka→consume→enqueue→scheduled
+      dispatch→HMAC-signed request→DELIVERED (`PaymentApprovedWebhookDeliveryIT`, iteration 4 —
+      only the outbound socket is a double). Remaining for [x]: prove it in the running compose
+      stack with a live receiver.
 
 ## 5. Partner plug-and-play (DX) — the "plug and play" promise
 
