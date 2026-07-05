@@ -37,6 +37,13 @@ import TransactionsPage from '../page';
  * Money MUST render as decimal strings — never Number-cast.
  */
 
+// The page's default filter window is the trailing 30 days from "now", so
+// fixture timestamps MUST be relative — fixed dates rot out of the window and
+// the rows silently filter away (this exact failure took CI red in Jul 2026).
+function daysAgo(n) {
+  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+}
+
 const UC10_ITEMS = [
   {
     txnId: 'TXN-A1',
@@ -44,13 +51,13 @@ const UC10_ITEMS = [
     state: 'APPROVED',
     amount: '125.50',
     currency: 'USD',
-    committedAt: '2026-06-01T10:00:00Z',
+    committedAt: daysAgo(10),
     qrSchemeId: 'ZEROPAY',
     krwAmount: '165000',
     payerCurrency: 'USD',
     payerCurrencyAmount: '125.50',
     appliedFxRate: '1315.00',
-    rateTimestamp: '2026-06-01T09:59:55Z',
+    rateTimestamp: daysAgo(10),
     prefundingDeductedUsd: '125.50'
   },
   {
@@ -59,13 +66,13 @@ const UC10_ITEMS = [
     state: 'COMMITTED',
     amount: '200.00',
     currency: 'USD',
-    committedAt: '2026-06-02T11:00:00Z',
+    committedAt: daysAgo(5),
     qrSchemeId: 'KAKAOPAY',
     krwAmount: '263000',
     payerCurrency: 'EUR',
     payerCurrencyAmount: '185.00',
     appliedFxRate: '1421.62',
-    rateTimestamp: '2026-06-02T10:59:50Z',
+    rateTimestamp: daysAgo(5),
     prefundingDeductedUsd: '200.00'
   }
 ];
@@ -146,14 +153,14 @@ describe('TransactionsPage — UC-10-02', () => {
   });
 
   it('renders — for missing UC-10 fields', () => {
-    // Use a committedAt within the default 30-day filter window (today = 2026-06-15)
+    // committedAt must stay inside the default trailing-30-day filter window
     const legacyItem = {
       txnId: 'TXN-OLD',
       partnerId: 'GMEREMIT',
       state: 'COMMITTED',
       amount: '50.00',
       currency: 'USD',
-      committedAt: '2026-06-10T09:00:00Z'
+      committedAt: daysAgo(5)
       // no UC-10 fields: qrSchemeId, krwAmount, etc. are absent
     };
     renderWithItems([legacyItem]);

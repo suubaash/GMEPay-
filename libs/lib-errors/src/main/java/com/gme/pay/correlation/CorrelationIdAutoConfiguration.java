@@ -38,18 +38,34 @@ import org.springframework.core.Ordered;
 public class CorrelationIdAutoConfiguration {
 
     /**
-     * Runs before {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context filter
-     * (HIGHEST_PRECEDENCE+20), so the correlation id is in MDC before any auth/RBAC logging occurs.
+     * Servlet-only slice, nested so the outer auto-config's method signatures never
+     * reference servlet types: on a reactive-only classpath (api-gateway / WebFlux,
+     * no jakarta.servlet), introspecting a method returning
+     * {@code FilterRegistrationBean<CorrelationIdFilter>} throws
+     * {@code NoClassDefFoundError: jakarta/servlet/Filter} during condition
+     * evaluation — a method-level {@code @ConditionalOnWebApplication} cannot
+     * prevent that. Class-level conditions here are ASM-evaluated, so the nested
+     * class is skipped without ever being loaded.
      */
-    @Bean
+    @Configuration(proxyBeanMethods = false)
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    public FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
-        FilterRegistrationBean<CorrelationIdFilter> reg =
-                new FilterRegistrationBean<>(new CorrelationIdFilter());
-        reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
-        reg.addUrlPatterns("/*");
-        reg.setName("correlationIdFilter");
-        return reg;
+    @ConditionalOnClass(name = "jakarta.servlet.Filter")
+    public static class ServletFilterConfiguration {
+
+        /**
+         * Runs before {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context
+         * filter (HIGHEST_PRECEDENCE+20), so the correlation id is in MDC before any auth/RBAC
+         * logging occurs.
+         */
+        @Bean
+        public FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
+            FilterRegistrationBean<CorrelationIdFilter> reg =
+                    new FilterRegistrationBean<>(new CorrelationIdFilter());
+            reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
+            reg.addUrlPatterns("/*");
+            reg.setName("correlationIdFilter");
+            return reg;
+        }
     }
 
     /** Shared interceptor bean — usable directly on service-built {@code RestClient}s. */
