@@ -23,6 +23,7 @@ import {
 } from '@mui/material';
 import RequestInspector from './RequestInspector';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import AutorenewIcon from '@mui/icons-material/Autorenew';
 import GroupsIcon from '@mui/icons-material/Groups';
 import HowToVoteIcon from '@mui/icons-material/HowToVote';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
@@ -68,6 +69,8 @@ const navItems = [
   { label: 'Operations', href: '/operations', icon: <HealthAndSafetyIcon /> },
   // Delivery: product-delivery analytics — are payments actually succeeding?
   { label: 'Delivery', href: '/delivery', icon: <TaskAltIcon /> },
+  // Flywheel: the 7 growth-loop KPIs (docs/QR_HUB_GROWTH_FLYWHEEL.md §5).
+  { label: 'Flywheel', href: '/flywheel', icon: <AutorenewIcon /> },
   // Platform Settings: hard-coded values exposed as editable tunables (Goal #3).
   { label: 'Platform Settings', href: '/settings', icon: <TuneIcon /> },
   // Journal: the posted double-entry ledger — every money movement, both sides.

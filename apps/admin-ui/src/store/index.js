@@ -6,6 +6,7 @@ import partnersReducer from './partnersSlice';
 import draftsReducer from './draftsSlice';
 import transactionsReducer from './transactionsSlice';
 import dashboardReducer from './dashboardSlice';
+import flywheelReducer from './flywheelSlice';
 import schemesReducer from './schemesSlice';
 import settlementReducer from './settlementSlice';
 import revenueReducer from './revenueSlice';
@@ -76,6 +77,7 @@ export const store = configureStore({
     drafts: draftsReducer,
     transactions: transactionsReducer,
     dashboard: dashboardReducer,
+    flywheel: flywheelReducer,
     schemes: schemesReducer,
     settlement: settlementReducer,
     revenue: revenueReducer,
