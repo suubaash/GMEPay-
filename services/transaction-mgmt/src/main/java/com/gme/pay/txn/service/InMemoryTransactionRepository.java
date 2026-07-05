@@ -136,6 +136,11 @@ public class InMemoryTransactionRepository implements TransactionRepository {
     // -------------------------------------------------------------------------
 
     @Override
+    public long countDistinctApprovedPayers(Instant from, Instant to) {
+        return jpaRepository.countDistinctApprovedPayers(from, to);
+    }
+
+    @Override
     public List<StatusCount> countByStatus(Instant from, Instant to) {
         return jpaRepository.countByStatus(from, to).stream()
                 .map(r -> new StatusCount(r.getBucket(), r.getCnt()))

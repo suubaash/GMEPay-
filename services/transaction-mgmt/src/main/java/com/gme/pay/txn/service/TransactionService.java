@@ -415,6 +415,19 @@ public class TransactionService {
      * @param from window lower bound (inclusive); defaults to 30 days before {@code to} when null
      * @param to   window upper bound (exclusive); defaults to now when null
      */
+    /**
+     * Payer-level activity over the window {@code [from, to)} (defaults mirror
+     * {@link #computeStats}): distinct non-null {@code user_ref} among APPROVED
+     * transactions — the flywheel's "monthly active cross-border payers" feed.
+     */
+    public com.gme.pay.txn.api.dto.PayerStatsResponse computePayerStats(Instant from, Instant to) {
+        Instant end = to != null ? to : Instant.now();
+        Instant start = from != null ? from : end.minus(java.time.Duration.ofDays(30));
+        long activePayers = repository.countDistinctApprovedPayers(start, end);
+        return new com.gme.pay.txn.api.dto.PayerStatsResponse(
+                new com.gme.pay.txn.api.dto.PayerStatsResponse.Window(start, end), activePayers);
+    }
+
     public com.gme.pay.txn.api.dto.TransactionStatsResponse computeStats(Instant from, Instant to) {
         Instant end = to != null ? to : Instant.now();
         Instant start = from != null ? from : end.minus(java.time.Duration.ofDays(30));

@@ -185,6 +185,26 @@ public class TransactionController {
     }
 
     // -------------------------------------------------------------------------
+    // GET /v1/transactions/payer-stats  (flywheel loops D/E — active payers)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Distinct pseudonymous payers ({@code user_ref}) among APPROVED transactions in the window
+     * {@code [from, to)} (same optional params and defaults as {@code /stats}). Feeds the
+     * flywheel dashboard's "monthly active cross-border payers" metric so it can come from the
+     * system of record instead of the ops-entered platform setting. A literal path segment, so
+     * it never collides with {@code GET /{txnRef}}.
+     */
+    @GetMapping("/payer-stats")
+    public ResponseEntity<com.gme.pay.txn.api.dto.PayerStatsResponse> payerStats(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) java.time.Instant from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) java.time.Instant to) {
+        return ResponseEntity.ok(transactionService.computePayerStats(from, to));
+    }
+
+    // -------------------------------------------------------------------------
     // GET /v1/transactions/first-approved  (activation signal — per partner)
     // -------------------------------------------------------------------------
 

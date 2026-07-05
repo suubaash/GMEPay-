@@ -231,6 +231,30 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
     }
 
     @Override
+    public PayerStats payerStats(Instant from, Instant to) {
+        try {
+            UriComponentsBuilder uri = UriComponentsBuilder.fromPath("/v1/transactions/payer-stats");
+            if (from != null) {
+                uri.queryParam("from", from.toString());
+            }
+            if (to != null) {
+                uri.queryParam("to", to.toString());
+            }
+            return restClient.get()
+                    .uri(uri.build().toUriString())
+                    .retrieve()
+                    .body(PayerStats.class);
+        } catch (RestClientResponseException e) {
+            log.warn("transaction-mgmt error on payer-stats (status={}): {}",
+                    e.getStatusCode(), e.getMessage());
+            return null;
+        } catch (ResourceAccessException e) {
+            log.warn("transaction-mgmt unreachable on payer-stats: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
     public java.util.Map<String, Instant> firstApprovedByPartner() {
         try {
             java.util.Map<String, Instant> resp = restClient.get()

@@ -44,6 +44,7 @@ class FlywheelControllerTest {
 
     private MockMvc mvc;
     private List<PlatformSettingView> settings;
+    private TransactionMgmtClient.PayerStats payerStatsResponse;
 
     private static PartnerView partner(String code, PartnerStatus status, Instant onboardedAt) {
         return new PartnerView(
@@ -106,6 +107,9 @@ class FlywheelControllerTest {
             }
             @Override public Map<String, Instant> firstApprovedByPartner() {
                 return Map.of("partner-A", P1_FIRST_APPROVED);   // partner-B intentionally absent
+            }
+            @Override public PayerStats payerStats(Instant from, Instant to) {
+                return payerStatsResponse;
             }
         };
 
@@ -173,6 +177,20 @@ class FlywheelControllerTest {
                 // window echoes the request
                 .andExpect(jsonPath("$.window.from").value("2026-06-01T00:00:00Z"))
                 .andExpect(jsonPath("$.window.to").value("2026-07-01T00:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("system-of-record payer stats (user_ref) override the ops-entered setting")
+    void computedPayerStatsWinOverSetting() throws Exception {
+        payerStatsResponse = new TransactionMgmtClient.PayerStats(
+                new TransactionMgmtClient.PayerStats.Window(
+                        Instant.parse("2026-06-01T00:00:00Z"), Instant.parse("2026-07-01T00:00:00Z")),
+                8);
+        mvc.perform(get("/v1/admin/flywheel"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.loopHealth.monthlyActivePayers").value(8))
+                // 2 approved txns / 8 computed payers = 0.3 (scale 1, HALF_UP)
+                .andExpect(jsonPath("$.loopHealth.txnsPerPayer").value(0.3));
     }
 
     @Test

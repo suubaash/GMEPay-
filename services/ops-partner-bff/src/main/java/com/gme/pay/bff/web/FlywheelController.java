@@ -103,7 +103,8 @@ public class FlywheelController {
         TpvScan tpv = scanTpv(fromDate, toDate);
         FlywheelDashboard.Volume volume = volume(tpv, fromDate, toDate);
         FlywheelDashboard.Capital capital = capital(tpv.sumUsd);
-        FlywheelDashboard.LoopHealth loopHealth = loopHealth(partnerViews, tpv, settings);
+        FlywheelDashboard.LoopHealth loopHealth =
+                loopHealth(partnerViews, tpv, settings, resolvedFrom, resolvedTo);
 
         return new FlywheelDashboard(
                 new FlywheelDashboard.Window(resolvedFrom, resolvedTo),
@@ -189,7 +190,8 @@ public class FlywheelController {
     }
 
     private FlywheelDashboard.LoopHealth loopHealth(
-            List<PartnerView> partnerViews, TpvScan tpv, Map<String, BigDecimal> settings) {
+            List<PartnerView> partnerViews, TpvScan tpv, Map<String, BigDecimal> settings,
+            Instant from, Instant to) {
         Map<String, Instant> firstApproved = transactions.firstApprovedByPartner();
 
         List<Long> activationHours = new ArrayList<>();
@@ -205,7 +207,13 @@ public class FlywheelController {
         }
         Long medianHours = median(activationHours);
 
+        // Prefer the system-of-record payer count (transaction-mgmt user_ref, V011) and
+        // fall back to the ops-entered setting while partners are not yet sending payer refs.
         BigDecimal activePayers = settings.get(SETTING_ACTIVE_PAYERS);
+        TransactionMgmtClient.PayerStats payerStats = transactions.payerStats(from, to);
+        if (payerStats != null && payerStats.activePayers() > 0) {
+            activePayers = BigDecimal.valueOf(payerStats.activePayers());
+        }
         BigDecimal txnsPerPayer = null;
         if (activePayers != null && activePayers.signum() > 0 && tpv.total > 0) {
             txnsPerPayer = BigDecimal.valueOf(tpv.total)

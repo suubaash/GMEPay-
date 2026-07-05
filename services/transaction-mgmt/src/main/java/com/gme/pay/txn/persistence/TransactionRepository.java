@@ -154,6 +154,21 @@ public interface TransactionRepository extends JpaRepository<TransactionEntity, 
     List<CountByBucket> countByStatus(@Param("from") Instant from, @Param("to") Instant to);
 
     /**
+     * Distinct pseudonymous payers ({@code user_ref}, V011) among APPROVED transactions in the
+     * window — the system-of-record feed for the flywheel's "monthly active cross-border payers"
+     * metric (loops D/E, docs/QR_HUB_GROWTH_FLYWHEEL.md). Rows without a user_ref (older
+     * transactions, partners not yet sending it) simply do not count.
+     */
+    @Query("""
+            SELECT COUNT(DISTINCT t.userRef)
+            FROM TransactionEntity t
+            WHERE t.status = 'APPROVED'
+              AND t.userRef IS NOT NULL
+              AND t.createdAt >= :from AND t.createdAt < :to
+            """)
+    long countDistinctApprovedPayers(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
      * Per-(partner, status) counts in the window, grouped by {@code partner_ref} (always
      * populated, unlike the nullable numeric {@code partner_id}). The service pivots each
      * partner's status rows into total / approved / declined + success rate.
