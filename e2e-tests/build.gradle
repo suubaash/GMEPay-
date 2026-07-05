@@ -26,5 +26,7 @@ tasks.named('e2eTest') {
               ':services:merchant-qr-data:bootJar',
               ':services:transaction-mgmt:bootJar',
               ':services:scheme-adapter-zeropay:bootJar',
-              ':services:revenue-ledger:bootJar'
+              ':services:revenue-ledger:bootJar',
+              // fail-closed kill-switch: payment-executor's gate reads config-registry /v1/ops
+              ':services:config-registry:bootJar'
 }

@@ -31,12 +31,14 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 
 ## 0. The definition of "works" (gate for every claim below)
 
-- [ ] **Golden-path gate per live corridor**: one automated E2E test (scan → classify → quote →
-      pay → receipt → ledger tie-out → settlement line) running against the real services,
-      red = cannot ship. *(CPO audit #1 — the single change that would have caught all three
-      Nepal defects.)*
+- [~] **Golden-path gate per live corridor**: `WalletScanPayE2ETest` (scan → resolve → pay →
+      APPROVED independently verified in transaction-mgmt + negative control) now runs as the
+      blocking `e2e` CI job on every PR (iteration 3). *(CPO audit #1.)* The gate immediately
+      caught a real regression: the fail-closed kill-switch declined 100% of payments because
+      the fleet lacked config-registry — fixed by booting the real registry in the fleet.
+      Remaining for [x]: Nepal-corridor case, ledger/settlement tie-out legs, webhook leg.
 - [~] Sandbox E2E payment test runner exists (admin-ui E2E tab + payment-executor backend) —
-      not yet a CI gate.
+      complements the CI gate for manual runs.
 - [ ] "Done" for any money-path item = proven by an executed journey + tied to the cent, not code merged.
 
 ## 1. Flagship journey — scan → pay (per corridor)
