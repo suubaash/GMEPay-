@@ -26,5 +26,9 @@ tasks.named('e2eTest') {
               ':services:merchant-qr-data:bootJar',
               ':services:transaction-mgmt:bootJar',
               ':services:scheme-adapter-zeropay:bootJar',
-              ':services:revenue-ledger:bootJar'
+              ':services:revenue-ledger:bootJar',
+              // PartnerOnboardingE2ETest fleet (loop-B funnel):
+              ':services:config-registry:bootJar',
+              ':services:auth-identity:bootJar',
+              ':services:prefunding:bootJar'
 }

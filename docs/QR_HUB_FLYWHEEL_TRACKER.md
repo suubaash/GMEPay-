@@ -13,7 +13,7 @@ partners, regulators — tracked here, fulfilled elsewhere).
 | 2 | Seed the three `flywheel.*` platform-settings keys with descriptions so ops can fill them | Turn 0 | ✅ | config-registry `V040__seed_flywheel_settings.sql`; `0` = not yet measured, BFF renders non-positive as unset |
 | 3 | Partner self-service loop: time-to-first-transaction measured per partner and surfaced in partner detail | Loop B | ✅ | `ActivationTile` on the partner detail Overview tab, fed by the delivery overview's activation rows |
 | 4 | Scheme Adapter SDK: extract shared adapter contract + certification harness from `scheme-adapter-zeropay`/`-nepal` | Loop A / Turn 2 | ⬜ | start after the second adapter passes its scheme test suite |
-| 5 | Simulator-backed partner sandbox E2E script (`sign up → KYB → keys → E2E → prefund`) | Loop B | ⬜ | builds on `gmepay-test-platform` + `simulators/` |
+| 5 | Simulator-backed partner sandbox E2E script (`sign up → KYB → keys → E2E → prefund`) | Loop B | ✅ | `PartnerOnboardingE2ETest` in `e2e-tests` boots config-registry + auth-identity + prefunding and drives the funnel; first-txn leg = `WalletScanPayE2ETest` |
 | 6 | Multilateral netting design note + settlement netting calc across opposing corridors | Loop C / Turn 2 | ⬜ | `settlement-reconciliation`; needs two-sided corridor flows first |
 | 7 | Remittance→QR conversion metric feed (needs payer-level ids on transactions) | Loop D | ⬜ | transaction-mgmt schema addition |
 | 8 | R0–R3 execution (money path real, Docker CI, auth) — prerequisite for the loop to spin | Turn 0 | 🟡 | tracked in `docs/COMPLETION_PLAN_V3.md`, not duplicated here |

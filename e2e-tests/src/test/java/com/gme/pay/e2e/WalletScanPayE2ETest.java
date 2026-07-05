@@ -92,6 +92,7 @@ class WalletScanPayE2ETest {
     private static final int PORT_REVENUE_LEDGER   = 8085;   // jar default
     private static final int PORT_MERCHANT_QR      = 18083;  // overridden (default 8083 clashes)
     private static final int PORT_TXN_MGMT         = 18082;  // overridden (default 8083 clashes)
+    private static final int PORT_CONFIG_REGISTRY  = 18088;  // ops kill-switch (V038): executor fails CLOSED without it
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3))
@@ -117,6 +118,7 @@ class WalletScanPayE2ETest {
         ensureSimSchemeJar();
 
         // (name, port, extra Spring args). Downstream services first; payment-executor last.
+        launchService("config-registry", PORT_CONFIG_REGISTRY);
         launchService("merchant-qr-data", PORT_MERCHANT_QR);
         launchService("transaction-mgmt", PORT_TXN_MGMT);
         launchService("revenue-ledger", PORT_REVENUE_LEDGER);
@@ -127,6 +129,10 @@ class WalletScanPayE2ETest {
                 "--gmepay.scheme-adapter-zeropay.base-url=http://localhost:" + PORT_SCHEME_ADAPTER,
                 "--gmepay.transaction-mgmt.base-url=http://localhost:" + PORT_TXN_MGMT,
                 "--gmepay.revenue-ledger.base-url=http://localhost:" + PORT_REVENUE_LEDGER,
+                // V038 ops kill-switch: the executor consults config-registry's
+                // /v1/ops/operational-status and fails CLOSED (SYSTEM_PAUSED) when it is
+                // unreachable, so the fleet must include a real config-registry.
+                "--gmepay.config-registry.base-url=http://localhost:" + PORT_CONFIG_REGISTRY,
                 "--gmepay.payment.merchant-validation=strict");
 
         waitForFleet(Duration.ofSeconds(180));
