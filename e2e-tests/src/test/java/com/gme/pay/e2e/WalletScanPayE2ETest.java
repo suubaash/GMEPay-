@@ -203,6 +203,49 @@ class WalletScanPayE2ETest {
         // --- 3) INDEPENDENT SIDE-EFFECT ASSERTION: the transaction was really persisted. ---
         // The hub swallows transaction-mgmt failures, so we verify the write actually landed.
         assertApprovedTransactionPersisted();
+
+        // --- 4) LEDGER TIE-OUT: the ₩500 fee journal really posted (also fire-and-forget). ---
+        // This closes the harness's original known limitation — revenue-ledger now has a
+        // read API (GET /v1/journals?reference=), so "code exists" becomes "tied to the won".
+        assertFeeJournalPosted(receipt.path("txnRef").asText());
+    }
+
+    /**
+     * Asserts revenue-ledger holds a BALANCED journal for the payment's fee booking: the hub
+     * posts the ₩500 service fee under the payment's {@code txnRef} (fire-and-forget, so a
+     * green receipt alone proves nothing) — this queries the ledger's read API independently.
+     */
+    private void assertFeeJournalPosted(String txnRef) throws Exception {
+        assertTrue(txnRef != null && !txnRef.isBlank(), "receipt must carry the hub txnRef");
+        Instant deadline = Instant.now().plusSeconds(15);
+        String lastBody = "";
+        while (Instant.now().isBefore(deadline)) {
+            HttpResponse<String> resp = get("http://localhost:" + PORT_REVENUE_LEDGER
+                    + "/v1/journals?reference=" + URLEncoder.encode(txnRef, StandardCharsets.UTF_8));
+            if (resp.statusCode() == 200) {
+                lastBody = resp.body();
+                for (JsonNode journal : JSON.readTree(resp.body()).path("items")) {
+                    BigDecimal debits = BigDecimal.ZERO;
+                    BigDecimal credits = BigDecimal.ZERO;
+                    boolean feeAmountSeen = false;
+                    for (JsonNode line : journal.path("lines")) {
+                        BigDecimal amount = new BigDecimal(line.path("amount").asText("0"));
+                        String side = line.path("side").asText("");
+                        if (side.startsWith("D")) debits = debits.add(amount); else credits = credits.add(amount);
+                        feeAmountSeen |= FEE_KRW.compareTo(amount) == 0;
+                    }
+                    if (feeAmountSeen && debits.compareTo(credits) == 0 && debits.signum() > 0) {
+                        return; // a balanced ₩500 journal exists for this payment
+                    }
+                }
+            } else {
+                lastBody = "HTTP " + resp.statusCode() + " " + resp.body();
+            }
+            Thread.sleep(1000);
+        }
+        fail("No balanced ₩" + FEE_KRW + " journal found in revenue-ledger for reference " + txnRef
+                + ". The fee posting is fire-and-forget in the hub, so the receipt cannot prove it "
+                + "— and it didn't land. Last /v1/journals response: " + lastBody);
     }
 
     @Test

@@ -37,9 +37,12 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
       caught a real regression: the fail-closed kill-switch declined 100% of payments because
       the fleet lacked config-registry — fixed by booting the real registry in the fleet.
       **Nepal corridor case added iteration 7** (classify → NPR → NEPAL adapter → sim →
-      APPROVED, hub-authoritative currency asserted). Remaining for [x]: ledger/settlement
-      tie-out legs in the same harness (webhook leg proven separately by
-      PaymentApprovedWebhookDeliveryIT).
+      APPROVED, hub-authoritative currency asserted). **Ledger tie-out leg added iteration 8**:
+      the happy path now independently asserts a BALANCED ₩500 fee journal posted in
+      revenue-ledger under the payment's txnRef (the harness's original known limitation,
+      closed by the journal read API). Remaining for [x]: settlement-line leg (blocked on
+      settlement batch lifecycle, §8); webhook leg proven separately by
+      PaymentApprovedWebhookDeliveryIT.
 - [~] Sandbox E2E payment test runner exists (admin-ui E2E tab + payment-executor backend) —
       complements the CI gate for manual runs.
 - [ ] "Done" for any money-path item = proven by an executed journey + tied to the cent, not code merged.
