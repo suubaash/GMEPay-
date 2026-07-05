@@ -1,2 +1,0 @@
-{"merchantId":"ZP-M001","event":{"seq":1,"authId":"AUTH-18D794C0C8C7","status":"APPROVED","amount":50000,"currency":"KRW","payerRef":"GMEREMIT-8ffc04ee-b423-4a34-a8fb-0ede72f5d5ff","at":"2026-07-06T00:06:27.602178377+09:00"}}
-{"merchantId":"ZP-M001","event":{"seq":2,"authId":"AUTH-18D794C0C8C7","schemeTxnRef":"TXN-3FE4F33F35","status":"CAPTURED","amount":50000,"currency":"KRW","payerRef":"GMEREMIT-8ffc04ee-b423-4a34-a8fb-0ede72f5d5ff","at":"2026-07-06T00:06:27.631763958+09:00"}}
