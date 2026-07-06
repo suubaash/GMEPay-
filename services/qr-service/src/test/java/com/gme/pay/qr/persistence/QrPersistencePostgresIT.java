@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>Docker-backed: tagged {@code docker} so the normal `test` task skips it (this dev
  * machine has no Docker) and CI runs it via the `integrationTest` task on ubuntu runners.
  * Boots the full Spring context against a postgres:16 container, letting Flyway apply
- * V001/V002 with PostgreSQL syntax — no H2-mode workarounds.
+ * every V*.sql with PostgreSQL syntax — no H2-mode workarounds.
  */
 @Tag("docker")
 @Testcontainers(disabledWithoutDocker = true)
@@ -59,11 +59,17 @@ class QrPersistencePostgresIT {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    void flywayAppliedBothMigrationsSuccessfully() {
+    void flywayAppliedAllMigrationsSuccessfully() throws Exception {
+        // Expected count comes from the V*__*.sql scripts on the classpath, so adding a
+        // migration can never stale this test (a hardcoded "2" broke when V003/V004 landed).
+        int expected = new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+                .getResources("classpath:db/migration/V*__*.sql").length;
+        assertTrue(expected >= 2, "sanity: migration scripts present on classpath");
+
         Integer applied = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM flyway_schema_history WHERE success = true", Integer.class);
         assertNotNull(applied);
-        assertEquals(2, applied);
+        assertEquals(expected, applied);
 
         // Both cache tables exist and are empty on a fresh database.
         assertEquals(Integer.valueOf(0), jdbcTemplate.queryForObject(

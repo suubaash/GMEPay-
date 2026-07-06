@@ -16,3 +16,6 @@ apps/*/.claude/launch.json
 
 # docx generator deps (not source)
 outputs/docgen/node_modules/
+
+# simulator runtime state written during e2e runs (sim JSONL persistence)
+e2e-tests/data/

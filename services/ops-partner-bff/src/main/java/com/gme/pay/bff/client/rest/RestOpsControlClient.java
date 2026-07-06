@@ -66,52 +66,67 @@ public class RestOpsControlClient implements OpsControlClient {
 
     @Override
     public OperationalStatusView pause(String actor, String reason) {
-        return post("/v1/ops/pause", body(actor, reason, null, null));
+        return post("/v1/ops/pause", actor, mapOfNonNull("reason", reason));
     }
 
     @Override
     public OperationalStatusView resume(String actor) {
-        return post("/v1/ops/resume", body(actor, null, null, null));
+        return post("/v1/ops/resume", actor, Map.of());
     }
 
     @Override
     public OperationalStatusView maintenance(String actor, String reason) {
-        return post("/v1/ops/maintenance", body(actor, reason, null, null));
+        // The BFF contract is a TOGGLE (matching StubOpsControlClient) but the upstream
+        // MaintenanceRequest is explicit {on, reason} — omitting `on` would deserialize to
+        // false and silently EXIT maintenance on every call. Read current state to flip it.
+        boolean on = !operationalStatus().maintenanceMode();
+        Map<String, Object> body = new HashMap<>();
+        body.put("on", on);
+        if (reason != null) {
+            body.put("reason", reason);
+        }
+        return post("/v1/ops/maintenance", actor, body);
     }
 
     @Override
     public OperationalStatusView suspend(String scope, String ref, String actor, String reason) {
-        return post("/v1/ops/suspend", body(actor, reason, scope, ref));
+        Map<String, Object> body = mapOfNonNull("reason", reason);
+        body.put("entityType", scope);
+        body.put("entityId", ref);
+        return post("/v1/ops/suspend", actor, body);
     }
 
     @Override
     public OperationalStatusView unsuspend(String scope, String ref, String actor) {
-        return post("/v1/ops/unsuspend", body(actor, null, scope, ref));
+        Map<String, Object> body = new HashMap<>();
+        body.put("entityType", scope);
+        body.put("entityId", ref);
+        return post("/v1/ops/unsuspend", actor, body);
     }
 
-    private OperationalStatusView post(String path, Map<String, String> body) {
+    /**
+     * OpsControlController reads the operator from the {@code X-Actor} HEADER (not the body) —
+     * sending it in the body loses audit attribution upstream.
+     */
+    private OperationalStatusView post(String path, String actor, Map<String, Object> body) {
         OperationalStatusView view = restClient.post()
                 .uri(path)
                 .contentType(MediaType.APPLICATION_JSON)
+                .headers(h -> {
+                    if (actor != null && !actor.isBlank()) {
+                        h.set("X-Actor", actor);
+                    }
+                })
                 .body(body)
                 .retrieve()
                 .body(OperationalStatusView.class);
         return view == null ? OperationalStatusView.allClear() : view;
     }
 
-    private static Map<String, String> body(String actor, String reason, String scope, String ref) {
-        Map<String, String> m = new HashMap<>();
-        if (actor != null) {
-            m.put("actor", actor);
-        }
-        if (reason != null) {
-            m.put("reason", reason);
-        }
-        if (scope != null) {
-            m.put("scope", scope);
-        }
-        if (ref != null) {
-            m.put("ref", ref);
+    private static Map<String, Object> mapOfNonNull(String key, String value) {
+        Map<String, Object> m = new HashMap<>();
+        if (value != null) {
+            m.put(key, value);
         }
         return m;
     }
