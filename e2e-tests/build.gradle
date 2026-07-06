@@ -27,8 +27,12 @@ tasks.named('e2eTest') {
               ':services:transaction-mgmt:bootJar',
               ':services:scheme-adapter-zeropay:bootJar',
               ':services:revenue-ledger:bootJar',
-              // PartnerOnboardingE2ETest fleet (loop-B funnel):
+              // fail-closed kill-switch: payment-executor's gate reads config-registry /v1/ops;
+              // config-registry also anchors PartnerOnboardingE2ETest's loop-B funnel fleet
               ':services:config-registry:bootJar',
+              // PartnerOnboardingE2ETest fleet (loop-B funnel):
               ':services:auth-identity:bootJar',
-              ':services:prefunding:bootJar'
+              ':services:prefunding:bootJar',
+              // Nepal corridor leg (adapter; sim-nepal-qr builds on demand like sim-scheme)
+              ':services:scheme-adapter-nepal:bootJar'
 }

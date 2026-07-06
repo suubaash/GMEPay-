@@ -37,12 +37,10 @@ import TransactionsPage from '../page';
  * Money MUST render as decimal strings — never Number-cast.
  */
 
-// The page's default filter window is the trailing 30 days from "now", so
-// fixture timestamps MUST be relative — fixed dates rot out of the window and
-// the rows silently filter away (this exact failure took CI red in Jul 2026).
-function daysAgo(n) {
-  return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
-}
+// The page defaults its date filter to the trailing 30 days, so fixture timestamps MUST be
+// relative to "now" — hardcoded dates silently age out of the window and the rows vanish
+// (this exact failure mode broke 4 of these tests on 2026-07-02).
+const daysAgoISO = (n) => new Date(Date.now() - n * 86400000).toISOString();
 
 const UC10_ITEMS = [
   {
@@ -51,13 +49,13 @@ const UC10_ITEMS = [
     state: 'APPROVED',
     amount: '125.50',
     currency: 'USD',
-    committedAt: daysAgo(10),
+    committedAt: daysAgoISO(3),
     qrSchemeId: 'ZEROPAY',
     krwAmount: '165000',
     payerCurrency: 'USD',
     payerCurrencyAmount: '125.50',
     appliedFxRate: '1315.00',
-    rateTimestamp: daysAgo(10),
+    rateTimestamp: daysAgoISO(3),
     prefundingDeductedUsd: '125.50'
   },
   {
@@ -66,13 +64,13 @@ const UC10_ITEMS = [
     state: 'COMMITTED',
     amount: '200.00',
     currency: 'USD',
-    committedAt: daysAgo(5),
+    committedAt: daysAgoISO(2),
     qrSchemeId: 'KAKAOPAY',
     krwAmount: '263000',
     payerCurrency: 'EUR',
     payerCurrencyAmount: '185.00',
     appliedFxRate: '1421.62',
-    rateTimestamp: daysAgo(5),
+    rateTimestamp: daysAgoISO(2),
     prefundingDeductedUsd: '200.00'
   }
 ];
@@ -153,14 +151,14 @@ describe('TransactionsPage — UC-10-02', () => {
   });
 
   it('renders — for missing UC-10 fields', () => {
-    // committedAt must stay inside the default trailing-30-day filter window
+    // committedAt must stay inside the default 30-day filter window — keep it relative.
     const legacyItem = {
       txnId: 'TXN-OLD',
       partnerId: 'GMEREMIT',
       state: 'COMMITTED',
       amount: '50.00',
       currency: 'USD',
-      committedAt: daysAgo(5)
+      committedAt: daysAgoISO(5)
       // no UC-10 fields: qrSchemeId, krwAmount, etc. are absent
     };
     renderWithItems([legacyItem]);

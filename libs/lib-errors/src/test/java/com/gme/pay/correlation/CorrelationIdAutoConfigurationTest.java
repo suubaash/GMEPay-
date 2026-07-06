@@ -10,16 +10,16 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 
 /**
- * Context-runner tests for {@link CorrelationIdAutoConfiguration}, pinning the two
- * classpath shapes that matter:
+ * Context-runner tests for the correlation auto-config split
+ * ({@link CorrelationIdAutoConfiguration} outbound + {@link CorrelationIdServletAutoConfiguration}
+ * inbound), pinning the two classpath shapes that matter:
  *
  * <ul>
  *   <li>a servlet web app registers the {@code correlationIdFilter}; and</li>
- *   <li>a classpath WITHOUT {@code jakarta.servlet.Filter} (the api-gateway /
- *       WebFlux case, reproduced with {@link FilteredClassLoader}) must not blow up
- *       introspecting the auto-config — the regression that broke every
- *       {@code api-gateway} Spring context test — while still contributing the
- *       outbound-propagation interceptor bean.</li>
+ *   <li>a classpath WITHOUT {@code jakarta.servlet.Filter} (the api-gateway / WebFlux case,
+ *       reproduced with {@link FilteredClassLoader}) must not blow up introspecting the
+ *       auto-configs — the regression that broke every {@code api-gateway} Spring context
+ *       test — while still contributing the outbound-propagation interceptor bean.</li>
  * </ul>
  */
 class CorrelationIdAutoConfigurationTest {
@@ -28,7 +28,9 @@ class CorrelationIdAutoConfigurationTest {
     @DisplayName("servlet web app registers the correlationIdFilter")
     void servletApp_registersCorrelationFilter() {
         new WebApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(CorrelationIdAutoConfiguration.class))
+                .withConfiguration(AutoConfigurations.of(
+                        CorrelationIdAutoConfiguration.class,
+                        CorrelationIdServletAutoConfiguration.class))
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx).hasBean("correlationIdFilter");
@@ -41,7 +43,9 @@ class CorrelationIdAutoConfigurationTest {
     void nonServletClasspath_skipsFilterWithoutCrashing() {
         new ApplicationContextRunner()
                 .withClassLoader(new FilteredClassLoader(jakarta.servlet.Filter.class))
-                .withConfiguration(AutoConfigurations.of(CorrelationIdAutoConfiguration.class))
+                .withConfiguration(AutoConfigurations.of(
+                        CorrelationIdAutoConfiguration.class,
+                        CorrelationIdServletAutoConfiguration.class))
                 .run(ctx -> {
                     assertThat(ctx).hasNotFailed();
                     assertThat(ctx).doesNotHaveBean("correlationIdFilter");

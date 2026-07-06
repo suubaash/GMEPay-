@@ -22,6 +22,10 @@ networks:
 volumes:
   pg-config:
   pg-txn:
+  pg-executor:
+  pg-qr:
+  pg-ratefx:
+  pg-reporting:
   pg-prefunding:
   pg-ledger:
   pg-settlement:
@@ -66,6 +70,42 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d txndb"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
     profiles: ["core", "full"]
+
+  postgres-executor:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: executor, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5441:5432"]
+    volumes: ["pg-executor:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d executor"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-qr:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: qrdb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5442:5432"]
+    volumes: ["pg-qr:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d qrdb"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-ratefx:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: ratefx, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5443:5432"]
+    volumes: ["pg-ratefx:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d ratefx"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
+
+  postgres-reporting:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: reporting, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5444:5432"]
+    volumes: ["pg-reporting:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d reporting"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["full"]
 
   postgres-prefunding:
     image: postgres:16-alpine
@@ -307,9 +347,15 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable rate locks/pool state — H2 in-memory lost them on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ratefx:5432/ratefx
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: rate-fx has no gmepay.config-registry.base-url reader yet.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
     depends_on:
+      postgres-ratefx: { condition: service_healthy }
       config-registry: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
@@ -354,9 +400,16 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable QR parse/merchant caches + CPM prepare sessions + prefund reservations
+      # (V001-V004) — H2 in-memory lost them all on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-qr:5432/qrdb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: qr-service has no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
     depends_on:
+      postgres-qr: { condition: service_healthy }
       merchant-qr-data: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
@@ -423,6 +476,13 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable money-path state (execution_attempts, idempotency_keys, payment
+      # authorizations, sandbox E2E runs) — H2 in-memory loses all of it on restart.
+      # Migrations are PG-portable by design (BIGSERIAL/NUMERIC, no H2-isms).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-executor:5432/executor
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Env names match the gmepay.<svc>.base-url @Value placeholders in the
       # Rest*Client adapters (verified against services/payment-executor source).
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
@@ -436,6 +496,7 @@ services:
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
     depends_on:
+      postgres-executor: { condition: service_healthy }
       config-registry: { condition: service_healthy }
       rate-fx: { condition: service_healthy }
       prefunding: { condition: service_healthy }
@@ -561,6 +622,10 @@ services:
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
       SPRING_DATASOURCE_PASSWORD: gmepay
+      # §8.2 registration gate LIVE in deploy: ZP0061/0063 generation is blocked until the
+      # adapter reports ZP0011 transmitted + ZP0012 received for the date (fail-closed).
+      SCHEME_ADAPTER_ZEROPAY_URL: http://scheme-adapter-zeropay:8080
+      SCHEME_ADAPTER_ZEROPAY_ENABLED: "true"
     depends_on:
       postgres-settlement: { condition: service_healthy }
     healthcheck: *tcp-health
@@ -594,10 +659,16 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # Durable BOK/regulatory report state — H2 in-memory lost it on restart.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-reporting:5432/reporting
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
       # Forward-compat: no gmepay.*.base-url readers in this module yet.
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
     depends_on:
+      postgres-reporting: { condition: service_healthy }
       revenue-ledger: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
     healthcheck: *tcp-health
@@ -621,7 +692,14 @@ services:
       GMEPAY_TRANSACTION_MGMT_CLIENT: rest
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      # Live double-entry journals + revenue summary (Journal page reads posted ledger
+      # entries from revenue-ledger instead of StubRevenueLedgerClient fixtures).
+      GMEPAY_REVENUE_LEDGER_CLIENT: rest
       GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      # Live settlement rows + recon-exception count + operator recon re-run
+      # (wire contracts aligned to SettlementController/ReConExceptionController/
+      # ReconRerunController — see RestSettlementClient).
+      GMEPAY_SETTLEMENT_RECONCILIATION_CLIENT: rest
       # Real self-serve SANDBOX API keys: activate the live auth-identity clients
       # (default is the in-memory stub). Get-Started keys are then issued by
       # auth-identity (POST /internal/auth/keys, environment=SANDBOX) instead of
@@ -631,6 +709,10 @@ services:
       # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
       # Activates RestConfigRegistryClient / RestPlatformSettingsClient / RestAuditTrailClient.
       GMEPAY_CONFIG_REGISTRY_CLIENT: rest
+      # Live kill-switch: without this the Operations console pause/suspend hits the
+      # in-memory stub and NEVER reaches config-registry's /v1/ops gate that
+      # payment-executor actually enforces — the switch would look on but do nothing.
+      GMEPAY_OPS_CONTROL_CLIENT: rest
       # Shared internal-auth token (#90) the BFF presents to auth-identity's internal-only
       # /v1/rbac/** + /v1/approvals/** (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}

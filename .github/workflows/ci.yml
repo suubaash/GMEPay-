@@ -85,7 +85,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Integration tests (Testcontainers)
-        run: ./gradlew integrationTest --console=plain --no-daemon --continue
+        # --no-parallel: with org.gradle.parallel=true every module's IT starts its own
+        # postgres:16 + ryuk simultaneously; on the small runner the pile-up starves
+        # container startup and Hikari times out at 30s (observed as "Connection refused"
+        # on qr-service in run 28716522203). Serial module ITs are a few minutes slower
+        # but deterministic.
+        run: ./gradlew integrationTest --console=plain --no-daemon --continue --no-parallel
 
       - name: Upload IT reports on failure
         if: failure()
@@ -93,6 +98,52 @@ jobs:
         with:
           name: integration-test-reports
           path: '**/build/reports/tests/integrationTest/**'
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # e2e — the golden-path gate: a wallet scans a merchant QR and the payment
+  # succeeds across the REAL services (fleet of JVMs on H2/in-memory, no
+  # Docker), with the APPROVED write independently verified in transaction-mgmt.
+  # CPO audit 2026-07-03 #1: "the flagship journey passes" is the definition of
+  # "the product works" — this job existing and blocking the merge is the single
+  # change that would have caught all three Nepal defects. Checklist §0.
+  # ---------------------------------------------------------------------------
+  e2e:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-e2e-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-e2e-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Golden-path E2E (scan -> pay -> persisted APPROVED)
+        run: ./gradlew :e2e-tests:e2eTest --console=plain --no-daemon
+
+      - name: Upload E2E reports + fleet logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports
+          path: |
+            e2e-tests/build/reports/tests/**
+            e2e-tests/build/e2e-logs/**
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------

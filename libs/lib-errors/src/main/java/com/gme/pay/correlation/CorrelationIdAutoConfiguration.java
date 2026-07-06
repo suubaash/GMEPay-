@@ -3,26 +3,23 @@ package com.gme.pay.correlation;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.boot.web.client.RestTemplateCustomizer;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
 
 /**
- * Auto-configuration for end-to-end correlation-ID propagation. On by default
+ * Auto-configuration for end-to-end correlation-ID propagation (outbound side). On by default
  * ({@code gmepay.correlation.enabled}, {@code matchIfMissing=true}); set it to {@code false} to
- * disable. Installs, with zero per-service code:
- * <ul>
- *   <li>a {@link CorrelationIdFilter} (servlet services only) registered very early — before
- *       {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context filter — so even
- *       auth-rejection logs carry the id;</li>
- *   <li>a shared {@link CorrelationIdClientHttpInterceptor} bean plus, when {@code RestClient} /
- *       {@code RestTemplate} is on the classpath, customizers that register it on the
- *       Spring-Boot-provided builders so outbound calls propagate the id automatically.</li>
- * </ul>
+ * disable. Installs, with zero per-service code, a shared
+ * {@link CorrelationIdClientHttpInterceptor} bean plus, when {@code RestClient} /
+ * {@code RestTemplate} is on the classpath, customizers that register it on the
+ * Spring-Boot-provided builders so outbound calls propagate the id automatically.
+ *
+ * <p>The inbound side lives in web-stack-specific auto-configs so this class stays loadable on
+ * any classpath: {@link CorrelationIdServletAutoConfiguration} (servlet services) and
+ * {@link CorrelationIdReactiveAutoConfiguration} (WebFlux, i.e. api-gateway). This class MUST NOT
+ * reference servlet or reactive types — it is introspected in every service, including the
+ * reactive gateway where {@code jakarta.servlet.Filter} is absent.
  *
  * <p>The interceptor is also a plain bean, so a service that constructs its own {@code RestClient}
  * (rather than using the shared builder) can opt in with
@@ -36,37 +33,6 @@ import org.springframework.core.Ordered;
 @ConditionalOnProperty(prefix = "gmepay.correlation", name = "enabled",
         havingValue = "true", matchIfMissing = true)
 public class CorrelationIdAutoConfiguration {
-
-    /**
-     * Servlet-only slice, nested so the outer auto-config's method signatures never
-     * reference servlet types: on a reactive-only classpath (api-gateway / WebFlux,
-     * no jakarta.servlet), introspecting a method returning
-     * {@code FilterRegistrationBean<CorrelationIdFilter>} throws
-     * {@code NoClassDefFoundError: jakarta/servlet/Filter} during condition
-     * evaluation — a method-level {@code @ConditionalOnWebApplication} cannot
-     * prevent that. Class-level conditions here are ASM-evaluated, so the nested
-     * class is skipped without ever being loaded.
-     */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnClass(name = "jakarta.servlet.Filter")
-    public static class ServletFilterConfiguration {
-
-        /**
-         * Runs before {@code InternalAuthFilter} (HIGHEST_PRECEDENCE+10) and the RBAC context
-         * filter (HIGHEST_PRECEDENCE+20), so the correlation id is in MDC before any auth/RBAC
-         * logging occurs.
-         */
-        @Bean
-        public FilterRegistrationBean<CorrelationIdFilter> correlationIdFilter() {
-            FilterRegistrationBean<CorrelationIdFilter> reg =
-                    new FilterRegistrationBean<>(new CorrelationIdFilter());
-            reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
-            reg.addUrlPatterns("/*");
-            reg.setName("correlationIdFilter");
-            return reg;
-        }
-    }
 
     /** Shared interceptor bean — usable directly on service-built {@code RestClient}s. */
     @Bean

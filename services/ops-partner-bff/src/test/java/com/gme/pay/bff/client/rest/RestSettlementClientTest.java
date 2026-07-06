@@ -86,4 +86,49 @@ class RestSettlementClientTest {
         RestSettlementClient client = new RestSettlementClient(RestClient.builder().build());
         assertThat(client.detail("any-batch")).isNull();
     }
+
+    @Test
+    void openReconExceptions_countsOpenRowsFromExceptionList() {
+        RestSettlementClient client = newClient();
+        // ReConExceptionController serves GET /v1/settlement/exceptions (singular) and
+        // returns a LIST of exception rows — the client counts the OPEN-filtered rows.
+        String body = """
+                [{"id":1,"batchId":"B-1","exceptionStatus":"OPEN"},
+                 {"id":2,"batchId":"B-2","exceptionStatus":"OPEN"}]
+                """;
+        server.expect(requestTo(containsString("/v1/settlement/exceptions")))
+                .andExpect(requestTo(containsString("exceptionStatus=OPEN")))
+                .andExpect(method(GET))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        assertThat(client.openReconExceptions()).isEqualTo(2);
+        server.verify();
+    }
+
+    @Test
+    void rerunRecon_sendsCanonicalFieldNames_andMapsReconRerunResponse() {
+        RestSettlementClient client = newClient();
+        // ReconRerunResponse's wire shape: operatorId/batchesRerun/totalMatched/totalExceptions.
+        String response = """
+                {"operatorId":"ops@gmeremit.com","batchesRerun":3,
+                 "totalMatched":41,"totalExceptions":2,"batches":[]}
+                """;
+        server.expect(requestTo(containsString("/v1/settlements/recon/rerun")))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.settlementDate").value("2026-07-04"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.operatorId").value("ops@gmeremit.com"))
+                .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                        .jsonPath("$.reason").value("daily check"))
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+
+        var result = client.rerunRecon("2026-07-04", "ops@gmeremit.com", "daily check");
+        server.verify();
+
+        assertThat(result.status()).isEqualTo("COMPLETED");
+        assertThat(result.matched()).isEqualTo(41);
+        assertThat(result.unmatched()).isEqualTo(2);
+        assertThat(result.detail()).isEqualTo("batchesRerun=3");
+    }
 }

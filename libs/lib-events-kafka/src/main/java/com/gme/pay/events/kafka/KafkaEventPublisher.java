@@ -140,6 +140,7 @@ public class KafkaEventPublisher implements EventPublisher {
             // Contract fields are always present, whatever the concrete event's bean shape.
             node.put("eventType", event.eventType());
             node.put("aggregateId", event.aggregateId());
+            node.put("schemaVersion", event.schemaVersion());
             Instant occurredAt = event.occurredAt();
             if (occurredAt == null) {
                 node.putNull("occurredAt");
