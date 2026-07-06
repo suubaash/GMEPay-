@@ -42,8 +42,7 @@ vi.mock('@/api/opsApi', () => ({
 }));
 
 const CONTROL_TOWER = {
-  inFlight: 42,
-  uncertainOrAgedCount: 3,
+  inFlight: { inFlightCount: 42, uncertainOrAgedCount: 3 },
   webhookBacklog: { pending: 5, dlq: 1, total: 6 },
   floatHeadroom: [
     { partner: 'GME_KR_001', balance: '1000.00', threshold: '500.00', pctOfThreshold: 200, atRisk: false },

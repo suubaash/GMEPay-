@@ -134,8 +134,7 @@ async function request(path, init = {}) {
 /**
  * GET /v1/admin/ops/control-tower
  * -> {
- *   inFlight: number,
- *   uncertainOrAgedCount: number,
+ *   inFlight: { inFlightCount: number, uncertainOrAgedCount: number },
  *   webhookBacklog: { pending, dlq, total },
  *   floatHeadroom: [{ partner, balance, threshold, pctOfThreshold, atRisk }] + lowest,
  *   health: { total, up, down, degraded },
