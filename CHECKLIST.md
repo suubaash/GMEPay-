@@ -68,7 +68,11 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 - [~] Per-partner settlement rounding (ADDENDUM-001) — lib built; live commit-path wiring pending.
 - [~] Prefunding atomic deduction (SELECT FOR UPDATE proven on PG integration test);
       float release on reversal fixed; low-balance alert **delivered** to a human? — unproven.
-- [ ] Cent-for-cent tie-out report: payment vs ledger vs prefund vs settlement, automated daily.
+- [~] Cent-for-cent tie-out report (iteration 13): `GET /v1/settlements/tie-out?date=` reconciles
+      the three money views of a business date — approved payouts (unbatched + settled lines),
+      the settlement engine's own gross = net + fee + refund invariant recomputed from persisted
+      rows, and revenue-ledger's recognised fee revenue (delta expected 0; ledger leg fail-soft).
+      Remaining for [x]: include prefund movements, schedule it daily + alert on tiedOut=false.
 
 ## 3. Persistence & data (DB)
 
