@@ -7,8 +7,13 @@
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY . .
-RUN --mount=type=cache,target=/root/.gradle \
-    ./gradlew -p simulators/sim-nepal-qr bootJar --no-daemon \
+# Trust the GME Internal Root CA so Gradle can fetch dependencies through the
+# corporate TLS-inspection firewall (self-signed cert in the chain otherwise
+# fails PKIX validation). Cert ships in the build context via COPY . . above.
+RUN keytool -importcert -noprompt -trustcacerts -alias gme-root \
+    -file docker/certs/gme-root-ca.crt -cacerts -storepass changeit
+RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
+    ./gradlew -p simulators/sim-nepal-qr bootJar --no-daemon --no-watch-fs \
  && set -eu \
  && JAR="$(ls simulators/sim-nepal-qr/build/libs/ | grep -E '^sim-nepal-qr-[0-9].*\.jar$' | grep -v -- '-plain\.jar$' | head -n1)" \
  && cp "simulators/sim-nepal-qr/build/libs/${JAR}" /workspace/app.jar

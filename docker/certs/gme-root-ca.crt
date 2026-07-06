@@ -1,0 +1,55 @@
+-----BEGIN CERTIFICATE-----
+MIIFrzCCA5egAwIBAgIUIgS+1US/KAAoCk7GxgD3tWLGNZ8wDQYJKoZIhvcNAQEL
+BQAwZzELMAkGA1UEBhMCS1IxDjAMBgNVBAgMBVNlb3VsMQ4wDAYDVQQHDAVTZW91
+bDEMMAoGA1UECgwDR01FMQswCQYDVQQLDAJJVDEdMBsGA1UEAwwUR01FIEludGVy
+bmFsIFJvb3QgQ0EwHhcNMjYwMzE4MDYxNjM4WhcNMzYwMzE1MDYxNjM4WjBnMQsw
+CQYDVQQGEwJLUjEOMAwGA1UECAwFU2VvdWwxDjAMBgNVBAcMBVNlb3VsMQwwCgYD
+VQQKDANHTUUxCzAJBgNVBAsMAklUMR0wGwYDVQQDDBRHTUUgSW50ZXJuYWwgUm9v
+dCBDQTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAMeG7TJiXIolY9rR
+xyWBXKH3lsxO6Mf9XPVgNfDcZXzDd02MEeU34esTb98+6x1OIDFCA4WJaPWeFnKj
+J3k658Zg/3k7/ajk6zsnQPMc69Ltr9IkNPehPbfMI3MGoZH44TcefH2+OXvoZKI4
+q3RYx4m3oUP5QbD1O7UcdniW5VvL82aN8mW6fGnLIw4P3/fmEaoqOT5793LWgnVQ
+6Iqrus/rFxicwdJ7+n4KHPVrJFxOdBxOtDDAWTAwBAk8Fu0JUG/m9H3IsaSiQYck
+0KR4bsy9/7ExEIz39TUWNmaFeoeBbnoTVmTUewFon2UQ7Az0Ld4OD1M4aa37DvRi
+xbS8NHAFYLf+diclozOzmoaP3DqG2BhXuwtqXpbRRhymuzC0lzFtaOVBz2PUtqQf
+5D60+JJG0413T58isuK5twSbIDauJ3TJ2Tu87OxyovIe94nZe6yEibesCfE8VBtz
+P/vOPWh7JfDTPFKj6hheytDLASCwGVgG66li6Vwp23KO75FTv4pUXAWFHXBxUxMN
+2nmdWvIG33J/FVxlso//a/CXpLc3e7x2Hg8jtdZ+2R7IqYeDdj0z+o8B2EnlhzSj
+9bjwNGjppVAyX+ljYQqkhMJgbLDnW+78kPI9FSM8Zw0ubHyvbYgiN1cHiJHxf1le
+vqR+FBFlSYwv7jpOOu5LmwWUf8H5AgMBAAGjUzBRMB0GA1UdDgQWBBTTQHbYF9u+
+6B0hIIvBXpqJUtT7izAfBgNVHSMEGDAWgBTTQHbYF9u+6B0hIIvBXpqJUtT7izAP
+BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4ICAQCd2Mcxgtbl+jRnJZss
+ACPiEszgp1VSHbT9Z+MvTzORYJ3K7aEK9Sme0llmy9JaoVbcgbQ8FG43iAjbZ1sT
+/5YBaibufAyGdnLt5jRRCZBl8zIsJJ1qEkG2fedSwnt3eqwI4ON15FDD8nkTjQiJ
+9cmJAVBM5uK+FMs3Df6gp3XcXBe3LC01eb90zSfJOJQZS8PlgnBNsgyim2PBLWEo
+2OV4rI9I++Mc/VzfjuIZCXxwqXA2TZ52iaws6Hi1pJ867yqC/T5o96LbX3e4uJ0D
+HW5UtBPNRVnfkqIicJpvv49405LeJp9J+KlRQ4Mw7aVwyl3YrLTDiDDhEXPIDxX2
+L3vXhW77AZVZRyZtrAqdbHtOus02hQJtDd4+A6W1wX7peZ+kER5kFDeUARftV0zy
+AMW3+3hXmlwd3nTAMC6Ur8cS3gQCjXyWhEPvgJdvqI3lm4bSzYbWx+mILqFLEUmj
+xmNqHEIT27PdlrmjeWuAepF+AUMTCjn2ijqw2MQFR5CUx36p/82zf/0CvtYr/okF
+GlrZ0WpZCgFZuw8ceup5JXeApPxYDM9tkvJDaTuQ2yPAzjayjEjPxTG9vG/cxyqH
+0mMTHnDGzraaFXl1UTaYg/gF87OQj63kddHucbiyXd+e3NC0KBQHQOxMP0osbBob
+34NDavbJCbWLBdKcWgiAfcde3Q==
+-----END CERTIFICATE-----
+---
+Server certificate
+subject=CN = repo.maven.apache.org
+issuer=C = KR, ST = Seoul, O = GME, OU = IT, CN = GME Internal CA
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: RSA-PSS
+Server Temp Key: X25519, 253 bits
+---
+SSL handshake has read 4228 bytes and written 403 bytes
+Verification error: self-signed certificate in certificate chain
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Server public key is 2048 bit
+Secure Renegotiation IS NOT supported
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+Early data was not sent
+Verify return code: 19 (self-signed certificate in certificate chain)
+---

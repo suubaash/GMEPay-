@@ -6,10 +6,15 @@
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY . .
+# Trust the GME Internal Root CA so Gradle can fetch dependencies through the
+# corporate TLS-inspection firewall (self-signed cert in the chain otherwise
+# fails PKIX validation). Cert ships in the build context via COPY . . above.
+RUN keytool -importcert -noprompt -trustcacerts -alias gme-root \
+    -file docker/certs/gme-root-ca.crt -cacerts -storepass changeit
 # Build the bootJar for this module only, then copy the executable jar
 # (not the "-plain" companion produced by the java plugin) to a stable name.
-RUN --mount=type=cache,target=/root/.gradle \
-    ./gradlew :services:config-registry:bootJar --no-daemon \
+RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
+    ./gradlew :services:config-registry:bootJar --no-daemon --no-watch-fs \
  && set -eu \
  && JAR="$(ls services/config-registry/build/libs/ | grep -E '^config-registry-[0-9].*\.jar$' | grep -v -- '-plain\.jar$' | head -n1)" \
  && cp "services/config-registry/build/libs/${JAR}" /workspace/app.jar

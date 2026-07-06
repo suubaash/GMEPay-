@@ -2,3 +2,4 @@
 # break Linux Docker builds ("./gradlew: not found" from a CRLF shebang).
 gradlew text eol=lf
 *.sh text eol=lf
+Dockerfile text eol=lf
