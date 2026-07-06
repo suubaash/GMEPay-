@@ -235,17 +235,17 @@ function ControlTower() {
               {isDegraded('inFlight') ? (
                 <UnavailableCard label="In-flight txns" />
               ) : (
-                <StatCard label="In-flight txns" value={data?.inFlight ?? '—'} />
+                <StatCard label="In-flight txns" value={data?.inFlight?.inFlightCount ?? '—'} />
               )}
             </Grid>
             <Grid item xs={6} md={3}>
-              {isDegraded('uncertainOrAgedCount') ? (
+              {isDegraded('inFlight') ? (
                 <UnavailableCard label="UNCERTAIN / aged" />
               ) : (
                 <StatCard
                   label="UNCERTAIN / aged"
-                  value={data?.uncertainOrAgedCount ?? '—'}
-                  color={data?.uncertainOrAgedCount ? 'warning.main' : undefined}
+                  value={data?.inFlight?.uncertainOrAgedCount ?? '—'}
+                  color={data?.inFlight?.uncertainOrAgedCount ? 'warning.main' : undefined}
                 />
               )}
             </Grid>
