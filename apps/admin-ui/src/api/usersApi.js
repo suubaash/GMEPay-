@@ -1,12 +1,15 @@
 /**
  * usersApi — BFF calls for the Operator User Management page (/users).
  *
- * Endpoint contract (BFF → auth-identity service):
- *   GET    /v1/admin/users                        → UserSummary[]
- *   POST   /v1/admin/users/invite                 → UserSummary  (body: InviteUserRequest)
- *   PATCH  /v1/admin/users/{id}                   → UserSummary  (body: UpdateUserRequest)
- *   POST   /v1/admin/users/{id}/deactivate        → UserSummary
- *   POST   /v1/admin/users/{id}/reactivate        → UserSummary
+ * Endpoint contract (admin-ui → BFF → auth-identity service). Note the browser
+ * MUST hit these under the `/api` prefix so Next.js rewrites them to the BFF
+ * (see next.config.mjs — the `/api/:path*` rewrite). A bare `/v1/...` path is
+ * served by the Next app itself and returns its 404 not-found HTML page.
+ *   GET    /api/v1/admin/users                    → UserSummary[]
+ *   POST   /api/v1/admin/users/invite             → UserSummary  (body: InviteUserRequest)
+ *   PATCH  /api/v1/admin/users/{id}               → UserSummary  (body: UpdateUserRequest)
+ *   POST   /api/v1/admin/users/{id}/deactivate    → UserSummary
+ *   POST   /api/v1/admin/users/{id}/reactivate    → UserSummary
  *
  * UserSummary wire shape:
  *   { id, name, email, roles: string[], status: 'ACTIVE'|'INVITED'|'DISABLED',
@@ -15,13 +18,23 @@
  * InviteUserRequest:  { email: string, roles: string[] }
  * UpdateUserRequest:  { roles: string[] }
  *
- * The backend (auth-identity) may not be deployed yet.  All methods tolerate
- * a network / HTTP error by returning the FIXTURE_USERS list so the page
- * remains demoable without a running backend.  The caller (usersSlice) is
+ * The backend (auth-identity users controller) may not be deployed yet. The GET
+ * tolerates a network / HTTP error by returning the FIXTURE_USERS list so the
+ * page renders; the mutation thunks (usersSlice) apply an optimistic local
+ * change when the page is already in fixture/demo mode. The caller is
  * responsible for surfacing a friendly error alongside the fixture data.
  */
 
-const BASE = '/v1/admin/users';
+import { TOKEN_KEY } from '@/api/auth';
+
+// Browser calls go through the same-origin `/api` rewrite to the BFF; SSR/tests
+// read the BFF base URL directly (mirrors @/api/client and @/api/rbacApi).
+function baseUrl() {
+  if (typeof window !== 'undefined') return '/api';
+  return process.env.NEXT_PUBLIC_BFF_BASE_URL ?? 'http://127.0.0.1:8095';
+}
+
+const PATH = '/v1/admin/users';
 
 /** Fixture list — returned as a fallback when the backend is absent. */
 export const FIXTURE_USERS = [
@@ -67,18 +80,44 @@ export const FIXTURE_USERS = [
   },
 ];
 
+function readToken() {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Shared fetch wrapper.  Resolves to parsed JSON on 2xx; rejects with an
- * Error whose message is the HTTP status line on 4xx/5xx.
+ * Shared fetch wrapper.  Resolves to parsed JSON on 2xx; rejects with an Error
+ * whose message is `HTTP <status>: <detail>` on 4xx/5xx. The detail is the
+ * BFF's Spring error `message` when the body is JSON — never a raw HTML page
+ * (a Next.js 404 dump would otherwise flood the error snackbar).
+ *
+ * @param {string} path  relative path under the users resource, e.g. '' or '/invite'
  */
-async function apiFetch(url, options = {}) {
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
-    ...options,
-  });
+async function apiFetch(path, options = {}) {
+  const token = readToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    ...(options.headers ?? {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${baseUrl()}${PATH}${path}`, { ...options, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    let detail = res.statusText;
+    if (text && text.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed.message || parsed.error || detail;
+      } catch {
+        /* leave as statusText */
+      }
+    }
+    throw new Error(`HTTP ${res.status}: ${detail || 'request failed'}`);
   }
   return res.json();
 }
@@ -90,7 +129,7 @@ async function apiFetch(url, options = {}) {
  */
 export async function listUsers() {
   try {
-    const data = await apiFetch(BASE);
+    const data = await apiFetch('');
     return { data: Array.isArray(data) ? data : [], fromFixture: false };
   } catch (err) {
     return { data: FIXTURE_USERS, fromFixture: true, error: err.message };
@@ -102,7 +141,7 @@ export async function listUsers() {
  * body: { email: string, roles: string[] }
  */
 export async function inviteUser(body) {
-  return apiFetch(`${BASE}/invite`, {
+  return apiFetch('/invite', {
     method: 'POST',
     body: JSON.stringify(body),
   });
@@ -113,7 +152,7 @@ export async function inviteUser(body) {
  * body: { roles: string[] }
  */
 export async function updateUser(id, body) {
-  return apiFetch(`${BASE}/${encodeURIComponent(id)}`, {
+  return apiFetch(`/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   });
@@ -124,7 +163,7 @@ export async function updateUser(id, body) {
  * Requires 4-eyes: the operator must not deactivate themselves.
  */
 export async function deactivateUser(id) {
-  return apiFetch(`${BASE}/${encodeURIComponent(id)}/deactivate`, {
+  return apiFetch(`/${encodeURIComponent(id)}/deactivate`, {
     method: 'POST',
   });
 }
@@ -133,7 +172,7 @@ export async function deactivateUser(id) {
  * Reactivate a previously DISABLED operator user.
  */
 export async function reactivateUser(id) {
-  return apiFetch(`${BASE}/${encodeURIComponent(id)}/reactivate`, {
+  return apiFetch(`/${encodeURIComponent(id)}/reactivate`, {
     method: 'POST',
   });
 }

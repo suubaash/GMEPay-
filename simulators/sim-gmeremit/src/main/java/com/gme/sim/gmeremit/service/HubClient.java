@@ -145,9 +145,10 @@ public class HubClient {
     ) {
         HubPayRequest(String qrPayload, String amount, String currency,
                       String partner, String userRef) {
-            this(qrPayload, amount,
-                    "KRW".equals(currency) ? amount : null,   // amountKrw only meaningful for domestic
-                    currency, partner, userRef);
+            // The hub's WalletPaymentRequest REQUIRES amountKrw and interprets it as "the amount in
+            // `currency`" (the field name is legacy — it holds NPR for a Nepal scan, not only KRW).
+            // Always populate it; nulling it for non-KRW made the hub 400 → wallet HUB_ERROR.
+            this(qrPayload, amount, amount, currency, partner, userRef);
         }
     }
 

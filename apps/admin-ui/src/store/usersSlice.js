@@ -34,24 +34,88 @@ export const fetchUsers = createAsyncThunk('users/fetchAll', async () => {
   return usersApi.listUsers();
 });
 
-export const inviteUser = createAsyncThunk('users/invite', async (body) => {
-  return usersApi.inviteUser(body);
-});
+/**
+ * Demo-mode fallback for mutations.
+ *
+ * When the users backend is absent, the initial fetch falls back to fixtures
+ * and flips `fromFixture` true. In that state a mutation cannot reach a real
+ * backend, so instead of surfacing a raw HTTP error we apply the change
+ * optimistically to local state and keep the page usable (the /users page
+ * banner tells the operator these changes are local-only and not persisted).
+ *
+ * When a real backend IS present (`fromFixture` false), the error is re-thrown
+ * so genuine failures still surface to the operator.
+ */
+function localFallback(getState, buildLocal, err) {
+  if (!getState().users.fromFixture) throw err;
+  return { ...buildLocal(), __local: true };
+}
 
-export const updateUserRoles = createAsyncThunk(
-  'users/updateRoles',
-  async ({ id, roles }) => {
-    return usersApi.updateUser(id, { roles });
+export const inviteUser = createAsyncThunk(
+  'users/invite',
+  async (body, { getState }) => {
+    try {
+      return await usersApi.inviteUser(body);
+    } catch (err) {
+      return localFallback(
+        getState,
+        () => ({
+          id: `u-local-${Date.now()}`,
+          name: body.email?.split('@')[0] ?? body.email,
+          email: body.email,
+          roles: body.roles ?? [],
+          status: 'INVITED',
+          lastLoginAt: null,
+        }),
+        err,
+      );
+    }
   },
 );
 
-export const deactivateUser = createAsyncThunk('users/deactivate', async (id) => {
-  return usersApi.deactivateUser(id);
-});
+export const updateUserRoles = createAsyncThunk(
+  'users/updateRoles',
+  async ({ id, roles }, { getState }) => {
+    try {
+      return await usersApi.updateUser(id, { roles });
+    } catch (err) {
+      const current = getState().users.items.find((u) => u.id === id);
+      return localFallback(getState, () => ({ ...(current ?? { id }), id, roles }), err);
+    }
+  },
+);
 
-export const reactivateUser = createAsyncThunk('users/reactivate', async (id) => {
-  return usersApi.reactivateUser(id);
-});
+export const deactivateUser = createAsyncThunk(
+  'users/deactivate',
+  async (id, { getState }) => {
+    try {
+      return await usersApi.deactivateUser(id);
+    } catch (err) {
+      const current = getState().users.items.find((u) => u.id === id);
+      return localFallback(
+        getState,
+        () => ({ ...(current ?? { id }), id, status: 'DISABLED' }),
+        err,
+      );
+    }
+  },
+);
+
+export const reactivateUser = createAsyncThunk(
+  'users/reactivate',
+  async (id, { getState }) => {
+    try {
+      return await usersApi.reactivateUser(id);
+    } catch (err) {
+      const current = getState().users.items.find((u) => u.id === id);
+      return localFallback(
+        getState,
+        () => ({ ...(current ?? { id }), id, status: 'ACTIVE' }),
+        err,
+      );
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Helpers

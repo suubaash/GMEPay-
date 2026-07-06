@@ -28,12 +28,14 @@ public class InternalAuthProperties {
     /**
      * Ant path patterns (matched against the request URI) that require the internal token.
      * Defaults cover auth-identity's internal-only surface: the RBAC resolution + management API
-     * ({@code /v1/rbac/**}), the approval-decision API ({@code /v1/approvals/**}), and the
+     * ({@code /v1/rbac/**}), the operator user-management API ({@code /v1/users/**}), the
+     * approval-decision API ({@code /v1/approvals/**}), and the
      * machine-credential surface ({@code /internal/**} — API-key issuance + HMAC verify, called
      * server-to-server by config-registry / the gateway). The {@code /internal/} prefix is the
      * platform convention for "never publicly routed", so gating it wholesale is intentional.
      */
-    private List<String> pathPatterns = List.of("/v1/rbac/**", "/v1/approvals/**", "/internal/**");
+    private List<String> pathPatterns =
+            List.of("/v1/rbac/**", "/v1/users/**", "/v1/approvals/**", "/internal/**");
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }

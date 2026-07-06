@@ -26,12 +26,19 @@ import { ALL_ROLES } from './page';
  *   - roles: at least one role must be selected
  *
  * Props:
- *   open:      boolean
- *   saving:    boolean
- *   onSubmit:  ({ email, roles }) => void
- *   onCancel:  () => void
+ *   open:           boolean
+ *   saving:         boolean
+ *   availableRoles: string[]  — role codes to offer (defaults to ALL_ROLES)
+ *   onSubmit:       ({ email, roles }) => void
+ *   onCancel:       () => void
  */
-export default function InviteUserDialog({ open, saving, onSubmit, onCancel }) {
+export default function InviteUserDialog({
+  open,
+  saving,
+  availableRoles = ALL_ROLES,
+  onSubmit,
+  onCancel,
+}) {
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState('');
   const [roles, setRoles] = useState([]);
@@ -118,7 +125,7 @@ export default function InviteUserDialog({ open, saving, onSubmit, onCancel }) {
         >
           <FormLabel component="legend">Initial roles</FormLabel>
           <FormGroup row>
-            {ALL_ROLES.map((r) => (
+            {availableRoles.map((r) => (
               <FormControlLabel
                 key={r}
                 control={

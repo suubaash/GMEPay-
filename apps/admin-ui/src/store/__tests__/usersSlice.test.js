@@ -182,4 +182,77 @@ describe('usersSlice', () => {
     store.dispatch(clearError());
     expect(store.getState().users.error).toBeNull();
   });
+
+  // 10 — demo-mode fallback: mutation applies locally when fromFixture=true
+  it('updateUserRoles applies locally (fulfilled) when in fixture/demo mode', async () => {
+    mockUpdateUser.mockRejectedValue(new Error('HTTP 404: Not Found'));
+    const store = makeStore({
+      items: [ALICE, BOB],
+      loading: false,
+      saving: false,
+      error: null,
+      fromFixture: true,
+    });
+    const result = await store.dispatch(
+      updateUserRoles({ id: 'u-001', roles: ['ADMIN', 'FINANCE'] }),
+    );
+    expect(result.type).toBe('users/updateRoles/fulfilled');
+    const state = store.getState().users;
+    expect(state.items[0].roles).toEqual(['ADMIN', 'FINANCE']);
+    // other fields preserved from the existing user
+    expect(state.items[0].name).toBe('Alice');
+    expect(state.error).toBeNull();
+    expect(state.saving).toBe(false);
+  });
+
+  it('deactivateUser applies locally when in fixture/demo mode', async () => {
+    mockDeactivateUser.mockRejectedValue(new Error('HTTP 404: Not Found'));
+    const store = makeStore({
+      items: [ALICE, BOB],
+      loading: false,
+      saving: false,
+      error: null,
+      fromFixture: true,
+    });
+    await store.dispatch(deactivateUser('u-001'));
+    expect(store.getState().users.items[0].status).toBe('DISABLED');
+  });
+
+  it('inviteUser synthesises a local INVITED user when in fixture/demo mode', async () => {
+    mockInviteUser.mockRejectedValue(new Error('HTTP 404: Not Found'));
+    const store = makeStore({
+      items: [ALICE],
+      loading: false,
+      saving: false,
+      error: null,
+      fromFixture: true,
+    });
+    await store.dispatch(inviteUser({ email: 'dana@gme.com', roles: ['OPS'] }));
+    const state = store.getState().users;
+    expect(state.items).toHaveLength(2);
+    const added = state.items.find((u) => u.email === 'dana@gme.com');
+    expect(added).toBeTruthy();
+    expect(added.status).toBe('INVITED');
+    expect(added.roles).toEqual(['OPS']);
+  });
+
+  // 11 — live backend: mutation errors surface (no silent local fallback)
+  it('updateUserRoles rejects (surfaces error) when a real backend is present', async () => {
+    mockUpdateUser.mockRejectedValue(new Error('HTTP 409: role conflict'));
+    const store = makeStore({
+      items: [ALICE, BOB],
+      loading: false,
+      saving: false,
+      error: null,
+      fromFixture: false,
+    });
+    const result = await store.dispatch(
+      updateUserRoles({ id: 'u-001', roles: ['ADMIN', 'FINANCE'] }),
+    );
+    expect(result.type).toBe('users/updateRoles/rejected');
+    const state = store.getState().users;
+    // unchanged; error recorded
+    expect(state.items[0].roles).toEqual(['ADMIN']);
+    expect(state.error).toMatch(/role conflict/i);
+  });
 });

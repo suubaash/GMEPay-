@@ -151,12 +151,15 @@ public class WalletPayController {
                 && !isZeroPayNetwork(qr.networkIdentifier());
 
         if (routeViaFailover) {
-            // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
+            // Non-ZeroPay networks routed via failover are cross-border — a customer paying a merchant
+            // abroad — so the smart-router routing direction is OUTBOUND. smart-router validates the
+            // direction against Direction {INBOUND, OUTBOUND, DOMESTIC, HUB}; the old "OVERSEAS" value
+            // is a different (domestic-vs-cross-border) axis and 400s with "unknown direction".
             // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
             // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
             // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
             result = failoverPaymentRouter.pay(
-                    req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency());
+                    req.qrPayload(), amountKrw, req.userRef(), "OUTBOUND", req.payCurrency());
         } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
             result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
                     req.userRef(), SENDMN_PARTNER_ID);
@@ -216,11 +219,11 @@ public class WalletPayController {
         if (req.qrPayload() == null || req.qrPayload().isBlank()) {
             throw new IllegalArgumentException("qrPayload is required");
         }
-        // Use the same direction the failover pay path uses (OVERSEAS) so classify resolves the
+        // Use the same direction the failover pay path uses (OUTBOUND) so classify resolves the
         // exact route the payment will take.
         if (failoverPaymentRouter != null) {
             return ResponseEntity.ok(
-                    failoverPaymentRouter.classifyQr(req.qrPayload(), "OVERSEAS"));
+                    failoverPaymentRouter.classifyQr(req.qrPayload(), "OUTBOUND"));
         }
         // Router unavailable (minimal config): fall back to static classification, currency by
         // country. Still GMEPay+-sourced — the wallet must not hardcode it.

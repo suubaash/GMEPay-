@@ -31,6 +31,7 @@ import {
   reactivateUser,
   updateUserRoles,
 } from '@/store/usersSlice';
+import { fetchRbacData } from '@/store/rbacSlice';
 import ErrorAlert from '@/components/ErrorAlert';
 import EmptyState from '@/components/EmptyState';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
@@ -39,7 +40,12 @@ import InviteUserDialog from './InviteUserDialog';
 import EditRolesDialog from './EditRolesDialog';
 import DeactivateConfirmDialog from './DeactivateConfirmDialog';
 
-/** All roles the auth-identity service recognises. */
+/**
+ * Fallback role list, used only when the live RBAC role catalogue
+ * (state.rbac.roles, GET /v1/admin/rbac/roles) has not loaded yet. The
+ * invite/edit dialogs prefer the live catalogue so roles created on the RBAC
+ * page appear here too.
+ */
 export const ALL_ROLES = ['ADMIN', 'OPS', 'COMPLIANCE', 'FINANCE', 'READ_ONLY'];
 
 /** Role → MUI Chip colour mapping. */
@@ -118,6 +124,13 @@ export default function UsersPage() {
   const { items, loading, saving, error, fromFixture } = useAppSelector(
     (s) => s.users,
   );
+  // Live RBAC role catalogue (guarded: some test stores omit the rbac slice).
+  const rbacRoles = useAppSelector((s) => s.rbac?.roles) ?? [];
+  // Prefer the live catalogue so roles created on the RBAC page show up here;
+  // fall back to the static list until it loads.
+  const availableRoles = rbacRoles.length
+    ? rbacRoles.map((r) => r.role)
+    : ALL_ROLES;
 
   // ---- local UI state ----
   const [search, setSearch] = useState('');
@@ -136,6 +149,12 @@ export default function UsersPage() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Load the RBAC role catalogue so the invite/edit dialogs offer the same
+  // roles as the RBAC page (including any newly created custom roles).
+  useEffect(() => {
+    dispatch(fetchRbacData());
+  }, [dispatch]);
 
   // ---- derived rows ----
   const rows = Array.isArray(items) ? items : [];
@@ -217,8 +236,9 @@ export default function UsersPage() {
       {/* Demo fixture banner */}
       {fromFixture && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Backend unavailable — showing demo data. Actions will fail until the
-          auth-identity service is deployed.
+          Backend unavailable — showing demo data. Changes apply locally for
+          this session only and are not persisted until the auth-identity
+          service is deployed.
         </Alert>
       )}
 
@@ -254,7 +274,7 @@ export default function UsersPage() {
             sx={{ minWidth: 140 }}
           >
             <MenuItem value="ALL">All roles</MenuItem>
-            {ALL_ROLES.map((r) => (
+            {availableRoles.map((r) => (
               <MenuItem key={r} value={r}>
                 {r}
               </MenuItem>
@@ -383,6 +403,7 @@ export default function UsersPage() {
       <InviteUserDialog
         open={inviteOpen}
         saving={saving}
+        availableRoles={availableRoles}
         onSubmit={handleInviteSubmit}
         onCancel={() => setInviteOpen(false)}
       />
@@ -391,6 +412,7 @@ export default function UsersPage() {
         open={!!editRolesTarget}
         user={editRolesTarget}
         saving={saving}
+        availableRoles={availableRoles}
         onSubmit={handleEditRolesSubmit}
         onCancel={() => setEditRolesTarget(null)}
       />

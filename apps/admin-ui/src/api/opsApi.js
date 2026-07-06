@@ -132,12 +132,70 @@ async function request(path, init = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Flatten the BFF's nested ControlTowerView into the shape the /operations page
+ * consumes. This is an anti-corruption layer: the BFF nests
+ * {@code inFlight:{inFlightCount,uncertainOrAgedCount}},
+ * {@code floatHeadroom:{partners,lowest}} and
+ * {@code recentAlerts:{total,critical,latest}}, whereas the page (and this
+ * module's documented contract) expect flat scalars/arrays. Without this the
+ * page renders the {@code inFlight} object directly and React throws
+ * "Objects are not valid as a React child".
+ *
+ * Null-safe throughout: any missing section maps to null / [] so the page's
+ * degraded/empty handling still works.
+ *
+ * @param {object} raw  ControlTowerView as returned by the BFF
+ * @returns flat ControlTower — see {@link getControlTower}
+ */
+export function normalizeControlTower(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const inFlight = raw.inFlight ?? {};
+  const floats = Array.isArray(raw.floatHeadroom?.partners)
+    ? raw.floatHeadroom.partners
+    : Array.isArray(raw.floatHeadroom)
+      ? raw.floatHeadroom
+      : [];
+  const alerts = Array.isArray(raw.recentAlerts?.latest)
+    ? raw.recentAlerts.latest
+    : Array.isArray(raw.recentAlerts)
+      ? raw.recentAlerts
+      : [];
+  // The BFF marks the whole in-flight section degraded under the single key
+  // "inFlight"; the page has a separate "uncertainOrAgedCount" card, so mirror
+  // the flag onto that key too.
+  const degradedSections = Array.isArray(raw.degradedSections)
+    ? [...raw.degradedSections]
+    : [];
+  if (degradedSections.includes('inFlight') && !degradedSections.includes('uncertainOrAgedCount')) {
+    degradedSections.push('uncertainOrAgedCount');
+  }
+
+  return {
+    ...raw,
+    inFlight: inFlight.inFlightCount ?? null,
+    uncertainOrAgedCount: inFlight.uncertainOrAgedCount ?? null,
+    // Normalise the per-partner float rows to the page's field names
+    // (BFF PartnerFloat uses `partnerId`; the table reads `partner`).
+    floatHeadroom: floats.map((f) => ({
+      partner: f.partner ?? f.partnerId,
+      currency: f.currency,
+      balance: f.balance,
+      threshold: f.threshold,
+      pctOfThreshold: f.pctOfThreshold,
+      atRisk: f.atRisk,
+    })),
+    recentAlerts: alerts,
+    degradedSections,
+  };
+}
+
+/**
  * GET /v1/admin/ops/control-tower
  * -> {
  *   inFlight: number,
  *   uncertainOrAgedCount: number,
  *   webhookBacklog: { pending, dlq, total },
- *   floatHeadroom: [{ partner, balance, threshold, pctOfThreshold, atRisk }] + lowest,
+ *   floatHeadroom: [{ partner, balance, threshold, pctOfThreshold, atRisk }],
  *   health: { total, up, down, degraded },
  *   openReconExceptions: number,
  *   operationalStatus: {
@@ -148,9 +206,12 @@ async function request(path, init = {}) {
  *   recentAlerts: OpsAlert[],
  *   degradedSections: string[]   // section keys the BFF could not compute
  * }
+ *
+ * The BFF returns a nested ControlTowerView; {@link normalizeControlTower}
+ * flattens it to the above before it reaches the page.
  */
-export function getControlTower() {
-  return request('/v1/admin/ops/control-tower');
+export async function getControlTower() {
+  return normalizeControlTower(await request('/v1/admin/ops/control-tower'));
 }
 
 /**

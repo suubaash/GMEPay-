@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -64,19 +65,23 @@ public class RestSmartRouterClient implements SmartRouterClient {
                     .build()
                     .toUriString();
 
-            ResolveResponse body = restClient.get()
+            // smart-router's /v1/route/resolve returns a BARE JSON array of candidate rows
+            // (List<PartnerSchemeView>), not a {"candidates":[...]} envelope. Deserialize the
+            // array directly — the old wrapper record silently failed to parse and yielded zero
+            // candidates (payment then declined as unsupported_qr).
+            List<Candidate> body = restClient.get()
                     .uri(uri)
                     .retrieve()
-                    .body(ResolveResponse.class);
+                    .body(new ParameterizedTypeReference<List<Candidate>>() {});
 
-            if (body == null || body.candidates() == null) {
+            if (body == null) {
                 return List.of();
             }
             List<PartnerSchemeView> views = new ArrayList<>();
-            for (Candidate c : body.candidates()) {
+            for (Candidate c : body) {
                 views.add(new PartnerSchemeView(
                         c.partnerId(),
-                        c.partnerName(),
+                        c.partnerName(),   // absent in the wire row → null; merchant name comes from the scheme response
                         c.schemeId(),
                         c.priority()));
             }
@@ -93,11 +98,7 @@ public class RestSmartRouterClient implements SmartRouterClient {
         }
     }
 
-    // ---- wire formats (smart-router /v1/route/resolve contract) ----
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    record ResolveResponse(List<Candidate> candidates) {
-    }
+    // ---- wire format: smart-router /v1/route/resolve returns a bare array of these ----
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Candidate(long partnerId, String partnerName, String schemeId, int priority) {

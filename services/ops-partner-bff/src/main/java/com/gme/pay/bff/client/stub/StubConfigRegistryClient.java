@@ -125,6 +125,28 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         return new ArrayList<>(schemes);
     }
 
+    // -------- Slice 2 (2B.1) change-request approval endpoints (ADR-008) ------
+    //
+    // Config-registry owns the 4-eyes change-request queue; the stub has no such
+    // workflow (nothing here ever proposes a change request). Per the interface's
+    // "list reads degrade to empty, writes stay loud" convention, the reads return
+    // an empty/absent result — mirroring RestConfigRegistryClient's own
+    // upstream-unreachable fallback — so the Admin UI queue renders empty instead
+    // of 500ing on the UnsupportedOperationException default. Approve/reject stay
+    // on the throwing defaults: a write against a queue the stub cannot hold should
+    // be loud, not silently swallowed.
+
+    @Override
+    public ChangeRequestPage listChangeRequests(String state, int page, int size) {
+        return new ChangeRequestPage(List.of(), page, size, 0L);
+    }
+
+    @Override
+    public com.gme.pay.contracts.ChangeRequestView getChangeRequest(Long id) {
+        // No change requests exist in stub mode; null → controller returns 404.
+        return null;
+    }
+
     // -------- Slice 1 (1C.2) draft endpoints (ADR-012) -----------------------
 
     @Override

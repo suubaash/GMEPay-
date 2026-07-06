@@ -67,14 +67,13 @@ $fleet = @(
     @{ name = 'config-registry';           type = 'service'; port = 18081 }
     @{ name = 'transaction-mgmt';           type = 'service'; port = 18082 }
     @{ name = 'merchant-qr-data';           type = 'service'; port = 18083 }
+    # Only the NEPAL scheme-adapter url is unique here: $downstream (below) already emits every
+    # peer's --gmepay.<name>.base-url. Re-listing them would pass the SAME option twice, which
+    # Spring collapses into a comma-joined value (e.g. "http://a,http://a") — a malformed base-url
+    # that breaks the RestClient. For the ops-status gate that means it can't reach config-registry,
+    # fails CLOSED ("platform paused"), and EVERY payment 503s. The scheme-keyed url uses a different
+    # property name (gmepay.scheme-adapters.NEPAL.base-url) that $downstream can't derive — keep it.
     @{ name = 'payment-executor';           type = 'service'; port = 18084; args = @(
-            '--gmepay.config-registry.base-url=http://localhost:18081'
-            '--gmepay.rate-fx.base-url=http://localhost:18101'
-            '--gmepay.prefunding.base-url=http://localhost:18088'
-            '--gmepay.merchant-qr-data.base-url=http://localhost:18083'
-            '--gmepay.scheme-adapter-zeropay.base-url=http://localhost:18090'
-            '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
-            '--gmepay.revenue-ledger.base-url=http://localhost:18092'
             '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
@@ -213,6 +212,19 @@ function Start-Component($c) {
     # sims keep their own per-sim properties via $c.args below).
     if ($c.type -eq 'service') { $spring += $downstreamArgs }
     if ($c.args) { $spring += $c.args }
+    # De-dupe repeated "--key=value" options, keeping the LAST. Some gmepay.<peer>.base-url
+    # values are supplied BOTH via $downstreamArgs and a service's own $c.args; Spring joins a
+    # repeated --key into a comma value ("http://a,http://a") that then fails URL parsing — e.g.
+    # payment-executor's operational-status client got a malformed config-registry URL, so the
+    # operational gate failed CLOSED and rejected every payment.
+    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    $deduped = [System.Collections.ArrayList]::new()
+    for ($i = $spring.Count - 1; $i -ge 0; $i--) {
+        $arg = $spring[$i]
+        $key = if ($arg -match '^(--[^=]+)=') { $matches[1] } else { $arg }
+        if ($seen.Add($key)) { [void]$deduped.Insert(0, $arg) }
+    }
+    $spring = $deduped.ToArray()
     $a = (Get-JvmFlags $c) + @('-jar', $jar) + $spring
     Start-Process -FilePath 'java' -ArgumentList $a -WindowStyle Hidden `
         -RedirectStandardOutput (Join-Path $logDir "$($c.name).out.log") `

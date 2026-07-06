@@ -12,6 +12,9 @@ public interface PrincipalRepository extends JpaRepository<PrincipalEntity, Long
 
     Optional<PrincipalEntity> findByUsername(String username);
 
+    /** All principals of a given kind (e.g. OPERATOR for the user-management page). */
+    List<PrincipalEntity> findByType(PrincipalEntity.Type type);
+
     /** Ids of principals holding a role via the direct {@code principal_roles} join (for userCount). */
     @Query("select p.id from PrincipalEntity p join p.roles r where r.id = :roleId")
     List<Long> findIdsByRoleId(@Param("roleId") Long roleId);

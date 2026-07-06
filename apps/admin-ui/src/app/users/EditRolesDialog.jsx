@@ -23,15 +23,30 @@ import { ALL_ROLES } from './page';
  * Validates that at least one role is checked before submitting.
  *
  * Props:
- *   open:      boolean
- *   user:      UserSummary | null
- *   saving:    boolean
- *   onSubmit:  (roles: string[]) => void
- *   onCancel:  () => void
+ *   open:           boolean
+ *   user:           UserSummary | null
+ *   saving:         boolean
+ *   availableRoles: string[]  — role codes to offer (defaults to ALL_ROLES)
+ *   onSubmit:       (roles: string[]) => void
+ *   onCancel:       () => void
  */
-export default function EditRolesDialog({ open, user, saving, onSubmit, onCancel }) {
+export default function EditRolesDialog({
+  open,
+  user,
+  saving,
+  availableRoles = ALL_ROLES,
+  onSubmit,
+  onCancel,
+}) {
   const [roles, setRoles] = useState([]);
   const [rolesError, setRolesError] = useState('');
+
+  // Always show the user's currently-assigned roles as options, even if a role
+  // is no longer in the catalogue, so it can be seen and unchecked.
+  const displayRoles = [
+    ...availableRoles,
+    ...(user?.roles ?? []).filter((r) => !availableRoles.includes(r)),
+  ];
 
   // Seed the checkbox state whenever a new user is opened
   useEffect(() => {
@@ -80,7 +95,7 @@ export default function EditRolesDialog({ open, user, saving, onSubmit, onCancel
         <FormControl component="fieldset" error={!!rolesError} sx={{ width: '100%' }}>
           <FormLabel component="legend">Assigned roles</FormLabel>
           <FormGroup row>
-            {ALL_ROLES.map((r) => (
+            {displayRoles.map((r) => (
               <FormControlLabel
                 key={r}
                 control={

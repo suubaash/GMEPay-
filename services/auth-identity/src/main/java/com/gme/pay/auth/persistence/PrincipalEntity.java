@@ -113,12 +113,20 @@ public class PrincipalEntity {
         return displayName;
     }
 
+    public void setDisplayName(String displayName) {
+        this.displayName = displayName;
+    }
+
     public Long getPartnerId() {
         return partnerId;
     }
 
     public Status getStatus() {
         return status;
+    }
+
+    public void setStatus(Status status) {
+        this.status = status;
     }
 
     public Instant getCreatedAt() {

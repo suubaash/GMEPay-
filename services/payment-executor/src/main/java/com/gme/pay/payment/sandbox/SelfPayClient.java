@@ -13,7 +13,10 @@ import org.springframework.web.client.RestClient;
 /**
  * Loopback HTTP client the sandbox E2E runner uses to drive this service's OWN payment endpoints
  * (`POST /v1/pay/classify`, `POST /v1/pay`) over the REAL wire path, against a configurable self
- * base-url ({@code gmepay.self.base-url}, default {@code http://localhost:8080}).
+ * base-url ({@code gmepay.self.base-url}, default {@code http://localhost:${server.port}} — the
+ * service's OWN port, so the loopback self-call lands on this instance regardless of which port it
+ * boots on. The old fixed {@code :8080} default broke every run in the fleet, where payment-executor
+ * listens on 18084 and nothing serves 8080 — the self-call was refused at the Classify step).
  *
  * <p>Unlike the other {@code Rest*Client}s this one does NOT throw on a non-2xx response — the
  * runner needs the status + raw body of a 422 decline to record a meaningful step detail. Both
@@ -28,7 +31,7 @@ public class SelfPayClient {
 
     @Autowired
     public SelfPayClient(RestClient.Builder builder,
-                         @Value("${gmepay.self.base-url:http://localhost:8080}") String baseUrl) {
+                         @Value("${gmepay.self.base-url:http://localhost:${server.port}}") String baseUrl) {
         this.restClient = RestClientSupport.withJavaTime(builder.clone()).baseUrl(baseUrl).build();
         this.mapper = new ObjectMapper();
     }
