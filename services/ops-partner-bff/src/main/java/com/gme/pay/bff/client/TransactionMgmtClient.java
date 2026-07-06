@@ -99,6 +99,16 @@ public interface TransactionMgmtClient {
      * Earliest APPROVED instant per partner (keyed by the partner's partner_ref) across all time —
      * the activation signal. Routes to {@code GET /v1/transactions/first-approved}. Default empty.
      */
+    /**
+     * Payer-level activity in the window ({@code GET /v1/transactions/payer-stats}):
+     * distinct non-null {@code user_ref} among APPROVED transactions. Returns {@code null}
+     * when unavailable (stub mode, older upstream, transport error) — callers treat null
+     * and 0 alike as "not measured".
+     */
+    default PayerStats payerStats(Instant from, Instant to) {
+        return null;
+    }
+
     default java.util.Map<String, Instant> firstApprovedByPartner() {
         return java.util.Map.of();
     }
@@ -263,5 +273,10 @@ public interface TransactionMgmtClient {
      * Generic page envelope used by paginated client methods. The fields mirror
      * the BFF's {@code Page<T>} DTO so the wire shape passes through unchanged.
      */
+    /** Wire shape of {@code GET /v1/transactions/payer-stats} (window echoed by upstream). */
+    record PayerStats(Window window, long activePayers) {
+        public record Window(Instant from, Instant to) {}
+    }
+
     record Page<T>(List<T> content, int page, int size, long total) {}
 }

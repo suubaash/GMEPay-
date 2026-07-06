@@ -58,9 +58,10 @@ class PlatformSettingControllerTest {
     void listSeeded() throws Exception {
         mvc().perform(get("/v1/admin/settings"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(5))
-                .andExpect(jsonPath("$[0].key").value("fx.quote.ttl.seconds"))
-                .andExpect(jsonPath("$[4].key").value("wallet.fee.krw"));
+                .andExpect(jsonPath("$.length()").value(8))
+                .andExpect(jsonPath("$[0].key").value("flywheel.acceptance_points"))
+                .andExpect(jsonPath("$[3].key").value("fx.quote.ttl.seconds"))
+                .andExpect(jsonPath("$[7].key").value("wallet.fee.krw"));
     }
 
     @Test

@@ -73,6 +73,41 @@ class TransactionStatsIT {
         jpaRepository.save(e);
     }
 
+    private void seedWithPayer(String txnRef, String status, String userRef, Instant createdAt) {
+        TransactionEntity e = new TransactionEntity();
+        e.setTxnRef(txnRef);
+        e.setPartnerRef("partner-A");
+        e.setSchemeId("zeropay");
+        e.setStatus(status);
+        e.setUserRef(userRef);
+        e.setSendAmount(new BigDecimal("100.00000000"));
+        e.setSendCcy("USD");
+        e.setTargetPayout(new BigDecimal("130000.00000000"));
+        e.setTargetCcy("KRW");
+        e.setCreatedAt(createdAt);
+        e.setUpdatedAt(createdAt);
+        jpaRepository.save(e);
+    }
+
+    @Test
+    @DisplayName("computePayerStats counts distinct APPROVED payers only, in-window, null user_ref excluded")
+    void computePayerStats_math() {
+        seedWithPayer("P1", "APPROVED", "payer-1", IN_WINDOW);
+        seedWithPayer("P2", "APPROVED", "payer-1", IN_WINDOW);   // same payer twice -> 1
+        seedWithPayer("P3", "APPROVED", "payer-2", IN_WINDOW);
+        seedWithPayer("P4", "FAILED",   "payer-3", IN_WINDOW);   // not APPROVED -> excluded
+        seedWithPayer("P5", "APPROVED", null,      IN_WINDOW);   // no user_ref -> excluded
+        seedWithPayer("P6", "APPROVED", "payer-4",
+                Instant.parse("2026-05-01T00:00:00Z"));           // out of window -> excluded
+
+        com.gme.pay.txn.api.dto.PayerStatsResponse stats =
+                service.computePayerStats(WINDOW_FROM, WINDOW_TO);
+
+        assertEquals(2, stats.activePayers(), "payer-1 (deduped) + payer-2");
+        assertEquals(WINDOW_FROM, stats.window().from());
+        assertEquals(WINDOW_TO, stats.window().to());
+    }
+
     @Test
     @DisplayName("computeStats returns correct totals, per-partner/corridor slices and decline reasons")
     void computeStats_math() {

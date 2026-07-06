@@ -28,3 +28,9 @@ Legend: ✅ green (compiles + tests pass) · 🟡 scaffolded · ⬜ not started.
 
 ## F2/F3 — Integration & loop-until-green (pending)
 ⬜ wire modules · ⬜ contract tests vs OpenAPI · ⬜ Testcontainers (needs Docker)
+
+## 2026-07-05 — QR hub growth flywheel (Turn 0 instrumentation)
+- `docs/QR_HUB_GROWTH_FLYWHEEL.md` — expansion strategy (the loop) + `docs/QR_HUB_FLYWHEEL_TRACKER.md` fulfillment checklist.
+- ops-partner-bff: `GET /v1/admin/flywheel` (`FlywheelController` + DTO, 2 MockMvc tests) — 7 loop KPIs; ops-entered metrics via `flywheel.*` platform settings.
+- admin-ui: `/flywheel` page (nav: Flywheel) + `flywheelSlice` + `adminApi.getFlywheel`; lint/tests/build green (779 tests).
+- Follow-ups on the same branch: `V040` flywheel settings seeds · `ActivationTile` (partner detail) · `PartnerOnboardingE2ETest` (loop-B funnel, 6/6 e2e green) · `SETTLEMENT_NETTING_DESIGN.md` + `MultilateralNettingCalculator` · `GET /v1/transactions/payer-stats` feeding the flywheel · CI repairs (api-gateway servlet introspection, partner-portal-ui lottie/date-rot, stale Flyway IT pins, wallet E2E vs V038 kill-switch).

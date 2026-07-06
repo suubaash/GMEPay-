@@ -202,6 +202,26 @@ export const adminApi = {
   getDeliveryOverview: (range) =>
     request(`/v1/admin/delivery/overview${qs(range)}`),
 
+  // ---------- Flywheel (growth-loop KPIs) ----------
+  /**
+   * GET /v1/admin/flywheel?from=<ISO>&to=<ISO> -> FlywheelDashboard
+   * (docs/QR_HUB_GROWTH_FLYWHEEL.md §5 — window defaults to trailing 30 days)
+   * {
+   *   window:     { from, to },
+   *   network:    { liveWallets, totalWallets, liveSchemes, totalSchemes,
+   *                 acceptancePoints },
+   *   volume:     { tpvUsd, tpvTruncated, scannedTxnCount, approvedTxnCount,
+   *                 revenueUsd, takeRatePct },
+   *   capital:    { totalPrefundUsd, prefundingTurnRatio },
+   *   loopHealth: { medianPartnerTimeToFirstTxnHours, activatedPartnerCount,
+   *                 pendingPartnerCount, adapterTimeToLiveDays,
+   *                 monthlyActivePayers, txnsPerPayer }
+   * }
+   * Every metric is nullable — null means "not yet measurable" (no data, or the
+   * ops-entered flywheel.* platform setting is unset); render a dash, not 0.
+   */
+  getFlywheel: (range) => request(`/v1/admin/flywheel${qs(range)}`),
+
   // ---------- Journal (double-entry ledger) ----------
   /**
    * GET /v1/admin/journals?from=<ISO>&to=<ISO>&reference=<str>&page=0&size=50

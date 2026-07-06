@@ -112,6 +112,11 @@ public interface TransactionRepository {
         return List.of();
     }
 
+    /** Distinct non-null {@code user_ref} among APPROVED transactions in the window (payer feed). */
+    default long countDistinctApprovedPayers(Instant from, Instant to) {
+        return 0;
+    }
+
     /** A status name and its count. */
     record StatusCount(String status, long count) {}
 

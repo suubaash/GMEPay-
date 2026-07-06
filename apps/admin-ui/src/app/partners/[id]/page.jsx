@@ -22,6 +22,7 @@ import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import Breadcrumbs from '@/components/Breadcrumbs';
 import PrefundingTile from '@/components/PrefundingTile';
+import ActivationTile from '@/components/ActivationTile';
 import { useSnackbar } from '@/components/SnackbarProvider';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
@@ -199,6 +200,9 @@ export default function PartnerDetailPage() {
             {isOverseas && (
               <PrefundingTile partnerCode={partnerCode} />
             )}
+
+            {/* Loop-B activation: onboarding -> first approved txn */}
+            <ActivationTile partnerCode={partnerCode} />
           </Stack>
         </Box>
       )}

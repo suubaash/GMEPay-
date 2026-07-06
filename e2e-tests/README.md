@@ -1,5 +1,17 @@
 # e2e-tests — black-box end-to-end harness
 
+Two black-box tests, each booting its own real-service fleet as JVM processes
+(H2 / in-memory — no Docker, no Kafka):
+
+- **`WalletScanPayE2ETest`** — a wallet scans a merchant QR and the payment succeeds
+  (money path). Includes config-registry since the V038 ops kill-switch: the executor
+  fails CLOSED when `/v1/ops/operational-status` is unreachable.
+- **`PartnerOnboardingE2ETest`** — the loop-B onboarding funnel from
+  `docs/QR_HUB_GROWTH_FLYWHEEL.md`: sign up (draft) → KYB verify (stub adapter seam)
+  → SANDBOX API key → prefund provision + top-up, each step asserting its side
+  effect with an independent read-back. Together the two tests prove the whole
+  onboarding→transacting path a new wallet partner walks.
+
 The automated test that proves **a wallet scans a merchant QR and the payment succeeds**,
 across the real services (not mocks).
 

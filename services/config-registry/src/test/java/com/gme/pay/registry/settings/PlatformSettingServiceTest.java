@@ -24,7 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
  * {@code @DataJpaTest} against H2 (PostgreSQL mode) so Flyway applies the full
  * V001..V039 chain, including the V039 {@code platform_settings} seed rows.
  *
- * <p>Asserts: the five seeded rows are returned key-sorted; PUT upserts a value and
+ * <p>Asserts: the seeded rows (V039 + V040) are returned key-sorted; PUT upserts a value and
  * writes exactly one hash-chained audit row per key; a NUMBER value that does not parse
  * is rejected 400 with no write/audit; GET on an unknown key is 404.
  */
@@ -62,10 +62,13 @@ class PlatformSettingServiceTest {
     }
 
     @Test
-    @DisplayName("list returns the five seeded rows, key-sorted")
+    @DisplayName("list returns the seeded rows (V039 tunables + V040 flywheel metrics), key-sorted")
     void listReturnsSeededRowsKeySorted() {
         List<PlatformSettingView> all = service.list();
         assertThat(all).extracting(PlatformSettingView::key).containsExactly(
+                "flywheel.acceptance_points",
+                "flywheel.adapter_time_to_live_days",
+                "flywheel.monthly_active_payers",
                 "fx.quote.ttl.seconds",
                 "prefunding.alert.tier1.pct",
                 "prefunding.alert.tier2.pct",
