@@ -122,7 +122,16 @@ Companion docs: `MASTER_PLAN.md` · `docs/WBS_STATUS.md` · `docs/COMPLETION_PLA
 - [~] HMAC + idempotency filters at api-gateway (live-verified); internal auth filter; RBAC
       catalogue incl. scoped SUPPORT role.
 - [~] Fail-closed kill-switch + fail-closed RBAC/audit in ops path (fix wave 61b0651).
-- [ ] Real JWT/RBAC end-to-end — kill `password=demo`; issuance↔verify wired (Keycloak/OIDC).
+- [~] Real JWT/RBAC end-to-end (iteration 15 re-baseline + build). The June audit was stale:
+      Keycloak is a real compose service (PKCE SPAs, gateway verifies its JWTs, RBAC resolve →
+      signed claim stamping → @RequiresPermission enforcement is DB-backed, not fixture).
+      Built this iteration: **`password=demo` is dead** — the BFF's fake mock-token login is
+      replaced by a proxy to auth-identity's new `POST /v1/auth/login` (PBKDF2 210k-iter
+      password store, real HS256 JWT with preferred_username+roles, timing-uniform 401s,
+      env-gated dev-admin seeder); 4 Keycloak config drifts fixed (client ids, realm,
+      port 8097, public-PKCE clients) so the real OIDC round-trip can work. Remaining for
+      [x]: Vault secrets, gateway verify of auth-identity HS256 tokens, KC_HOSTNAME story,
+      retire Keycloak demo users.
 - [ ] Vault (or equivalent) for secrets; no secrets in git/compose.
 - [ ] Nginx/WAF edge, rate limiting/throttling (Redis) at gateway.
 - [ ] Pen test passed; secret scanning + dependency audit in CI.

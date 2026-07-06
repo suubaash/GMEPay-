@@ -103,12 +103,11 @@ public final class JwtHelper {
         String[] parts = token.split("\\.", -1);
         if (parts.length != 3) return null;
 
-        String signingInput = parts[0] + "." + parts[1];
-        byte[] expectedSig  = base64urlDecode(parts[2]);
-        byte[] actualSig    = hmacSha256(signingInput.getBytes(StandardCharsets.UTF_8));
-
-        // Constant-time comparison to prevent timing side-channel
-        if (!java.security.MessageDigest.isEqual(expectedSig, actualSig)) return null;
+        // Constant-time comparison in the ENCODED domain: comparing the presented
+        // segment against the canonical base64url of the recomputed MAC also
+        // rejects malleable re-encodings (base64 ignores the trailing partial
+        // bits, so several strings can decode to the same signature bytes).
+        if (!signatureMatches(parts[0] + "." + parts[1], parts[2])) return null;
 
         // Decode payload and extract exp / sub
         try {
@@ -143,15 +142,8 @@ public final class JwtHelper {
             return VerificationResult.invalid();
         }
 
-        String signingInput = parts[0] + "." + parts[1];
-        byte[] actualSig = hmacSha256(signingInput.getBytes(StandardCharsets.UTF_8));
-        byte[] expectedSig;
-        try {
-            expectedSig = base64urlDecode(parts[2]);
-        } catch (IllegalArgumentException e) {
-            return VerificationResult.invalid();
-        }
-        if (!java.security.MessageDigest.isEqual(expectedSig, actualSig)) {
+        // Same encoded-domain constant-time check as verify() — see note there.
+        if (!signatureMatches(parts[0] + "." + parts[1], parts[2])) {
             return VerificationResult.invalid();
         }
 
@@ -190,6 +182,20 @@ public final class JwtHelper {
 
     // ── private helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Recomputes the HMAC over {@code signingInput} and compares its canonical
+     * (unpadded) base64url form against the presented signature segment in
+     * constant time. Working in the encoded domain closes the base64
+     * malleability gap: the JDK decoder ignores the unused trailing bits of the
+     * final unit, so multiple encodings decode to identical bytes.
+     */
+    private boolean signatureMatches(String signingInput, String presentedSigB64) {
+        String actualSigB64 = base64url(hmacSha256(signingInput.getBytes(StandardCharsets.UTF_8)));
+        return java.security.MessageDigest.isEqual(
+                presentedSigB64.getBytes(StandardCharsets.UTF_8),
+                actualSigB64.getBytes(StandardCharsets.UTF_8));
+    }
+
     private byte[] hmacSha256(byte[] data) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -215,6 +221,18 @@ public final class JwtHelper {
     private static String toJsonValue(Object v) {
         if (v instanceof String s) return jsonString(s);
         if (v instanceof Number || v instanceof Boolean) return String.valueOf(v);
+        if (v instanceof java.util.Collection<?> c) {
+            // JSON array (e.g. the `roles` claim). Elements recurse through the
+            // same scalar rendering; still no external JSON library involved.
+            StringBuilder arr = new StringBuilder("[");
+            boolean first = true;
+            for (Object e : c) {
+                if (!first) arr.append(",");
+                arr.append(toJsonValue(e));
+                first = false;
+            }
+            return arr.append("]").toString();
+        }
         return jsonString(String.valueOf(v));
     }
 

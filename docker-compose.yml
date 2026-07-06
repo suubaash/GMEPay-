@@ -265,16 +265,19 @@ services:
   # `start-dev --import-realm` runs Keycloak in dev mode (no HTTPS required) and
   # imports any realm JSON found under /opt/keycloak/data/import on first boot.
   # docker/keycloak/realm-gmepay.json seeds:
-  #   - realm 'gmepay'
-  #   - clients 'admin-ui' + 'partner-portal-ui' (confidential OIDC, PKCE on)
+  #   - realm 'gmepay' (single dev realm shared by both SPAs)
+  #   - clients 'gmepay-admin-ui' + 'gmepay-partner-ui' (PUBLIC browser PKCE
+  #     clients — no secret; ids match the SPA oidc.js defaults)
   #   - users 'admin/demo' (OPERATOR) + 'partner-demo/demo' (PARTNER_USER)
   # Staging/prod use a different realm export with empty user lists; SCIM/LDAP
   # federation provisions real users (ADR-011 §Consequences).
   #
   # Host port 8097 (not 8090): the 8080..8096 application-port band is full,
   # and 8090 is already taken by scheme-adapter-zeropay. The Slice 1 brief
-  # called for 8090 — this is the documented deviation. Internal port is
-  # Keycloak's default 8080.
+  # called for 8090 — 8097 is now the canonical value everywhere: the SPA
+  # oidc.js defaults and api-gateway's OIDC_ISSUER_URI default all point at
+  # http://localhost:8097/realms/gmepay. Internal port is Keycloak's default
+  # 8080.
   #
   # Healthcheck note: Keycloak 25 exposes /health on the *management* port
   # (9000) by default and that endpoint is off in dev mode. A TCP probe on the

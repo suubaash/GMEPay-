@@ -1,109 +1,94 @@
 package com.gme.pay.bff.web;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.gme.pay.bff.web.dto.LoginRequest;
-import com.gme.pay.bff.web.dto.LoginResponse;
-import com.gme.pay.bff.web.dto.RefreshRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Base64;
+import java.util.Map;
 
 /**
- * Phase-1 stub auth controller for the Admin UI / Partner Portal login flow.
+ * Real login proxy (real-auth slice): {@code POST /v1/auth/login} forwards the
+ * {@code {username, password}} pair to auth-identity's human login endpoint
+ * ({@code POST /v1/auth/login}, see {@code HumanLoginController}) and returns
+ * auth-identity's response <em>verbatim</em> — a genuinely signed HS256 JWT
+ * with {@code preferred_username} + {@code roles} claims.
  *
- * <h2>Slice 1 status: DEPRECATED — scheduled for removal</h2>
+ * <p>This replaces the Phase-1 {@code password=demo} stub that minted
+ * {@code mock.eyJ…} tokens. There is no demo password and no local token
+ * minting left in this class: if auth-identity rejects the credentials the
+ * caller gets 401, and if auth-identity is unreachable the caller gets 503 —
+ * never a fabricated token. The legacy {@code POST /v1/auth/refresh} stub
+ * (which could only regenerate fake tokens, and had no remaining UI callers)
+ * is removed outright; expired sessions re-authenticate.
  *
- * <p>Per ADR-011 ("Keycloak for humans, auth-identity for machines"), human
- * authentication moves to Keycloak (realm {@code gmepay}) accessed directly by
- * the SPAs via the OIDC Authorization Code + PKCE flow. The api-gateway
- * (companion change in {@code services/api-gateway/.../SecurityConfig.java})
- * is now an OAuth2 resource server that validates the Keycloak-issued JWT and
- * maps the realm role {@code OPERATOR} to Spring authority {@code ROLE_OPERATOR}.
+ * <p>Base URL comes from {@code gmepay.auth-identity.base-url}, the same
+ * property the other auth-identity clients use ({@code RestRbacAdminClient} et
+ * al.). {@code /v1/auth/login} is outside auth-identity's internal-auth gate
+ * (it is the one human-facing exemption), so no {@code X-Gme-Internal} header
+ * is attached.
  *
- * <p><b>Why this class still exists today:</b> the admin-ui swap to Keycloak
- * OIDC ships in Slice 1's UI ticket (1D.3). Until that lands the SPA still
- * POSTs {@code {username, password}} to {@code /v1/auth/login} and stores the
- * returned token. To avoid a broken-build window we keep the endpoint live and
- * returning the same mock JWT shape it always did — the new resource-server
- * config in api-gateway does not yet front this BFF for admin traffic, so the
- * legacy flow continues to work for that brief overlap.
- *
- * <p><b>Migration path / removal plan:</b>
- * <ol>
- *   <li>1D.3 swaps admin-ui to {@code @react-keycloak/web} (or equivalent),
- *       redirecting to Keycloak for login and attaching the resulting JWT as
- *       {@code Authorization: Bearer ...} on outbound calls.</li>
- *   <li>The same ticket removes the admin-ui code that calls
- *       {@code POST /v1/auth/login} and {@code POST /v1/auth/refresh}.</li>
- *   <li>Slice 1's exit gate verifies "no {@code password=demo} left" in the UI;
- *       once that ships, this controller plus {@link com.gme.pay.bff.web.dto.LoginRequest},
- *       {@link com.gme.pay.bff.web.dto.LoginResponse}, {@link com.gme.pay.bff.web.dto.RefreshRequest},
- *       and the associated test {@code AuthControllerTest} are deleted in a
- *       follow-up commit referenced as 1C.4-cleanup.</li>
- * </ol>
- *
- * <p>Endpoints (kept identical for the transition window):
- * <ul>
- *   <li>{@code POST /v1/auth/login}   — body {@code {username, password}} → mock JWT or 401
- *   <li>{@code POST /v1/auth/refresh} — body {@code {token}}              → regenerated mock JWT
- * </ul>
- *
- * @deprecated Replaced by direct Keycloak OIDC login from the SPAs (ADR-011).
- *     Remove after Slice 1's admin-ui auth swap (ticket 1D.3) lands.
+ * <p>Keycloak (ADR-011) remains the production OIDC path for the SPAs; this
+ * endpoint backs the dev/password form behind
+ * {@code NEXT_PUBLIC_ALLOW_DEV_LOGIN=true}.
  */
-@Deprecated(since = "Slice 1", forRemoval = true)
 @RestController
 @RequestMapping("/v1/auth")
 public class AuthController {
 
-    /** Default token lifetime for the Phase-1 stub. */
-    static final long TOKEN_TTL_SECONDS = 3600;
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
-    /** Phase-1 demo password. Anything else (or empty) yields 401. */
-    static final String DEMO_PASSWORD = "demo";
+    private final RestClient restClient;
+
+    @Autowired
+    public AuthController(
+            RestClient.Builder builder,
+            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl) {
+        this(builder.baseUrl(baseUrl).build());
+    }
+
+    /** Package-private constructor for tests to inject a pre-built RestClient. */
+    AuthController(RestClient restClient) {
+        this.restClient = restClient;
+    }
 
     @PostMapping("/login")
-    public LoginResponse login(@RequestBody LoginRequest body) {
+    public JsonNode login(@RequestBody LoginRequest body) {
         String username = body == null ? null : body.username();
         String password = body == null ? null : body.password();
-        if (username == null || username.isBlank()
-                || password == null || !DEMO_PASSWORD.equals(password)) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "invalid credentials");
+        if (username == null || username.isBlank() || password == null || password.isEmpty()) {
+            // Cheap local reject — auth-identity would 401 this anyway.
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid credentials");
         }
-        return issue(username, "ADMIN");
-    }
-
-    @PostMapping("/refresh")
-    public LoginResponse refresh(@RequestBody RefreshRequest body) {
-        String token = body == null ? null : body.token();
-        if (token == null || token.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
-                    "invalid token");
+        try {
+            return restClient.post()
+                    .uri("/v1/auth/login")
+                    .body(Map.of("username", username, "password", password))
+                    .retrieve()
+                    .body(JsonNode.class);
+        } catch (RestClientResponseException upstream) {
+            if (upstream.getStatusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "invalid credentials");
+            }
+            log.warn("auth-identity login returned {}: {}",
+                    upstream.getStatusCode().value(), upstream.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "auth-identity error (" + upstream.getStatusCode().value() + ")");
+        } catch (ResourceAccessException network) {
+            log.warn("auth-identity unreachable for login: {}", network.getMessage());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "auth-identity unavailable");
         }
-        // Phase-1 stub: any non-empty token regenerates. The "subject" inside the
-        // mock token is opaque to us; we mint a fresh one tagged "refresh".
-        return issue("refresh", "ADMIN");
-    }
-
-    /**
-     * Builds a deterministic JWT-shaped string {@code mock.eyJ...} so the UI
-     * code path that decodes the middle segment continues to work without
-     * pulling in a real JWT library.
-     */
-    private static LoginResponse issue(String subject, String role) {
-        Instant expiresAt = Instant.now().plus(TOKEN_TTL_SECONDS, ChronoUnit.SECONDS);
-        String payload = "{\"sub\":\"" + subject + "\",\"role\":\"" + role
-                + "\",\"exp\":" + expiresAt.getEpochSecond() + "}";
-        String b64 = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
-        return new LoginResponse("mock.eyJ" + b64, expiresAt, role);
     }
 }

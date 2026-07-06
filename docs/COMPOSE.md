@@ -172,8 +172,8 @@ skips re-import when the realm already exists). It seeds:
 
 | Kind | Name | Purpose |
 |---|---|---|
-| Client | `admin-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3000/*`, dev secret `admin-ui-dev-secret` |
-| Client | `partner-portal-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3001/*`, dev secret `partner-portal-ui-dev-secret` |
+| Client | `gmepay-admin-ui` | public browser client (no secret), OIDC auth-code + PKCE S256, redirect `http://localhost:3000/*` |
+| Client | `gmepay-partner-ui` | public browser client (no secret), OIDC auth-code + PKCE S256, redirect `http://localhost:3001/*` |
 | Realm role | `OPERATOR` | back-office user; gates `/v1/admin/**` at the BFF |
 | Realm role | `PARTNER_USER` | partner-portal-ui human; per-partner scoping enforced at the BFF |
 | User | `admin / demo` | OPERATOR — replaces the legacy `password=demo` flow in admin-ui |

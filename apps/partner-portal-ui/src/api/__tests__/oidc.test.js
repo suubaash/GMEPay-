@@ -44,11 +44,11 @@ describe('api/oidc (partner-portal-ui)', () => {
   // Config helpers
   // -----------------------------------------------------------------------
   describe('keycloakBaseUrl()', () => {
-    it('returns the partners-realm default when no env is set', () => {
+    it('returns the shared gmepay-realm default when no env is set', () => {
+      // Single dev realm `gmepay` (shared with admin-ui) on host port 8097 —
+      // 8090 is owned by scheme-adapter-zeropay in docker-compose.
       delete process.env.NEXT_PUBLIC_KEYCLOAK_URL;
-      expect(keycloakBaseUrl()).toBe(
-        'http://localhost:8090/realms/gmepay-partners'
-      );
+      expect(keycloakBaseUrl()).toBe('http://localhost:8097/realms/gmepay');
     });
 
     it('honours NEXT_PUBLIC_KEYCLOAK_URL', () => {

@@ -12,10 +12,14 @@
  *   server. The dev-skip password form is retained behind
  *   NEXT_PUBLIC_ALLOW_DEV_LOGIN=true for local iteration without Keycloak.
  *
- * BFF wire contract (see docs/INTER_SERVICE_CONTRACTS.md):
+ * BFF wire contract (real-auth slice — the BFF proxies auth-identity's
+ * POST /v1/auth/login verbatim; the demo password stub is gone):
  *   POST /v1/auth/login
  *     body  : { username, password }
- *     reply : { token, expiresAt, role }
+ *     reply : { token, expiresAt, tokenType, username, roles }
+ *       token     - REAL 3-part HS256 JWT (preferred_username + roles claims)
+ *       expiresAt - epoch seconds
+ *       roles     - array of role codes, e.g. ["HUB_ADMIN"]
  *
  * The BFF does NOT return a partnerId — the Portal UI treats the form's
  * `partnerId` field as the partner identity for `X-Partner-Id` and stores it
@@ -23,13 +27,13 @@
  *
  * @typedef {object} LoginRequest
  * @property {string} partnerId  - Used as the X-Partner-Id header value (UI-local).
- * @property {string} password   - Demo password is "demo" in Phase 1.
+ * @property {string} password   - Real credential verified by auth-identity (PBKDF2).
  *
  * @typedef {object} LoginResponse
- * @property {string} token       - Mock JWT-shaped string from BFF.
+ * @property {string} token       - Real HS256 JWT from auth-identity (via the BFF proxy).
  * @property {string} partnerId   - UI-local: mirrors the partnerId from the form.
- * @property {string} [expiresAt] - ISO-8601 instant when the token expires.
- * @property {string} [role]      - Role claim from the BFF (e.g. "ADMIN").
+ * @property {number|string} [expiresAt] - Epoch-second expiry from auth-identity.
+ * @property {string} [role]      - First role code from the reply's `roles` array.
  */
 import { decodeJwtPayload } from './oidc';
 
@@ -227,7 +231,9 @@ export async function login(req) {
     token: data.token,
     partnerId: req.partnerId,
     expiresAt: data.expiresAt,
-    role: data.role
+    // New proxy shape carries `roles` (array of codes); keep the legacy
+    // single `role` field for UI display, preferring the array when present.
+    role: Array.isArray(data.roles) && data.roles.length > 0 ? data.roles[0] : data.role
   };
 }
 

@@ -10,10 +10,12 @@ import {
 } from '../auth';
 
 /**
- * Contract lock: the BFF reply is `{ token, expiresAt, role }` — no partnerId.
+ * Contract lock (real-auth slice): the BFF proxies auth-identity verbatim, so
+ * the reply is `{ token, expiresAt, tokenType, username, roles }` — a REAL
+ * 3-part HS256 JWT, epoch-second expiry, and a `roles` array; no partnerId.
  * `login()` mirrors the request's `partnerId` onto the persisted
  * LoginResponse and into localStorage so the UI has a stable identity for
- * the X-Partner-Id header.
+ * the X-Partner-Id header, and surfaces `roles[0]` as the legacy `role` field.
  */
 describe('api/auth', () => {
   beforeEach(() => {
@@ -40,30 +42,36 @@ describe('api/auth', () => {
   });
 
   describe('login()', () => {
-    it('persists token (from BFF) + partnerId (from form) on success', async () => {
+    it('persists token (from BFF proxy) + partnerId (from form) on success', async () => {
+      // Real proxy reply shape: 3-part HS256 JWT + epoch expiry + roles array.
+      const realJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJHTUVSRU1JVCJ9.c2ln';
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response(
           JSON.stringify({
-            token: 'mock.eyJabc',
-            expiresAt: '2026-06-09T13:15:30Z',
-            role: 'ADMIN'
+            token: realJwt,
+            expiresAt: 1750000000,
+            tokenType: 'Bearer',
+            username: 'GMEREMIT',
+            roles: ['HUB_ADMIN']
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         )
       );
 
-      const out = await login({ partnerId: 'GMEREMIT', password: 'demo' });
+      const out = await login({ partnerId: 'GMEREMIT', password: 'gmepay-dev-admin' });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       // Wire request is { username, password } — partnerId maps to username.
       const callArgs = fetchSpy.mock.calls[0];
       const body = JSON.parse(callArgs[1].body);
-      expect(body).toEqual({ username: 'GMEREMIT', password: 'demo' });
+      expect(body).toEqual({ username: 'GMEREMIT', password: 'gmepay-dev-admin' });
 
-      expect(out.token).toBe('mock.eyJabc');
+      expect(out.token).toBe(realJwt);
+      expect(out.token.split('.')).toHaveLength(3);
       expect(out.partnerId).toBe('GMEREMIT');
-      expect(out.role).toBe('ADMIN');
-      expect(window.localStorage.getItem(TOKEN_KEY)).toBe('mock.eyJabc');
+      expect(out.expiresAt).toBe(1750000000);
+      expect(out.role).toBe('HUB_ADMIN');
+      expect(window.localStorage.getItem(TOKEN_KEY)).toBe(realJwt);
       expect(window.localStorage.getItem(PARTNER_ID_KEY)).toBe('GMEREMIT');
     });
 

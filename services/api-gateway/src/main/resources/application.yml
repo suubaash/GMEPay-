@@ -12,7 +12,8 @@ spring:
   # partner-portal-ui bears OIDC-issued JWTs. Provider-neutral: the issuer URI is
   # injected and accepts ANY OIDC issuer (self-hosted Keycloak or any cloud IdP) —
   # it is NOT pinned to a literal Keycloak URL. The default below targets the
-  # docker-compose Keycloak service (realm = gmepay) for local dev only.
+  # docker-compose Keycloak service (realm = gmepay, host port 8097 — 8090 is
+  # owned by scheme-adapter-zeropay) for local dev only.
   #   OIDC_ISSUER_URI  — provider-neutral env name (preferred; works for any IdP)
   #   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI — set this only when
   #   the IdP's OIDC discovery (.well-known) is unreachable and JWKS must be pinned.
@@ -22,7 +23,7 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8090/realms/gmepay}
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8097/realms/gmepay}
 
 server:
   port: 8080

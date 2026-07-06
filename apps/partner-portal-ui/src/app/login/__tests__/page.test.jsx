@@ -87,17 +87,18 @@ describe('LoginPage', () => {
   });
 
   it('calls login() with the form values on a valid submit', async () => {
+    // New proxy shape: real 3-part JWT, epoch-second expiry, roles[0] as role.
     loginMock.mockResolvedValueOnce({
-      token: 'tkn',
+      token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJHTUVSRU1JVCJ9.c2ln',
       partnerId: 'GMEREMIT',
-      expiresAt: '2026-06-09T13:15:30Z',
-      role: 'ADMIN'
+      expiresAt: 1750000000,
+      role: 'HUB_ADMIN'
     });
     renderLogin();
     const user = userEvent.setup();
 
     await user.type(screen.getByTestId('partner-id-input'), 'GMEREMIT');
-    await user.type(screen.getByTestId('password-input'), 'demo');
+    await user.type(screen.getByTestId('password-input'), 'gmepay-dev-admin');
     await user.click(screen.getByTestId('login-submit'));
 
     await waitFor(() => {
@@ -105,7 +106,7 @@ describe('LoginPage', () => {
     });
     expect(loginMock).toHaveBeenCalledWith({
       partnerId: 'GMEREMIT',
-      password: 'demo'
+      password: 'gmepay-dev-admin'
     });
 
     await waitFor(() => {

@@ -66,6 +66,22 @@ public class PrincipalEntity {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    /**
+     * Salted PBKDF2 password credential (V007) for human operators who log in
+     * via {@code POST /v1/auth/login}. Mirrors the api_keys secret columns:
+     * hex hash + hex salt + per-row iteration count. All three are null for
+     * principals without a local password (partners, service accounts,
+     * Keycloak-only operators). See {@link com.gme.pay.auth.domain.SecretHasher}.
+     */
+    @Column(name = "password_hash", length = 128)
+    private String passwordHash;
+
+    @Column(name = "password_salt", length = 64)
+    private String passwordSalt;
+
+    @Column(name = "password_iterations")
+    private Integer passwordIterations;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -143,6 +159,34 @@ public class PrincipalEntity {
 
     public void setLastLoginAt(Instant lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public void setStatus(Status status) {
+        this.status = status;
+    }
+
+    /** True when this principal carries a local password credential (V007). */
+    public boolean hasPassword() {
+        return passwordHash != null && passwordSalt != null && passwordIterations != null;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public String getPasswordSalt() {
+        return passwordSalt;
+    }
+
+    public Integer getPasswordIterations() {
+        return passwordIterations;
+    }
+
+    /** Set (or rotate) the salted PBKDF2 password credential. */
+    public void setPasswordCredential(String passwordHash, String passwordSalt, Integer passwordIterations) {
+        this.passwordHash = passwordHash;
+        this.passwordSalt = passwordSalt;
+        this.passwordIterations = passwordIterations;
     }
 
     public Set<RoleEntity> getRoles() {

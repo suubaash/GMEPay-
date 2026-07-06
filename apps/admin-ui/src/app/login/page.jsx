@@ -32,7 +32,8 @@ import { isDevLoginAllowed, startLogin } from '@/api/oidc';
  * (ADR-011). The primary affordance on this page is now a single
  * "Sign in with Keycloak" button that redirects the browser to the realm
  * configured by `NEXT_PUBLIC_KEYCLOAK_URL` (default
- * `http://localhost:8090/realms/gmepay`).
+ * `http://localhost:8097/realms/gmepay` — compose publishes Keycloak on 8097
+ * because 8090 is owned by scheme-adapter-zeropay).
  *
  * Dev escape hatch: when `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` is set at build
  * time the legacy username/password form is rendered underneath the SSO

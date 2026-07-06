@@ -4,7 +4,8 @@
  * Slice 1 retires the legacy `password=demo` BFF login (see PARTNER_SETUP_PLAN.md
  * §"Slice 1 — Identity + Foundation"). The admin-ui now redirects operators to
  * Keycloak (realm `gmepay`, configured by env `NEXT_PUBLIC_KEYCLOAK_URL`,
- * default http://localhost:8090/realms/gmepay) and runs the standard OIDC
+ * default http://localhost:8097/realms/gmepay — host port 8097 because 8090
+ * is owned by scheme-adapter-zeropay in docker-compose) and runs the standard OIDC
  * authorization-code + PKCE dance entirely in the browser. Keycloak's
  * admin-ui client is a *public* client (no client_secret in the browser), so
  * PKCE is mandatory.
@@ -27,7 +28,7 @@
  *   local-no-Keycloak iteration use; CI compose-smoke covers the real flow.
  */
 
-const DEFAULT_KEYCLOAK_URL = 'http://localhost:8090/realms/gmepay';
+const DEFAULT_KEYCLOAK_URL = 'http://localhost:8097/realms/gmepay';
 const CLIENT_ID = 'gmepay-admin-ui';
 const PKCE_VERIFIER_KEY = 'gmepay.oidc.pkceVerifier';
 const STATE_KEY = 'gmepay.oidc.state';

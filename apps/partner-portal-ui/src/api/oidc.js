@@ -4,9 +4,10 @@
  * Browser-side OIDC authorization-code + PKCE flow for the Partner Portal.
  *
  * The partner-portal-ui may be reached by partners who use their own IdP
- * federated into Keycloak (realm `gmepay-partners`, client `gmepay-partner-ui`).
- * The flow is identical to the admin-ui OIDC module but with different
- * realm/client defaults.
+ * federated into Keycloak (single dev realm `gmepay`, client `gmepay-partner-ui`
+ * — docker/keycloak/realm-gmepay.json seeds one realm shared with admin-ui).
+ * The flow is identical to the admin-ui OIDC module but with a different
+ * client default.
  *
  * Flow:
  *   1. {@link buildAuthRequest} — generates PKCE verifier + state, caches in
@@ -19,7 +20,8 @@
  *      access_token as `Authorization: Bearer` on every BFF request.
  *
  * Config env vars (NEXT_PUBLIC_ = burned in at build):
- *   NEXT_PUBLIC_KEYCLOAK_URL       Realm base URL (defaults to localhost:8090/realms/gmepay-partners)
+ *   NEXT_PUBLIC_KEYCLOAK_URL       Realm base URL (defaults to localhost:8097/realms/gmepay;
+ *                                  host port 8097 because 8090 is owned by scheme-adapter-zeropay)
  *   NEXT_PUBLIC_KEYCLOAK_CLIENT_ID Client id (defaults to gmepay-partner-ui)
  *   NEXT_PUBLIC_ALLOW_DEV_LOGIN    "true" => show password form fallback
  *
@@ -28,7 +30,7 @@
  *   password form visible so vitest + local-no-Keycloak iteration still works.
  */
 
-const DEFAULT_KEYCLOAK_URL = 'http://localhost:8090/realms/gmepay-partners';
+const DEFAULT_KEYCLOAK_URL = 'http://localhost:8097/realms/gmepay';
 const DEFAULT_CLIENT_ID = 'gmepay-partner-ui';
 
 const PKCE_VERIFIER_KEY = 'gmepay.portal.oidc.pkceVerifier';

@@ -61,6 +61,13 @@ gmepay:
   internal-auth:
     enabled: ${GMEPAY_INTERNAL_AUTH_ENABLED:false}
     secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
+  auth:
+    seed-dev-admin:
+      # Real-auth slice: seed the 'admin' / 'gmepay-dev-admin' operator principal
+      # (HUB_ADMIN, PBKDF2 hash computed at runtime by DevAdminSeeder) so
+      # POST /v1/auth/login works out of the box in dev. Production MUST set
+      # GMEPAY_AUTH_SEED_DEV_ADMIN_ENABLED=false.
+      enabled: ${GMEPAY_AUTH_SEED_DEV_ADMIN_ENABLED:true}
 
 logging:
   level:

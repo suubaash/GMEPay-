@@ -32,7 +32,7 @@ describe('api/oidc (admin-ui)', () => {
     it('returns the default when no env is set', () => {
       const saved = process.env.NEXT_PUBLIC_KEYCLOAK_URL;
       delete process.env.NEXT_PUBLIC_KEYCLOAK_URL;
-      expect(keycloakBaseUrl()).toBe('http://localhost:8090/realms/gmepay');
+      expect(keycloakBaseUrl()).toBe('http://localhost:8097/realms/gmepay');
       process.env.NEXT_PUBLIC_KEYCLOAK_URL = saved;
     });
 

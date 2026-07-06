@@ -50,6 +50,18 @@ class WebSurfaceScopeTest {
             "/internal/auth"
     );
 
+    /**
+     * Deliberate, enumerated exemptions to the machine-only rule (real-auth
+     * slice): auth-identity now owns the local-credential human login that
+     * ops-partner-bff proxies ({@code HumanLoginController}), replacing the
+     * BFF's {@code password=demo} stub with a DB-backed PBKDF2 credential and
+     * a real HS256 JWT. Keycloak remains the production OIDC IdP (ADR-011);
+     * anything beyond this exact path still fails the guard.
+     */
+    private static final List<String> EXEMPT_PATHS = List.of(
+            "/v1/auth/login"
+    );
+
     /** Forbidden operator-login terminology. If any mapping contains these, this test fails. */
     private static final List<String> FORBIDDEN_TERMS = List.of(
             "/login",
@@ -72,6 +84,11 @@ class WebSurfaceScopeTest {
 
         for (MappingInfo m : mappings) {
             String pathLower = m.fullPath.toLowerCase(Locale.ROOT);
+
+            // 0. Enumerated exemptions (real-auth slice) bypass both checks.
+            if (EXEMPT_PATHS.contains(pathLower)) {
+                continue;
+            }
 
             // 1. Must start with an allowed prefix.
             boolean onMachineSurface = ALLOWED_PREFIXES.stream().anyMatch(pathLower::startsWith);
@@ -99,6 +116,20 @@ class WebSurfaceScopeTest {
         assertTrue(hasVerify,
                 "Expected POST /internal/auth/verify to remain registered — this is the "
                         + "machine-credential entry point consumed by api-gateway. Found: " + mappings);
+    }
+
+    @Test
+    @DisplayName("Real-auth slice: POST /v1/auth/login is the only human-login exemption")
+    void humanLoginExemptionIsPresentAndExact() throws Exception {
+        List<MappingInfo> mappings = scanMappings();
+        boolean hasHumanLogin = mappings.stream().anyMatch(m ->
+                m.fullPath.equalsIgnoreCase("/v1/auth/login") && "POST".equals(m.httpMethod));
+        assertTrue(hasHumanLogin,
+                "Expected POST /v1/auth/login (HumanLoginController) — the BFF login proxy "
+                        + "depends on it. Found: " + mappings);
+        assertEquals(List.of("/v1/auth/login"), EXEMPT_PATHS,
+                "The human-login exemption list must stay a single, exact path — widen it "
+                        + "only with an ADR-011 amendment.");
     }
 
     // ── Reflection scanning helpers ──────────────────────────────────────────
