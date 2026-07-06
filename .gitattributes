@@ -1,0 +1,4 @@
+# Force LF on shell scripts and the Gradle wrapper so Windows checkouts don't
+# break Linux Docker builds ("./gradlew: not found" from a CRLF shebang).
+gradlew text eol=lf
+*.sh text eol=lf
