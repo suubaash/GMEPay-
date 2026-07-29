@@ -25,23 +25,28 @@ describe('apiKeysSlice', () => {
 
   it('stores the BFF api-keys list verbatim on success', () => {
     const wire = [
+      // The REAL wire shape from auth-identity's api_keys registry (gap T1-3).
       {
         keyId: 'k_01HXYZACTIVE',
-        name: 'Production',
+        name: null,
         prefix: 'gmepk_live_abcd1234',
-        scopes: ['payments:create', 'payments:read'],
+        scopes: [],
         createdAt: '2026-01-15T08:00:00Z',
-        lastUsedAt: '2026-06-09T11:24:00Z',
-        status: 'ACTIVE'
+        lastUsedAt: null,
+        status: 'ACTIVE',
+        environment: 'PRODUCTION',
+        expiresAt: null
       },
       {
-        keyId: 'k_01HXYZROT',
-        name: 'Production (rotating)',
+        keyId: 'k_01HXYZSBX',
+        name: null,
         prefix: 'gmepk_live_efgh5678',
-        scopes: ['payments:create'],
+        scopes: [],
         createdAt: '2026-05-30T08:00:00Z',
         lastUsedAt: null,
-        status: 'ROTATING'
+        status: 'REVOKED',
+        environment: 'SANDBOX',
+        expiresAt: null
       }
     ];
     const state = reducer(undefined, {
@@ -50,9 +55,13 @@ describe('apiKeysSlice', () => {
     });
     expect(state.status).toBe('succeeded');
     expect(state.data).toEqual(wire);
-    expect(state.data[0].scopes).toEqual(['payments:create', 'payments:read']);
-    expect(state.data[1].status).toBe('ROTATING');
-    expect(state.data[1].lastUsedAt).toBeNull();
+    // The slice is a pass-through: the honestly-absent fields must survive as
+    // null/empty rather than being defaulted to something renderable.
+    expect(state.data[0].name).toBeNull();
+    expect(state.data[0].scopes).toEqual([]);
+    expect(state.data[0].lastUsedAt).toBeNull();
+    expect(state.data[0].environment).toBe('PRODUCTION');
+    expect(state.data[1].status).toBe('REVOKED');
   });
 
   it('coerces non-array payloads to []', () => {

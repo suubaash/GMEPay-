@@ -33,7 +33,23 @@ import { useSnackbar } from '@/components/SnackbarProvider';
  *
  * Wire shape — GET /v1/portal/{partnerId}/api-keys returns
  *   Array<ApiKeyView>
- *     { keyId, name, prefix, scopes[], createdAt, lastUsedAt, status }
+ *     { keyId, name, prefix, scopes[], createdAt, lastUsedAt, status,
+ *       environment, expiresAt }
+ *
+ * Source (gap register T1-3): auth-identity's real `api_keys` registry, read via
+ * the BFF's RestApiKeyClient. This page previously rendered two FABRICATED keys
+ * per partner (`gpk_live_<hash>` prefixes, PRIMARY/ROTATING labels, a two-scope
+ * grant list and a last-used timestamp) generated from the partner id's hash,
+ * because no rest client existed. Those are gone.
+ *
+ * Fields auth-identity genuinely does not record — shown as an em dash, never
+ * back-filled with a plausible value:
+ *   - `name`       : no name column on `api_keys` (V002)
+ *   - `scopes`     : per-key scopes are not modelled; authorization comes from
+ *                    the principal's RBAC grants, not the key
+ *   - `lastUsedAt` : no `last_used_at` column, so nothing records it
+ * What IS real: keyId, prefix, status (ACTIVE | PENDING_EXPIRY | REVOKED),
+ * environment (SANDBOX | PRODUCTION), createdAt and expiresAt.
  *
  * The full secret is NEVER on the wire — only the prefix is exposed (and we
  * mask everything after the first 8 chars in the UI). Rotation + revocation
@@ -150,6 +166,7 @@ export default function ApiKeysPage() {
                     <TableRow>
                       <TableCell>Name</TableCell>
                       <TableCell>Prefix</TableCell>
+                      <TableCell>Environment</TableCell>
                       <TableCell>Scopes</TableCell>
                       <TableCell>Status</TableCell>
                       <TableCell>Created</TableCell>
@@ -186,6 +203,23 @@ export default function ApiKeysPage() {
                             </Stack>
                           </TableCell>
                           <TableCell>
+                            {k?.environment ? (
+                              <Chip
+                                label={k.environment}
+                                size="small"
+                                variant="outlined"
+                                color={
+                                  String(k.environment).toUpperCase() === 'PRODUCTION'
+                                    ? 'primary'
+                                    : 'default'
+                                }
+                                data-testid={`api-key-env-${keyId}`}
+                              />
+                            ) : (
+                              '—'
+                            )}
+                          </TableCell>
+                          <TableCell>
                             <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                               {scopes.length === 0 ? (
                                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -208,6 +242,17 @@ export default function ApiKeysPage() {
                     })}
                   </TableBody>
                 </Table>
+                <Typography
+                  variant="caption"
+                  sx={{ color: 'text.secondary', display: 'block', mt: 1.5 }}
+                  data-testid="api-keys-absent-fields-note"
+                >
+                  Name, Scopes and Last used show “—” because GMEPay+ does not record them
+                  against a key: keys carry no label or per-key scope (access is decided by
+                  your account’s permissions), and key usage timestamps are not tracked.
+                  Prefix, Environment, Status and Created are the live values from the key
+                  registry.
+                </Typography>
               </TableContainer>
             )}
           </CardContent>

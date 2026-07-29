@@ -17,18 +17,22 @@ describe('webhooksSlice', () => {
   });
 
   it('stores the BFF webhook list verbatim', () => {
+    // The REAL wire shape from notification-webhook's endpoint registry (gap T1-3):
+    // a partner-owned URL, and lastDeliveredAt always null because there is no
+    // per-endpoint last-delivery read. The old fixture used partner.example.com rows
+    // with literal delivery timestamps, hardcoded in the BFF controller.
     const wire = [
       {
-        url: 'https://partner.example.com/GMEREMIT/webhook/payments',
+        url: 'https://ops.gmeremit.com/gmepay/payments',
         eventTypes: ['payment.approved', 'payment.failed'],
         status: 'ACTIVE',
-        lastDeliveredAt: '2026-06-09T11:00:00Z'
+        lastDeliveredAt: null
       },
       {
-        url: 'https://partner.example.com/GMEREMIT/webhook/settlements',
-        eventTypes: ['settlement.completed'],
-        status: 'ACTIVE',
-        lastDeliveredAt: '2026-06-08T22:30:00Z'
+        url: 'https://ops.gmeremit.com/gmepay/settlements',
+        eventTypes: [],
+        status: 'INACTIVE',
+        lastDeliveredAt: null
       }
     ];
     const state = reducer(undefined, {
@@ -39,6 +43,10 @@ describe('webhooksSlice', () => {
     expect(state.data).toEqual(wire);
     expect(state.data[0].eventTypes).toEqual(['payment.approved', 'payment.failed']);
     expect(state.data[0].status).toBe('ACTIVE');
+    // An empty eventTypes array means "all events" — it must not be defaulted away.
+    expect(state.data[1].eventTypes).toEqual([]);
+    expect(state.data[1].status).toBe('INACTIVE');
+    expect(state.data.every((w) => w.lastDeliveredAt === null)).toBe(true);
   });
 
   it('coerces non-array payloads to []', () => {

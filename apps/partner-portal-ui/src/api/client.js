@@ -198,14 +198,19 @@ export const portalApi = {
    * Read-only listing of API keys provisioned for this partner. Phase 1: no
    * rotate/revoke endpoints — those land in Phase 2 (Ops/Admin or auth-identity).
    *
+   * Real data from auth-identity's api_keys registry (gap T1-3). `name`, `scopes`
+   * and `lastUsedAt` have no source in the platform and are always null/empty.
+   *
    * @returns {Promise<Array<{
    *   keyId: string,
-   *   name: string,
+   *   name: null,
    *   prefix: string,
-   *   scopes: string[],
+   *   scopes: string[],            // always empty
    *   createdAt: string,           // ISO instant
-   *   lastUsedAt: string | null,   // ISO instant or null
-   *   status: 'ACTIVE' | 'ROTATING' | 'REVOKED'
+   *   lastUsedAt: null,
+   *   status: 'ACTIVE' | 'PENDING_EXPIRY' | 'REVOKED',
+   *   environment: 'SANDBOX' | 'PRODUCTION',
+   *   expiresAt: string | null     // ISO instant or null
    * }>>}
    */
   listApiKeys(partnerId) {

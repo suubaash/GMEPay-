@@ -53,24 +53,34 @@ function renderWithApiKeys(state) {
   );
 }
 
+/**
+ * The REAL wire shape auth-identity's api_keys registry produces (gap T1-3):
+ * name is null, scopes is empty and lastUsedAt is null because none of the three
+ * has a column/owner; status is the api_keys.status roster and environment is the
+ * field that actually distinguishes a live key from a test one.
+ */
 const TWO_KEYS = [
   {
     keyId: 'k_01HXYZACTIVE',
-    name: 'Production',
+    name: null,
     prefix: 'gmepk_live_abcd1234',
-    scopes: ['payments:create', 'payments:read'],
+    scopes: [],
     createdAt: '2026-01-15T08:00:00Z',
-    lastUsedAt: '2026-06-09T11:24:00Z',
-    status: 'ACTIVE'
+    lastUsedAt: null,
+    status: 'ACTIVE',
+    environment: 'PRODUCTION',
+    expiresAt: null
   },
   {
-    keyId: 'k_01HXYZROT',
-    name: 'Production (rotating)',
+    keyId: 'k_01HXYZSBX',
+    name: null,
     prefix: 'gmepk_live_efgh5678',
-    scopes: ['payments:create'],
+    scopes: [],
     createdAt: '2026-05-30T08:00:00Z',
     lastUsedAt: null,
-    status: 'ROTATING'
+    status: 'PENDING_EXPIRY',
+    environment: 'SANDBOX',
+    expiresAt: '2027-05-30T08:00:00Z'
   }
 ];
 
@@ -108,11 +118,32 @@ describe('ApiKeysPage', () => {
     renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
     expect(screen.getByTestId('api-keys-table')).toBeInTheDocument();
     expect(screen.getByTestId('api-key-row-k_01HXYZACTIVE')).toBeInTheDocument();
-    expect(screen.getByTestId('api-key-row-k_01HXYZROT')).toBeInTheDocument();
+    expect(screen.getByTestId('api-key-row-k_01HXYZSBX')).toBeInTheDocument();
 
     // first 8 chars of "gmepk_live_abcd1234" -> "gmepk_li" then "****"
     expect(screen.getByTestId('api-key-prefix-k_01HXYZACTIVE')).toHaveTextContent('gmepk_li****');
-    expect(screen.getByTestId('api-key-prefix-k_01HXYZROT')).toHaveTextContent('gmepk_li****');
+    expect(screen.getByTestId('api-key-prefix-k_01HXYZSBX')).toHaveTextContent('gmepk_li****');
+  });
+
+  it('shows the real environment per key so a test key is distinguishable', () => {
+    renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
+    expect(screen.getByTestId('api-key-env-k_01HXYZACTIVE')).toHaveTextContent('PRODUCTION');
+    expect(screen.getByTestId('api-key-env-k_01HXYZSBX')).toHaveTextContent('SANDBOX');
+  });
+
+  it('explains why name/scopes/last-used are blank instead of leaving bare dashes', () => {
+    // Gap T1-3: those three fields have no source, so the page must say so rather
+    // than let an em dash read as "we lost your data" (or invent a value).
+    renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
+    expect(screen.getByTestId('api-keys-absent-fields-note')).toBeInTheDocument();
+  });
+
+  it('renders the real api_keys status roster, not fabricated PRIMARY/ROTATING labels', () => {
+    renderWithApiKeys({ data: TWO_KEYS, status: 'succeeded', error: null });
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+    expect(screen.getByText('PENDING_EXPIRY')).toBeInTheDocument();
+    expect(screen.queryByText('PRIMARY')).not.toBeInTheDocument();
+    expect(screen.queryByText('ROTATING')).not.toBeInTheDocument();
   });
 
   it('shows a loading skeleton when status is loading', () => {
@@ -172,7 +203,7 @@ describe('ApiKeysPage', () => {
       configurable: true,
       value: { writeText: clipboardWriteText }
     });
-    await user.click(screen.getByTestId('copy-prefix-k_01HXYZROT'));
+    await user.click(screen.getByTestId('copy-prefix-k_01HXYZSBX'));
 
     await waitFor(() => {
       expect(screen.getByTestId('snackbar-toast')).toHaveTextContent(

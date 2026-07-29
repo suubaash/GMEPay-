@@ -19,10 +19,14 @@ const STATUS_COLOR = {
   CANCELLED: 'default',
   REVERSED: 'default',
   SETTLED: 'primary',
-  // API key statuses (see store/apiKeysSlice.js):
+  // API key statuses — the real api_keys.status roster from auth-identity (V002):
+  // ACTIVE | PENDING_EXPIRY | REVOKED. (gap T1-3: the portal previously showed
+  // fabricated PRIMARY/ROTATING labels invented by the BFF stub.)
   ACTIVE: 'success',
-  ROTATING: 'warning',
-  REVOKED: 'error'
+  PENDING_EXPIRY: 'warning',
+  REVOKED: 'error',
+  // Webhook endpoint states from notification-webhook.
+  INACTIVE: 'default'
 };
 
 export default function StatusChip({ status, size = 'small' }) {

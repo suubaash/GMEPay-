@@ -14,6 +14,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography
 } from '@mui/material';
 import { useDispatch, useSelector } from 'react-redux';
@@ -30,14 +31,23 @@ import EmptyState from '@/components/EmptyState';
  *   Array<WebhookConfigView>
  *     { url, eventTypes, status, lastDeliveredAt }
  *
+ * Source (gap register T1-3): notification-webhook's real endpoint registry, read
+ * via the BFF's RestPortalWebhookClient. This page previously rendered two rows
+ * hardcoded in the BFF controller — `partner.example.com/{code}/webhook/payments`
+ * and `.../webhook/settlements`, both ACTIVE with a literal 2026-06-09T11:00:00Z
+ * last-delivery — identical for every partner and never sourced from the service
+ * that actually delivers webhooks. Those are gone.
+ *
  * Notes:
  *   - There is NO `id` field on the wire — we key rows by `url` (which is
  *     unique within a partner's webhook set).
- *   - `eventTypes` (not `events`) is the array of subscribed event names.
- *   - `status` is a free-form string ("ACTIVE" in the Phase-1 stub) rendered
- *     as a chip; we treat "ACTIVE" as success-colored and anything else as
- *     default.
- *   - There is no createdAt or delivery-status field on the wire.
+ *   - `eventTypes` (not `events`) is the array of subscribed event names. An
+ *     EMPTY array means the endpoint is subscribed to all events.
+ *   - `status` is "ACTIVE" or "INACTIVE", rendered as a chip.
+ *   - `lastDeliveredAt` is ALWAYS null: notification-webhook exposes no
+ *     per-endpoint last-delivery read, so there is no real source for it. It
+ *     renders as an em dash rather than an invented timestamp.
+ *   - There is no createdAt field on the wire.
  */
 function statusColor(status) {
   return String(status).toUpperCase() === 'ACTIVE' ? 'success' : 'default';
@@ -105,7 +115,11 @@ export default function WebhooksPage() {
                       <TableCell>URL</TableCell>
                       <TableCell>Event types</TableCell>
                       <TableCell>Status</TableCell>
-                      <TableCell>Last delivered at</TableCell>
+                      <TableCell>
+                        <Tooltip title="Not tracked per endpoint — GMEPay+ does not record a last-delivery time for a webhook endpoint.">
+                          <span>Last delivered at</span>
+                        </Tooltip>
+                      </TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
