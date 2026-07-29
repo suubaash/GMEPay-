@@ -51,7 +51,7 @@ class RefundMoneyPathTest {
         private BigDecimal balance = new BigDecimal("1000.0000");
         /** key → outstanding debit; a reversal zeroes it (and is idempotent, as prefunding really is). */
         private final Map<String, BigDecimal> debits = new LinkedHashMap<>();
-        private final List<String> calls = new ArrayList<>();
+        final List<String> calls = new ArrayList<>();
 
         LedgerPrefunding seedCapture(String key, BigDecimal amount) {
             debits.put(key, amount);
@@ -285,11 +285,76 @@ class RefundMoneyPathTest {
         // 10 000 of 30 000 is a third — deliberately not representable exactly.
         orchestrator.refundPayment("pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
                 "R1", "ZEROPAY", new BigDecimal("10000"), "KRW");
-        orchestrator.refundPayment("pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
+        PaymentOrchestrator.RefundResult completing = orchestrator.refundPayment(
+                "pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
                 "R2", "ZEROPAY", new BigDecimal("20000"), "KRW");
 
         assertEquals(0, fresh.netDebited().signum(),
                 "the refund that completes the payment takes the exact remainder, so no crumb is stranded");
+        assertTrue(completing.fullyRefunded());
+
+        // The completing refund must UNWIND the slice the first partial re-retained. That is the case the
+        // first cut of this fix got wrong: it took the "full refund" shortcut (a single reverse of the
+        // original key, which is already a no-op by then) and left 14.8149 USD deducted forever.
+        String priorRetainedKey = TXN + "#REFUND-RETAINED@10000";
+        assertTrue(fresh.calls.contains("REVERSE " + priorRetainedKey),
+                "the completing refund must release the earlier partial's retained slice, got: " + fresh.calls);
+        assertTrue(fresh.calls.stream().noneMatch(c -> c.startsWith("DEDUCT " + TXN + "#REFUND-RETAINED@30000")),
+                "nothing is re-retained once the payment is fully refunded");
+
+        // Its own USD figure is the exact remainder, not a re-derived fraction: 22.2223 - 7.4074.
+        assertEquals(0, completing.prefundReturnedUsd().compareTo(new BigDecimal("14.8149")),
+                "the completing refund returns exactly what the earlier partial did not");
+    }
+
+    @Test
+    @DisplayName("a FULL refund AFTER a partial releases the remainder AND the retained slice")
+    void fullRefundAfterPartial_releasesEverything() {
+        BasisTransactionClient txn = new BasisTransactionClient(basis(null));
+        LedgerPrefunding prefunding = new LedgerPrefunding().seedCapture(TXN, CAPTURED_USD);
+        PaymentOrchestrator orchestrator =
+                orchestrator(prefunding, new RecordingScheme(), txn, new RecordingLedger());
+
+        orchestrator.refundPayment("pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
+                "R1", "ZEROPAY", new BigDecimal("20000"), "KRW");
+        // No amount = "refund the rest". This is the natural API shape for completing a partially refunded
+        // payment, and it goes down planRefund's null-amount branch — a different path from the one above.
+        PaymentOrchestrator.RefundResult rest = orchestrator.refundPayment(
+                "pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN, "R2", "ZEROPAY");
+
+        assertEquals(0, new BigDecimal("30000").compareTo(rest.refundedAmount()),
+                "the remainder of the 50000 original");
+        assertEquals(0, new BigDecimal("50000").compareTo(rest.cumulativeRefundedAmount()));
+        assertTrue(rest.fullyRefunded());
+        assertEquals(0, rest.prefundReturnedUsd().compareTo(new BigDecimal("22.5000")),
+                "60% of the captured 37.5000 USD, at the original locked rate");
+        assertEquals(0, prefunding.netDebited().signum(),
+                "the float is whole again: nothing of the payment remains deducted");
+        assertTrue(prefunding.calls.contains("REVERSE " + TXN + "#REFUND-RETAINED@20000"),
+                "the partial's retained slice is released, got: " + prefunding.calls);
+    }
+
+    @Test
+    @DisplayName("re-running a partial refund is float-safe: every step is keyed and idempotent")
+    void replayingARefundDoesNotMoveTheFloatTwice() {
+        BasisTransactionClient txn = new BasisTransactionClient(basis(null));
+        LedgerPrefunding prefunding = new LedgerPrefunding().seedCapture(TXN, CAPTURED_USD);
+        PaymentOrchestrator orchestrator =
+                orchestrator(prefunding, new RecordingScheme(), txn, new RecordingLedger());
+
+        orchestrator.refundPayment("pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
+                "R1", "ZEROPAY", new BigDecimal("20000"), "KRW");
+        BigDecimal afterFirst = prefunding.netDebited();
+
+        // A retry of the SAME refund. The cumulative total it validates against has already advanced, so the
+        // second call is a fresh 20 000 on top — the point here is that the FLOAT arithmetic is keyed, so the
+        // net position is a pure function of the cumulative refunded amount rather than of how many calls ran.
+        orchestrator.refundPayment("pay_1", SCHEME_TXN, PartnerType.OVERSEAS, PARTNER, TXN,
+                "R1", "ZEROPAY", new BigDecimal("20000"), "KRW");
+
+        assertEquals(0, afterFirst.compareTo(new BigDecimal("22.5000")));
+        assertEquals(0, prefunding.netDebited().compareTo(new BigDecimal("7.5000")),
+                "net float movement = captured - cumulative refunded, always");
     }
 
     @Nested

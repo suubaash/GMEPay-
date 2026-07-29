@@ -6,6 +6,7 @@ import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
 import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.OperationalGateException;
+import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
@@ -439,6 +440,145 @@ class WalletPayControllerTest {
      */
     private static SchemeClient.CancelRequest cancelOf(String authId) {
         return argThat(req -> req != null && authId.equals(req.schemeTxnRef()));
+    }
+
+    // ---- T2-6: the wallet refund path recorded the wrong status and booked nothing ----
+
+    /** Registers an original wallet payment of 50 000 KRW so the refund has a basis to validate against. */
+    private void givenOriginalWalletPayment(String txnRef, BigDecimal alreadyRefunded) {
+        when(transactionClient.findRefundBasis(txnRef)).thenReturn(Optional.of(
+                new TransactionClient.RefundBasis(txnRef, "APPROVED", new BigDecimal("50000"), "KRW",
+                        new BigDecimal("37.5000"), alreadyRefunded)));
+    }
+
+    @Test
+    @DisplayName("T2-6: a wallet refund lands as REFUNDED (not REVERSED) with the refunded KRW recorded")
+    void walletRefund_landsAsRefundedWithItsAmount() throws Exception {
+        givenOriginalWalletPayment("TXN-W1", null);
+        doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-W1"));
+
+        mockMvc.perform(post("/v1/pay/TXN-W1/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W1\",\"reason\":\"CUSTOMER_REQUEST\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status", is("REFUNDED")));
+
+        ArgumentCaptor<TransactionClient.StatusPatch> patch =
+                ArgumentCaptor.forClass(TransactionClient.StatusPatch.class);
+        verify(transactionClient).commitStatus(eq("TXN-W1"), patch.capture());
+
+        // The defect: this path patched REVERSED. refundedAt is stamped only on entry to REFUNDED, so every
+        // wallet refund was invisible to GET /v1/transactions/refunded — and therefore to the settlement
+        // claw-back. It is also the REFUNDED transition that emits payment.reversed, so revenue reversal and
+        // the partner webhook both hung off getting this one enum right.
+        assertEquals(PaymentStatus.REFUNDED, patch.getValue().newStatus(),
+                "a refund must be recorded as REFUNDED; REVERSED is not found by findRefundedOn");
+        assertEquals(0, new BigDecimal("50000").compareTo(patch.getValue().refundAmountKrw()),
+                "the full collection amount is the refunded magnitude the claw-back nets");
+    }
+
+    @Test
+    @DisplayName("T2-6: a wallet refund books a REAL reversal journal, never a zero rounding residual")
+    void walletRefund_booksARealReversalNotAZeroResidual() throws Exception {
+        givenOriginalWalletPayment("TXN-W2", null);
+        doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-W2"));
+
+        mockMvc.perform(post("/v1/pay/TXN-W2/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W2\",\"reason\":\"CUSTOMER_REQUEST\"}"))
+                .andExpect(status().isOk());
+
+        // Was: postRoundingResidual(ref + "-REFUND", ZERO, "KRW") — an amount of nothing, in the rounding
+        // account, under a reference nothing else uses. Nothing was booked at all.
+        verify(revenueLedgerClient, never()).postRoundingResidual(anyString(), any(), anyString());
+        verify(revenueLedgerClient).postReversalJournal(
+                eq("TXN-W2"), eq(new BigDecimal("50000")), eq("KRW"));
+    }
+
+    @Test
+    @DisplayName("T2-6: a PARTIAL wallet refund records only that amount")
+    void walletRefund_partialRecordsOnlyThatAmount() throws Exception {
+        givenOriginalWalletPayment("TXN-W3", null);
+        doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-W3"));
+
+        mockMvc.perform(post("/v1/pay/TXN-W3/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W3\",\"amount\":\"20000\",\"currency\":\"KRW\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status", is("REFUNDED")))
+                .andExpect(jsonPath("$.refundedAmount", is(20000)));
+
+        ArgumentCaptor<TransactionClient.StatusPatch> patch =
+                ArgumentCaptor.forClass(TransactionClient.StatusPatch.class);
+        verify(transactionClient).commitStatus(eq("TXN-W3"), patch.capture());
+        assertEquals(0, new BigDecimal("20000").compareTo(patch.getValue().refundAmountKrw()));
+        verify(revenueLedgerClient).postReversalJournal(
+                eq("TXN-W3"), eq(new BigDecimal("20000")), eq("KRW"));
+    }
+
+    @Test
+    @DisplayName("T2-6: a wallet over-refund is rejected with a structured error and nothing is recorded")
+    void walletRefund_overRefundIsRejected() throws Exception {
+        // 40 000 already refunded of 50 000; asking for another 20 000 would refund 60 000.
+        givenOriginalWalletPayment("TXN-W4", new BigDecimal("40000"));
+
+        mockMvc.perform(post("/v1/pay/TXN-W4/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W4\",\"amount\":\"20000\",\"currency\":\"KRW\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.status", is("FAILED")))
+                .andExpect(jsonPath("$.errorCode", is("REFUND_AMOUNT_EXCEEDS_ORIGINAL")));
+
+        // Rejected before the scheme is even called, so no over-refund can reach the customer.
+        verifyNoInteractions(schemeClient);
+        verify(transactionClient, never()).commitStatus(any(), any());
+        verifyNoInteractions(revenueLedgerClient);
+    }
+
+    @Test
+    @DisplayName("T2-6: a wallet refund in a foreign currency is refused rather than converted")
+    void walletRefund_foreignCurrencyIsRefused() throws Exception {
+        givenOriginalWalletPayment("TXN-W5", null);
+
+        mockMvc.perform(post("/v1/pay/TXN-W5/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W5\",\"amount\":\"10\",\"currency\":\"USD\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode", is("REFUND_AMOUNT_INVALID")));
+
+        verifyNoInteractions(schemeClient);
+    }
+
+    @Test
+    @DisplayName("T2-6: a PARTIAL wallet refund is refused when the original payment cannot be read")
+    void walletRefund_partialWithUnreadableOriginalIsRefused() throws Exception {
+        when(transactionClient.findRefundBasis("TXN-W6")).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/v1/pay/TXN-W6/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W6\",\"amount\":\"10000\",\"currency\":\"KRW\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.errorCode", is("REFUND_BASIS_UNAVAILABLE")));
+
+        verifyNoInteractions(schemeClient);
+    }
+
+    @Test
+    @DisplayName("T2-6: a FULL wallet refund with an unreadable original still works, and books nothing")
+    void walletRefund_fullWithUnreadableOriginalStillRefundsButBooksNothing() throws Exception {
+        when(transactionClient.findRefundBasis("TXN-W7")).thenReturn(Optional.empty());
+        doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-W7"));
+
+        mockMvc.perform(post("/v1/pay/TXN-W7/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"authId\":\"AUTH-W7\",\"reason\":\"CUSTOMER_REQUEST\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status", is("REFUNDED")));
+
+        // The status still moves (the legacy path's guarantee), but with no amount known nothing is
+        // journalled — an honest blank rather than the zero residual that used to read as "booked".
+        verify(transactionClient).commitStatus(eq("TXN-W7"), any());
+        verifyNoInteractions(revenueLedgerClient);
     }
 
     // ---- T2-7: refund routes by scheme; an unsupported corridor is a structured error ----
