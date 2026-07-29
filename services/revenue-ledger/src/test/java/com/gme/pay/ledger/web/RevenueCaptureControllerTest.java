@@ -3,6 +3,9 @@ package com.gme.pay.ledger.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gme.pay.ledger.domain.ledger.LedgerPostingService;
+import com.gme.pay.ledger.fees.SchemeFeeSplitCalculator;
+import com.gme.pay.ledger.persistence.InMemoryJournalStore;
 import com.gme.pay.ledger.revenue.RevenueCaptureService;
 import com.gme.pay.ledger.revenue.RevenueRecord;
 import com.gme.pay.ledger.revenue.RevenueRecordStore;
@@ -48,7 +51,12 @@ class RevenueCaptureControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new RevenueCaptureController(new RevenueCaptureService(store)))
+        // T2-4: the capture service now journals as well as records. This slice asserts the HTTP
+        // contract only, so the journal goes to an in-memory store (the journal shape itself is
+        // covered by RevenueCaptureJournalTest).
+        LedgerPostingService posting =
+                new LedgerPostingService(new InMemoryJournalStore(), new SchemeFeeSplitCalculator());
+        mvc = standaloneSetup(new RevenueCaptureController(new RevenueCaptureService(store, posting)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }

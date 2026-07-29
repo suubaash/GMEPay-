@@ -2,6 +2,69 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-07-28 — the main P&L now reaches the double-entry journal (T2-4, feat/exec-gap-closure-2026-07-28)
+
+Additive. **No schema change** — no new table or column was needed, so no Flyway migration was added
+(next free version in this module remains `V007`; there are no vendor-specific migration dirs here).
+
+### Fixed
+- **Revenue capture now posts a balanced journal.** `RevenueCaptureService.capture` is `@Transactional`
+  and calls the new `LedgerPostingService.postCapturedRevenueJournal` in the SAME transaction as the
+  `revenue_records` insert, so the record and its journal commit together or not at all. Before this the
+  class documented itself as "Not double-entry" and `LedgerPostingService.postRevenueCapture` /
+  `postFeeShareSplit` had **zero production callers** — journals received only rounding residuals and
+  cancel/refund reversals, so `RECEIVABLE_PARTNER` was credited by reversals that were never debited by a
+  capture and no trial balance was possible (CFO#7).
+  - `DEBIT RECEIVABLE_PARTNER / CREDIT REVENUE_FX_MARGIN` (USD) and
+    `DEBIT RECEIVABLE_PARTNER / CREDIT REVENUE_SERVICE_CHARGE` (service-charge ccy) — the same accounts
+    and sides `postRevenueCapture` always used. **No account code and no accounting policy was invented.**
+  - Idempotent on `txnRef`: a CREDIT to an income account is only ever produced by an original capture
+    (a reversal mirrors the sides), so a replay/Kafka redelivery adds nothing. DB backstop is the existing
+    `UNIQUE(revenue_records.txn_ref)`, since both writes share one transaction.
+  - Zero-revenue transactions post **nothing** rather than the nominal zero journal `postRevenueCapture`
+    emits (CFO#14) — they are reported as `zeroAmount` by the reconciliation self-check instead.
+  - A replay also **back-fills** a journal for a record that has none, so pre-T2-4 rows are repairable by
+    re-posting the capture.
+- **The commission split is no longer record-only** (CFO#4). `CommissionSplitRecordService.recordIfAbsent`
+  posts the scheme-side leg via the new `LedgerPostingService.postCommissionSplitJournal`, in its existing
+  transaction, from the amounts already stored on the record (so journal and record cannot drift):
+  `DEBIT RECEIVABLE_PARTNER net / CREDIT REVENUE_GME_FEE_SHARE gmeGross / CREDIT PAYABLE_SCHEME scheme` —
+  again the exact shape `postFeeShareSplit` used. An input that does not satisfy
+  `gmeGross + scheme == net` is **refused**, never silently balanced.
+
+### Added
+- **`GET /v1/journals/trial-balance?startDate=&endDate=[&strict=true]`** → per `(account, currency)`
+  debit/credit totals, plus per-currency whole-book totals with `difference` and a top-level `balanced`
+  flag and an `imbalances` list. An imbalance logs at ERROR and is reported explicitly; `strict=true`
+  additionally returns **409** so an automated day-close check cannot ignore it. This is the artifact that
+  was impossible before: every `Journal` is validated balanced before storage, so a non-zero difference
+  means ledger rows exist that no balanced journal produced.
+- **`GET /v1/revenue/journal-reconciliation?startDate=&endDate=[&strict=true]`** → the finance-team
+  self-check: per-table coverage (`total` / `journalled` / `notJournalled` + the offending `txnRef`s,
+  capped at 100 with an honest `truncated` flag / `zeroAmount`), per-stream recorded-vs-journalled
+  `tieOuts` with a signed `variance`, and `unmappedComponents` — money that is recorded but cannot be
+  journalled for want of an account code. Tie-outs are scoped by **reference set**, not journal post date,
+  so business-date vs post-date skew cannot masquerade as a variance; they compare gross CREDITs, since a
+  revenue record is never reversed while a reversal DEBITs the income account.
+- `TrialBalanceService`, `RevenueJournalReconciliationService`, DTOs `TrialBalanceView` /
+  `RevenueJournalReconciliationView`, and additive date-ranged finders on
+  `LedgerEntryEntityRepository` (`trialBalanceRows`), `RevenueRecordJpaRepository` and
+  `CommissionSplitRecordRepository`.
+- 29 tests (114 total, 0 failures): balanced lines per revenue type, idempotent replay, journal back-fill,
+  record+journal rollback atomicity (induced by the real `NUMERIC(20,8)` vs `NUMERIC(20,4)` column
+  mismatch, not a mock), trial balance zero over a fixture period **and** a deliberate orphan-debit
+  imbalance reported with the exact difference, recorded-but-not-journalled rows surfacing in the
+  self-check, and the HTTP contracts including the `strict` 409.
+
+### Known gap — awaiting a finance-owner decision (deliberately NOT invented)
+- The **partner-side leg of the two-sided commission split** (`commission_splits.partner_share_krw`, the
+  wallet partner's carve out of GME's gross commission) has **no account code in this module**, so it is
+  not journalled. `REVENUE_GME_FEE_SHARE` therefore carries GME's **gross** commission and overstates
+  retained commission by exactly that amount. Rather than adding a plausible account, the amount is
+  reported per period as `unmappedComponents[PARTNER_COMMISSION_SHARE]` and keeps the reconciliation's
+  `clean` flag **false** while it carries money. `CommissionSplitJournalTest` asserts its absence on
+  purpose, so deciding the account forces the mapping in rather than letting the gap be forgotten.
+
 ## 2026-07-03 — journal view read API (feat/journal-view-be)
 
 Additive, read-only. No new dependency, no schema change.
