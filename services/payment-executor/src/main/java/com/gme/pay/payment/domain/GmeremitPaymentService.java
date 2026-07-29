@@ -344,6 +344,31 @@ public class GmeremitPaymentService {
                     null, null, null, payCurrency);
         }
 
+        /**
+         * Factory for a cross-border approved result that BOTH applied FX and executed in a non-KRW
+         * payout currency — the Nepal KRW→NPR corridor (T4-1).
+         *
+         * <p>Distinct from {@link #approvedInCurrency} (which carries no rate, because it was the
+         * no-FX pass-through) and from {@link #approvedFx} (which predates the {@code payCurrency}
+         * field and therefore reads as MNT-only). The KRW leg rides {@code payAmountKrw} /
+         * {@code feeKrw} / {@code chargedKrw}; the foreign payout rides {@code payAmount} +
+         * {@code payCurrency}, with {@code fxRate} the offer rate actually applied.
+         */
+        public static WalletResult approvedFxInCurrency(String txnRef,
+                                                        String schemeTxnRef,
+                                                        String merchantName,
+                                                        BigDecimal payAmountKrw,
+                                                        BigDecimal feeKrw,
+                                                        BigDecimal chargedKrw,
+                                                        String committedAt,
+                                                        BigDecimal fxRate,
+                                                        BigDecimal payAmount,
+                                                        String payCurrency) {
+            return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
+                    payAmountKrw, feeKrw, chargedKrw, committedAt, null,
+                    true, fxRate, payAmount, payCurrency);
+        }
+
         /** Factory for FX (overseas) approved results. */
         public static WalletResult approvedFx(String schemeTxnRef,
                                               String merchantName,

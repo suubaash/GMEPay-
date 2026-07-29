@@ -2,6 +2,82 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (T4-1: the Nepal corridor gets a real money path)
+
+### Fixed - the Nepal corridor stopped sending KRW as NPR
+`NepalPaymentService` used to hand the wallet's KRW amount to the Nepal adapter labelled `NPR`: no FX,
+no fee, no prefunding, no revenue. Its own Javadoc said so ("the wallet-labeled KRW must not be sent
+as NPR in production"). It now runs the same pipeline `SendmnPaymentService` runs for KRW->MNT:
+price -> FX -> fee -> USD prefunding debit -> scheme submit -> transaction commit -> revenue capture.
+
+- **FX applied, both directions.** `offerRate = liveMid(KRW/NPR) x (1 - configuredMargin)`.
+  A KRW-quoted request derives the NPR payout; an NPR-quoted request derives the KRW collection.
+  There is no pass-through mode left, and an amount in any other currency is rejected rather than
+  reinterpreted.
+- **Configured service fee.** `chargedKrw = amountKrw + feeKrw`.
+- **Prefunding.** `chargedUsd` is debited exactly once on `partnerTxnRef` and REVERSED on a scheme
+  decline / non-APPROVED status. A `PENDING` (or unresolvable) outcome KEEPS the float - the payment
+  may have landed. A transport failure now runs the idempotent `lookupStatus` probe before deciding
+  (ADR-016 SS4) instead of the old blind path.
+- **Revenue booked for real.** `postRevenueCapture` (FX margin + service charge), never
+  `postRoundingResidual` - corridor P&L must not land in `REVENUE_ROUNDING` (the T2-1 mistake).
+  Failed postings go to the durable `revenue_posting_failures` sink.
+- **Transaction values are real, not null.** The APPROVED `StatusPatch` carries `payoutMarginUsd`,
+  `collectionMarginUsd`, `collectionUsd` and `prefundDeductedUsd`; the row records the NPR payout leg
+  and the KRW collection leg.
+
+### Added - pricing is configuration, and an unpriced corridor REFUSES
+- **`NepalCorridorPricing`** resolves the rate, margin and fee. The margin and fee are business
+  decisions, so they are read from config and **never defaulted**:
+  - margin <- config-registry `GET /v1/partners/{code}/fx-config` -> `marginBps` (`partner_fx_config`, V019)
+  - fee <- config-registry `GET /v1/partners/{code}/fee-schedules/effective?schemeId=NEPAL&direction=OVERSEAS&amountUsd=...`
+    -> `serviceFeeUsd` (`partner_fee_schedule`, V018)
+  - or module config `gmepay.payment.nepal.fx-margin` / `.service-fee-krw`, both **unset by default**
+    (so a local/sim environment is made transactable by CONFIGURATION, not by a hardcoded default).
+- **`CorridorPricingUnavailableException`** -> HTTP 503 with a stable code:
+  `CORRIDOR_PRICING_NOT_CONFIGURED` (retryable=false - an owner must enter the terms) or
+  `CORRIDOR_RATE_UNAVAILABLE` (retryable=true). Every refusal happens **before** any side effect: no
+  float moved, no scheme call, a FAILED attempt row persisted.
+- **The 1350 KRW/USD fallback is NOT used to price.** `UsdAmountBasis.KRW_PER_USD_FALLBACK` exists so
+  a regulatory CAP can still be evaluated during a rate outage (a conservative direction for a
+  control); using it to sell FX is the opposite. Nepal fetches USD/KRW itself and fails closed.
+- **`PartnerConfigClient.resolveFxConfig` / `.resolveServiceFeeUsd`** + their `RestPartnerConfigClient`
+  implementations. Both stay fail-soft (empty on 404/unreachable) - the DECISION to refuse lives in the
+  corridor, preserving the "a client never fails a payment by itself" contract.
+- **`WalletResult.approvedFxInCurrency`** - an approval that both applied FX and paid out in a non-KRW
+  currency (`approvedFx` predates `payCurrency`; `approvedInCurrency` predates FX).
+
+### Changed
+- **`FailoverPaymentRouter` DELEGATES the Nepal corridor** to `NepalPaymentService` instead of walking
+  it in the generic candidate loop. A dispatcher cannot price a corridor, and walking it was exactly
+  how the KRW arrived labelled NPR. `NepalPaymentService` is therefore no longer dead code - it is the
+  corridor's single money path, and there are no longer two divergent Nepal paths. Nepal does not fail
+  over (one scheme edge; a "failover" would pay a different corridor with Nepal's pricing applied), and
+  extra candidates are logged, not walked. **With no Nepal money path wired the router REFUSES** - the
+  pass-through is not an acceptable fallback.
+- **`WalletPayController`** - `payAmount` now reports the FX'd payout (not the KRW leg) whenever a
+  corridor applied FX; a pricing refusal feeds the DECLINE_SPIKE monitor like any other decline.
+- **T4-2 basis on this path got stronger**: the gate runs `enforceUsd(chargedUsd)` - bit-for-bit the
+  figure the prefunding debit moves - instead of converting a pass-through NPR amount at USD/NPR.
+
+### Tests
+- **`NepalPaymentServiceTest`** (24): FX applied / never pass-through, offer rate = mid - margin,
+  NPR-quoted derivation, fee applied, prefunding deducted once + reversed on decline + KEPT on PENDING,
+  revenue to the real accounts with `postRoundingResidual` never called, real margins on the commit,
+  both legs recorded, config-registry-sourced pricing, and six fail-closed refusals (no margin, no fee,
+  no KRW/NPR rate, no USD/KRW rate, nonsense margin, no float ledger) each asserting no scheme call and
+  no float moved - plus T4-2 gating still enforced on the corridor.
+- **`FailoverPaymentRouterTest`** - Nepal delegation + refusal-without-a-money-path. The generic
+  failover-mechanics candidate moved off `NEPAL` (it is delegated now, so it can no longer stand in for
+  "some cross-border scheme"); same for `ResilientFailoverIntegrationTest`.
+- **`WalletLimitEnforcementTest`** - the Nepal block now exercises the real production chain
+  (`/v1/pay` -> router -> corridor -> gate) on KRW amounts and asserts the cap is charged on the
+  corridor's fee-inclusive `chargedUsd`.
+
+### Owner action required before the corridor can transact
+The FX margin and the service fee for KRW->NPR. Until they are configured the corridor refuses every
+payment - deliberately not sellable rather than silently mispriced.
+
 ## [feat/pay-idempotency] — 2026-07-03 (request-level idempotency on POST /v1/pay)
 
 ### Added

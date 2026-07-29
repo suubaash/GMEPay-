@@ -87,6 +87,12 @@ public class FailoverPaymentRouter {
             "merchantnotfound",
             "merchantinactive");
 
+    /**
+     * Scheme code of the Nepal corridor. Matched case-insensitively; see
+     * {@link #payNepalCorridor} for why this one scheme is delegated instead of walked.
+     */
+    private static final String NEPAL_SCHEME = "NEPAL";
+
     private final SmartRouterClient smartRouterClient;
     private final SchemeClient schemeClient;
     private final ExecutionAttemptRepository attemptRepository;
@@ -94,6 +100,11 @@ public class FailoverPaymentRouter {
     @Nullable private final TransactionClient transactionClient;
     /** T4-2: per-txn + cumulative regulatory limit gate. Never null (see {@link WalletLimitGate#disabled()}). */
     private final WalletLimitGate limitGate;
+    /**
+     * T4-1: the Nepal corridor's ONE money path. A Nepal candidate is delegated here rather than
+     * walked by the generic loop, which would send the KRW amount as NPR.
+     */
+    @Nullable private final NepalPaymentService nepalPaymentService;
 
     @Autowired
     public FailoverPaymentRouter(SmartRouterClient smartRouterClient,
@@ -101,20 +112,22 @@ public class FailoverPaymentRouter {
                                  ExecutionAttemptRepository attemptRepository,
                                  @Value("${gmepay.routing.max-hops:3}") int maxHops,
                                  @Nullable TransactionClient transactionClient,
-                                 @Nullable WalletLimitGate limitGate) {
+                                 @Nullable WalletLimitGate limitGate,
+                                 @Nullable NepalPaymentService nepalPaymentService) {
         this.smartRouterClient = smartRouterClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.maxHops = maxHops > 0 ? maxHops : 3;
         this.transactionClient = transactionClient;
         this.limitGate = limitGate != null ? limitGate : WalletLimitGate.disabled();
+        this.nepalPaymentService = nepalPaymentService;
     }
 
     /** Test constructor — no transaction client, default max-hops. */
     FailoverPaymentRouter(SmartRouterClient smartRouterClient,
                           SchemeClient schemeClient,
                           ExecutionAttemptRepository attemptRepository) {
-        this(smartRouterClient, schemeClient, attemptRepository, 3, null, null);
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, null, null);
     }
 
     /** Test constructor with the T4-2 limit gate wired. */
@@ -122,7 +135,17 @@ public class FailoverPaymentRouter {
                           SchemeClient schemeClient,
                           ExecutionAttemptRepository attemptRepository,
                           @Nullable WalletLimitGate limitGate) {
-        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate);
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate, null);
+    }
+
+    /** Test constructor with the T4-1 Nepal corridor delegate wired. */
+    FailoverPaymentRouter(SmartRouterClient smartRouterClient,
+                          SchemeClient schemeClient,
+                          ExecutionAttemptRepository attemptRepository,
+                          @Nullable WalletLimitGate limitGate,
+                          @Nullable NepalPaymentService nepalPaymentService) {
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate,
+                nepalPaymentService);
     }
 
     /**
@@ -141,11 +164,16 @@ public class FailoverPaymentRouter {
     }
 
     /**
-     * As {@link #pay(String, BigDecimal, String, String)} but with an explicit wallet-supplied pay
-     * {@code currency}. When non-null it is the authoritative pay currency (e.g. NPR for a Fonepay
-     * scan); {@code amount} is then interpreted in that currency and passed straight through to the
-     * scheme adapter (the Nepal adapter converts NPR→paisa). When null the currency is derived from
-     * the resolved scheme, keeping the ZeroPay/KRW path identical. No KRW→foreign FX is done here.
+     * As {@link #pay(String, BigDecimal, String, String)} but with an explicit wallet-supplied
+     * {@code currency} for {@code amount}. When null the currency is derived from the resolved scheme,
+     * keeping the ZeroPay/KRW path identical.
+     *
+     * <p><b>Nepal (T4-1).</b> A Nepal candidate is delegated to {@link NepalPaymentService}, which
+     * prices the corridor (live KRW/NPR rate × configured margin, configured fee, USD prefunding,
+     * revenue capture). {@code currency} then selects which leg the caller fixed — {@code KRW} (the
+     * default) quotes the collection, {@code NPR} quotes the merchant payout — and FX is applied
+     * either way. For every OTHER scheme this router remains a dispatcher: {@code amount} is submitted
+     * in {@code currency} as-is and no FX is done here.
      */
     public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction,
                             @Nullable String payCurrency) {
@@ -164,8 +192,9 @@ public class FailoverPaymentRouter {
      * terminal decline or exhausts its candidates; an APPROVED/PENDING outcome keeps the cap consumed
      * (fail-safe: a payment that may have landed must not free cap).
      *
-     * <p>This is the LIVE cross-border wallet path (a Fonepay/NepalPay scan arrives here, not at
-     * {@code NepalPaymentService}), so it is the enforcement point that actually matters for Nepal.
+     * <p>This is the LIVE cross-border wallet path — a Fonepay/NepalPay scan arrives here. Since T4-1
+     * it hands the Nepal corridor over to {@link NepalPaymentService}, which runs the very same gate on
+     * its own {@code chargedUsd}; the gate below therefore covers the non-Nepal schemes.
      */
     public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction,
                             @Nullable String payCurrency, WalletPartnerRef partner) {
@@ -186,6 +215,12 @@ public class FailoverPaymentRouter {
             log.warn("No routing candidates for network={} country={} (userRef={})",
                     classification.networkIdentifier(), classification.country(), userRef);
             return WalletResult.declined(null, "unsupported_qr");
+        }
+
+        // T4-1: a Nepal candidate is NOT walked by the generic loop — it is delegated to the corridor's
+        // single money path, which applies FX / fee / prefunding / revenue. See payNepalCorridor.
+        if (hasNepalCandidate(candidates)) {
+            return payNepalCorridor(qrPayload, amount, payCurrency, userRef, partner, candidates);
         }
 
         // T4-2 regulatory gate — per-transaction min/max USD + cumulative daily/monthly/annual USD +
@@ -214,8 +249,9 @@ public class FailoverPaymentRouter {
         for (int i = 0; i < hops; i++) {
             PartnerSchemeView candidate = candidates.get(i);
             String reference = "FO-" + candidate.schemeId() + "-" + UUID.randomUUID();
-            // Wallet-supplied pay currency is authoritative when present (e.g. NPR for Fonepay);
-            // otherwise fall back to the scheme-derived currency (ZeroPay=KRW). No FX is applied.
+            // Wallet-supplied pay currency is authoritative when present; otherwise fall back to the
+            // scheme-derived currency (ZeroPay=KRW). No FX is applied on this generic dispatch path —
+            // the Nepal corridor, which needs FX, never reaches this loop (see payNepalCorridor).
             String currency = resolveCurrency(payCurrency, candidate.schemeId());
 
             try {
@@ -279,6 +315,58 @@ public class FailoverPaymentRouter {
         // charge may have landed), so the cumulative cap is returned.
         limitGate.reverse(limitCharge);
         return WalletResult.declined(null, lastReason);
+    }
+
+    /** True when any resolved candidate is the Nepal corridor. */
+    private static boolean hasNepalCandidate(List<PartnerSchemeView> candidates) {
+        for (PartnerSchemeView c : candidates) {
+            if (c != null && NEPAL_SCHEME.equalsIgnoreCase(c.schemeId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Delegates a Nepal payment to {@link NepalPaymentService} — the corridor's single money path
+     * (gap T4-1).
+     *
+     * <h2>Why delegate instead of walking the loop</h2>
+     * The generic loop is a scheme <em>dispatcher</em>: it submits {@code amount} in {@code currency}
+     * to each candidate in turn. For Nepal that meant handing the wallet's KRW to the Nepal adapter
+     * labelled NPR — no FX, no fee, no prefunding, no revenue. Pricing a cross-border corridor is not
+     * something a dispatcher can do generically (the rate, margin and fee are per-corridor commercial
+     * terms), so the corridor owns its own money path exactly as {@code SendmnPaymentService} does, and
+     * this router hands the payment over whole. The delegate runs the T4-2 limit gate itself on its own
+     * {@code chargedUsd}, so the gate still fires exactly once per payment.
+     *
+     * <h2>No failover</h2>
+     * Nepal resolves to one scheme edge; a "failover" would mean paying a different corridor with
+     * corridor-specific pricing already applied. Additional candidates alongside Nepal are logged and
+     * ignored rather than silently walked.
+     *
+     * <h2>Fail closed</h2>
+     * If no Nepal money path is wired (a minimal/legacy context), the payment is REFUSED. There is
+     * deliberately no fallback to the old pass-through: mispricing a live payment is worse than
+     * refusing it, and T4-1's acceptable outcome is a clean refusal.
+     */
+    private WalletResult payNepalCorridor(String qrPayload, BigDecimal amount,
+                                          @Nullable String payCurrency, String userRef,
+                                          WalletPartnerRef partner,
+                                          List<PartnerSchemeView> candidates) {
+        if (candidates.size() > 1) {
+            log.warn("Nepal corridor resolved with {} candidates — the corridor money path handles the"
+                    + " Nepal edge only; the remaining candidates are not eligible for failover",
+                    candidates.size());
+        }
+        if (nepalPaymentService == null) {
+            log.error("Nepal candidate resolved but no NepalPaymentService is wired — refusing"
+                    + " (the KRW-as-NPR pass-through this replaced is not an acceptable fallback)");
+            throw CorridorPricingUnavailableException.notConfigured(
+                    NepalCorridorPricing.CORRIDOR, "its money path",
+                    "no NepalPaymentService bean is wired into payment-executor");
+        }
+        return nepalPaymentService.pay(qrPayload, amount, payCurrency, userRef, partner);
     }
 
     /**

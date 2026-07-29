@@ -127,6 +127,69 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
         }
     }
 
+    /**
+     * T4-1: the partner's CURRENT FX terms from the Slice 6 commercial surface
+     * ({@code GET /v1/partners/{code}/fx-config}). Fail-soft (empty on 404 / unreachable) — the
+     * calling corridor decides, and for a cross-border corridor "no margin configured" means REFUSE.
+     */
+    @Override
+    public java.util.Optional<PartnerConfigClient.FxTerms> resolveFxConfig(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            FxConfigResponse body = restClient.get()
+                    .uri("/v1/partners/{id}/fx-config", partnerCode)
+                    .retrieve()
+                    .body(FxConfigResponse.class);
+            if (body == null) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new PartnerConfigClient.FxTerms(
+                    parseMoney(body.marginBps()), body.referenceRateSource()));
+        } catch (RuntimeException ex) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
+     * T4-1: the effective USD service fee from the Slice 6 fee schedule
+     * ({@code GET /v1/partners/{code}/fee-schedules/effective}). Fail-soft (empty when
+     * {@code resolved=false} / unreachable) — a cross-border corridor turns empty into a refusal.
+     */
+    @Override
+    public java.util.Optional<java.math.BigDecimal> resolveServiceFeeUsd(
+            String partnerCode, String schemeId, String direction, java.math.BigDecimal amountUsd) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            EffectiveFeeResponse body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/v1/partners/{id}/fee-schedules/effective");
+                        if (schemeId != null && !schemeId.isBlank()) {
+                            uriBuilder.queryParam("schemeId", schemeId);
+                        }
+                        if (direction != null && !direction.isBlank()) {
+                            uriBuilder.queryParam("direction", direction);
+                        }
+                        if (amountUsd != null) {
+                            uriBuilder.queryParam("amountUsd", amountUsd.toPlainString());
+                        }
+                        return uriBuilder.build(partnerCode);
+                    })
+                    .retrieve()
+                    .body(EffectiveFeeResponse.class);
+            if (body == null || !body.resolved()
+                    || body.serviceFeeUsd() == null || body.serviceFeeUsd().isBlank()) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new java.math.BigDecimal(body.serviceFeeUsd()));
+        } catch (RuntimeException ex) {
+            return java.util.Optional.empty();
+        }
+    }
+
     @Override
     public java.util.Optional<PartnerConfigClient.TxnLimits> resolveLimits(String partnerCode) {
         if (partnerCode == null || partnerCode.isBlank()) {
@@ -165,6 +228,17 @@ public class RestPartnerConfigClient implements PartnerConfigClient {
     record LimitsResponse(
             String perTxnMinUsd, String perTxnMaxUsd, String dailyCapUsd,
             String monthlyCapUsd, String annualCapUsd, String licenseType, Integer dailyTxnCountLimit) {}
+
+    /**
+     * Wire format for {@code GET /v1/partners/{id}/fx-config} (config-registry {@code FxConfigView};
+     * {@code marginBps} rides as a decimal STRING per MONEY_CONVENTION.md).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record FxConfigResponse(String marginBps, String referenceRateSource, Integer quoteHoldSeconds) {}
+
+    /** Wire format for {@code GET /v1/partners/{id}/fee-schedules/effective}. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EffectiveFeeResponse(String serviceFeeUsd, boolean resolved) {}
 
     /** Wire format for {@code GET /v1/commission/effective} (config-registry EffectiveCommissionView). */
     @JsonIgnoreProperties(ignoreUnknown = true)

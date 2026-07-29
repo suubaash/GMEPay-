@@ -53,7 +53,13 @@ class ResilientFailoverIntegrationTest {
     private static final String QR = "00020101021126150011fonepay.com5802NP5910KINAUN PVT6304ABCD";
     private static final BigDecimal AMT = new BigDecimal("1000");
 
-    private final PartnerSchemeView primaryNepal = new PartnerSchemeView(1L, "PrimaryPartner", "NEPAL", 0);
+    /**
+     * The primary (breaker-tripped) scheme. It was NEPAL until T4-1 gave the Nepal corridor its own
+     * money path — a Nepal candidate is now delegated to {@code NepalPaymentService} instead of being
+     * walked by the failover loop, so it can no longer stand in for "a cross-border scheme" here. The
+     * breaker/failover contract under test is scheme-agnostic.
+     */
+    private final PartnerSchemeView primaryNepal = new PartnerSchemeView(1L, "PrimaryPartner", "khqr", 0);
     private final PartnerSchemeView secondaryZeropay = new PartnerSchemeView(2L, "SecondaryPartner", "zeropay", 1);
 
     private SchemeClientRouter routerDelegate;
@@ -84,42 +90,43 @@ class ResilientFailoverIntegrationTest {
 
     private void tripNepalBreaker() {
         when(routerDelegate.submitMpm(any(MpmSubmitRequest.class)))
-                .thenThrow(new SchemeTimeoutException("NEPAL"));
+                .thenThrow(new SchemeTimeoutException("khqr"));
         for (int i = 0; i < 4; i++) {
             try {
                 resilientClient.submitMpm(new MpmSubmitRequest(
-                        "warm-" + i, null, AMT, "NPR", "NEPAL", QR));
+                        "warm-" + i, null, AMT, "NPR", "khqr", QR));
             } catch (RuntimeException ignored) {
                 // expected technical failures that trip the breaker
             }
         }
-        assertEquals(CircuitBreaker.State.OPEN, breakerRegistry.circuitBreaker("NEPAL").getState());
+        // ResilientSchemeClient keys breakers by the UPPER-CASED scheme code.
+        assertEquals(CircuitBreaker.State.OPEN, breakerRegistry.circuitBreaker("KHQR").getState());
     }
 
     @Test
-    @DisplayName("OPEN breaker on primary (NEPAL) → router fails over to secondary (ZeroPay) and APPROVES")
+    @DisplayName("OPEN breaker on primary (primary) → router fails over to secondary (ZeroPay) and APPROVES")
     void openBreakerOnPrimary_failsOverToSecondary() {
         tripNepalBreaker();
-        // Clear the warm-up invocation counts: from here NEPAL submit must be short-circuited (never
+        // Clear the warm-up invocation counts: from here primary submit must be short-circuited (never
         // delegated), while ZeroPay is served normally.
         org.mockito.Mockito.reset(routerDelegate);
 
         when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
                 .thenReturn(List.of(primaryNepal, secondaryZeropay));
-        // NEPAL breaker is OPEN → submit short-circuits (no delegate call). ZeroPay is healthy.
+        // primary breaker is OPEN → submit short-circuits (no delegate call). ZeroPay is healthy.
         when(routerDelegate.submitMpm(argMatchesScheme("zeropay")))
                 .thenReturn(new MpmSubmitResponse("ZP_OK", "ZP-TXN-2", Instant.now()));
-        // The anti-double-charge guard for the OPEN NEPAL breaker is itself short-circuited (throws) →
+        // The anti-double-charge guard for the OPEN primary breaker is itself short-circuited (throws) →
         // router treats it as "cannot confirm → safe to fail over" (no charge landed).
-        when(routerDelegate.lookupStatus(eq("NEPAL"), anyString()))
-                .thenReturn(LookupStatus.NOT_FOUND); // (not reached — NEPAL breaker open)
+        when(routerDelegate.lookupStatus(eq("khqr"), anyString()))
+                .thenReturn(LookupStatus.NOT_FOUND); // (not reached — primary breaker open)
 
         WalletResult result = failover.pay(QR, AMT, "user-1", "OVERSEAS");
 
         assertTrue(result.approved(), "should approve via the healthy secondary");
         assertEquals("ZP-TXN-2", result.schemeTxnRef());
-        // NEPAL submit was NEVER delegated post-open (short-circuited); only ZeroPay was actually submitted.
-        verify(routerDelegate, never()).submitMpm(argMatchesScheme("NEPAL"));
+        // primary submit was NEVER delegated post-open (short-circuited); only ZeroPay was actually submitted.
+        verify(routerDelegate, never()).submitMpm(argMatchesScheme("khqr"));
         verify(routerDelegate, times(1)).submitMpm(argMatchesScheme("zeropay"));
     }
 
@@ -135,12 +142,12 @@ class ResilientFailoverIntegrationTest {
         WalletResult result = failover.pay(QR, AMT, "user-1", "OVERSEAS");
 
         assertFalse(result.approved(), "an open breaker must NEVER yield an approval");
-        // NEPAL submit was short-circuited by the open breaker → the delegate was never invoked.
-        verify(routerDelegate, never()).submitMpm(argMatchesScheme("NEPAL"));
+        // primary submit was short-circuited by the open breaker → the delegate was never invoked.
+        verify(routerDelegate, never()).submitMpm(argMatchesScheme("khqr"));
     }
 
     @Test
-    @DisplayName("ZEROPAY breaker stays CLOSED while NEPAL is open (per-scheme isolation through the router)")
+    @DisplayName("ZEROPAY breaker stays CLOSED while the primary is open (per-scheme isolation through the router)")
     void secondarySchemeUnaffectedByPrimaryOpen() {
         tripNepalBreaker();
         assertEquals(CircuitBreaker.State.CLOSED,

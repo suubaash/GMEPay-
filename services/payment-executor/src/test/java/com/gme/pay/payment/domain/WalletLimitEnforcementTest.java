@@ -325,17 +325,41 @@ class WalletLimitEnforcementTest {
     }
 
     // =======================================================================================
-    // Nepal — the LIVE path is the failover router (a Fonepay scan never reaches
-    // NepalPaymentService); both are covered.
+    // Nepal — the LIVE path is the failover router, which since T4-1 DELEGATES the corridor to
+    // NepalPaymentService (its single money path). So the router test below exercises the real
+    // production chain: /v1/pay → FailoverPaymentRouter → NepalPaymentService → gate.
+    //
+    // The T4-2 basis also changed with T4-1 and is now STRONGER: the gate no longer converts a
+    // pass-through NPR amount at USD/NPR, it runs on the corridor's own fee-inclusive `chargedUsd`
+    // (enforceUsd), i.e. bit-for-bit the figure the prefunding deduct moves.
     // =======================================================================================
 
     @Nested
-    @DisplayName("Nepal (NPR) corridor")
+    @DisplayName("Nepal (KRW→NPR) corridor")
     class Nepal {
 
         /** A Fonepay MPM QR: classifies to fonepay.com / NP. */
         private static final String FONEPAY_QR =
                 "00020101021126150011fonepay.com5802NP5910KINAUN PVT6304ABCD";
+
+        /** Owner-configured corridor terms (T4-1 refuses without them). */
+        private static final String MARGIN = "0.02";
+        private static final String FEE_KRW = "500";
+
+        /**
+         * Corridor-specific stubs. Kept in a nested {@code @BeforeEach} (not inside the helpers) so a
+         * test that wants a rate to FAIL can re-stub it afterwards — re-stubbing a
+         * {@code thenThrow} mock inside a helper would trigger the throw during stubbing.
+         */
+        @BeforeEach
+        void nepalStubs() {
+            when(rateClient.fetchLiveRate("KRW", "NPR")).thenReturn(
+                    new RateClient.LiveRate("KRW", "NPR", new BigDecimal("0.10"), Instant.now(), "sim"));
+            // The Nepal adapter maps its state onto schemeApprovalCode, so an approval reads "APPROVED"
+            // (the outer setUp's ZeroPay-shaped "AP-1" is not one).
+            when(schemeClient.submitMpm(any())).thenReturn(
+                    new SchemeClient.MpmSubmitResponse("APPROVED", "NP-1", Instant.now()));
+        }
 
         private SmartRouterClient router() {
             SmartRouterClient r = mock(SmartRouterClient.class);
@@ -344,89 +368,92 @@ class WalletLimitEnforcementTest {
             return r;
         }
 
-        private FailoverPaymentRouter failover() {
-            return new FailoverPaymentRouter(router(), schemeClient, attemptRepository, gate());
+        private NepalPaymentService corridor() {
+            return new NepalPaymentService(schemeClient, attemptRepository,
+                    new NepalCorridorPricing(rateClient, partnerConfigClient, MARGIN, FEE_KRW),
+                    prefundingClient, gate());
         }
 
-        private NepalPaymentService direct() {
-            return new NepalPaymentService(schemeClient, attemptRepository, gate());
+        /** The production chain: the failover router delegating the Nepal corridor. */
+        private FailoverPaymentRouter failover() {
+            return new FailoverPaymentRouter(router(), schemeClient, attemptRepository, gate(),
+                    corridor());
         }
 
         @Test
-        @DisplayName("failover router: per-txn max exceeded on an NPR amount → declined, NO scheme call")
+        @DisplayName("failover→corridor: per-txn max exceeded → declined, NO scheme call, NO float moved")
         void failover_perTxnMaxExceeded() {
             limitsFor("GMEREMIT", soaekHaeoemong());
-            // 135 NPR per USD → 1,000,000 NPR ≈ 7,407 USD, over the 5,000 USD ceiling.
+            // 8.1M KRW ≈ 6,000 USD, over the 5,000 USD ceiling.
             assertThrows(TransactionLimitExceededException.class,
-                    () -> failover().pay(FONEPAY_QR, new BigDecimal("1000000"), "user-np",
-                            "OVERSEAS", "NPR", WalletPartnerRef.GMEREMIT));
+                    () -> failover().pay(FONEPAY_QR, OVER_CAP_KRW, "user-np",
+                            "OVERSEAS", "KRW", WalletPartnerRef.GMEREMIT));
 
             assertNoSchemeCallAndNoFloatMoved();
             assertFailedAttemptPersisted();
         }
 
         @Test
-        @DisplayName("failover router: daily cap exceeded → declined, NO scheme call")
+        @DisplayName("failover→corridor: daily cap exceeded → declined, NO scheme call")
         void failover_dailyCapExceeded() {
             limitsFor("GMEREMIT", dailyCapOnly("10"));
             cumulativeBreach();
 
             assertThrows(CumulativeLimitExceededException.class,
                     () -> failover().pay(FONEPAY_QR, new BigDecimal("13500"), "user-np",
-                            "OVERSEAS", "NPR", WalletPartnerRef.GMEREMIT));
+                            "OVERSEAS", "KRW", WalletPartnerRef.GMEREMIT));
 
             assertNoSchemeCallAndNoFloatMoved();
         }
 
         @Test
-        @DisplayName("failover router: within limits → APPROVED (NPR pass-through unchanged)")
+        @DisplayName("failover→corridor: within limits → APPROVED, cap charged on the real chargedUsd")
         void failover_withinLimitsApproves() {
             limitsFor("GMEREMIT", soaekHaeoemong());
 
             WalletResult result = failover().pay(FONEPAY_QR, new BigDecimal("13500"), "user-np",
-                    "OVERSEAS", "NPR", WalletPartnerRef.GMEREMIT);
+                    "OVERSEAS", "KRW", WalletPartnerRef.GMEREMIT);
 
             assertTrue(result.approved(), "a within-limits Nepal payment must still approve");
-            // 13,500 NPR / 135 = 100 USD, charged against the 50,000 USD annual cap.
+            // (13,500 + 500 fee) / 1350 = 10.37037037 USD against the 50,000 USD annual cap — the
+            // corridor's own fee-inclusive figure, not a converted pass-through amount.
             verify(prefundingClient).chargeCumulative(eq(1L), anyString(),
-                    eq(new BigDecimal("100.00000000")),
+                    eq(new BigDecimal("10.37037037")),
                     eq(null), eq(null), eq(new BigDecimal("50000")), eq(null));
         }
 
         @Test
-        @DisplayName("FAIL CLOSED: limits configured but no USD/NPR rate → refused, NO scheme call")
-        void failover_failsClosedWithoutUsdBasis() {
+        @DisplayName("FAIL CLOSED: limits configured but the corridor cannot be priced → refused, NO scheme call")
+        void failover_failsClosedWithoutPricing() {
             limitsFor("GMEREMIT", soaekHaeoemong());
-            when(rateClient.fetchLiveRate("USD", "NPR"))
+            when(rateClient.fetchLiveRate("KRW", "NPR"))
                     .thenThrow(new PaymentException("rate provider down"));
 
-            assertThrows(LimitCheckUnavailableException.class,
+            assertThrows(CorridorPricingUnavailableException.class,
                     () -> failover().pay(FONEPAY_QR, new BigDecimal("13500"), "user-np",
-                            "OVERSEAS", "NPR", WalletPartnerRef.GMEREMIT));
+                            "OVERSEAS", "KRW", WalletPartnerRef.GMEREMIT));
 
             assertNoSchemeCallAndNoFloatMoved();
         }
 
         @Test
-        @DisplayName("NepalPaymentService: per-txn max exceeded → declined, NO scheme call")
+        @DisplayName("NepalPaymentService directly: per-txn max exceeded → declined, NO scheme call")
         void direct_perTxnMaxExceeded() {
             limitsFor("NEPAL", soaekHaeoemong());
 
             assertThrows(TransactionLimitExceededException.class,
-                    () -> direct().pay(FONEPAY_QR, new BigDecimal("1000000"), "user-np",
+                    () -> corridor().pay(FONEPAY_QR, OVER_CAP_KRW, "KRW", "user-np",
                             WalletPartnerRef.of("NEPAL", 7L)));
 
             assertNoSchemeCallAndNoFloatMoved();
         }
 
         @Test
-        @DisplayName("NepalPaymentService: within limits → APPROVED")
+        @DisplayName("NepalPaymentService directly: within limits → APPROVED")
         void direct_withinLimitsApproves() {
             limitsFor("NEPAL", soaekHaeoemong());
-            when(schemeClient.submitMpm(any())).thenReturn(
-                    new SchemeClient.MpmSubmitResponse("APPROVED", "NP-1", Instant.now()));
 
-            WalletResult result = direct().pay(FONEPAY_QR, new BigDecimal("13500"), "user-np",
+            WalletResult result = corridor().pay(FONEPAY_QR, new BigDecimal("13500"), "KRW", "user-np",
                     WalletPartnerRef.of("NEPAL", 7L));
 
             assertTrue(result.approved());

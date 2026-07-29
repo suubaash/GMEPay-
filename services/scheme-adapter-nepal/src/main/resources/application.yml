@@ -31,6 +31,19 @@ gmepay:
       token: sim-token
       # Authorization: Key <key> for /qrscan-thirdparty/pay/ and /status/
       key: sim-key
+      # Request signing (issuance-extension): RSA-2048 / PKCS#1 v1.5 / SHA-256 over base64(data).
+      # NO key is shipped. All three keys below are intentionally EMPTY, so an unconfigured
+      # deployment FAILS CLOSED — signed /pay and /status calls are refused rather than sent with a
+      # placeholder signature (gap T4-1).
+      signing:
+        # PKCS#8 private key, PEM or bare base64 DER. Supply via
+        # GMEPAY_SCHEME_NEPAL_SIGNING_PRIVATE_KEY (env/secret), never in a committed file.
+        private-key: ""
+        # …or a path to a mounted secret file containing the same.
+        private-key-path: ""
+        # EPHEMERAL_DEV = generate a throwaway RSA-2048 keypair at startup, for local/sim runs only
+        # (sim-nepal-qr soft-logs signatures). Explicit opt-in; leave empty everywhere else.
+        mode: ""
 
 springdoc:
   api-docs:

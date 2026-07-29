@@ -1,6 +1,7 @@
 package com.gme.pay.payment.web;
 
 import com.gme.pay.payment.alert.DeclineSpikeMonitor;
+import com.gme.pay.payment.domain.CorridorPricingUnavailableException;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
@@ -74,7 +75,12 @@ import java.util.Optional;
  * scheme routed via {@link FailoverPaymentRouter} (e.g. Nepal Fonepay) the amount is executed in
  * {@code currency} (NPR) rather than assumed KRW; the response then carries {@code payCurrency} +
  * {@code payAmount}. The ZeroPay/GMEREMIT domestic KRW path (currency absent or {@code KRW}) is
- * unchanged, keeping the ₩500 fee. No KRW→foreign FX happens here.
+ * unchanged, keeping the ₩500 fee.
+ *
+ * <p><b>T4-1.</b> The NEPAL corridor is priced by the hub: {@link FailoverPaymentRouter} delegates it
+ * to {@code NepalPaymentService}, which applies the configured KRW→NPR FX margin and service fee,
+ * debits USD prefunding and books revenue. {@code currency} selects the quoted leg (KRW = collection,
+ * the default; NPR = merchant payout). Other schemes are still dispatched without hub-side FX.
  */
 @RestController
 @RequestMapping("/v1/pay")
@@ -336,9 +342,13 @@ public class WalletPayController {
         try {
             if (routeViaFailover) {
                 // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
-                // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
-                // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
-                // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
+                // The wallet-supplied currency (default KRW when absent) says which currency `amountKrw`
+                // is denominated in.
+                //
+                // T4-1: for the NEPAL corridor the router delegates to NepalPaymentService, which DOES do
+                // KRW→NPR FX (configured margin + fee + USD prefunding + revenue). `currency` then picks
+                // the quoted leg: KRW = the collection, NPR = the merchant payout. For every other scheme
+                // the router stays a dispatcher and the amount is submitted in `currency` as-is.
                 result = failoverPaymentRouter.pay(
                         req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency(),
                         limitSubject);
@@ -353,9 +363,10 @@ public class WalletPayController {
                                 + ". Supported: GMEREMIT, SENDMN");
             }
         } catch (TransactionLimitExceededException | CumulativeLimitExceededException
-                 | LimitCheckUnavailableException ex) {
-            // A limit refusal IS a decline: feed the DECLINE_SPIKE monitor before the structured error
-            // leaves the controller, so a burst of cap rejections is as visible as a scheme decline.
+                 | LimitCheckUnavailableException | CorridorPricingUnavailableException ex) {
+            // A limit refusal — and, since T4-1, an unpriceable-corridor refusal — IS a decline: feed the
+            // DECLINE_SPIKE monitor before the structured error leaves the controller, so a burst of cap
+            // rejections or a corridor that has lost its pricing is as visible as a scheme decline.
             if (declineSpikeMonitor != null) {
                 declineSpikeMonitor.record(req.partner(),
                         qr.isKnown() ? qr.networkIdentifier() : null, false);
@@ -387,9 +398,14 @@ public class WalletPayController {
                 result.payAmountMnt() != null ? result.payAmountMnt().toPlainString() : null,
                 // Cross-border pay currency + amount (e.g. NPR) so the wallet shows the right figures;
                 // null (omitted) for the domestic KRW path, leaving that response shape unchanged.
+                //
+                // T4-1: when FX was applied the foreign payout is the FX'd figure (payAmountMnt — the
+                // generic "amount in the merchant's currency" slot), NOT the KRW leg. Before Nepal had
+                // FX, payAmountKrw WAS the foreign amount (pass-through), so it was correct then and
+                // would now report KRW under an NPR label. Non-FX cross-border schemes keep the old
+                // mapping.
                 result.payCurrency(),
-                result.payCurrency() != null && result.payAmountKrw() != null
-                        ? result.payAmountKrw().toPlainString() : null
+                payAmountFor(result)
         );
 
         HttpStatus status = result.approved() ? HttpStatus.CREATED : HttpStatus.UNPROCESSABLE_ENTITY;
@@ -426,6 +442,22 @@ public class WalletPayController {
         return ResponseEntity.ok(new FailoverPaymentRouter.QrClassification(
                 c.isKnown(), c.networkIdentifier(), c.country(), currency,
                 c.isKnown() ? c.mode().name() : null, null));
+    }
+
+    /**
+     * The {@code payAmount} field: the amount in {@code payCurrency}. When the corridor applied FX
+     * (Nepal KRW→NPR) that is the FX'd payout; otherwise the amount as submitted. Null for the
+     * domestic KRW path, which omits both fields.
+     */
+    @Nullable
+    private static String payAmountFor(WalletResult result) {
+        if (result.payCurrency() == null) {
+            return null;
+        }
+        BigDecimal amount = Boolean.TRUE.equals(result.fxApplied()) && result.payAmountMnt() != null
+                ? result.payAmountMnt()
+                : result.payAmountKrw();
+        return amount == null ? null : amount.toPlainString();
     }
 
     /** True when the classified QR network is ZeroPay (domestic path stays on the existing services). */

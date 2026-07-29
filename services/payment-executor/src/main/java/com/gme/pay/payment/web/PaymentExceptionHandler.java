@@ -3,6 +3,7 @@ package com.gme.pay.payment.web;
 import com.gme.pay.correlation.CorrelationHeaders;
 import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.payment.domain.CorridorPricingUnavailableException;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.LimitCheckUnavailableException;
@@ -74,6 +75,22 @@ public class PaymentExceptionHandler {
     public ResponseEntity<ApiError> handleLimitCheckUnavailable(LimitCheckUnavailableException ex) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ApiError(ex.code(), ex.getMessage(), true, newRequestId()));
+    }
+
+    /**
+     * T4-1: the corridor could not be PRICED — its FX margin / service fee is not configured, or the
+     * live reference rate was unavailable. 503 with the stable code carried on the exception
+     * ({@code CORRIDOR_PRICING_NOT_CONFIGURED}, {@code retryable=false} — an owner must supply the
+     * terms; or {@code CORRIDOR_RATE_UNAVAILABLE}, {@code retryable=true} — a transient rate outage).
+     * Never a 2xx: refusing beats mispricing, and no float moved and no scheme was called. Emitted via
+     * the {@link ApiError} string ctor because lib-errors is frozen (same pattern as
+     * {@code LimitCheckUnavailableException}).
+     */
+    @ExceptionHandler(CorridorPricingUnavailableException.class)
+    public ResponseEntity<ApiError> handleCorridorPricingUnavailable(
+            CorridorPricingUnavailableException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ApiError(ex.code(), ex.getMessage(), ex.retryable(), newRequestId()));
     }
 
     @ExceptionHandler(SchemeDeclinedException.class)

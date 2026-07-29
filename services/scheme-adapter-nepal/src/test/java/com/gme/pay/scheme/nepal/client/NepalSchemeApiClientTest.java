@@ -3,7 +3,7 @@ package com.gme.pay.scheme.nepal.client;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
-import com.gme.pay.scheme.nepal.sign.StubNepalSigner;
+import com.gme.pay.scheme.nepal.sign.RsaNepalSigner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,8 +37,17 @@ class NepalSchemeApiClientTest {
         ObjectMapper mapper = new ObjectMapper();
         RestClient.Builder builder = RestClient.builder().baseUrl(BASE);
         server = MockRestServiceServer.bindTo(builder).build();
-        client = new NepalSchemeApiClient(builder.build(), new StubNepalSigner(mapper), mapper,
+        client = new NepalSchemeApiClient(builder.build(), devSigner(mapper), mapper,
                 "sim-token", "sim-key");
+    }
+
+    /**
+     * A REAL signer for the test, keyed with an explicitly opted-in throwaway RSA-2048 keypair
+     * ({@code EPHEMERAL_DEV}) — the same mode the local/sim stack uses. There is no constant-signature
+     * fallback to lean on any more (T4-1), so the signing path executes for real here too.
+     */
+    private static RsaNepalSigner devSigner(ObjectMapper mapper) {
+        return new RsaNepalSigner(mapper, "", "", "EPHEMERAL_DEV");
     }
 
     @Test
