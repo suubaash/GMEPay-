@@ -1,0 +1,42 @@
+server:
+  port: 9106
+
+spring:
+  application:
+    name: sim-sendmn
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+gmepay:
+  sim:
+    sendmn:
+      # Partner credentials the sim accepts on /api/Authentication (headers
+      # Username / AgentCode / AuthKey). Defaults match scheme-adapter-sendmn's
+      # placeholders so adapter <-> sim work together out of the box.
+      username: sendmn-username-placeholder
+      agent-code: sendmn-agentcode-placeholder
+      auth-key: sendmn-authkey-placeholder
+      # Doc: "Token will only be Valid for 90 minutes."
+      token-validity-minutes: 90
+      # Registered MNT/USD buy rate used to verify SETTLEMENT_AMOUNT (error 307).
+      # Override at runtime via POST /sim/fx-rate.
+      default-rate: 3373.00
+      # PaymentStatus returns Processing until the N-th poll, then Approved.
+      approve-after-polls: 1
+      # ---- scenario toggles (also mutable at runtime via POST /sim/scenario) ----
+      force-error-304: false      # every Confirm answers 304 TX_TOKEN_NO duplicated
+      force-error-307: false      # every Confirm answers 307 SETTLEMENT_AMOUNT mismatch
+      never-approve: false        # PaymentStatus never leaves Processing
+      delay-millis: 0             # artificial latency on business endpoints (timeout tests)
+      # ---- push the registered rate to the partner (adapter) fx-rate endpoint ----
+      # Realistic SendMN -> partner direction (doc section 9). Off by default; trigger
+      # manually with POST /sim/fx-rate/push.
+      fx-push:
+        enabled: false
+        url: http://localhost:8093/partner-hosted/fx-rate
+
+logging:
+  level:
+    com.gme.sim: DEBUG

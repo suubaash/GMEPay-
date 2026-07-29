@@ -100,7 +100,15 @@ class PartnerOnboardingE2ETest {
         logDir = repoRoot.resolve("e2e-tests/build/e2e-logs");
         Files.createDirectories(logDir);
 
-        launchService("config-registry", PORT_CONFIG_REGISTRY);
+        // Gap T1-1: config-registry's auth-identity client now defaults to `rest` (the stub
+        // that fabricated unverifiable credentials is opt-in only), so this fleet must point
+        // it at the local auth-identity instead of the compose hostname auth-identity:8080.
+        // notification-webhook is NOT in this fleet (it needs Kafka) and this funnel saves no
+        // step-8 webhook draft, so its client is explicitly parked on the stub.
+        launchService("config-registry", PORT_CONFIG_REGISTRY,
+                "--gmepay.auth-identity.client=rest",
+                "--gmepay.auth-identity.base-url=http://localhost:" + PORT_AUTH_IDENTITY,
+                "--gmepay.notification-webhook.client=stub");
         launchService("auth-identity", PORT_AUTH_IDENTITY);
         launchService("prefunding", PORT_PREFUNDING);
 

@@ -34,5 +34,9 @@ tasks.named('e2eTest') {
               ':services:auth-identity:bootJar',
               ':services:prefunding:bootJar',
               // Nepal corridor leg (adapter; sim-nepal-qr builds on demand like sim-scheme)
-              ':services:scheme-adapter-nepal:bootJar'
+              ':services:scheme-adapter-nepal:bootJar',
+              // QR scheme accommodation Phase-4 pairs (SendmnAdapterSimE2ETest /
+              // NinepayPayoutE2ETest; sim-sendmn + sim-ninepay build on demand)
+              ':services:scheme-adapter-sendmn:bootJar',
+              ':services:scheme-adapter-ninepay:bootJar'
 }

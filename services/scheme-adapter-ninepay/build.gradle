@@ -1,0 +1,27 @@
+// scheme-adapter-ninepay: ACL adapter for the 9Pay (Vietnam) disbursement/payout scheme.
+// Unlike the QR-pay adapters this is a PAYOUT edge (partner-prefunded VND transfers to
+// Vietnamese banks/cards/wallets) with an inbound IPN push channel, so it carries a
+// persistence layer (np_payouts idempotency registry + np_ipn_events audit) like ZeroPay.
+plugins {
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Actuator (feat/actuator-health): /actuator/health + liveness/readiness probes + /actuator/metrics.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.flywaydb:flyway-core'
+    implementation project(':libs:lib-errors')
+
+    // Flyway 10.x ships PostgreSQL support as a separate module (production);
+    // H2 support stays in flyway-core (unit/slice tests).
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'com.h2database:h2'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.mockito:mockito-core'
+}

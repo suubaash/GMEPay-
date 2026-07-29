@@ -39,6 +39,10 @@ include 'services:payment-executor'
 include 'services:merchant-qr-data'
 include 'services:scheme-adapter-zeropay'
 include 'services:scheme-adapter-nepal'
+// QR scheme accommodation (SendMN Mongolia QR pay-in + 9Pay Vietnam payout) —
+// see Documentation/schemes/QR_SCHEME_ACCOMMODATION_PLAN.md.
+include 'services:scheme-adapter-sendmn'
+include 'services:scheme-adapter-ninepay'
 include 'services:notification-webhook'
 include 'services:settlement-reconciliation'
 include 'services:revenue-ledger'

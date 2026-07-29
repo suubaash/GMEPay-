@@ -1,0 +1,78 @@
+spring:
+  application:
+    name: scheme-adapter-ninepay
+
+  # Persistence (np_payouts idempotency registry + np_ipn_events audit).
+  # Defaults to in-memory H2 in PostgreSQL-compat mode so unit/slice tests run without
+  # Docker; production overrides via SPRING_DATASOURCE_* environment variables
+  # (same convention as scheme-adapter-zeropay).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:npadapterdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  # Flyway owns the schema — Hibernate must not auto-DDL. No dialect pinned: Hibernate
+  # auto-detects H2 vs PostgreSQL so one config serves both engines.
+  jpa:
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: true
+
+server:
+  port: 8096
+
+# Actuator (feat/actuator-health): health + liveness/readiness probes + metrics on the app
+# port. Only health/info/metrics exposed; env/beans/heapdump/shutdown stay off;
+# show-details=never.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+# 9Pay (Vietnam) disbursement scheme — targets the planned sim-ninepay :9107 by default.
+# Real endpoints: test https://stg-api-console.9pay.mobi, prod https://api-console.9pay.vn.
+# Override in production with GMEPAY_SCHEME_NINEPAY_* environment variables. NOTE: 9Pay
+# additionally requires mutual IP whitelisting (our egress IPs registered with 9Pay; only
+# 9Pay's IPs allowed to hit /scheme/ipn) — enforced at the network layer, not here.
+gmepay:
+  scheme:
+    ninepay:
+      enabled: true
+      base-url: http://localhost:9107
+      # partner_id issued by 9Pay at onboarding.
+      partner-id: GMEPAY
+      # RSA digest algorithm we told 9Pay we sign with: SHA1/SHA224/SHA256/SHA384/SHA512.
+      sign-algorithm: SHA256
+      # OUR RSA-2048 private key, PEM PKCS#8 ("BEGIN PRIVATE KEY"). Placeholder — inject
+      # the real key via env/secret in production; sign() fails loudly while blank.
+      private-key-pem: ${GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM:}
+      # 9PAY's RSA public key, PEM X.509 ("BEGIN PUBLIC KEY") — verifies responses + IPN.
+      ninepay-public-key-pem: ${GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM:}
+      # Verify 9Pay's RSA signature on API responses. ON by default (gap T5-4): responses
+      # drive payout state, so accepting them unverified let anything that could answer as
+      # 9Pay move money-state. FAIL CLOSED — when ninepay-public-key-pem is blank or
+      # unparseable, responses are treated as UNVERIFIABLE (ambiguous ->
+      # NinepayTransportException -> the payout resolves by polling / stays UNKNOWN);
+      # trust is NEVER the fallback. IPN verification is always attempted regardless.
+      verify-responses: ${GMEPAY_SCHEME_NINEPAY_VERIFY_RESPONSES:true}
+      ipn:
+        # IPN replay protection (T5-4). Duplicate (request_id, trans_id, code) triples are
+        # ignored idempotently; see NinepayIpnReplayGuard. An IPN whose signed created_at is
+        # older than this many minutes is audited but NOT applied. 0 disables the age check
+        # (dedupe + monotonic-status rules still apply). Default 7 days: bank reversals
+        # (code 009) legitimately arrive days late, so this must not be tight.
+        max-age-minutes: ${GMEPAY_SCHEME_NINEPAY_IPN_MAX_AGE_MINUTES:10080}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true
