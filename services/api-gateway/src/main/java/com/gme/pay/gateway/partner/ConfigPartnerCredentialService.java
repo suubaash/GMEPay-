@@ -2,9 +2,6 @@ package com.gme.pay.gateway.partner;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.util.LinkedHashMap;
@@ -12,22 +9,19 @@ import java.util.Map;
 
 /**
  * Config-backed {@link PartnerCredentialService}: resolves partners from
- * {@link ConfigPartnerCredentialProperties} ({@code gateway.partner-credentials.partners[]})
- * instead of the hard-coded {@link StubPartnerCredentialService}.
+ * {@link ConfigPartnerCredentialProperties} ({@code gateway.partner-credentials.partners[]}).
  *
- * <p>Activated by {@code gateway.partner-credentials.source=config} ({@code @Primary} +
- * {@code @ConditionalOnProperty}, the same convention {@link com.gme.pay.gateway.registry.RestConfigRegistryClient}
- * uses). When that flag is absent the stub stays the default, so the gateway still boots
- * standalone for local dev and tests.
+ * <p>Not a bean itself. {@link PartnerCredentialConfig} constructs it as the signing-material
+ * source behind {@link AuthIdentityVerifiedPartnerCredentialService} — before T0-7 this class was
+ * an opt-in {@code @Primary} override and the default was the hard-coded
+ * {@code StubPartnerCredentialService}, whose api keys and secrets were published in git. Being a
+ * plain class rather than a conditional bean is the point: there is now exactly one way the
+ * credential source gets built, and it is explicit.
  *
- * <p>This is the genuine "config/DB-backed credential source with stub fallback" the gap plan
- * asks for, expressed at an interface boundary: it reads externalised config today and can be
- * swapped for an R2DBC/Redis implementation (T18) without touching any filter — the contract is
- * {@link PartnerCredentialService#findByApiKey}.
+ * <p>An entry with a blank {@code api-key} or a blank {@code hmac-secret} is skipped with a WARN:
+ * a row without signing material cannot verify a signature, and admitting it would mean HMAC-ing
+ * with an empty key.
  */
-@Service
-@Primary
-@ConditionalOnProperty(name = "gateway.partner-credentials.source", havingValue = "config")
 public class ConfigPartnerCredentialService implements PartnerCredentialService {
 
     private static final Logger log = LoggerFactory.getLogger(ConfigPartnerCredentialService.class);
@@ -42,6 +36,14 @@ public class ConfigPartnerCredentialService implements PartnerCredentialService 
                         entry.getPartnerId());
                 continue;
             }
+            // A blank hmac-secret would make HmacSignatureFilter sign with an empty key, which any
+            // caller can reproduce. Drop the row rather than admit a forgeable partner (T0-7).
+            if (entry.getHmacSecret() == null || entry.getHmacSecret().isBlank()) {
+                log.error("Skipping config partner '{}' (partner-id={}): hmac-secret is blank, so no "
+                        + "signature could be verified for it. Supply it from the environment.",
+                        entry.getApiKey(), entry.getPartnerId());
+                continue;
+            }
             PartnerCredentials prev = store.put(entry.getApiKey(), entry.toCredentials());
             if (prev != null) {
                 log.warn("Duplicate api-key '{}' in gateway.partner-credentials — last one wins",
@@ -49,8 +51,15 @@ public class ConfigPartnerCredentialService implements PartnerCredentialService 
             }
         }
         this.byApiKey = Map.copyOf(store);
-        log.info("ConfigPartnerCredentialService active: {} partner(s) loaded from config",
-                byApiKey.size());
+        if (byApiKey.isEmpty()) {
+            log.warn("ConfigPartnerCredentialService active with ZERO partner rows — the partner API "
+                    + "will answer 401 INVALID_API_KEY to every caller. Populate "
+                    + "gateway.partner-credentials.partners[] (api-key + hmac-secret from the "
+                    + "environment) to admit a partner. This is the intended fail-closed default.");
+        } else {
+            log.info("ConfigPartnerCredentialService active: {} partner(s) loaded from config",
+                    byApiKey.size());
+        }
     }
 
     @Override

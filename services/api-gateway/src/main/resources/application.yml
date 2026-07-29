@@ -71,39 +71,70 @@ api:
     v1:
       deprecated: false
 
-# Internal service-to-service token (#90). The gateway's RBAC claim resolver calls auth-identity's
-# internal-only /v1/rbac/resolve; when auth-identity enforces the internal-auth gate, the gateway
-# presents this shared secret in the X-Gme-Internal header. Blank = local dev (gate off).
+# Internal service-to-service token (#90). Presented in the X-Gme-Internal header on the gateway's
+# two calls into auth-identity's internal-only surface:
+#   - POST /v1/rbac/resolve             (RBAC claim resolver, only when rbac.stamp is enabled)
+#   - POST /internal/auth/keys/resolve  (T0-7 partner-credential lifecycle check — EVERY partner request)
+# No default: auth-identity's gate is enforced-by-default, so a blank secret can only produce 401s
+# from it. The gateway therefore treats blank as "credential store unreachable" and answers partner
+# requests 503 rather than skipping the check (AuthIdentityCredentialStatusClient).
 gmepay:
   internal-auth:
     secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
+  auth-identity:
+    # Also read by the T0-7 credential lifecycle check. Compose/Helm already set
+    # GMEPAY_AUTH_IDENTITY_BASE_URL on this service.
+    base-url: ${GMEPAY_AUTH_IDENTITY_BASE_URL:http://auth-identity:8080}
 
-# Replay-protection fail-open flag (true = allow request if Redis is unreachable)
 gateway:
+  # Replay protection (ReplayProtectionFilter, order 5). It is UNCONDITIONAL and already
+  # fail-closed: an HMAC-authenticated request without X-Nonce is 400 MISSING_NONCE, and a
+  # nonce seen twice inside the retention window is 401 REPLAY_DETECTED.
+  #
+  # T0-7: two keys used to sit here — `fail-open: true` and `store: memory` — and the CISO audit
+  # read them as "replay protection is fail-open". They were DEAD CONFIG: nothing in the repo has
+  # ever read either key. They are removed rather than left to imply a control that does not exist.
+  # The real limitation is that InMemoryNonceStore is the only NonceStore implementation, so the
+  # nonce window is PER GATEWAY INSTANCE: with N replicas a captured request can be replayed once
+  # per replica inside the 5-minute clock-skew window. A shared Redis nonce store is genuinely
+  # missing — recorded as a T0-7 residual, not configured away.
   replay-protection:
-    fail-open: true
-    # nonce store backend: 'memory' (default, single-instance) or 'redis' (shared)
-    store: memory
-  trust-proxy: false
+    nonce-ttl-seconds: 300
 
-  # Per-partner rate limiting (API-05 §3.5). Disabled by default so local dev and the
-  # existing test suite are unthrottled; switch on per environment. Limits are per second.
+  # Per-partner rate limiting (API-05 §3.5). T0-7: was `enabled: false` + `fail-open: true`.
+  # Now on, and a store error DENIES. Same per-instance caveat as the nonce store above: the only
+  # RateLimitStore implementation is in-memory, so with N replicas the effective cap is N x these
+  # values. (A `store:` key used to be here naming 'redis'; nothing read it, so it is gone.)
   rate-limit:
-    enabled: false
-    fail-open: true
-    store: memory            # 'memory' (default, per-instance) or 'redis' (shared)
+    enabled: true
+    fail-open: false
     global-per-second: 100
     rates-per-second: 20
     payments-per-second: 50
 
-  # Partner credential source: 'stub' (default, hard-coded test partners) or 'config'
-  # (externalised table below — operators add rows without recompiling). A live
-  # config-registry/DB-backed implementation (T18) can replace this behind the same
-  # PartnerCredentialService interface. hmac-secret MUST be a placeholder/env var in real
-  # deployments, never a literal.
+  # ─────────── PARTNER CREDENTIALS (T0-7) ───────────
+  # `source: stub` used to be the default here and in ConfigPartnerCredentialProperties, selecting
+  # a hard-coded bean whose api keys AND HMAC secrets were published in this repository
+  # (pk_test_abc/sk_test_xyz, pk_test_no_mtls/sk_test_no_mtls) with no IP restriction. That bean is
+  # DELETED from the shipped build and `source: stub` now makes the service refuse to start
+  # (PartnerCredentialConfig).
+  #
+  # The table below is EMPTY by default and an empty table authenticates nobody — the partner API
+  # answers 401 INVALID_API_KEY until an operator populates it. Every key is additionally required
+  # to be ACTIVE in auth-identity's api_keys store, and an unreachable store yields 503, never a
+  # bypass. See PartnerCredentialConfig's javadoc for the full operator checklist.
+  #
+  #   OPERATOR ACTION (per live partner — values from the environment, never literals):
+  #     gateway.partner-credentials.partners[0].api-key      = ${ACME_API_KEY}      # pk_… from issuance
+  #     gateway.partner-credentials.partners[0].partner-id   = <config-registry partner CODE>
+  #     gateway.partner-credentials.partners[0].hmac-secret  = ${ACME_HMAC_SECRET}  # one-time sk_…
+  #     gateway.partner-credentials.partners[0].ip-cidr-ranges = [...]
   partner-credentials:
-    source: stub
+    source: config
     partners: []
+    # Require every presented key to be ACTIVE in auth-identity's credential store. Turning this
+    # off means a key revoked upstream keeps working here; it is logged loudly at startup.
+    verify-with-auth-identity: true
 
 # HMAC signature verification settings
 security:
@@ -117,15 +148,32 @@ security:
     # In production Nginx terminates mTLS and forwards the SHA-256 fingerprint of the verified
     # client certificate as the X-Client-Cert-Fingerprint header.  This filter checks that
     # fingerprint against the value stored in partner_mtls_cert.
-    # Set enabled=true only in environments where the gateway sits behind an Nginx mTLS proxy;
-    # leaving it false (default) means mTLS is not enforced locally or in tests.
+    # Set enabled=true only in environments where the gateway sits behind an Nginx mTLS proxy.
+    #
+    # T0-7 / CISO#5 — HONEST STATE: still false by default, and that is NOT closed by this change.
+    # When enabled, this filter trusts the X-Client-Cert-Fingerprint header, which is only
+    # meaningful if a TLS-terminating proxy is provably the sole ingress path and strips the header
+    # from client requests. No such proxy is defined anywhere in this repo (no Nginx config, no
+    # ingress mTLS annotation, no NetworkPolicy), so enabling it here would create a spoofable
+    # "mTLS enforced" signal — strictly worse than leaving it off and saying so. Enabling it is an
+    # infrastructure task, not a config flip. HMAC + IP allowlist + the auth-identity lifecycle
+    # check are the controls that actually run.
     mtls:
       enabled: false
       client-cert-header: X-Client-Cert-Fingerprint
 
-    # IP-allowlist settings (Slice 8)
+    # IP-allowlist settings (Slice 8). T0-7: trust_header_only_in_dev and fail-open BOTH defaulted
+    # to true, so (a) the unauthenticated X-Partner-Id header chose which partner's allowlist was
+    # checked and (b) a config-registry outage admitted unchecked traffic. Both now default to the
+    # safe value in PartnerIpAllowlistFilter and are pinned here; each is logged at startup if
+    # switched back on.
+    #
+    # NOTE: the allowlist is read through ConfigRegistryClient, whose default implementation is an
+    # in-memory stub that returns NOTHING (T0-7 — it used to seed a published test partner with
+    # loopback/RFC1918 ranges). Set gmepay.config-registry.client=rest so the real partner
+    # allowlist is consulted; otherwise every partner request is 403 IP_NOT_ALLOWED.
     allowlist:
-      trust_header_only_in_dev: true
+      trust_header_only_in_dev: false
       default-environment: sandbox
-      fail-open: true
+      fail-open: false
       cache-ttl-seconds: 60

@@ -39,9 +39,18 @@ public class AuthConfig {
         return apiKey -> Optional.empty();
     }
 
+    /**
+     * T0-6: the signing secret has <b>no default</b>. It used to default to the literal
+     * {@code changeme-at-least-32-chars-long!!} right here as well as in {@code application.yml},
+     * so a deployment that never set {@code GME_AUTH_JWT_SIGNING_SECRET} (which was every
+     * deployment — the variable appeared in no manifest) signed real capability tokens with a key
+     * published in the repo. {@link JwtSigningKeyEnforcedConfig} refuses to start the service on a
+     * blank, too-short, placeholder or previously-published value, so reaching this method at all
+     * means a usable operator-supplied key is present.
+     */
     @Bean
     public JwtHelper jwtHelper(
-            @Value("${gme.auth.jwt.signing-secret:changeme-at-least-32-chars-long!!}") String secret,
+            @Value("${gme.auth.jwt.signing-secret:}") String secret,
             @Value("${gme.auth.jwt.access-token-ttl-seconds:1800}") long ttlSeconds) {
         return new JwtHelper(secret, ttlSeconds);
     }

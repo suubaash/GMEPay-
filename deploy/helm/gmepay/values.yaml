@@ -121,6 +121,12 @@ secrets:
     # Secrets Manager / Key Vault. Leaving it as-is means the whole fleet fails closed, by design.
     GMEPAY_INTERNAL_AUTH_SECRET: CHANGE_ME_INTERNAL_SVC_SECRET
     GMEPAY_WEBHOOK_SIGNING_SECRET: CHANGE_ME_WEBHOOK_SECRET
+    # HS256 key for the platform capability tokens auth-identity mints (T0-6). Symmetric: whoever
+    # holds it can forge any token. It used to be templated NOWHERE while auth-identity defaulted it
+    # to a literal published in the repo; auth-identity now REFUSES TO START on a blank, too-short,
+    # placeholder or previously-published value, so leaving this placeholder as-is fails the service
+    # closed rather than signing forgeable tokens. Must be >= 32 chars of random material.
+    GME_AUTH_JWT_SIGNING_SECRET: CHANGE_ME_AUTH_JWT_SIGNING_SECRET
 
 # ---------------------------------------------------------------------------
 # Ingress — fronts api-gateway + the two UIs. Hosts/class/annotations are
@@ -230,7 +236,11 @@ services:
     image: auth-identity
     probe: { type: http }     # ships spring-boot-starter-actuator
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_INTERNAL_AUTH_SECRET]
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    # REQUIRED TO BOOT (T0-6): the HS256 key for the platform capability tokens this
+                    # service mints. No default exists in the image any more; a blank / placeholder /
+                    # previously-published value stops the service starting.
+                    GME_AUTH_JWT_SIGNING_SECRET]
     envSecretAliases:
       GMEPAY_RBAC_VERIFY_SECRET: GMEPAY_RBAC_SECRET
     env:
@@ -442,12 +452,25 @@ services:
     image: api-gateway
     component: edge
     probe: { type: http }     # the one module with actuator + real /actuator/health
+    # T0-7: GMEPAY_INTERNAL_AUTH_SECRET is now on the hot path for EVERY partner request — the
+    # partner-credential lifecycle check calls auth-identity's POST /internal/auth/keys/resolve with
+    # it. Without it that lookup can only 401, and the gateway answers partner traffic 503 rather
+    # than skipping the check.
     envSecretKeys: [GMEPAY_INTERNAL_AUTH_SECRET, SPRING_DATA_REDIS_PASSWORD]
     envSecretAliases:
       GMEPAY_RBAC_STAMP_SECRET: GMEPAY_RBAC_SECRET
     env:
       SERVER_PORT: "8080"
       GMEPAY_RBAC_STAMP_ENABLED: "true"
+      # T0-7: the partner IP allowlist must come from the real registry. The fallback
+      # ConfigRegistryClient returns NOTHING (it used to seed the published test partner with
+      # loopback/RFC1918 ranges), so without this every partner request is 403 IP_NOT_ALLOWED.
+      GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
+      # NOTE (T0-7): the gateway still authenticates nobody until an operator populates
+      # gateway.partner-credentials.partners[] with each live partner's api-key + hmac-secret
+      # (from a secret store) + ip-cidr-ranges. That table is intentionally NOT templated here:
+      # per-partner HMAC secrets do not belong in a values file. See
+      # services/api-gateway/.../partner/PartnerCredentialConfig.java for the checklist.
       GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080

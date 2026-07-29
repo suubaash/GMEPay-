@@ -97,8 +97,82 @@ Verify the whole matrix statically, with no Docker and no servers:
 ```bash
 python scripts/check_internal_auth_wiring.py     # derives the requirement from the code, then
                                                  # asserts compose + all 4 Helm values + run-fleet
+                                                 # (also covers the T0-6 secrets — section below)
 node docker/keycloak/check-topology.mjs          # OIDC realm/client/issuer/port agreement
 ```
+
+## Secrets an operator must supply (T0-6)
+
+Every value below has **no working default in the shipped images** any more. The compose file keeps a
+clearly-non-production `${VAR:-dev-…}` fallback so a bare local boot still works, and each fallback
+literal lives in **exactly one** top-level anchor (never inlined per service). Helm carries only
+`CHANGE_ME_…` / `REPLACE_*` placeholders, so an un-substituted chart fails closed rather than running
+on a checked-in credential.
+
+| Variable | What it protects | Compose anchor | Missing / left at the placeholder ⇒ |
+|---|---|---|---|
+| `GMEPAY_INTERNAL_AUTH_SECRET` | the `X-Gme-Internal` gate on every `/internal/**` surface (matrix above) | `x-internal-auth-secret` | 5 services **refuse to start**; callers 401 |
+| `GME_AUTH_JWT_SIGNING_SECRET` | the **HS256 key auth-identity signs platform capability tokens with**. Symmetric — whoever holds it can forge any token. Must be ≥ 32 chars | `x-auth-jwt-signing-secret` | `auth-identity` **refuses to start** |
+| `GMEPAY_RBAC_SECRET` | the gateway's `X-Gme-*` claim-provenance signature; downstream services verify with the same value | `x-rbac-edge-secret` | RBAC claim bundles are refused as unsigned |
+| `GMEPAY_WEBHOOK_SIGNING_SECRET` | outbound partner webhook signatures | (inline, single site) | deliveries stay `PENDING` (fails closed) |
+| `GMEPAY_LOCAL_PG_PASSWORD` | the 14 **local dev** Postgres containers + the 14 service blocks that connect to them. Not used by Kubernetes at all | `x-pg-password` | dev DBs use the `gmepay` dev literal on host ports 5433-5446 |
+| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | the **dev-only** Keycloak admin console on host port 8097. Not deployed by the chart | (inline, single site) | `admin`/`admin` on a published port |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | the **dev-only** object store | (inline, single site) | dev literals on published ports |
+
+```bash
+# compose — any shared, tunnelled or CI-visible host: all REQUIRED, not optional
+export GMEPAY_INTERNAL_AUTH_SECRET="$(openssl rand -hex 32)"
+export GME_AUTH_JWT_SIGNING_SECRET="$(openssl rand -hex 32)"   # >= 32 chars; forgeable tokens if weak
+export GMEPAY_RBAC_SECRET="$(openssl rand -hex 32)"
+export GMEPAY_WEBHOOK_SIGNING_SECRET="$(openssl rand -hex 32)"
+export GMEPAY_LOCAL_PG_PASSWORD="$(openssl rand -hex 24)"
+export KEYCLOAK_ADMIN=<user> KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+export MINIO_ROOT_PASSWORD="$(openssl rand -hex 24)"
+export KC_PUBLIC_URL=https://auth.example.com                  # only if Keycloak is not on localhost
+docker compose --profile core up --build
+```
+
+```powershell
+# host fleet — run-fleet.ps1 supplies the same dev fallbacks, with a yellow warning per variable
+$env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+$env:GME_AUTH_JWT_SIGNING_SECRET = '<random 32+ chars>'
+$env:OIDC_ISSUER_URI             = 'http://localhost:8097/realms/gmepay'
+.\run-fleet.ps1
+```
+
+**Still committed, and NOT closed by the above** — see gap register T0-6:
+`docker/keycloak/realm-gmepay.json` (confidential-client secrets `admin-ui-dev-secret` /
+`partner-portal-ui-dev-secret`, plus the `admin`/`demo` and `partner-demo`/`demo` users);
+`services/qr-service`'s `changeme-internal-token` (which nothing verifies, so it authenticates
+nothing); `libs/lib-vault`'s `VaultProperties` dev defaults; and the vendor SQL Server login in
+`Octa Solution AML external partner/appsettings.json`, which has been removed from the working tree
+but **remains in git history and must be rotated at the database**.
+
+## Partner API credentials (T0-7)
+
+The `api-gateway` partner edge no longer authenticates against the stub keys that were published in
+this repository (`pk_test_abc`/`sk_test_xyz`) — that bean is deleted and `source: stub` now makes the
+gateway **refuse to start**. A default-configured gateway therefore answers **401** to every partner
+request until an operator supplies, per live partner:
+
+```yaml
+gateway:
+  partner-credentials:
+    source: config                      # the only accepted value
+    verify-with-auth-identity: true     # every key must also be ACTIVE in auth-identity's api_keys
+    partners:
+      - api-key: ${ACME_API_KEY}            # the pk_… identifier auth-identity issued
+        partner-id: ACME                    # config-registry partner CODE (the allowlist key)
+        hmac-secret: ${ACME_HMAC_SECRET}    # the ONE-TIME sk_… plaintext from issuance
+        ip-cidr-ranges: ["203.0.113.0/24"]
+        mtls-cert-fingerprint: ${ACME_MTLS_FINGERPRINT}   # optional
+```
+
+Two supporting variables are already wired on all three surfaces and are on the hot path for every
+partner request: `GMEPAY_AUTH_IDENTITY_BASE_URL` + `GMEPAY_INTERNAL_AUTH_SECRET` (the lifecycle
+lookup — without them the gateway answers **503**, never a bypass), and
+`GMEPAY_CONFIG_REGISTRY_CLIENT=rest` (the IP allowlist — the fallback client returns nothing, so
+without it every partner request is **403 IP_NOT_ALLOWED**).
 
 ## Port map
 

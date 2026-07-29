@@ -1,47 +1,45 @@
 package com.gme.pay.gateway.registry;
 
 import com.gme.pay.contracts.PartnerIpAllowlistView;
-import java.time.Instant;
 import java.util.List;
-import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 /**
- * Default in-memory {@link ConfigRegistryClient} so the gateway boots standalone for
- * tests and local dev — the same role {@link com.gme.pay.gateway.partner.StubPartnerCredentialService}
- * plays for credentials. Replaced by {@link RestConfigRegistryClient} when
- * {@code gmepay.config-registry.client=rest} ({@code @Primary} + {@code @ConditionalOnProperty}).
+ * Fallback {@link ConfigRegistryClient} so the gateway boots standalone when no real registry is
+ * wired. Replaced by {@link RestConfigRegistryClient} when {@code gmepay.config-registry.client=rest}
+ * ({@code @Primary} + {@code @ConditionalOnProperty}).
  *
- * <p>Seeds the same test partner the credential stub registers ({@code partner_test_001},
- * API key {@code pk_test_abc}) with SANDBOX ranges that cover local callers (loopback,
- * RFC1918) so the filter chain is exercisable end-to-end on a dev box. Its PRODUCTION
- * allowlist is deliberately EMPTY: production traffic for the stub partner is rejected,
- * which is the fail-closed posture the Slice 8 contract demands for an unconfigured
- * environment.
+ * <p><b>T0-7 — it returns nothing, on purpose.</b> This class used to seed {@code partner_test_001}
+ * (the partner whose api key and HMAC secret the deleted credential stub published) with SANDBOX
+ * ranges covering loopback, the docker bridge and RFC1918 — i.e. the checked-in credential came with
+ * a checked-in allowlist that admitted any caller on a private network. Since
+ * {@code gmepay.config-registry.client} is set for this service in no deployment file, that seeded
+ * allowlist was the live one everywhere.
+ *
+ * <p>An empty allowlist makes {@link com.gme.pay.gateway.filter.PartnerIpAllowlistFilter} answer
+ * 403 {@code IP_NOT_ALLOWED} — the correct fail-closed posture for an environment whose registry is
+ * not wired. It logs once at construction so the cause of a blanket 403 is discoverable from the
+ * gateway's own startup log rather than from reading this class.
  */
 @Component
 public class StubConfigRegistryClient implements ConfigRegistryClient {
 
-    private static final Instant SEEDED_AT = Instant.parse("2026-06-01T00:00:00Z");
+    private static final Logger log = LoggerFactory.getLogger(StubConfigRegistryClient.class);
 
-    private static final Map<String, List<PartnerIpAllowlistView>> STORE = Map.of(
-            "partner_test_001", List.of(
-                    entry(1L, "127.0.0.0/8", "local loopback", "SANDBOX"),
-                    entry(2L, "::1/128", "local loopback (v6)", "SANDBOX"),
-                    entry(3L, "10.0.0.0/8", "docker-compose bridge", "SANDBOX"),
-                    entry(4L, "192.168.0.0/16", "dev LAN", "SANDBOX")));
+    public StubConfigRegistryClient() {
+        log.warn("No real config-registry client wired (gmepay.config-registry.client != rest): "
+                + "every partner IP-allowlist lookup resolves to EMPTY, so partner requests are "
+                + "answered 403 IP_NOT_ALLOWED. This is the T0-7 fail-closed default — set "
+                + "gmepay.config-registry.client=rest to consult the real partner allowlist.");
+    }
 
     @Override
     public Mono<List<PartnerIpAllowlistView>> getIpAllowlist(String partnerCode,
                                                              String environment) {
-        return Mono.just(STORE.getOrDefault(partnerCode, List.of()).stream()
-                .filter(v -> v.environment().equalsIgnoreCase(environment))
-                .toList());
-    }
-
-    private static PartnerIpAllowlistView entry(Long id, String cidr, String label,
-                                                String environment) {
-        return new PartnerIpAllowlistView(id, cidr, label, environment, SEEDED_AT, "stub");
+        // Deliberately no rows for any partner: see the class javadoc.
+        return Mono.just(List.of());
     }
 }

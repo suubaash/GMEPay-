@@ -76,12 +76,53 @@ x-tcp-health: &tcp-health
 # require it) instead of an 11-site sweep. Do NOT re-inline the literal in a service block.
 x-internal-auth-secret: &internal-auth-secret ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
 
+# ─────────── AUTH-IDENTITY JWT SIGNING KEY (T0-6) ───────────
+# HS256 key for the platform capability tokens auth-identity mints at /internal/auth/token/issue.
+# HS256 is symmetric, so WHOEVER HOLDS THIS KEY CAN FORGE ANY TOKEN.
+#
+# Before T0-6 this variable was set in NO file — not here, not in any of the four Helm values files,
+# not in run-fleet.ps1 — while auth-identity's application.yml defaulted it to the literal
+# `changeme-at-least-32-chars-long!!`, sized to pass the 32-char HS256 check. Every environment
+# therefore signed real tokens with a key published in the repo. The Java/yml default is gone and
+# auth-identity now REFUSES TO START on a blank, too-short, placeholder or previously-published
+# value (config/JwtSigningKeyEnforcedConfig).
+#
+#   OPERATOR ACTION:  export GME_AUTH_JWT_SIGNING_SECRET="$(openssl rand -hex 32)"   before `up`
+#
+# Anchored ONCE, same idiom and same reasoning as the internal-auth secret above: the `:-` fallback
+# keeps `docker compose --profile core up` working for a local dev, the literal is a clearly
+# non-production marker, and it is a CHECKED-IN default — the remaining T0-6 surface, now a one-line
+# change here (drop the `:-…`, or switch to `${GME_AUTH_JWT_SIGNING_SECRET:?…}` to require it).
+# Do NOT re-inline this literal in a service block. Helm carries only a CHANGE_ME_ placeholder.
+x-auth-jwt-signing-secret: &auth-jwt-signing-secret ${GME_AUTH_JWT_SIGNING_SECRET:-dev-auth-jwt-signing-key-not-for-prod}
+
+# ─────────── RBAC CLAIM-PROVENANCE SIGNING KEY (#90) ───────────
+# api-gateway SIGNS the X-Gme-* claim bundle with it; downstream services VERIFY with it and refuse any
+# bundle that arrives unsigned. Both sides must hold the same value. T0-6: the dev literal used to
+# appear twice inline (api-gateway + auth-identity); anchored here so it exists ONCE.
+# Helm carries only CHANGE_ME_RBAC_EDGE_SECRET.
+#   OPERATOR ACTION:  export GMEPAY_RBAC_SECRET="$(openssl rand -hex 32)"
+x-rbac-edge-secret: &rbac-edge-secret ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
+
+# ─────────── LOCAL POSTGRES PASSWORD (dev containers only) ───────────
+# One value shared by the 14 throwaway postgres containers in this file and the 14 service blocks that
+# connect to them. T0-6: the literal `gmepay` was written out 28 times, so rotating it meant 28 edits
+# and any single miss broke a service silently. Now one place, env-overridable.
+#
+# These containers exist ONLY for local development and CI's compose-smoke job — but they DO publish
+# host ports 5433..5446, so on a shared or tunnelled host this must be overridden. Kubernetes never
+# uses it: deploy/helm/gmepay carries SPRING_DATASOURCE_PASSWORD as a CHANGE_ME_/REPLACE_ placeholder
+# and the real database lives outside the chart. (postgres-keycloak keeps its own keycloak/keycloak
+# pair — that container is dev-only Keycloak's store and is not deployed by the chart at all.)
+#   OPERATOR ACTION (shared host):  export GMEPAY_LOCAL_PG_PASSWORD="$(openssl rand -hex 24)"
+x-pg-password: &pg-password ${GMEPAY_LOCAL_PG_PASSWORD:-gmepay}
+
 services:
   # ─────────── INFRASTRUCTURE (profiles: core + full) ───────────
 
   postgres-config:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: configreg, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: configreg, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5433:5432"]
     volumes: ["pg-config:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d configreg"], interval: 5s, timeout: 3s, retries: 12 }
@@ -90,7 +131,7 @@ services:
 
   postgres-txn:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: txndb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: txndb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5434:5432"]
     volumes: ["pg-txn:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d txndb"], interval: 5s, timeout: 3s, retries: 12 }
@@ -99,7 +140,7 @@ services:
 
   postgres-executor:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: executor, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: executor, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5441:5432"]
     volumes: ["pg-executor:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d executor"], interval: 5s, timeout: 3s, retries: 12 }
@@ -108,7 +149,7 @@ services:
 
   postgres-qr:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: qrdb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: qrdb, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5442:5432"]
     volumes: ["pg-qr:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d qrdb"], interval: 5s, timeout: 3s, retries: 12 }
@@ -117,7 +158,7 @@ services:
 
   postgres-ratefx:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: ratefx, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: ratefx, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5443:5432"]
     volumes: ["pg-ratefx:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d ratefx"], interval: 5s, timeout: 3s, retries: 12 }
@@ -126,7 +167,7 @@ services:
 
   postgres-reporting:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: reporting, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: reporting, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5444:5432"]
     volumes: ["pg-reporting:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d reporting"], interval: 5s, timeout: 3s, retries: 12 }
@@ -135,7 +176,7 @@ services:
 
   postgres-prefunding:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: prefunding, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: prefunding, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5435:5432"]
     volumes: ["pg-prefunding:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d prefunding"], interval: 5s, timeout: 3s, retries: 12 }
@@ -144,7 +185,7 @@ services:
 
   postgres-ledger:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: ledger, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: ledger, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5436:5432"]
     volumes: ["pg-ledger:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d ledger"], interval: 5s, timeout: 3s, retries: 12 }
@@ -153,7 +194,7 @@ services:
 
   postgres-settlement:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: settlement, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: settlement, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5437:5432"]
     volumes: ["pg-settlement:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d settlement"], interval: 5s, timeout: 3s, retries: 12 }
@@ -162,7 +203,7 @@ services:
 
   postgres-notify:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: notify, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: notify, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5438:5432"]
     volumes: ["pg-notify:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d notify"], interval: 5s, timeout: 3s, retries: 12 }
@@ -171,7 +212,7 @@ services:
 
   postgres-authid:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: authid, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: authid, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5439:5432"]
     volumes: ["pg-authid:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d authid"], interval: 5s, timeout: 3s, retries: 12 }
@@ -180,7 +221,7 @@ services:
 
   postgres-scheme:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: zpadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: zpadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5440:5432"]
     volumes: ["pg-scheme:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d zpadapter"], interval: 5s, timeout: 3s, retries: 12 }
@@ -191,7 +232,7 @@ services:
   # Host port 5445 continues the per-service band (5446 is postgres-keycloak).
   postgres-sendmn:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: smnadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: smnadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5445:5432"]
     volumes: ["pg-sendmn:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d smnadapter"], interval: 5s, timeout: 3s, retries: 12 }
@@ -201,7 +242,7 @@ services:
   # 9Pay adapter datastore (np_payouts idempotency registry + np_ipn_events audit).
   postgres-ninepay:
     image: postgres:16-alpine
-    environment: { POSTGRES_DB: npadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    environment: { POSTGRES_DB: npadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
     ports: ["5447:5432"]
     volumes: ["pg-ninepay:/var/lib/postgresql/data"]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d npadapter"], interval: 5s, timeout: 3s, retries: 12 }
@@ -244,8 +285,11 @@ services:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: gmepay
-      MINIO_ROOT_PASSWORD: gmepay-minio
+      # T0-6: was a bare literal. Dev-only object store (Helm carries GMEPAY_VAULT_SECRET_KEY as a
+      # CHANGE_ME_/REPLACE_ placeholder), but the console + API publish host ports, so override on
+      # any shared host.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-gmepay}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-gmepay-minio}
     ports: ["9000:9000", "9001:9001"]
     volumes: ["minio-data:/data"]
     healthcheck: { test: ["CMD", "mc", "ready", "local"], interval: 10s, timeout: 5s, retries: 18, start_period: 10s }
@@ -355,8 +399,14 @@ services:
     command: ["start-dev", "--import-realm"]
     ports: ["8097:8080"]
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      # T0-6: these were pure literals (`admin`/`admin`) with no ${} indirection at all. Now
+      # env-overridable. This Keycloak is DEV-ONLY — it runs `start-dev --import-realm` and is NOT
+      # deployed by deploy/helm/gmepay (the chart treats the IdP as external, see values.yaml
+      # "Keycloak is NOT deployed by this chart"). It still publishes host port 8097, so a shared or
+      # tunnelled host MUST override both. The realm file's own client secrets and demo users
+      # (docker/keycloak/realm-gmepay.json) are a separate, still-open T0-6 item.
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres-keycloak:5432/keycloak
       KC_DB_USERNAME: keycloak
@@ -403,7 +453,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-config:5432/configreg
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Shared internal-auth token (#90) config-registry presents to auth-identity's internal-only
       # /internal/auth/keys (API-key issuance) — matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET.
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: *internal-auth-secret
@@ -441,7 +491,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ratefx:5432/ratefx
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Forward-compat: rate-fx has no gmepay.config-registry.base-url reader yet.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       # REQUIRED TO BOOT (T0-2). POST /v1/rates/snapshots is a treasury-rate override and the latest
@@ -466,7 +516,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-prefunding:5432/prefunding
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # REQUIRED TO BOOT (T0-5). prefunding has NO public surface: all 18 money-moving /
       # float-reading routes (/internal/** + /v1/prefunding/**) are gated, gmepay.internal-auth.enabled
       # is pinned true, and InternalAuthEnforcedConfig REFUSES TO START on a blank secret. Every caller
@@ -505,7 +555,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-qr:5432/qrdb
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Forward-compat: qr-service has no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
       # OUTBOUND only (T0-2): the CPM prepare/confirm path calls prefunding's gated
@@ -529,7 +579,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-authid:5432/authid
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # auth-identity reads gme.config-registry.base-url (NOT gmepay.*) — see
       # RestPartnerCredentialClient. Env name fixed accordingly.
       GME_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
@@ -537,7 +587,7 @@ services:
       # API (@RequiresPermission rbac.manage), the prime self-grant target — so it must trust
       # X-Gme-* only with a valid gateway signature. Secret MUST match api-gateway's stamp secret.
       GMEPAY_RBAC_ENABLED: "true"
-      GMEPAY_RBAC_VERIFY_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
+      GMEPAY_RBAC_VERIFY_SECRET: *rbac-edge-secret
       # Service-to-service internal-auth gate (#90). auth-identity's /v1/rbac/** (incl. the unannotated
       # /resolve), /v1/approvals/** (unannotated approve/reject that trust raw X-Gme-* headers), and
       # /internal/** (API-key issuance + HMAC verify) are internal-only and reached off-gateway, so they
@@ -545,6 +595,11 @@ services:
       # hold. Distinct from the RBAC stamp/verify secret above.
       GMEPAY_INTERNAL_AUTH_ENABLED: "true"
       GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret
+      # HS256 JWT signing key (T0-6). Was set NOWHERE while application.yml defaulted it to a
+      # literal published in this repo, so every environment signed forgeable capability tokens.
+      # The service now refuses to start without a usable value — see the anchor at the top of this
+      # file for the operator action.
+      GME_AUTH_JWT_SIGNING_SECRET: *auth-jwt-signing-secret
     depends_on:
       postgres-authid: { condition: service_healthy }
       config-registry: { condition: service_healthy }
@@ -569,7 +624,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-txn:5432/txndb
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Inert until spring-kafka lands on the module classpath (17.4-G0x); the
       # internal listener address is already correct for that moment.
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -613,7 +668,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-executor:5432/executor
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Env names match the gmepay.<svc>.base-url @Value placeholders in the
       # Rest*Client adapters (verified against services/payment-executor source).
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
@@ -706,7 +761,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/zpadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Forward-compat: no gmepay.merchant-qr-data.base-url reader yet.
       GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
       # REQUIRED TO BOOT (T0-2). /internal/scheme/zeropay/{submit,cpm,cancel,balance-check} authorise
@@ -793,7 +848,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-sendmn:5432/smnadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Downstream scheme endpoint (sim in single-host; real SendMN in cloud).
       SENDMN_BASE_URL: http://sim-sendmn:8080
     depends_on:
@@ -832,7 +887,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ninepay:5432/npadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Downstream scheme endpoint (sim in single-host; stg-api-console.9pay.mobi /
       # api-console.9pay.vn in test/prod — see the module's application.yml).
       GMEPAY_SCHEME_NINEPAY_BASE_URL: http://sim-ninepay:8080
@@ -853,7 +908,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notify:5432/notify
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Activates the @KafkaListener on gmepay.payment.approved (WebhookKafkaConsumerConfig).
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # Turn on the dispatcher drain loop so enqueued PENDING rows are actually delivered.
@@ -884,7 +939,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-settlement:5432/settlement
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # §8.2 registration gate LIVE in deploy: ZP0061/0063 generation is blocked until the
       # adapter reports ZP0011 transmitted + ZP0012 received for the date (fail-closed).
       # NB: these two resolve gmepay.clients.scheme-adapter-zeropay.{base-url,enabled}. Until this
@@ -911,7 +966,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ledger:5432/ledger
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Inert until spring-kafka lands on the module classpath (17.4-G0x).
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
@@ -932,7 +987,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-reporting:5432/reporting
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       SPRING_DATASOURCE_USERNAME: gmepay
-      SPRING_DATASOURCE_PASSWORD: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
       # Forward-compat: no gmepay.*.base-url readers in this module yet.
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
@@ -1048,11 +1103,19 @@ services:
       # and refuse any claim bundle that arrives unsigned (a direct-to-service spoof). The literal
       # default is a clearly non-prod marker — replace with a Vault-backed secret before LIVE.
       GMEPAY_RBAC_STAMP_ENABLED: "true"
-      GMEPAY_RBAC_STAMP_SECRET: ${GMEPAY_RBAC_SECRET:-dev-rbac-edge-secret-not-for-prod}
+      GMEPAY_RBAC_STAMP_SECRET: *rbac-edge-secret
       # Shared internal-auth token (#90) the RBAC claim resolver presents to auth-identity's
       # internal-only /v1/rbac/resolve (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
       GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret
-      # Route targets read by GatewayRoutingConfig (gmepay.<svc>.base-url).
+      # T0-7: the partner IP allowlist is read through ConfigRegistryClient, whose fallback
+      # implementation returns NOTHING (it used to seed the published test partner with
+      # loopback/RFC1918 ranges). Without this selector every partner request would be 403
+      # IP_NOT_ALLOWED. config-registry's /v1/admin/partners/{code}/ip-allowlist is an operator
+      # surface and is deliberately not internal-auth gated, so no token is needed for it.
+      GMEPAY_CONFIG_REGISTRY_CLIENT: rest
+      # Route targets read by GatewayRoutingConfig (gmepay.<svc>.base-url). GMEPAY_AUTH_IDENTITY_BASE_URL
+      # is ALSO the target of the T0-7 partner-credential lifecycle check
+      # (POST /internal/auth/keys/resolve), which is why it is paired with the internal-auth secret above.
       GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080

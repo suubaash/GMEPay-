@@ -35,9 +35,21 @@ management:
 gme:
   auth:
     jwt:
-      # Override via environment variable GME_AUTH_JWT_SIGNING_SECRET in production.
-      # Must be at least 32 characters for HS256 security.
-      signing-secret: ${GME_AUTH_JWT_SIGNING_SECRET:changeme-at-least-32-chars-long!!}
+      # HS256 signing key for the platform capability tokens this service mints at
+      # /internal/auth/token/issue. WHOEVER HOLDS THIS KEY CAN FORGE ANY TOKEN.
+      #
+      # T0-6: this used to default to the literal `changeme-at-least-32-chars-long!!`, which was
+      # (a) checked into the repo, (b) set in NO deployment file anywhere, and (c) deliberately
+      # sized to pass the 32-char HS256 length check — so a deployment that forgot the env var
+      # booted cleanly and signed valid tokens with a published key. There is now NO default:
+      # an absent/blank/too-short/known-published value makes the service REFUSE TO START
+      # (JwtSigningKeyEnforcedConfig), the same fail-closed posture as the internal-auth gate.
+      #
+      #   OPERATOR ACTION:  GME_AUTH_JWT_SIGNING_SECRET=<random 32+ chars>   (e.g. openssl rand -hex 32)
+      #
+      # No rotation/kid window exists yet — rotating this key is a fleet-wide cutover that
+      # invalidates every live token (gap register T0-6 residual).
+      signing-secret: ${GME_AUTH_JWT_SIGNING_SECRET:}
       # Access token lifetime: 30 minutes (1800 s).
       access-token-ttl-seconds: ${GME_AUTH_JWT_ACCESS_TOKEN_TTL_SECONDS:1800}
       # Hard upper bound on a per-request TTL override at /internal/auth/token/issue.

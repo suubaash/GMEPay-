@@ -58,6 +58,9 @@ secrets:
     GMEPAY_RBAC_SECRET: REPLACE_FROM_KEY_VAULT
     GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_FROM_KEY_VAULT
     GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_FROM_KEY_VAULT
+    # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
+    # on a placeholder, so this MUST be substituted from Key Vault before deploy.
+    GME_AUTH_JWT_SIGNING_SECRET: REPLACE_FROM_KEY_VAULT
 
 ingress:
   enabled: true

@@ -2,6 +2,38 @@
 
 All notable changes to the auth-identity service. Newest first.
 
+## 2026-07-28 — JWT signing key is required from config and fails closed (T0-6)
+
+### Changed
+- **`gme.auth.jwt.signing-secret` has NO default any more.** It defaulted to the literal
+  `changeme-at-least-32-chars-long!!` in *two* places (`application.yml` and the `@Value` in
+  `config/AuthConfig`) while `GME_AUTH_JWT_SIGNING_SECRET` was set in **zero** files — not
+  `docker-compose.yml`, not any of the four Helm values files, not `run-fleet.ps1`. HS256 is
+  symmetric and the literal was sized to clear the 32-char check, so every environment signed real
+  platform capability tokens with a key readable from the repository: token forgery, failing open and
+  silently.
+
+### Added
+- **`config/JwtSigningKeyEnforcedConfig`** — the service now **refuses to start** when the key is
+  blank, shorter than 32 bytes, placeholder-shaped (`changeme`, `CHANGE_ME_`, `REPLACE_*`,
+  `your-secret`, `TODO`), or **any literal ever published in this repo** (rejected by value, so
+  re-adding one is a boot failure). Mirrors `prefunding`'s `InternalAuthEnforcedConfig` — same shape,
+  same `refuses to start` message prefix, asserted through `InitializingBean#afterPropertiesSet`.
+- **`JwtSigningKeyEnforcedConfigTest`** — one case per rejection path, plus an assertion over the
+  **shipped `application.yml`** so the regression cannot return unnoticed.
+
+### Deployment
+- `GME_AUTH_JWT_SIGNING_SECRET` is now wired on all three surfaces: `docker-compose.yml` (single
+  `x-auth-jwt-signing-secret` anchor with a clearly-non-production dev fallback),
+  `deploy/helm/gmepay` (`secrets.data` + `auth-identity.envSecretKeys`; `CHANGE_ME_…` base and
+  `REPLACE_*` per overlay — no working value at any layer), `run-fleet.ps1` (one export + warning).
+  Operator instructions: `docs/COMPOSE.md` §"Secrets an operator must supply (T0-6)".
+- Test contexts get the fixture key from `src/test/resources/application-test.properties`.
+
+### Not done
+- **No rotation and no `kid`/key-versioning window.** Rotating this key is still a fleet-wide cutover
+  that invalidates every live token. Recorded as a T0-6 residual rather than half-built.
+
 ## 2026-07-03 — self-serve SANDBOX key read-back + issue-response enrichment (feat/sandbox-keys-live)
 
 Additive. Lets ops-partner-bff's Partner-Portal "Get Started" flow issue and list

@@ -62,9 +62,14 @@ class RateLimitFilterTest {
     }
 
     @Test
-    @DisplayName("Disabled filter passes every request through with no headers")
+    @DisplayName("Explicitly disabled filter passes every request through with no headers")
     void disabled_passesThrough() {
-        RateLimitProperties props = new RateLimitProperties(); // enabled=false by default
+        // T0-7 flipped the shipped default to enabled=true (the documented per-partner cap was
+        // being applied nowhere), so a test of the disabled path has to opt out explicitly. That
+        // the DEFAULT is now enabled + fail-closed is asserted by
+        // PartnerEdgeFailClosedTest#rateLimitDefaultsAreSafe.
+        RateLimitProperties props = new RateLimitProperties();
+        props.setEnabled(false);
         RateLimitFilter f = filter(props);
 
         MockServerWebExchange ex = partnerPost("/v1/rates");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Internal-auth / fleet-config wiring guard (gap register T0-2, T0-5).
+"""Internal-auth / fleet-config / committed-secret wiring guard (gap register T0-2, T0-5, T0-6).
 
 The security hardening made four services FAIL CLOSED on a missing
 ``GMEPAY_INTERNAL_AUTH_SECRET`` (they refuse to boot) and made every gated edge answer 401 to a
@@ -27,6 +27,12 @@ Each required service is then asserted present in:
 
 Plus the T1-2 residual: ``run-fleet.ps1`` must pin ``OIDC_ISSUER_URI``, because the Java default is
 the stale ``:8090`` and a host-run ops-partner-bff otherwise 401s everything.
+
+Section 6 adds the T0-6 surface, same four-surface shape, for ``GME_AUTH_JWT_SIGNING_SECRET`` — the
+HS256 key auth-identity signs platform capability tokens with. It used to default to a literal
+published in this repo while being set in no deployment file at all, i.e. every environment signed
+forgeable tokens. It now has no in-repo default, auth-identity refuses to boot without a usable
+value, and each dev literal in ``docker-compose.yml`` must live in exactly one anchor.
 
 Run (no servers, no Docker):
     python scripts/check_internal_auth_wiring.py
@@ -256,6 +262,89 @@ for name, text in sorted(e2e_text.items()):
           "a gated service in its fleet would exit during startup")
     check("INTERNAL_HEADER" in text or HEADER in text,
           f"e2e-tests: {name} presents the internal header on its own HTTP helpers")
+
+
+# ---------------------------------------------------------------------------
+# 6. T0-6 — committed secrets are no longer the live defaults
+#
+# The JWT signing key is the priority case: HS256 is symmetric, so a predictable signing key means
+# forgeable capability tokens. It used to default to a literal published in this repo while being set
+# in NO deployment file. auth-identity now refuses to boot without it (asserted in Java by
+# JwtSigningKeyEnforcedConfigTest, which reads the shipped application.yml), and every deployment
+# surface must supply it. Same shape as section 1-4 above, one variable at a time.
+# ---------------------------------------------------------------------------
+JWT_KEY_VAR = "GME_AUTH_JWT_SIGNING_SECRET"
+PUBLISHED_JWT_KEY = "changeme-at-least-32-chars-long!!"
+
+authid_yml = read(os.path.join("services", "auth-identity", "src", "main", "resources",
+                               "application.yml"))
+authid_cfg = "\n".join(
+    l for l in authid_yml.split("\n") if not l.lstrip().startswith("#"))
+check("signing-secret: ${" + JWT_KEY_VAR + ":}" in authid_cfg,
+      "auth-identity: the shipped application.yml gives the JWT signing key NO default",
+      "a default here is a published signing key -> forgeable tokens")
+check(PUBLISHED_JWT_KEY not in authid_cfg,
+      "auth-identity: the published signing key literal is gone from shipped config")
+
+guard = read(os.path.join("services", "auth-identity", "src", "main", "java", "com", "gme", "pay",
+                          "auth", "config", "JwtSigningKeyEnforcedConfig.java"))
+check("refuses to start" in guard and PUBLISHED_JWT_KEY in guard,
+      "auth-identity: the fail-closed guard exists and rejects the published key by value")
+
+authid_java = read(os.path.join("services", "auth-identity", "src", "main", "java", "com", "gme",
+                                "pay", "auth", "config", "AuthConfig.java"))
+# Javadoc legitimately NAMES the removed literal to explain the gap; only live code counts.
+authid_code = "\n".join(
+    l for l in authid_java.split("\n")
+    if not l.lstrip().startswith(("*", "/*", "//")))
+check(PUBLISHED_JWT_KEY not in authid_code,
+      "auth-identity: AuthConfig's @Value no longer defaults the signing key to the published literal")
+check('${gme.auth.jwt.signing-secret:}' in authid_code,
+      "auth-identity: AuthConfig reads the signing key with an EMPTY @Value default")
+
+_authid_env = ((compose.get("services") or {}).get("auth-identity") or {}).get("environment") or {}
+check(JWT_KEY_VAR in (set(_authid_env) if isinstance(_authid_env, dict)
+                      else {e.split("=", 1)[0] for e in _authid_env}),
+      f"compose: auth-identity sets {JWT_KEY_VAR}",
+      "auth-identity refuses to boot without it")
+check(compose_text.count("dev-auth-jwt-signing-key-not-for-prod") == 1,
+      "compose: the JWT dev-default literal appears exactly once (its own anchor)",
+      "T0-6: one clearly-marked non-prod place, never re-inlined per service")
+check("x-auth-jwt-signing-secret:" in compose_text,
+      "compose: the shared JWT-signing-key anchor is defined")
+check(compose_text.count("dev-rbac-edge-secret-not-for-prod") == 1,
+      "compose: the RBAC dev-default literal appears exactly once (its own anchor)")
+check("x-pg-password:" in compose_text and compose_text.count("POSTGRES_PASSWORD: gmepay }") == 0,
+      "compose: the local Postgres password is anchored once, not repeated per container")
+
+check(JWT_KEY_VAR in set(base["secrets"]["data"]),
+      f"Helm: {JWT_KEY_VAR} is declared in secrets.data")
+helm_jwt = str(base["secrets"]["data"][JWT_KEY_VAR])
+check(helm_jwt.startswith("CHANGE_ME_") or helm_jwt.startswith("REPLACE_"),
+      "Helm values.yaml: the JWT signing key is a placeholder, not a working credential",
+      helm_jwt)
+check(PUBLISHED_JWT_KEY not in read(os.path.join(HELM, "values.yaml")),
+      "Helm values.yaml: does not carry the published signing key")
+authid_helm = base["services"]["auth-identity"]
+check(JWT_KEY_VAR in set(authid_helm.get("envSecretKeys") or []),
+      f"Helm values.yaml: auth-identity pulls {JWT_KEY_VAR} from the Secret")
+for ov in OVERLAYS:
+    data = (yaml.safe_load(read(os.path.join(HELM, ov))) or {})
+    ovv = str(((data.get("secrets") or {}).get("data") or {}).get(JWT_KEY_VAR, ""))
+    check(ovv.startswith("REPLACE_"),
+          f"Helm {ov}: {JWT_KEY_VAR} is a REPLACE_* placeholder, not a working credential",
+          ovv or "missing")
+
+check(re.search(r"\$env:" + JWT_KEY_VAR + r"\s*=", code_lines) is not None,
+      f"run-fleet.ps1: exports {JWT_KEY_VAR} (auth-identity will not boot without it)")
+
+# The vendor DB credential the CISO audit named must not be back in the working tree.
+octa = os.path.join("Octa Solution AML external partner", "appsettings.json")
+if os.path.exists(octa):
+    octa_text = read(octa)
+    check("pwd=gM3R3Mli" not in octa_text,
+          "Octa vendor config: the committed SQL Server credential is out of the working tree",
+          "history still carries it - the login must be ROTATED at the database")
 
 
 # ---------------------------------------------------------------------------

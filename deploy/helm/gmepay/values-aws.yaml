@@ -59,6 +59,9 @@ secrets:
     GMEPAY_RBAC_SECRET: REPLACE_FROM_SECRETS_MANAGER
     GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_FROM_SECRETS_MANAGER
     GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_FROM_SECRETS_MANAGER
+    # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
+    # on a placeholder, so this MUST be substituted from Secrets Manager before deploy.
+    GME_AUTH_JWT_SIGNING_SECRET: REPLACE_FROM_SECRETS_MANAGER
 
 ingress:
   enabled: true

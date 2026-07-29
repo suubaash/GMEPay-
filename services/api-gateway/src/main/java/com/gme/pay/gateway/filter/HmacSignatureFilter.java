@@ -1,6 +1,7 @@
 package com.gme.pay.gateway.filter;
 
 import com.gme.pay.gateway.partner.PartnerCredentialService;
+import com.gme.pay.gateway.partner.PartnerCredentialSourceUnavailableException;
 import com.gme.pay.gateway.partner.PartnerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -110,14 +112,45 @@ public class HmacSignatureFilter implements GlobalFilter, Ordered {
             return timestampError;
         }
 
+        // The resolution outcome is MATERIALISED into an Optional before anything else runs, so the
+        // deny-on-error handler below can be scoped to credential resolution ALONE. Attaching
+        // onErrorResume to the whole pipeline would also swallow downstream/proxy errors and try to
+        // write a 503 onto an already-committed response.
         return credentialService.findByApiKey(apiKey)
-                .switchIfEmpty(Mono.defer(() ->
-                        GatewayErrorWriter.writeError(
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                // T0-7 fail-closed: the credential store could not be consulted (unconfigured,
+                // unreachable, 5xx, timeout). We do not know whether this key is valid, so the
+                // request is REFUSED — 503 (retryable) rather than 401 (which would tell a real
+                // partner their key is bad) and never a pass-through. Any other unexpected error
+                // lands here too, so a bug in the credential path cannot degrade to "allow".
+                .onErrorResume(error ->
+                        credentialSourceUnavailable(exchange, error).then(Mono.empty()))
+                .flatMap(resolved -> resolved
+                        .map(creds -> verifySignatureAndDelegate(
+                                exchange, chain, creds, timestamp, signature))
+                        .orElseGet(() -> GatewayErrorWriter.writeError(
                                 exchange, HttpStatus.UNAUTHORIZED, "INVALID_API_KEY",
-                                "Unknown or revoked API key")
-                                .then(Mono.empty())))
-                .flatMap(creds -> verifySignatureAndDelegate(
-                        exchange, chain, creds, timestamp, signature));
+                                "Unknown or revoked API key")));
+    }
+
+    /**
+     * The single deny-on-error path for credential resolution. Deliberately catches every
+     * {@link Throwable} rather than only {@link PartnerCredentialSourceUnavailableException}: an
+     * unclassified failure at an authentication boundary must fail closed, and letting it propagate
+     * would surface as a bare 500 from the Netty handler with no audit-friendly error envelope.
+     */
+    static Mono<Void> credentialSourceUnavailable(ServerWebExchange exchange, Throwable error) {
+        if (error instanceof PartnerCredentialSourceUnavailableException) {
+            log.error("partner credential store unavailable — refusing the request (503): {}",
+                    error.getMessage());
+        } else {
+            log.error("unexpected failure resolving partner credentials — refusing the request "
+                    + "(503) rather than admitting it: {}", error.toString());
+        }
+        return GatewayErrorWriter.writeError(
+                exchange, HttpStatus.SERVICE_UNAVAILABLE, "CREDENTIAL_SERVICE_UNAVAILABLE",
+                "Partner credentials could not be verified; the request was not processed");
     }
 
     /**

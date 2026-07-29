@@ -1,5 +1,59 @@
 # api-gateway — CHANGELOG
 
+## 2026-07-28 — Partner edge authenticates against the real credential store; every fail-open branch denies (T0-7)
+
+### Removed
+- **`StubPartnerCredentialService` — DELETED from `src/main`.** It authenticated partner API calls
+  against api keys *and HMAC secrets published in this repository* (`pk_test_abc`/`sk_test_xyz`,
+  `pk_test_no_mtls`/`sk_test_no_mtls`) with `List.of()` as the IP allowlist, and it was the DEFAULT
+  credential source in every environment. Deleted rather than `@Profile`-gated: a profile still ships
+  the literals. The pairs now live only in `src/test` (`partner/TestPartnerCredentials`), which is what
+  the negative tests assert against.
+- **Dead config removed** — `gateway.replay-protection.{fail-open,store}` and `gateway.trust-proxy`
+  were read by nothing in the repo. The CISO audit reasonably read the first as "replay protection is
+  fail-open"; it never was (replay protection is unconditional: no `X-Nonce` ⇒ 400, reuse ⇒ 401).
+  Removed rather than left implying a control that does not exist.
+- `StubConfigRegistryClient` no longer seeds `partner_test_001` with loopback/RFC1918 SANDBOX ranges.
+  The checked-in credential came with a checked-in allowlist, and since `gmepay.config-registry.client`
+  was set for this service nowhere, that seed WAS the live allowlist. It now returns nothing (⇒ 403)
+  and logs why at construction.
+
+### Added
+- **`partner/PartnerCredentialConfig`** — the one place the credential source is built. `source=stub`
+  (and any unrecognised value) makes the service **refuse to start**; `config` is the default.
+- **`partner/AuthIdentityCredentialStatusClient`** — `POST /internal/auth/keys/resolve` on
+  auth-identity (the T1-1 endpoint), presenting `X-Gme-Internal`. Maps found/active to
+  ACTIVE / UNKNOWN / INACTIVE, and every failure mode (transport, non-2xx, timeout, empty body, blank
+  internal token) to `PartnerCredentialSourceUnavailableException`.
+- **`partner/AuthIdentityVerifiedPartnerCredentialService`** — a key is accepted only if the gateway
+  holds signing material for it **and** auth-identity says the credential is live. Revocation is now
+  effective at the edge. The local lookup short-circuits, so an unauthenticated caller cannot probe
+  the upstream store.
+- **`partner/PartnerCredentialSourceUnavailableException`** — separates "unknown key" (401, a
+  decision) from "store unavailable" (503, the absence of one).
+
+### Changed — fail-closed defaults
+- `gateway.partner-credentials.source` `stub` → **`config`**, table empty by default (⇒ 401 to
+  everyone until an operator populates it), plus `verify-with-auth-identity: true`.
+- `security.gateway.allowlist.trust_header_only_in_dev` `true` → **`false`**. The unauthenticated
+  `X-Partner-Id` header used to choose *which partner's* allowlist was checked.
+- `security.gateway.allowlist.fail-open` `true` → **`false`**.
+- `gateway.rate-limit.enabled` `false` → **`true`**, `fail-open` `true` → **`false`**.
+- `HmacSignatureFilter`, `MtlsFingerprintFilter`, `PartnerIpAllowlistFilter` answer **503
+  `CREDENTIAL_SERVICE_UNAVAILABLE`** when the credential store cannot be consulted, instead of
+  passing through to the next filter or 500-ing. The HMAC filter catches every throwable there.
+- A config row with a blank `hmac-secret` is dropped (HMAC-ing with an empty key is forgeable).
+
+### Notes
+- **The partner API now authenticates nobody until configured.** HMAC needs the plaintext secret and
+  auth-identity stores only a PBKDF2 digest, so signing material must come from
+  `gateway.partner-credentials.partners[]` (env-injected). See `PartnerCredentialConfig`'s javadoc and
+  `docs/COMPOSE.md` §"Partner API credentials (T0-7)".
+- **Per-instance windows:** the only `NonceStore`/`RateLimitStore` implementations are in-memory, so
+  with N replicas the rate cap is N x the configured value. Recorded as a T0-7 residual.
+- mTLS stays off: the fingerprint header is spoofable without a terminator this repo does not define.
+- 44 new tests (143 total, 0 failures).
+
 ## 2026-06-30 — OIDC issuer made provider-neutral (agent/cloud-audit)
 
 ### Changed

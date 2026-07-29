@@ -61,6 +61,16 @@
         topology asserted by `node docker/keycloak/check-topology.mjs`. Keycloak itself is NOT
         started by this script: run `docker compose --profile core up -d keycloak` (host port 8097).
 
+    $env:GME_AUTH_JWT_SIGNING_SECRET = '<random 32+ chars>'
+        HS256 key for the platform capability tokens auth-identity mints at
+        /internal/auth/token/issue. HS256 is symmetric, so whoever holds it can FORGE ANY TOKEN.
+        FAIL-CLOSED (T0-6): auth-identity REFUSES TO START on a blank, too-short, placeholder or
+        previously-published value. It used to default to the literal
+        `changeme-at-least-32-chars-long!!` inside the image while being set in no file anywhere,
+        so every environment signed real tokens with a key published in this repo. Default here =
+        a clearly-non-production dev literal (same idiom as docker-compose.yml's
+        x-auth-jwt-signing-secret anchor; gap-register item T0-6).
+
   Full env-var matrix (service x compose/Helm/run-fleet): docs/COMPOSE.md, section
   "Internal-auth secret (GMEPAY_INTERNAL_AUTH_SECRET)".
 #>
@@ -100,6 +110,17 @@ if (-not $internalAuthSecret) {
     Write-Host "GMEPAY_INTERNAL_AUTH_SECRET not set - using the dev default (NOT for any shared or tunnelled host)" -ForegroundColor DarkYellow
 }
 $env:GMEPAY_INTERNAL_AUTH_SECRET = $internalAuthSecret
+
+# auth-identity's HS256 JWT signing key (T0-6). FAIL-CLOSED: auth-identity refuses to START without
+# a usable value, and there is no default inside the image any more (it used to default to a literal
+# published in this repo). Same dev-default idiom as above, matching docker-compose.yml's
+# x-auth-jwt-signing-secret anchor. Must be >= 32 chars.
+$authJwtSigningSecret = $env:GME_AUTH_JWT_SIGNING_SECRET
+if (-not $authJwtSigningSecret) {
+    $authJwtSigningSecret = 'dev-auth-jwt-signing-key-not-for-prod'
+    Write-Host "GME_AUTH_JWT_SIGNING_SECRET not set - using the dev default (NOT for any shared or tunnelled host)" -ForegroundColor DarkYellow
+}
+$env:GME_AUTH_JWT_SIGNING_SECRET = $authJwtSigningSecret
 
 # OIDC issuer for the two resource servers (ops-partner-bff :18095, api-gateway :18080). Their Java
 # default is the stale :8090 (= scheme-adapter-zeropay), so a host-run BFF 401s everything without
@@ -175,7 +196,16 @@ $fleet = @(
             '--gmepay.notification-webhook.base-url=http://localhost:18086') }
     @{ name = 'kyb-adapter';                type = 'service'; port = 18098 }
     @{ name = 'rate-fx';                    type = 'service'; port = 18101 }
-    @{ name = 'api-gateway';                type = 'service'; port = 18080 }
+    # T0-7: the gateway's partner edge now (a) reads the IP allowlist from the REAL registry — its
+    # fallback client returns nothing, so without this every partner request is 403 IP_NOT_ALLOWED —
+    # and (b) checks every presented api key against auth-identity's api_keys store, so it needs
+    # that base-url on the 18xxx band. It still authenticates nobody until an operator adds rows to
+    # gateway.partner-credentials.partners[] (api-key + hmac-secret + ip-cidr-ranges); the published
+    # pk_test_abc/sk_test_xyz stub that used to make this work is deleted.
+    @{ name = 'api-gateway';                type = 'service'; port = 18080; args = @(
+            '--gmepay.config-registry.client=rest'
+            '--gmepay.config-registry.base-url=http://localhost:18081'
+            '--gmepay.auth-identity.base-url=http://localhost:18085') }
     @{ name = 'sim-rate-provider';          type = 'sim';     port = 9101 }
     @{ name = 'sim-scheme';                 type = 'sim';     port = 9102; args = @('--gmepay.sim.scheme.profile=ZEROPAY') }
     @{ name = 'sim-wallet';                 type = 'sim';     port = 9103 }
