@@ -41,6 +41,28 @@
   Memory: all ~28 JVMs need ~9-11 GB. If services get reaped, use -Subset money or
   lower -Xmx (e.g. -Xmx 224m). Run from any path (uses its own folder as the repo root).
   First run from a new shell may need:  Unblock-File .\run-fleet.ps1
+
+  ENVIRONMENT AN OPERATOR SHOULD EXPORT BEFORE `start`
+  ----------------------------------------------------
+  Both are optional here — this script supplies dev defaults so a bare `.\run-fleet.ps1`
+  still works — but both MUST be set explicitly for anything shared or tunnelled:
+
+    $env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+        The shared service-to-service token behind the X-Gme-Internal header (#90 / T0-2 / T0-5).
+        FAIL-CLOSED: auth-identity, prefunding, scheme-adapter-zeropay and rate-fx REFUSE TO START
+        without it, and any caller that omits it is answered 401. Exported to every child JVM below
+        so both sides of every gated edge agree. Default = a clearly-non-production dev literal
+        (same idiom as docker-compose.yml's x-internal-auth-secret anchor; gap-register item T0-6).
+
+    $env:OIDC_ISSUER_URI = 'http://localhost:8097/realms/gmepay'
+        Browser-facing Keycloak issuer for the two resource servers (ops-partner-bff, api-gateway).
+        Their Java default is still the stale :8090 — which is scheme-adapter-zeropay's port — so
+        without this a host-run BFF 401s every request (gap T1-2). Default = the canonical local
+        topology asserted by `node docker/keycloak/check-topology.mjs`. Keycloak itself is NOT
+        started by this script: run `docker compose --profile core up -d keycloak` (host port 8097).
+
+  Full env-var matrix (service x compose/Helm/run-fleet): docs/COMPOSE.md, section
+  "Internal-auth secret (GMEPAY_INTERNAL_AUTH_SECRET)".
 #>
 [CmdletBinding()]
 param(
@@ -59,6 +81,30 @@ $root = $PSScriptRoot
 $traceEnabled = -not $NoTrace
 $logDir = Join-Path $root '.smoke\logs'
 $dashUrl = 'http://localhost:7099'
+
+# --- shared config every child JVM inherits ---------------------------------
+# Start-Process inherits this process's environment, so setting these once here reaches every
+# service below. Passing them as env (not --spring CLI args) is deliberate: each service reads a
+# DIFFERENT property name off the same variable (gmepay.internal-auth.secret,
+# gmepay.auth-identity.internal-secret, spring.security...issuer-uri), and Spring's relaxed binding
+# resolves all of them from the env var. One assignment, no per-service arg lists to keep in sync.
+
+# Service-to-service internal-auth token (#90 / T0-2 / T0-5). FAIL-CLOSED: auth-identity,
+# prefunding, scheme-adapter-zeropay and rate-fx refuse to START without it; payment-executor,
+# qr-service, config-registry, ops-partner-bff, settlement-reconciliation and api-gateway must
+# present the SAME value or their calls are refused 401. The dev default is a clearly-non-production
+# marker, matching docker-compose.yml's x-internal-auth-secret anchor (gap-register item T0-6).
+$internalAuthSecret = $env:GMEPAY_INTERNAL_AUTH_SECRET
+if (-not $internalAuthSecret) {
+    $internalAuthSecret = 'dev-internal-svc-secret-not-for-prod'
+    Write-Host "GMEPAY_INTERNAL_AUTH_SECRET not set - using the dev default (NOT for any shared or tunnelled host)" -ForegroundColor DarkYellow
+}
+$env:GMEPAY_INTERNAL_AUTH_SECRET = $internalAuthSecret
+
+# OIDC issuer for the two resource servers (ops-partner-bff :18095, api-gateway :18080). Their Java
+# default is the stale :8090 (= scheme-adapter-zeropay), so a host-run BFF 401s everything without
+# this (gap T1-2). Canonical local topology, asserted by docker/keycloak/check-topology.mjs.
+if (-not $env:OIDC_ISSUER_URI) { $env:OIDC_ISSUER_URI = 'http://localhost:8097/realms/gmepay' }
 
 # --- the fleet -------------------------------------------------------------
 # type: service jars are <name>-0.1.0.jar under services\<name>; sim jars are
@@ -307,6 +353,9 @@ switch ($Action) {
 
         Start-TraceConsole
         Write-Host "starting $($fleet.Count) components (trace=$traceEnabled, -Xmx$Xmx)..." -ForegroundColor Yellow
+        Write-Host ("  internal-auth secret: {0}  |  OIDC issuer: {1}" -f `
+            $(if ($internalAuthSecret -eq 'dev-internal-svc-secret-not-for-prod') { 'dev default' } else { 'from environment' }),
+            $env:OIDC_ISSUER_URI) -ForegroundColor DarkGray
         foreach ($c in $fleet) { Start-Component $c; Write-Host "  -> $($c.name) :$($c.port)" -ForegroundColor DarkGray }
 
         Write-Host "`nwaiting up to 180s for services to come up (heavy: many JVMs + H2)..." -ForegroundColor Yellow

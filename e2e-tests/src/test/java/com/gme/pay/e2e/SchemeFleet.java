@@ -38,6 +38,29 @@ final class SchemeFleet {
             .connectTimeout(Duration.ofSeconds(3))
             .build();
 
+    /**
+     * Shared service-to-service internal-auth token for every E2E fleet in this module (T0-2 / T0-5).
+     *
+     * <p>Two things now depend on it. (1) <b>Boot:</b> {@code auth-identity}, {@code prefunding},
+     * {@code scheme-adapter-zeropay} and {@code rate-fx} REFUSE TO START with a blank
+     * {@code GMEPAY_INTERNAL_AUTH_SECRET}, so any fleet that launches one of them must export it or
+     * the process exits during startup. (2) <b>Calls:</b> the tests drive gated surfaces directly
+     * ({@code /internal/**}, {@code /v1/prefunding/**}), so every request needs the
+     * {@code X-Gme-Internal} header — hence {@link #INTERNAL_HEADER} on the helpers below.
+     *
+     * <p>This is a <b>test fixture, not a credential</b>: it lives only in the test source set, is
+     * never packaged, and is deliberately self-describing so it cannot be mistaken for a deployment
+     * value. Sims get it too; they ignore it.
+     */
+    static final String INTERNAL_SECRET = "e2e-fixture-internal-token-not-a-deployment-secret";
+
+    /** The header name the {@code com.gme.pay.internalauth} gate reads (kept literal: e2e-tests does not depend on lib-errors). */
+    static final String INTERNAL_HEADER = "X-Gme-Internal";
+
+    /** Env every launched component receives, so a gated service boots and its callers can reach it. */
+    static final Map<String, String> INTERNAL_AUTH_ENV =
+            Map.of("GMEPAY_INTERNAL_AUTH_SECRET", INTERNAL_SECRET);
+
     private final Path repoRoot;
     private final Path logDir;
     private final List<Service> fleet = new ArrayList<>();
@@ -100,6 +123,10 @@ final class SchemeFleet {
         ProcessBuilder pb = new ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .redirectOutput(logDir.resolve(name + ".log").toFile());
+        // Internal-auth secret FIRST, so a per-test env map can still override it deliberately.
+        // Without it a gated service (auth-identity / prefunding / scheme-adapter-zeropay / rate-fx)
+        // exits during startup and awaitUp() fails with "exited during startup".
+        pb.environment().putAll(INTERNAL_AUTH_ENV);
         pb.environment().putAll(env);
         fleet.add(new Service(name, pb.start(), port));
     }
@@ -252,8 +279,15 @@ final class SchemeFleet {
     // HTTP helpers
     // -------------------------------------------------------------------------
 
+    // Both helpers always present X-Gme-Internal (T0-2 / T0-5). Several of the URLs these tests hit
+    // are gated (/internal/scheme/**, /v1/prefunding/**) and would answer 401 without it; on an
+    // ungated route the extra header is simply ignored, so it is safe to send unconditionally rather
+    // than asking each call site to decide.
     static HttpResponse<String> get(String url) throws Exception {
-        return HTTP.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
+        return HTTP.send(HttpRequest.newBuilder(URI.create(url))
+                        .timeout(Duration.ofSeconds(10))
+                        .header(INTERNAL_HEADER, INTERNAL_SECRET)
+                        .GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 
@@ -261,6 +295,7 @@ final class SchemeFleet {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(20))
                         .header("Content-Type", "application/json")
+                        .header(INTERNAL_HEADER, INTERNAL_SECRET)
                         .POST(HttpRequest.BodyPublishers.ofString(json)).build(),
                 HttpResponse.BodyHandlers.ofString());
     }

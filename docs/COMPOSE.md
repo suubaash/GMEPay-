@@ -13,11 +13,11 @@ flag — a bare `docker compose up` starts nothing.
 
 | Profile | Contents |
 |---|---|
-| `core` | All infrastructure (9× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry, Keycloak) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff |
-| `full` | Everything in `core` plus: api-gateway, auth-identity, smart-router, reporting-compliance |
+| `core` | All infrastructure (9× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry, Keycloak) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff, **auth-identity** (promoted `full` → `core` by gap T1-1: partner activation issues real credentials through it) |
+| `full` | Everything in `core` plus: api-gateway, smart-router, reporting-compliance |
 
 Infrastructure and money-path services are tagged with *both* profiles
-(`["core", "full"]`); the four extra services are tagged `["full"]` only, so a
+(`["core", "full"]`); the extra services are tagged `["full"]` only, so a
 single `--profile full` boots the entire platform.
 
 ```bash
@@ -29,6 +29,75 @@ docker compose --profile full up --build
 
 # tear down (drops the postgres/mongo volumes too)
 docker compose --profile full down -v
+```
+
+## Internal-auth secret (`GMEPAY_INTERNAL_AUTH_SECRET`)
+
+### What an operator must export before starting anything
+
+```bash
+export GMEPAY_INTERNAL_AUTH_SECRET="$(openssl rand -hex 32)"   # any shared/tunnelled host: REQUIRED
+export GMEPAY_RBAC_SECRET="$(openssl rand -hex 32)"            # same discipline, gateway RBAC stamp
+export KC_PUBLIC_URL=https://auth.example.com                  # only if Keycloak is not on localhost
+```
+
+For the host fleet instead of compose (`.\run-fleet.ps1`), the same variable plus the OIDC issuer:
+
+```powershell
+$env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+$env:OIDC_ISSUER_URI             = 'http://localhost:8097/realms/gmepay'   # default, set explicitly to be sure
+```
+
+Both compose and `run-fleet.ps1` fall back to the clearly-non-production literal
+`dev-internal-svc-secret-not-for-prod` so a bare local boot still works. In compose that fallback
+lives in **exactly one place** — the top-level `x-internal-auth-secret` anchor — and every service
+block references it, so removing the checked-in default (gap-register item **T0-6**) is a one-line
+change rather than an eleven-site sweep. **Never** ship that literal to a shared, tunnelled or
+production environment. Helm never carries a working default at all: the value comes from
+`secrets.data.GMEPAY_INTERNAL_AUTH_SECRET`, a `CHANGE_ME_…` / `REPLACE_FROM_SECRETS_MANAGER` /
+`REPLACE_FROM_KEY_VAULT` / `REPLACE_WITH_INTERNAL_SECRET` placeholder per overlay.
+
+### Why it is not optional
+
+The `X-Gme-Internal` gate (`com.gme.pay.internalauth`, issue #90) is **fail-closed** since gaps
+T0-2 / T0-5. Four services **refuse to boot** without a secret, and every caller that omits it is
+answered **401** — never allowed through. So the same value must be present on *both* sides of every
+gated edge. One secret, eleven services:
+
+| Service | Why it needs the secret | Missing ⇒ |
+|---|---|---|
+| `auth-identity` | gates `/internal/auth/**` (JWT minting, API-key issuance), `/v1/rbac/**`, `/v1/approvals/**` | **refuses to start** |
+| `prefunding` | gates all 18 money-moving / float-reading routes (`/internal/**`, `/v1/prefunding/**`) | **refuses to start** |
+| `scheme-adapter-zeropay` | gates `/internal/scheme/zeropay/**` (real KFTC authorize/commit) + `registration-status` | **refuses to start** |
+| `rate-fx` | gates `POST /v1/rates/snapshots` (treasury-rate override that re-prices every later quote) | **refuses to start** |
+| `payment-executor` | caller → prefunding debit + ZeroPay authorize/commit; also gates its own `GET /v1/balance` | boots, but **every payment declines** |
+| `config-registry` | caller → auth-identity key issuance + prefunding credit-limit push | activation 502s / credit-limit push 401s |
+| `qr-service` | caller → prefunding CPM `reserve`/`release` | **CPM issuance declines** |
+| `ops-partner-bff` | caller → auth-identity RBAC/approvals/sandbox-keys + prefunding balance/alerts | RBAC + balance panels 401 |
+| `settlement-reconciliation` | caller → the ZeroPay registration-status prerequisite | fails CLOSED ⇒ **settlement generation blocked** |
+| `api-gateway` | caller → auth-identity `/v1/rbac/resolve` | RBAC claim resolution fails |
+| `transaction-mgmt` | gates `/actuator/metrics` + `/v3/api-docs`; **required** if `GMEPAY_DEVTOOLS_ENABLED=true` | introspection stays anonymous |
+
+### Where it is wired
+
+| Surface | Mechanism |
+|---|---|
+| `docker-compose.yml` | `GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret` in each of the 11 service blocks (single top-level anchor) |
+| `deploy/helm/gmepay/values.yaml` | `envSecretKeys: [… GMEPAY_INTERNAL_AUTH_SECRET]` per service, sourced from the chart's credentials `Secret` |
+| `values-onprem/aws/azure.yaml` | inherited — the overlays override only `env` (datasource URLs), never `envSecretKeys` |
+| `run-fleet.ps1` | one `$env:GMEPAY_INTERNAL_AUTH_SECRET` assignment; `Start-Process` children inherit it |
+| `e2e-tests` | `SchemeFleet.INTERNAL_AUTH_ENV` injected into every launched JVM; the HTTP helpers add the header |
+
+Do **not** set `GMEPAY_DEVTOOLS_ENABLED` or `GMEPAY_SANDBOX_E2E_ENABLED` anywhere shared: they
+expose table dumps / a real "spend money" runner. `GMEPAY_INTERNAL_AUTH_ENABLED` is **no longer read
+by any service** — the gate is pinned on and cannot be switched off from config.
+
+Verify the whole matrix statically, with no Docker and no servers:
+
+```bash
+python scripts/check_internal_auth_wiring.py     # derives the requirement from the code, then
+                                                 # asserts compose + all 4 Helm values + run-fleet
+node docker/keycloak/check-topology.mjs          # OIDC realm/client/issuer/port agreement
 ```
 
 ## Port map

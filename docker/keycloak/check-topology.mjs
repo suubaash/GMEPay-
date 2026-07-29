@@ -119,6 +119,24 @@ check('compose does NOT disable RBAC enforcement',
   !/GMEPAY_OPS_RBAC_ENFORCE:\s*["']?false/.test(compose));
 
 // ---------------------------------------------------------------------------
+// 2b. run-fleet.ps1 (host fleet) — the T1-2 residual
+// ---------------------------------------------------------------------------
+// ops-partner-bff and api-gateway default their issuer to :8090, which is
+// scheme-adapter-zeropay's port here. Compose sets OIDC_ISSUER_URI explicitly;
+// the host fleet did not, so a host-run BFF 401'd every request. One export in
+// the script reaches every child JVM (Start-Process inherits its environment).
+const fleetScript = read('run-fleet.ps1');
+const fleetCode = fleetScript
+  .split('\n')
+  .filter((l) => !/^\s*#/.test(l))
+  .join('\n');
+const fleetIssuer = fleetCode.match(/\$env:OIDC_ISSUER_URI\s*=\s*'([^']+)'/)?.[1];
+check('run-fleet.ps1 pins OIDC_ISSUER_URI for the host fleet', Boolean(fleetIssuer),
+  'without it a host-run ops-partner-bff falls back to the stale :8090 Java default');
+check(`run-fleet.ps1 issuer === ${LOCAL_ISSUER}`, fleetIssuer === LOCAL_ISSUER,
+  `got ${fleetIssuer}`);
+
+// ---------------------------------------------------------------------------
 // 3. SPA defaults + env files
 // ---------------------------------------------------------------------------
 for (const [app, client] of [['admin-ui', ADMIN_CLIENT], ['partner-portal-ui', PORTAL_CLIENT]]) {

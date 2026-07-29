@@ -356,10 +356,14 @@ class WalletScanPayE2ETest {
                 "--spring.application.name=" + name));
         cmd.addAll(List.of(extraArgs));
 
-        Process p = new ProcessBuilder(cmd)
+        ProcessBuilder pb = new ProcessBuilder(cmd)
                 .redirectErrorStream(true)
-                .redirectOutput(logDir.resolve(name + ".log").toFile())
-                .start();
+                .redirectOutput(logDir.resolve(name + ".log").toFile());
+        // T0-2 / T0-5: scheme-adapter-zeropay in this fleet refuses to START without the
+        // internal-auth secret, and payment-executor's RestSchemeClient must present the SAME value
+        // on every /internal/scheme/zeropay/** authorize+commit or the golden path 401s.
+        pb.environment().putAll(SchemeFleet.INTERNAL_AUTH_ENV);
+        Process p = pb.start();
         FLEET.add(new Service(name, p, port));
     }
 
@@ -464,8 +468,14 @@ class WalletScanPayE2ETest {
     // Tiny HTTP + misc helpers
     // -------------------------------------------------------------------------
 
+    // Both helpers always present X-Gme-Internal (T0-2 / T0-5) so any gated route this suite touches
+    // directly (scheme-adapter-zeropay's /internal/**, transaction-mgmt introspection) is reachable.
+    // Ignored on the ungated payment/merchant routes, so it is safe to send unconditionally.
     private static HttpResponse<String> get(String url) throws Exception {
-        return HTTP.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
+        return HTTP.send(HttpRequest.newBuilder(URI.create(url))
+                        .timeout(Duration.ofSeconds(10))
+                        .header(SchemeFleet.INTERNAL_HEADER, SchemeFleet.INTERNAL_SECRET)
+                        .GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 
@@ -473,6 +483,7 @@ class WalletScanPayE2ETest {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(20))
                         .header("Content-Type", "application/json")
+                        .header(SchemeFleet.INTERNAL_HEADER, SchemeFleet.INTERNAL_SECRET)
                         .POST(HttpRequest.BodyPublishers.ofString(json)).build(),
                 HttpResponse.BodyHandlers.ofString());
     }

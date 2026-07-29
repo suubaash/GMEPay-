@@ -106,6 +106,14 @@ gmepay:
   scheme-adapters:
     SENDMN:
       base-url: ${SCHEME_ADAPTER_SENDMN_URL:http://scheme-adapter-sendmn:8093}
+  # Service-to-service internal-auth token (com.gme.pay.internalauth, #90). OUTBOUND only for this
+  # service: scheme-adapter-zeropay's /internal/** — including the §8.2 registration-status
+  # projection RestRegistrationStatusClient consults — is behind the gate since T0-2, so the token
+  # must ride on that call. NO default value: it comes from GMEPAY_INTERNAL_AUTH_SECRET. Blank ⇒ no
+  # header ⇒ the gated adapter answers 401 ⇒ the prerequisite fails CLOSED and settlement generation
+  # is blocked. Fail-closed, never a bypass.
+  internal-auth:
+    secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:

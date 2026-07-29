@@ -268,10 +268,14 @@ class PartnerOnboardingE2ETest {
                 "--spring.application.name=" + name));
         cmd.addAll(List.of(extraArgs));
 
-        Process p = new ProcessBuilder(cmd)
+        ProcessBuilder pb = new ProcessBuilder(cmd)
                 .redirectErrorStream(true)
-                .redirectOutput(logDir.resolve(name + ".log").toFile())
-                .start();
+                .redirectOutput(logDir.resolve(name + ".log").toFile());
+        // T0-2 / T0-5: auth-identity AND prefunding (both in this fleet) refuse to START without
+        // the internal-auth secret, and this funnel calls their gated /internal/auth/keys +
+        // /v1/prefunding/** surfaces directly. Same fixture value SchemeFleet uses.
+        pb.environment().putAll(SchemeFleet.INTERNAL_AUTH_ENV);
+        Process p = pb.start();
         FLEET.add(new Service(name, p, port));
     }
 
@@ -346,15 +350,22 @@ class PartnerOnboardingE2ETest {
     // Tiny HTTP + misc helpers
     // -------------------------------------------------------------------------
 
+    // Both helpers always present X-Gme-Internal (T0-2 / T0-5): steps ③ and ④ of this funnel call
+    // auth-identity's /internal/auth/keys and prefunding's /v1/prefunding/**, both now gated. The
+    // header is ignored on the ungated config-registry routes, so sending it unconditionally is safe.
     private static HttpResponse<String> get(String url) throws Exception {
-        return HTTP.send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET().build(),
+        return HTTP.send(HttpRequest.newBuilder(URI.create(url))
+                        .timeout(Duration.ofSeconds(10))
+                        .header(SchemeFleet.INTERNAL_HEADER, SchemeFleet.INTERNAL_SECRET)
+                        .GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 
     private static HttpResponse<String> post(String url, String json, String... headers) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(20))
-                .header("Content-Type", "application/json");
+                .header("Content-Type", "application/json")
+                .header(SchemeFleet.INTERNAL_HEADER, SchemeFleet.INTERNAL_SECRET);
         for (int i = 0; i + 1 < headers.length; i += 2) {
             builder.header(headers[i], headers[i + 1]);
         }
