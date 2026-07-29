@@ -154,7 +154,17 @@ public class BokReportScheduler {
 
             BokFxFileBuilder.BokFileResult result = fileBuilder.buildFiles(records, reportDate);
 
-            log.info("BOK FX daily report complete for {}: "
+            // Attach the artifacts to their filing rows and settle each against the BOK
+            // channel. No channel exists (OI-03), so each filing ends at
+            // NOT_FILED_CHANNEL_UNAVAILABLE with the reason recorded — never a success.
+            if (persistenceService != null) {
+                persistenceService.recordArtifact(reportDate, "FX1014",
+                        result.getFx1014Count(), result.getFx1014Path());
+                persistenceService.recordArtifact(reportDate, "FX1015",
+                        result.getFx1015Count(), result.getFx1015Path());
+            }
+
+            log.info("BOK FX daily report complete for {} (generated only, nothing filed): "
                     + "FX1014={} records → {}, FX1015={} records → {}",
                     reportDate,
                     result.getFx1014Count(), result.getFx1014Path(),

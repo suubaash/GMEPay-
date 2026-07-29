@@ -9,9 +9,12 @@ import java.time.Instant;
  * <p>The production implementation
  * ({@link com.gme.pay.registry.client.rest.RestAuthIdentityClient}) calls
  * auth-identity's internal issuance API ({@code POST /internal/auth/keys})
- * over the internal network. Local dev / unit slices fall back to
- * {@link StubAuthIdentityClient}, which mints random material in-process —
- * same conditional seam as {@code KybScreeningClient} / {@code RestKybClient}.
+ * over the internal network and is the DEFAULT: it is selected both by
+ * {@code gmepay.auth-identity.client=rest} and by the selector being absent.
+ * {@link StubAuthIdentityClient} mints unverifiable random material in-process
+ * and must be opted into with {@code gmepay.auth-identity.client=stub} — the
+ * inversion of the old stub-by-default wiring that caused gap T1-1 (every
+ * environment silently handed operators dead go-live credentials).
  *
  * <p>Per MSA rules (INTER_SERVICE_CONTRACTS.md): config-registry never reads
  * auth-identity's database; the salted secret hashes live there, the

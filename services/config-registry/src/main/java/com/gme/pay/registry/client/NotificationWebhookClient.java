@@ -9,12 +9,14 @@ import com.gme.pay.contracts.WebhookEndpointRegistrationView;
  *
  * <p>Implementations:
  * <ul>
- *   <li>{@link RestNotificationWebhookClient} — production HTTP transport,
- *       active when {@code gmepay.notification-webhook.client=rest};</li>
+ *   <li>{@link RestNotificationWebhookClient} — production HTTP transport and
+ *       the DEFAULT: selected by {@code gmepay.notification-webhook.client=rest}
+ *       and by the selector being absent;</li>
  *   <li>{@link StubNotificationWebhookClient} — deterministic in-process
- *       default so {@code @DataJpaTest} slices and local dev never need the
- *       notification-webhook service running (the {@code StubKybClient}
- *       discipline).</li>
+ *       stand-in for unit slices / single-service local runs, opt-in via
+ *       {@code gmepay.notification-webhook.client=stub}. It mints a signing
+ *       secret notification-webhook has never seen, so activation output from a
+ *       stub-wired instance is unusable (gap T1-1).</li>
  * </ul>
  */
 public interface NotificationWebhookClient {

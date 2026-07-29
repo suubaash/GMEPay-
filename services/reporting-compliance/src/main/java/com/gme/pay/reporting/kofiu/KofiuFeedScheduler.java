@@ -1,7 +1,9 @@
 package com.gme.pay.reporting.kofiu;
 
+import com.gme.pay.reporting.channel.FilingTransmissionResult;
 import com.gme.pay.reporting.persistence.ReportFiling;
 import com.gme.pay.reporting.persistence.ReportFilingService;
+import com.gme.pay.reporting.validation.FilingArtifactValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,18 +59,37 @@ public class KofiuFeedScheduler {
     @Nullable
     private final ReportFilingService filingService;
 
+    /** Local artifact format validation; null in unit tests that skip validation. */
+    @Nullable
+    private final FilingArtifactValidator validator;
+
     @Autowired
     public KofiuFeedScheduler(
             KofiuReportService reportService,
             KofiuFeedFileBuilder fileBuilder,
             KofiuFeedClient feedClient,
             ReportFilingService filingService,
+            FilingArtifactValidator validator,
             @Value("${gmepay.reporting.kofiu.enabled:false}") boolean enabled) {
         this.reportService = reportService;
         this.fileBuilder = fileBuilder;
         this.feedClient = feedClient;
         this.filingService = filingService;
+        this.validator = validator;
         this.enabled = enabled;
+    }
+
+    /**
+     * Package-private constructor for tests predating the artifact validator.
+     * Validation is skipped (filings stop at GENERATED) — never a more advanced state.
+     */
+    KofiuFeedScheduler(
+            KofiuReportService reportService,
+            KofiuFeedFileBuilder fileBuilder,
+            KofiuFeedClient feedClient,
+            ReportFilingService filingService,
+            boolean enabled) {
+        this(reportService, fileBuilder, feedClient, filingService, null, enabled);
     }
 
     /**
@@ -96,17 +117,28 @@ public class KofiuFeedScheduler {
             }
 
             Path feedFile = fileBuilder.buildAndWrite(batch);
+            FilingTransmissionResult result = feedClient.submit(feedFile, batch);
             persistFilings(yesterday, batch.getCtrReports().size(),
-                    batch.getStrReports().size(), feedFile.toString());
-            String receiptId = feedClient.submit(feedFile, batch);
+                    batch.getStrReports().size(), feedFile, result);
 
-            log.info("KoFIU daily feed completed: reportDate={}, ctr={}, str={}, "
-                            + "file={}, receiptId={}",
-                    yesterday,
-                    batch.getCtrReports().size(),
-                    batch.getStrReports().size(),
-                    feedFile,
-                    receiptId);
+            if (result.transmitted()) {
+                log.info("KoFIU daily feed TRANSMITTED: reportDate={}, ctr={}, str={}, "
+                                + "file={}, receiptId={}",
+                        yesterday,
+                        batch.getCtrReports().size(),
+                        batch.getStrReports().size(),
+                        feedFile,
+                        result.receiptId());
+            } else {
+                // Normal path today: the feed was generated but no KoFIU channel exists.
+                log.warn("KoFIU daily feed GENERATED BUT NOT FILED: reportDate={}, ctr={}, "
+                                + "str={}, file={} — {}",
+                        yesterday,
+                        batch.getCtrReports().size(),
+                        batch.getStrReports().size(),
+                        feedFile,
+                        result.reason());
+            }
 
         } catch (Exception e) {
             log.error("KoFIU daily feed FAILED for reportDate={}: {}", yesterday, e.getMessage(), e);
@@ -126,27 +158,44 @@ public class KofiuFeedScheduler {
         KofiuReportBatch batch = reportService.buildDailyBatch(reportDate);
         if (!batch.isEmpty()) {
             Path feedFile = fileBuilder.buildAndWrite(batch);
+            FilingTransmissionResult result = feedClient.submit(feedFile, batch);
             persistFilings(reportDate, batch.getCtrReports().size(),
-                    batch.getStrReports().size(), feedFile.toString());
-            feedClient.submit(feedFile, batch);
+                    batch.getStrReports().size(), feedFile, result);
         }
     }
 
     /**
-     * Records idempotent CTR/STR {@code report_filing} rows for the date (one per type).
-     * Best-effort: a persistence failure must not abort the feed run.
+     * Records idempotent CTR/STR {@code report_filing} rows for the date (one per type),
+     * advancing each through the honest lifecycle:
+     * GENERATED → (VALIDATED if the artifact passes local checks) →
+     * TRANSMITTED only when the channel really transmitted, otherwise
+     * NOT_FILED_CHANNEL_UNAVAILABLE with the reason.
+     *
+     * <p>Best-effort: a persistence failure must not abort the feed run.
      */
-    private void persistFilings(LocalDate reportDate, int ctrCount, int strCount, String filePath) {
+    private void persistFilings(LocalDate reportDate, int ctrCount, int strCount,
+                                Path feedFile, FilingTransmissionResult result) {
         if (filingService == null) {
             return;
         }
         try {
-            ReportFiling ctr = filingService.openFiling(
-                    ReportFiling.Lane.KOFIU, "CTR", reportDate);
-            filingService.recordGenerated(ctr.getId(), ctrCount, filePath);
-            ReportFiling str = filingService.openFiling(
-                    ReportFiling.Lane.KOFIU, "STR", reportDate);
-            filingService.recordGenerated(str.getId(), strCount, filePath);
+            FilingArtifactValidator.Outcome outcome =
+                    (validator != null) ? validator.validate(feedFile) : null;
+            if (outcome != null && !outcome.valid()) {
+                log.warn("KoFIU feed artifact failed local validation for {}: {}",
+                        reportDate, outcome.reason());
+            }
+            for (String reportType : new String[] {"CTR", "STR"}) {
+                int count = "CTR".equals(reportType) ? ctrCount : strCount;
+                ReportFiling filing = filingService.openFiling(
+                        ReportFiling.Lane.KOFIU, reportType, reportDate);
+                filingService.recordGenerated(filing.getId(), count, feedFile.toString());
+                if (outcome != null && outcome.valid()) {
+                    filingService.recordValidated(filing.getId());
+                }
+                // Truth comes from the channel outcome, never from the caller's optimism.
+                filingService.recordTransmissionResult(filing.getId(), result);
+            }
         } catch (Exception e) {
             log.error("KoFIU filing persistence failed for reportDate={}: {}",
                     reportDate, e.getMessage(), e);

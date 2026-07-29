@@ -1,5 +1,6 @@
 package com.gme.pay.reporting.persistence;
 
+import com.gme.pay.reporting.channel.FilingChannelRegistry;
 import com.gme.pay.reporting.domain.CommittedTransaction;
 import com.gme.pay.reporting.domain.TransactionDirection;
 import com.gme.pay.reporting.service.BokRecordPersistenceService;
@@ -16,6 +17,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -29,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * </ul>
  */
 @DataJpaTest
-@Import({BokRecordPersistenceService.class, ReportFilingService.class})
+@Import({BokRecordPersistenceService.class, ReportFilingService.class, FilingChannelRegistry.class})
 class BokRecordPersistenceServiceTest {
 
     private static final LocalDate REPORT_DATE = LocalDate.of(2026, 5, 20);
@@ -108,7 +110,16 @@ class BokRecordPersistenceServiceTest {
 
         assertEquals(1, fx1014.getRecordCount());
         assertEquals(1, fx1015.getRecordCount());
-        assertEquals(ReportFiling.Status.GENERATED.name(), fx1015.getSubmissionStatus());
+        // Generation is real (record counts above); filing is not. With no BOK SFTP channel
+        // configured the run settles to the honest terminal state, with the reason recorded.
+        assertEquals(ReportFiling.Status.NOT_FILED_CHANNEL_UNAVAILABLE.name(),
+                fx1015.getSubmissionStatus(),
+                "No BOK channel is configured, so the filing must not claim to be submitted");
+        assertNotNull(fx1015.getChannelUnavailableReason(),
+                "the register must say WHY nothing was filed");
+        assertNull(fx1015.getExternalReceiptId(),
+                "no receipt id may exist when nothing was transmitted");
+        assertNull(fx1015.getSubmittedAt(), "submitted_at must stay null when nothing was sent");
     }
 
     @Test

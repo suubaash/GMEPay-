@@ -1,5 +1,7 @@
 package com.gme.pay.reporting.hometax;
 
+import com.gme.pay.reporting.channel.FilingChannelRegistry;
+import com.gme.pay.reporting.persistence.ReportFiling;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,17 +11,19 @@ import java.time.YearMonth;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for {@link StubHometaxClient} — verifies the stub returns a non-null
- * invoiceId and NTS confirmation without making any real network call.
+ * Tests for {@link StubHometaxClient} — the no-channel Hometax client (GAP T5-2).
+ *
+ * <p>This client previously fabricated an NTS acknowledgement (status {@code "ACCEPTED"},
+ * a fake 24-char confirmation number and a {@code STUB-INV-} invoice id). These tests pin
+ * the opposite: with no NTS channel configured, no invoice can be reported as filed and no
+ * NTS-issued identifier may be invented.
  */
 class StubHometaxClientTest {
 
     private final StubHometaxClient client = new StubHometaxClient();
 
-    @Test
-    @DisplayName("submitInvoice returns non-null invoiceId")
-    void submitInvoice_returnsNonNullInvoiceId() {
-        HometaxInvoiceRequest req = new HometaxInvoiceRequest(
+    private static HometaxInvoiceRequest request() {
+        return new HometaxInvoiceRequest(
                 "stub-cert-id",
                 42L,
                 YearMonth.of(2026, 5),
@@ -27,59 +31,60 @@ class StubHometaxClientTest {
                 BigDecimal.ZERO,
                 new BigDecimal("100000"),
                 "ZERO_RATED_EXPORT");
-
-        HometaxInvoiceResponse response = client.submitInvoice(req);
-
-        assertNotNull(response, "Response must not be null");
-        assertNotNull(response.getInvoiceId(), "invoiceId must not be null");
-        assertFalse(response.getInvoiceId().isBlank(), "invoiceId must not be blank");
     }
 
     @Test
-    @DisplayName("submitInvoice returns non-null NTS confirmation")
-    void submitInvoice_returnsNtsConfirmation() {
-        HometaxInvoiceRequest req = new HometaxInvoiceRequest(
-                "stub-cert-id",
-                42L,
-                YearMonth.of(2026, 5),
-                new BigDecimal("50000"),
-                new BigDecimal("5000"),
-                new BigDecimal("55000"),
-                "STANDARD");
+    @DisplayName("status is NOT_FILED_CHANNEL_UNAVAILABLE — never ACCEPTED")
+    void submitInvoice_statusIsNotFiled() {
+        HometaxInvoiceResponse response = client.submitInvoice(request());
 
-        HometaxInvoiceResponse response = client.submitInvoice(req);
-
-        assertNotNull(response.getNtsConfirmation(), "NTS confirmation must not be null");
-        assertFalse(response.getNtsConfirmation().isBlank(), "NTS confirmation must not be blank");
+        assertNotNull(response);
+        assertEquals(ReportFiling.Status.NOT_FILED_CHANNEL_UNAVAILABLE.name(), response.getStatus());
+        assertNotEquals("ACCEPTED", response.getStatus(),
+                "a stubbed lane must never report an accepted NTS filing");
+        assertFalse(response.isFiled(), "nothing was filed");
     }
 
     @Test
-    @DisplayName("submitInvoice status is ACCEPTED")
-    void submitInvoice_statusIsAccepted() {
-        HometaxInvoiceRequest req = new HometaxInvoiceRequest(
-                "cert",
-                1L,
-                YearMonth.of(2026, 6),
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                "EXEMPT");
+    @DisplayName("no NTS-issued identifiers are fabricated (invoiceId + confirmation are null)")
+    void submitInvoice_fabricatesNoIdentifiers() {
+        HometaxInvoiceResponse response = client.submitInvoice(request());
 
-        HometaxInvoiceResponse response = client.submitInvoice(req);
-        assertEquals("ACCEPTED", response.getStatus());
+        assertNull(response.getInvoiceId(),
+                "invoiceId may only hold a value issued by NTS");
+        assertNull(response.getNtsConfirmation(),
+                "ntsConfirmation may only hold a value issued by NTS");
     }
 
     @Test
-    @DisplayName("Two successive calls return different invoiceIds (counter increments)")
-    void submitInvoice_successiveCalls_differentInvoiceIds() {
-        HometaxInvoiceRequest req = new HometaxInvoiceRequest(
-                "cert", 1L, YearMonth.of(2026, 6),
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "EXEMPT");
+    @DisplayName("the response explains WHY nothing was filed (missing mTLS cert config)")
+    void submitInvoice_surfacesChannelReason() {
+        HometaxInvoiceResponse response = client.submitInvoice(request());
 
-        HometaxInvoiceResponse r1 = client.submitInvoice(req);
-        HometaxInvoiceResponse r2 = client.submitInvoice(req);
+        String reason = response.getChannelUnavailableReason();
+        assertNotNull(reason, "an unfiled invoice must carry the reason");
+        assertTrue(reason.contains("cert-id") || reason.contains("base-url"),
+                "the reason must name the missing configuration: " + reason);
+    }
 
-        assertNotEquals(r1.getInvoiceId(), r2.getInvoiceId(),
-                "Each stub call must produce a unique invoiceId");
+    @Test
+    @DisplayName("every call is identically unfiled (no counter-based fake sequence)")
+    void submitInvoice_repeatedCallsAllUnfiled() {
+        HometaxInvoiceResponse r1 = client.submitInvoice(request());
+        HometaxInvoiceResponse r2 = client.submitInvoice(request());
+
+        assertEquals(r1.getStatus(), r2.getStatus());
+        assertNull(r1.getInvoiceId());
+        assertNull(r2.getInvoiceId());
+    }
+
+    @Test
+    @DisplayName("if a real Hometax channel is configured this client refuses to stand in for it")
+    void submitInvoice_failsLoudlyWhenChannelConfigured() {
+        StubHometaxClient wired = new StubHometaxClient(new FilingChannelRegistry(
+                "", "", "https://api.hometax.go.kr", "vault-doc-real-cert"));
+
+        assertThrows(IllegalStateException.class, () -> wired.submitInvoice(request()),
+                "a configured channel with no production client must fail, not silently not-file");
     }
 }

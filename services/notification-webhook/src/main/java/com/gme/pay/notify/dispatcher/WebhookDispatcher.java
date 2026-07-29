@@ -171,6 +171,9 @@ public class WebhookDispatcher {
                     target.get().url(),
                     payloadBytes,
                     target.get().secret(),
+                    // T5-4: non-null only during a secret-rotation overlap window, when the
+                    // retired secret is signed with as a second header value.
+                    target.get().secondarySecret(),
                     attempt);
         } catch (WebhookUrlNotHttpsException e) {
             // A non-HTTPS endpoint is a hard config error, not a transient failure.

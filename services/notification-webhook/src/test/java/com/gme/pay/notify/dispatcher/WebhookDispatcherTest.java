@@ -67,8 +67,10 @@ class WebhookDispatcherTest {
         WebhookDeliveryEntity row = pendingRow(0, null);
         when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
         when(resolver.resolve(row)).thenReturn(Optional.of(new ResolvedTarget("https://p/wh", "whsec_x")));
+        // T5-4: the dispatcher passes the endpoint's secret plus a (here null) rotation-overlap
+        // secondary secret.
         when(sender.sendWithAttempt(eq("evt_1"), eq("payment.approved"), eq("https://p/wh"),
-                any(), eq("whsec_x"), eq(1)))
+                any(), eq("whsec_x"), isNull(), eq(1)))
                 .thenReturn(WebhookDeliveryResult.of(200, "ok", 5));
 
         dispatcher().drainPending();
@@ -82,7 +84,8 @@ class WebhookDispatcherTest {
         WebhookDeliveryEntity row = pendingRow(0, null);
         when(repo.findByStatusOrderByCreatedAtAsc(eq("PENDING"), any())).thenReturn(List.of(row));
         when(resolver.resolve(row)).thenReturn(Optional.of(new ResolvedTarget("https://p/wh", "whsec_x")));
-        when(sender.sendWithAttempt(anyString(), anyString(), anyString(), any(), anyString(), eq(1)))
+        when(sender.sendWithAttempt(anyString(), anyString(), anyString(), any(), anyString(),
+                any(), eq(1)))
                 .thenReturn(WebhookDeliveryResult.of(500, "boom", 5));
 
         dispatcher().drainPending();

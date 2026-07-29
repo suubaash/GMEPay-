@@ -2,6 +2,8 @@ package com.gme.pay.registry.client;
 
 import com.gme.pay.contracts.WebhookEndpointRegistrationCommand;
 import com.gme.pay.contracts.WebhookEndpointRegistrationView;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -12,11 +14,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Default {@link NotificationWebhookClient}: an in-process stand-in so local
- * dev and test contexts never need the notification-webhook service running.
- * Active unless {@code gmepay.notification-webhook.client=rest} promotes
- * {@link RestNotificationWebhookClient} — the same stub-by-default discipline
- * as {@link com.gme.pay.registry.kyb.StubKybClient}.
+ * OPT-IN {@link NotificationWebhookClient}: an in-process stand-in so a unit
+ * slice or a single-service local run never needs the notification-webhook
+ * service running. Requires an explicit
+ * {@code gmepay.notification-webhook.client=stub}.
+ *
+ * <h2>⚠ This bean issues a DEAD signing secret (gap T1-1)</h2>
+ *
+ * <p>The {@code whsec_} secret below is minted here and nowhere else: no
+ * {@code webhook_endpoint} row exists at notification-webhook, so the
+ * {@code X-Gme-Signature} a partner computes with it can never be reproduced by
+ * the dispatcher. This class used to carry {@code matchIfMissing = true} while
+ * {@link RestNotificationWebhookClient} needed an explicit selector that no
+ * environment ever set — so activation always handed out an unusable secret.
+ * Defaults are now inverted (REST wins when the selector is absent).
  *
  * <p>Mirrors the real endpoint's contract faithfully enough for the
  * activation flow to be exercised end-to-end: endpoint ids are stable per
@@ -26,14 +37,24 @@ import java.util.concurrent.atomic.AtomicLong;
  * registrations mint a {@code whsec_}-prefixed random secret.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.notification-webhook.client",
-        havingValue = "stub", matchIfMissing = true)
+@ConditionalOnProperty(name = "gmepay.notification-webhook.client", havingValue = "stub")
 public class StubNotificationWebhookClient implements NotificationWebhookClient {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(StubNotificationWebhookClient.class);
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final Map<String, String> endpointIdsByKey = new ConcurrentHashMap<>();
     private final AtomicLong sequence = new AtomicLong(1000);
+
+    /** Loud startup banner — see the class Javadoc (gap T1-1). */
+    public StubNotificationWebhookClient() {
+        log.warn("gmepay.notification-webhook.client=stub — webhook signing secrets issued by this"
+                + " instance are LOCAL RANDOMNESS and are unknown to notification-webhook, so no"
+                + " partner can verify a delivery signature. Never use this selector in an"
+                + " environment whose activation output reaches a real partner.");
+    }
 
     @Override
     public WebhookEndpointRegistrationView registerEndpoint(

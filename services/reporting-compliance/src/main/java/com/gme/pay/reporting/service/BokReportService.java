@@ -9,6 +9,10 @@ import com.gme.pay.reporting.dto.BokFxRecordDto;
 import com.gme.pay.reporting.dto.ReportRequest;
 import com.gme.pay.reporting.dto.ReportResponse;
 import com.gme.pay.reporting.dto.ReportType;
+import com.gme.pay.reporting.channel.FilingChannelRegistry;
+import com.gme.pay.reporting.channel.FilingChannelStatus;
+import com.gme.pay.reporting.persistence.ReportFiling;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -24,10 +28,26 @@ public class BokReportService {
 
     private final TransactionClient transactionClient;
     private final BokFxMapper mapper;
+    private final FilingChannelRegistry channelRegistry;
 
-    public BokReportService(TransactionClient transactionClient) {
+    /**
+     * Spring constructor. {@code @Autowired} declared explicitly because this
+     * {@code @Service} has more than one constructor (Spring 6 requires it).
+     */
+    @Autowired
+    public BokReportService(TransactionClient transactionClient,
+                            FilingChannelRegistry channelRegistry) {
         this.transactionClient = Objects.requireNonNull(transactionClient);
+        this.channelRegistry = Objects.requireNonNull(channelRegistry);
         this.mapper = new BokFxMapper();
+    }
+
+    /**
+     * Convenience constructor defaulting to "no lane has a transmission channel" — the
+     * platform's actual state today.
+     */
+    public BokReportService(TransactionClient transactionClient) {
+        this(transactionClient, FilingChannelRegistry.noChannelsConfigured());
     }
 
     /**
@@ -65,7 +85,15 @@ public class BokReportService {
             dtos.add(toDto(record));
         }
 
-        return new ReportResponse(dtos);
+        // Carry the channel board with the payload: these records are generated, not filed.
+        return new ReportResponse(dtos,
+                channelRegistry.statusOf(ReportFiling.Lane.BOK),
+                channelRegistry.statuses());
+    }
+
+    /** Channel availability per regulatory lane — backs GET /v1/reports/filing-channels. */
+    public List<FilingChannelStatus> filingChannels() {
+        return channelRegistry.statuses();
     }
 
     private boolean matchesFilter(BokReportType actual, ReportType requested) {

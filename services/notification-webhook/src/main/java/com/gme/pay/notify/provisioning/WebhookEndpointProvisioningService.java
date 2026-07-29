@@ -38,6 +38,21 @@ import java.util.Set;
  * {@code environment}) the call short-circuits to that row with
  * {@code newlyRegistered=false} — the same at-least-once discipline as
  * {@code WebhookPersistenceService.enqueuePendingIfAbsent}.
+ *
+ * <h2>Per-endpoint secrets + rotation (T5-4)</h2>
+ *
+ * <p>The minted secret is now <b>derived for this endpoint</b> via
+ * {@link WebhookSecretDeriver} (HKDF over a root key, {@code info} =
+ * partner|environment|generation) instead of being unrelated randomness that the
+ * dispatcher then ignored in favour of one global secret. What is persisted is
+ * unchanged — the SHA-256 digest only — so the T1-1 registration contract and its
+ * cross-service digest agreement still hold.
+ *
+ * <p>{@link #rotateSecret} issues the next generation and keeps the previous digest
+ * alive for an overlap window during which the dispatcher signs with BOTH secrets.
+ * When no root key is configured, registration falls back to a CSPRNG secret so
+ * partner activation still completes, but that endpoint is undeliverable by design
+ * (the resolver fails closed) — see {@link WebhookSecretDeriver}.
  */
 @Service
 public class WebhookEndpointProvisioningService {
@@ -47,12 +62,21 @@ public class WebhookEndpointProvisioningService {
 
     private static final int MAX_URL_LENGTH = 512;
 
+    /** Overlap applied when a rotate call does not name its own window. */
+    public static final long DEFAULT_OVERLAP_MINUTES = 1440L; // 24h
+
+    /** Upper bound on the overlap: a rotation that never lands is not a rotation. */
+    static final long MAX_OVERLAP_MINUTES = 30 * 24 * 60L; // 30 days
+
     private final WebhookEndpointRepository repository;
     private final Clock clock;
+    private final WebhookSecretDeriver deriver;
 
-    public WebhookEndpointProvisioningService(WebhookEndpointRepository repository, Clock clock) {
+    public WebhookEndpointProvisioningService(WebhookEndpointRepository repository, Clock clock,
+                                              WebhookSecretDeriver deriver) {
         this.repository = Objects.requireNonNull(repository);
         this.clock = Objects.requireNonNull(clock);
+        this.deriver = Objects.requireNonNull(deriver);
     }
 
     /**
@@ -77,7 +101,14 @@ public class WebhookEndpointProvisioningService {
                     String.valueOf(existing.get(0).getId()), null, false);
         }
 
-        String secretPlaintext = SigningSecrets.newSecret();
+        // T5-4: the secret this endpoint will actually be signed with — derived from the
+        // root key + THIS endpoint's identity, so it can never verify another partner's
+        // payload. Without a root key we still mint (activation must not half-complete),
+        // but the dispatcher will refuse to deliver: see WebhookSecretDeriver.
+        String secretPlaintext = deriver.isConfigured()
+                ? deriver.derive(request.partnerId(), request.environment(),
+                        WebhookSecretDeriver.INITIAL_GENERATION)
+                : SigningSecrets.newSecret();
         // MICROS truncation: stored TIMESTAMP must equal the in-memory value
         // on both PostgreSQL and H2 (project-wide discipline).
         Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
@@ -88,6 +119,7 @@ public class WebhookEndpointProvisioningService {
         entity.setEventTypesCsv(JpaWebhookConfigStore.toCsv(request.eventTypes()));
         entity.setEnvironment(request.environment());
         entity.setSigningSecretHash(SigningSecrets.sha256Hex(secretPlaintext));
+        entity.setSecretGeneration(WebhookSecretDeriver.INITIAL_GENERATION);
         entity.setActive(true);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
@@ -95,6 +127,69 @@ public class WebhookEndpointProvisioningService {
 
         return new WebhookEndpointRegistrationView(
                 String.valueOf(saved.getId()), secretPlaintext, true);
+    }
+
+    /**
+     * Rotates one endpoint's signing secret — gap T5-4, the "rotation is supported" half.
+     *
+     * <p>Bumps {@code secret_generation}, so the new secret is an independent HKDF output;
+     * the outgoing generation's digest moves to {@code previous_secret_hash} with an
+     * expiry {@code overlapMinutes} in the future. Until that expiry the dispatcher signs
+     * every delivery with BOTH secrets (two comma-separated values in
+     * {@code X-GME-Webhook-Signature}), so the partner can switch whenever they redeploy
+     * and no event is lost either side of the cutover. After it, only the new one.
+     *
+     * <p>Chosen over a "both secrets accepted" design because this side <b>produces</b>
+     * signatures rather than verifying them: an inbound service can simply try two keys,
+     * but an outbound signer has to decide what to put on the wire — so the overlap has
+     * to live in the header, and the window is what bounds how long the retired secret
+     * stays usable. The plaintext is revealed exactly once here, like registration.
+     *
+     * @param endpointId     the row to rotate (must be active)
+     * @param overlapMinutes how long the previous secret stays valid; {@code null} =
+     *                       {@link #DEFAULT_OVERLAP_MINUTES}, {@code 0} = immediate cutover
+     * @return the new plaintext secret + the window, revealed once
+     * @throws IllegalStateException    when no derivation root key is configured
+     * @throws IllegalArgumentException unknown/inactive endpoint, or an out-of-range window
+     */
+    @Transactional
+    public WebhookSecretRotationView rotateSecret(Long endpointId, Long overlapMinutes) {
+        if (endpointId == null) {
+            throw new IllegalArgumentException("endpointId is required");
+        }
+        long overlap = overlapMinutes == null ? DEFAULT_OVERLAP_MINUTES : overlapMinutes;
+        if (overlap < 0 || overlap > MAX_OVERLAP_MINUTES) {
+            throw new IllegalArgumentException("overlapMinutes must be between 0 and "
+                    + MAX_OVERLAP_MINUTES + ", was: " + overlap);
+        }
+        if (!deriver.isConfigured()) {
+            // Never rotate to a secret we cannot reproduce at dispatch time.
+            throw new IllegalStateException("cannot rotate: gmepay.webhook.signing-secret "
+                    + "(derivation root key) is not configured");
+        }
+
+        WebhookEndpointEntity row = repository.findById(endpointId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "no webhook endpoint with id " + endpointId));
+        if (!row.isActive()) {
+            throw new IllegalArgumentException(
+                    "webhook endpoint " + endpointId + " is not active; re-register instead of rotating");
+        }
+
+        int nextGeneration = row.getSecretGeneration() + 1;
+        String newSecret = deriver.derive(row.getPartnerId(), row.getEnvironment(), nextGeneration);
+        Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
+        Instant overlapUntil = overlap == 0 ? null : now.plus(overlap, ChronoUnit.MINUTES);
+
+        row.setPreviousSecretHash(overlap == 0 ? null : row.getSigningSecretHash());
+        row.setPreviousSecretExpiresAt(overlapUntil);
+        row.setSigningSecretHash(SigningSecrets.sha256Hex(newSecret));
+        row.setSecretGeneration(nextGeneration);
+        row.setUpdatedAt(now);
+        repository.saveAndFlush(row);
+
+        return new WebhookSecretRotationView(String.valueOf(row.getId()), newSecret,
+                nextGeneration, overlapUntil);
     }
 
     private static void validate(WebhookEndpointRegistrationCommand request) {
