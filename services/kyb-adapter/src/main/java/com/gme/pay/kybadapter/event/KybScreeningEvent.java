@@ -15,13 +15,22 @@ import java.util.List;
  * carries the full screening verdict — consumers (reporting-compliance daily
  * rescreen ledger, notification-webhook compliance alerts) act on the event
  * without calling back into kyb-adapter.
+ *
+ * <p>T1-4: the payload carries the run's PROVENANCE ({@code providerId} /
+ * {@code authoritative} / {@code caveat}) alongside the verdict, so a consumer
+ * that files, alerts on or reports a screening cannot present a stub run as a
+ * completed check. A {@code status} of {@code NOT_SCREENED_NO_PROVIDER} means
+ * nothing was screened.
  */
 public record KybScreeningEvent(
         String partnerCode,
         String status,
         List<ScreeningResult.Hit> hits,
         String providerRef,
-        Instant screenedAt) implements DomainEvent {
+        Instant screenedAt,
+        String providerId,
+        boolean authoritative,
+        String caveat) implements DomainEvent {
 
     /** Builds the event straight from the provider's {@link ScreeningResult}. */
     public static KybScreeningEvent of(String partnerCode, ScreeningResult result) {
@@ -30,7 +39,10 @@ public record KybScreeningEvent(
                 result.status() == null ? null : result.status().name(),
                 result.hitList(),
                 result.providerRef(),
-                result.screenedAt());
+                result.screenedAt(),
+                result.provenance().providerId(),
+                result.authoritative(),
+                result.caveat());
     }
 
     @Override

@@ -203,14 +203,27 @@ class KybServiceTest {
         // No prior KYB row at all: screening creates the first row.
         seedPartnerWithLegalName("KYB_SCREEN_FRESH", "Totally Clean GmbH");
         KybView fresh = service.runScreening("KYB_SCREEN_FRESH", null);
-        assertThat(fresh.screeningStatus()).isEqualTo("CLEAR");
+        // T1-4: the in-process stub screens nothing, so a name with no trigger word
+        // is NOT_SCREENED_NO_PROVIDER — never CLEAR.
+        assertThat(fresh.screeningStatus()).isEqualTo("NOT_SCREENED_NO_PROVIDER");
         assertThat(fresh.riskRating()).isNull();
-        assertThat(service.currentKyb("KYB_SCREEN_FRESH").screeningStatus()).isEqualTo("CLEAR");
+        assertThat(service.currentKyb("KYB_SCREEN_FRESH").screeningStatus())
+                .isEqualTo("NOT_SCREENED_NO_PROVIDER");
+        KybEntity freshRow = kybRepository.findCurrentByPartnerId(
+                partnerRepository.findCurrentByPartnerCode("KYB_SCREEN_FRESH")
+                        .orElseThrow().getId()).orElseThrow();
+        assertThat(freshRow.getScreeningProviderId()).isEqualTo("stub");
+        assertThat(freshRow.getScreeningAuthoritative()).isFalse();
+        assertThat(freshRow.getScreeningCaveat()).contains("NOT A SANCTIONS SCREENING");
+        assertThat(freshRow.hasAuthoritativeScreening())
+                .as("activation must not be able to read this as a passed screening")
+                .isFalse();
     }
 
     @Test
     void verify_viaStubClient_persistsDecisionAndProviderRef_onFreshRow() {
-        // Clean entity → stub verify decision APPROVED, screening CLEAR.
+        // T1-4: a clean entity through the STUB verify seam can only be MANUAL_REVIEW
+        // — an approval would rest on a screening that never ran.
         Long cleanId = seedPartnerWithLegalName("KYB_VERIFY_OK", "Totally Clean GmbH");
         service.upsertStep3("KYB_VERIFY_OK", step3("LOW", List.of()), "maker_kim");
 
@@ -219,10 +232,14 @@ class KybServiceTest {
 
         // The verify verdict lives off-view (V036 columns), so read the entity.
         KybEntity row = kybRepository.findCurrentByPartnerId(cleanId).orElseThrow();
-        assertThat(row.getVerificationDecision()).isEqualTo("APPROVED");
-        assertThat(row.getVerificationDecisionReason()).isNotBlank();
+        assertThat(row.getVerificationDecision()).isEqualTo("MANUAL_REVIEW");
+        assertThat(row.getVerificationDecisionReason())
+                .contains("no authoritative sanctions screening was performed");
         assertThat(row.getScreeningProviderRef()).startsWith("stub-");
-        assertThat(row.getScreeningStatus()).isEqualTo("CLEAR");
+        assertThat(row.getScreeningStatus()).isEqualTo("NOT_SCREENED_NO_PROVIDER");
+        assertThat(row.getScreeningProviderId()).isEqualTo("stub");
+        assertThat(row.getScreeningAuthoritative()).isFalse();
+        assertThat(row.getScreeningCaveat()).contains("NOT A SANCTIONS SCREENING");
         assertThat(verified.screenedAt()).isNotNull();
         // Step-3 fields survived the verify write.
         assertThat(verified.riskRating()).isEqualTo("LOW");
@@ -236,10 +253,15 @@ class KybServiceTest {
         assertThat(hit.getVerificationDecision()).isEqualTo("MANUAL_REVIEW");
         assertThat(hit.getScreeningStatus()).isEqualTo("HIT");
 
-        // The verdict survives a later step-3 save (carry-forward).
+        // The verdict AND its provenance survive a later step-3 save (carry-forward):
+        // a wizard save must not strip the caveat off a stored verdict (T1-4).
         service.upsertStep3("KYB_VERIFY_OK", step3("MEDIUM", List.of()), "maker_kim");
-        assertThat(kybRepository.findCurrentByPartnerId(cleanId).orElseThrow()
-                .getVerificationDecision()).isEqualTo("APPROVED");
+        KybEntity carried = kybRepository.findCurrentByPartnerId(cleanId).orElseThrow();
+        assertThat(carried.getVerificationDecision()).isEqualTo("MANUAL_REVIEW");
+        assertThat(carried.getScreeningStatus()).isEqualTo("NOT_SCREENED_NO_PROVIDER");
+        assertThat(carried.getScreeningProviderId()).isEqualTo("stub");
+        assertThat(carried.getScreeningAuthoritative()).isFalse();
+        assertThat(carried.getScreeningCaveat()).contains("NOT A SANCTIONS SCREENING");
     }
 
     @Test
@@ -314,7 +336,11 @@ class KybServiceTest {
                 .as("BEFORE carries the superseded (unscreened) row")
                 .contains("\"screeningStatus\":null");
         assertThat(new String(screened.afterJsonb(), StandardCharsets.UTF_8))
-                .contains("\"screeningStatus\":\"CLEAR\"");
+                .contains("\"screeningStatus\":\"NOT_SCREENED_NO_PROVIDER\"")
+                // T1-4: the sealed audit snapshot carries the provenance too, so the
+                // hash chain covers WHO produced the verdict, not just what it was.
+                .contains("\"screeningProviderId\":\"stub\"")
+                .contains("\"screeningAuthoritative\":false");
     }
 
     @Test
@@ -352,7 +378,8 @@ class KybServiceTest {
                         e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
 
         // Daily rescreen path: screening is NOT gated on ONBOARDING.
-        assertThat(service.runScreening("KYB_LIVE", "system").screeningStatus()).isEqualTo("CLEAR");
+        assertThat(service.runScreening("KYB_LIVE", "system").screeningStatus())
+                .isEqualTo("NOT_SCREENED_NO_PROVIDER");
     }
 
     @Test

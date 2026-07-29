@@ -12,6 +12,7 @@ import com.gme.pay.kybadapter.event.KybScreeningEvent;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import com.gme.pay.kybadapter.testsupport.TestInternalAuth;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -30,7 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * (no Kafka broker on this box — {@code spring.kafka.bootstrap-servers} is
  * unset, so the lib-events-kafka auto-config backs off exactly as in local dev).
  */
-@SpringBootTest
+@SpringBootTest(properties = TestInternalAuth.SECRET_PROPERTY)
 @AutoConfigureMockMvc
 class ScreeningControllerTest {
 
@@ -56,8 +57,8 @@ class ScreeningControllerTest {
     }
 
     @Test
-    @DisplayName("clean subject screens CLEAR with a stable stub providerRef")
-    void screen_clearSubject() throws Exception {
+    @DisplayName("clean subject is NOT_SCREENED_NO_PROVIDER with non-authoritative provenance")
+    void screen_cleanSubject_isNotScreened() throws Exception {
         String body = """
                 {
                   "partnerCode": "P_CLEAN",
@@ -70,12 +71,28 @@ class ScreeningControllerTest {
                   ]
                 }
                 """;
-        mvc.perform(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(TestInternalAuth.internal(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("CLEAR"))
+                // T1-4: the wire body cannot say CLEAR — no provider screened anything.
+                .andExpect(jsonPath("$.status").value("NOT_SCREENED_NO_PROVIDER"))
                 .andExpect(jsonPath("$.hits.length()").value(0))
                 .andExpect(jsonPath("$.providerRef").value(org.hamcrest.Matchers.startsWith("stub-")))
-                .andExpect(jsonPath("$.screenedAt").isNotEmpty());
+                .andExpect(jsonPath("$.screenedAt").isNotEmpty())
+                // …and the response carries WHO produced it and why it is not a check.
+                .andExpect(jsonPath("$.provenance.providerId").value("stub"))
+                .andExpect(jsonPath("$.provenance.authoritative").value(false))
+                .andExpect(jsonPath("$.provenance.caveat")
+                        .value(org.hamcrest.Matchers.containsString("NOT A SANCTIONS SCREENING")));
+    }
+
+    @Test
+    @DisplayName("the KYB surface is internal-only: no X-Gme-Internal token -> 401, nothing published")
+    void screen_withoutInternalToken_isRejected() throws Exception {
+        mvc.perform(post("/v1/kyb/screen")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"partnerCode\":\"P_ANON\",\"legalNameRomanized\":\"Anon Corp\"}"))
+                .andExpect(status().isUnauthorized());
+        assertThat(events.published()).isEmpty();
     }
 
     @Test
@@ -91,7 +108,7 @@ class ScreeningControllerTest {
                   "uboList": []
                 }
                 """;
-        mvc.perform(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(TestInternalAuth.internal(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("HIT"))
                 .andExpect(jsonPath("$.hits.length()").value(1))
@@ -105,6 +122,11 @@ class ScreeningControllerTest {
             assertThat(e.aggregateId()).isEqualTo("P_BAD");
             assertThat(e.status()).isEqualTo("HIT");
             assertThat(e.providerRef()).startsWith("stub-");
+            // T1-4: the event carries provenance, so no consumer can file a stub
+            // run as a completed screening.
+            assertThat(e.providerId()).isEqualTo("stub");
+            assertThat(e.authoritative()).isFalse();
+            assertThat(e.caveat()).contains("NOT A SANCTIONS SCREENING");
         });
     }
 
@@ -118,7 +140,7 @@ class ScreeningControllerTest {
                   "uboList": []
                 }
                 """;
-        mvc.perform(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(TestInternalAuth.internal(post("/v1/kyb/screen").contentType(MediaType.APPLICATION_JSON).content(body)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_REVIEW"))
                 .andExpect(jsonPath("$.hits[0].listName").value("STUB_FUZZY"));
@@ -127,19 +149,25 @@ class ScreeningControllerTest {
     @Test
     @DisplayName("missing partnerCode is rejected with 400 and publishes nothing")
     void screen_missingPartnerCode_400() throws Exception {
-        mvc.perform(post("/v1/kyb/screen")
+        mvc.perform(TestInternalAuth.internal(post("/v1/kyb/screen")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"legalNameRomanized\":\"No Code Corp\"}"))
+                        .content("{\"legalNameRomanized\":\"No Code Corp\"}")))
                 .andExpect(status().isBadRequest());
         assertThat(events.published()).isEmpty();
     }
 
     @Test
-    @DisplayName("GET /v1/kyb/health reports UP with the active provider")
+    @DisplayName("GET /v1/kyb/health reports UP, the active provider, and that it is NOT authoritative")
     void health() throws Exception {
+        // Anonymous on purpose (a container probe must reach it) and it must state
+        // the honest posture of the environment: this one screens nothing.
         mvc.perform(get("/v1/kyb/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"))
-                .andExpect(jsonPath("$.provider").value("StubKybAdapter"));
+                .andExpect(jsonPath("$.provider").value("StubKybAdapter"))
+                .andExpect(jsonPath("$.providerId").value("stub"))
+                .andExpect(jsonPath("$.authoritative").value("false"))
+                .andExpect(jsonPath("$.caveat")
+                        .value(org.hamcrest.Matchers.containsString("NOT A SANCTIONS SCREENING")));
     }
 }

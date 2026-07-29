@@ -250,6 +250,15 @@ services:
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: "rest"
       GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
+      # ---- KYB screening must leave the JVM (gap T1-4) -----------------------------
+      # Unset, StubKybClient / StubKybVerifyClient (matchIfMissing=true) won in EVERY
+      # environment and "screening" was keyword matching inside this service. Now that
+      # kyb-adapter is deployable (entry below), the seam points at it. This changes
+      # the TRANSPORT, not the truthfulness — kyb-adapter still runs the same
+      # non-authoritative stub provider until ADR-014's vendor credentials land, and
+      # every verdict it returns says so.
+      GMEPAY_KYB_ADAPTER_CLIENT: "rest"
+      GMEPAY_KYB_ADAPTER_BASE_URL: http://kyb-adapter:8080
 
   rate-fx:
     image: rate-fx
@@ -459,6 +468,36 @@ services:
       SERVER_PORT: "8080"
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+
+  # ─────────────────────────── kyb-adapter (gap T1-4) ───────────────────────────
+  # This service was EXCLUDED from the chart because it had no Dockerfile (see
+  # deploy/CHANGELOG.md). It now has one, so the chart deploys it — previously the
+  # only way KYB screening could run anywhere was config-registry's in-process
+  # StubKybClient fallback, i.e. keyword matching inside the registry.
+  #
+  # HONESTY: deployable is not the same as real. With gmepay.kyb.provider=stub
+  # (the default until ADR-014's Octa Solution sandbox credentials land) this pod
+  # consults no sanctions / PEP / adverse-media source. Its verdicts are stamped
+  # non-authoritative, its clean branch is NOT_SCREENED_NO_PROVIDER rather than
+  # CLEAR, and config-registry's activation gate refuses to accept them as a passed
+  # pre-condition (it will REFUSE activation — see
+  # gmepay.activation.allow-unscreened-kyb, which must stay false here).
+  #
+  # NO DATASOURCE: the module defaults to in-memory H2 for its own kyb_screening
+  # run log, so GET /v1/kyb/result/{ref} history does not survive a restart. The
+  # regulator-defensible record is config-registry's partner_kyb, which is on
+  # PostgreSQL. Giving this service its own database is a T1-4 residual (it also
+  # needs an entry in scripts/backup/inventory.env).
+  kyb-adapter:
+    image: kyb-adapter
+    probe: { type: tcp }
+    envSecretKeys: [
+                    # REQUIRED TO BOOT (T1-4): /v1/kyb/screen, /v1/kyb/verify and
+                    # /v1/kyb/result/** carry partner UBO / tax-id data and are gated;
+                    # KybInternalAuthEnforcedConfig refuses to start on a blank secret.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
+    env:
+      SERVER_PORT: "8080"
 
   ops-partner-bff:
     image: ops-partner-bff

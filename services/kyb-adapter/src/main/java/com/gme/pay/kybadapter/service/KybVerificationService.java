@@ -40,13 +40,26 @@ import org.springframework.transaction.annotation.Transactional;
  * <h2>Decisioning</h2>
  * <pre>
  *   FAIL          ← screening HIT, or business registration NOT_FOUND
- *   MANUAL_REVIEW ← screening NEEDS_REVIEW, biz-reg MISMATCH/SKIPPED, or any
- *                   required document missing
- *   PASS          ← screening CLEAR, biz-reg VERIFIED, documents complete
+ *   MANUAL_REVIEW ← NO AUTHORITATIVE SCREENING RAN, screening NEEDS_REVIEW,
+ *                   biz-reg MISMATCH/SKIPPED, or any required document missing
+ *   PASS          ← screening CLEAR *from an authoritative provider*, biz-reg
+ *                   VERIFIED, documents complete
  * </pre>
  * FAIL conditions outrank MANUAL_REVIEW (a watchlist hit is never "review
  * later"). The verdict is evidence-driven GUIDANCE — final activation stays an
  * ADR-008 4-eyes operator decision.
+ *
+ * <h2>PASS requires a screening that happened (gap T1-4)</h2>
+ *
+ * <p>Before this was explicit, a run through the in-process stub produced
+ * {@code PASS} for every partner whose name lacked the word "SANCTIONED",
+ * because the stub's clean branch was called {@code CLEAR}. It is now
+ * {@link ScreeningResult.Status#NOT_SCREENED_NO_PROVIDER} carrying
+ * non-authoritative {@link com.gme.pay.kyb.ScreeningProvenance}, and
+ * {@link #decide} refuses to collapse a PASS out of it — the run lands in
+ * MANUAL_REVIEW with the provider's caveat as the reason. The stub still never
+ * REJECTs (inventing a rejection would be a worse defect); it simply can no
+ * longer approve.
  *
  * <h2>Idempotency</h2>
  * <p>The run is keyed by the provider's deterministic {@code providerRef}
@@ -109,10 +122,20 @@ public class KybVerificationService {
         List<String> missing = missingDocuments(request);
         boolean documentsComplete = missing.isEmpty();
 
-        Decision d = decide(screening.status(), bizReg.status(), documentsComplete);
+        Decision d = decide(screening, bizReg.status(), documentsComplete);
         Instant screenedAt = screening.screenedAt() == null
                 ? Instant.now().truncatedTo(ChronoUnit.MICROS)
                 : screening.screenedAt();
+
+        if (!screening.screeningPerformed()) {
+            // One WARN per run that reached a verdict without a screening — the
+            // operational counterpart to the structural block: an environment
+            // running unscreened onboarding says so in its logs.
+            log.warn("KYB verification {} for partner {} completed WITHOUT A SANCTIONS SCREENING"
+                            + " (provider={}, status={}, decision={}). {}",
+                    providerRef, subject.partnerCode(), screening.provenance().providerId(),
+                    screening.status(), d.decision, screening.caveat());
+        }
 
         KybScreeningRecord saved = persist(providerRef, subject.partnerCode(), screening,
                 bizReg, documentsComplete, d, screenedAt, request.force());
@@ -120,7 +143,9 @@ public class KybVerificationService {
         KybVerificationResult result = new KybVerificationResult(
                 providerRef, subject.partnerCode(), d.decision, d.reason,
                 screening.status(), screening.hitList(), bizReg.status(),
-                missing, false, saved.getScreenedAt());
+                missing, false, saved.getScreenedAt(),
+                screening.provenance().providerId(), screening.authoritative(),
+                screening.caveat());
 
         publishBestEffort(result);
         return result;
@@ -141,8 +166,9 @@ public class KybVerificationService {
     private record Decision(KybDecision decision, String reason) {
     }
 
-    private static Decision decide(ScreeningResult.Status screening, BizRegStatus bizReg,
+    private static Decision decide(ScreeningResult result, BizRegStatus bizReg,
             boolean documentsComplete) {
+        ScreeningResult.Status screening = result.status();
         // FAIL conditions first — a watchlist hit or an absent registration is
         // never downgraded to "review later".
         if (screening == ScreeningResult.Status.HIT) {
@@ -150,6 +176,14 @@ public class KybVerificationService {
         }
         if (bizReg == BizRegStatus.NOT_FOUND) {
             return new Decision(KybDecision.FAIL, "business registration not found");
+        }
+        // T1-4: no authoritative screening ran, so there is nothing to pass. Not a
+        // FAIL — the absence of a provider is not evidence against the partner —
+        // but it can never be an approval either.
+        if (!result.screeningPerformed()) {
+            return new Decision(KybDecision.MANUAL_REVIEW,
+                    "no authoritative sanctions screening was performed ("
+                            + result.provenance().providerId() + "): " + result.caveat());
         }
         // MANUAL_REVIEW conditions.
         if (screening == ScreeningResult.Status.NEEDS_REVIEW) {
@@ -164,6 +198,7 @@ public class KybVerificationService {
         if (!documentsComplete) {
             return new Decision(KybDecision.MANUAL_REVIEW, "required onboarding documents incomplete");
         }
+        // Unreachable unless screening is an authoritative CLEAR (guarded above).
         return new Decision(KybDecision.PASS, "screening clear, registration verified, documents complete");
     }
 
@@ -194,7 +229,8 @@ public class KybVerificationService {
             repository.flush();
         }
         KybScreeningRecord record = new KybScreeningRecord(
-                providerRef, partnerCode, screening.status(), bizReg.status(), bizReg.ref(),
+                providerRef, partnerCode, screening.status(), screening.provenance(),
+                bizReg.status(), bizReg.ref(),
                 documentsComplete, d.decision, d.reason, screening.hitList().size(),
                 screenedAt, Instant.now().truncatedTo(ChronoUnit.MICROS));
         return repository.save(record);
@@ -219,6 +255,11 @@ public class KybVerificationService {
                 rec.getBizRegStatus(),
                 // Persisted rows do not retain the missing-document list; an empty
                 // list is correct for a PASS and acceptable evidence for a replay.
-                List.of(), false, rec.getScreenedAt());
+                List.of(), false, rec.getScreenedAt(),
+                // Provenance is read back from the row, so a replay is exactly as
+                // caveated as the original run (a pre-V002 row reads back as the
+                // non-authoritative "unknown" producer).
+                rec.provenance().providerId(), rec.isScreeningAuthoritative(),
+                rec.provenance().caveat());
     }
 }

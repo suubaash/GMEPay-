@@ -201,6 +201,7 @@ precedence). Host ports fan out as follows:
 | 8095 | ops-partner-bff | core+full | |
 | 8096 | **config-registry** | core+full | **moved from 8081** to free the SR port |
 | 8097 | **keycloak** | core+full | human IdP (ADR-011); see below |
+| 9104 | **kyb-adapter** | core+full | gap T1-4: added 2026-07-28. The `8080..8099` band was full and `9103/9106/9107` are the scheme simulators, so it sits at 9104. **Screens nothing** while `gmepay.kyb.provider=stub` — `GET /v1/kyb/health` reports `authoritative=false`; the rest of `/v1/kyb/**` requires `X-Gme-Internal` |
 | 5433–5440 | postgres-{config,txn,prefunding,ledger,settlement,notify,authid,scheme} | core+full | one PostgreSQL per stateful service |
 | 5446 | postgres-keycloak | core+full | Keycloak's own datastore (separate from authid) |
 | 6379 | redis | core+full | used by api-gateway (replay protection + health) |

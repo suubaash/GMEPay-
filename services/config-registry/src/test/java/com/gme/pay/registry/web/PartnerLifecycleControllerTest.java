@@ -170,6 +170,11 @@ class PartnerLifecycleControllerTest {
         kyb.setPartnerId(partner.getId());
         kyb.setRiskRating("MEDIUM");
         kyb.setScreeningStatus("CLEAR");
+        // T1-4: a CLEAR must name the authority that produced it — the activation
+        // gate refuses an unscreened partner and the V042 CHECK refuses to store a
+        // CLEAR with no provenance. This fixture stands in for a real provider.
+        kyb.setScreeningProviderId("octa-test");
+        kyb.setScreeningAuthoritative(true);
         kybRepository.saveAndFlush(kyb);
 
         BankAccountEntity account = new BankAccountEntity();

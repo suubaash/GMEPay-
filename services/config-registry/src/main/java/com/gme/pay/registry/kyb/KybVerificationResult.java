@@ -20,6 +20,18 @@ import java.time.Instant;
  * @param screeningStatus  sanctions/PEP disposition (CLEAR / HIT / NEEDS_REVIEW)
  *                         — stored as {@code screening_status}.
  * @param screenedAt       run completion instant; {@code null} → caller stamps now.
+ * @param screeningProviderId WHICH provider produced the screening — {@code stub},
+ *                         {@code unknown}, or a vendor id (T1-4). Absent on a
+ *                         pre-T1-4 adapter's payload, which is treated as
+ *                         non-authoritative.
+ * @param screeningAuthoritative {@code true} only when a real screening provider
+ *                         consulted sanctions / PEP / adverse-media sources. A
+ *                         {@code false} (or absent, hence {@code false}) value
+ *                         means <b>nothing was screened</b>, whatever
+ *                         {@code decision} says — and the activation gate refuses
+ *                         the sanctions pre-condition on that basis.
+ * @param screeningCaveat  why the run is not authoritative; stored on the KYB row
+ *                         so the limitation is visible wherever the verdict is.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record KybVerificationResult(
@@ -27,5 +39,18 @@ public record KybVerificationResult(
         String decision,
         String decisionReason,
         String screeningStatus,
-        Instant screenedAt) {
+        Instant screenedAt,
+        String screeningProviderId,
+        boolean screeningAuthoritative,
+        String screeningCaveat) {
+
+    /**
+     * Five-arg form for callers that have no provenance to supply — the run is
+     * recorded as non-authoritative, which is the safe reading of "we do not know
+     * who produced this".
+     */
+    public KybVerificationResult(String providerRef, String decision, String decisionReason,
+                                 String screeningStatus, Instant screenedAt) {
+        this(providerRef, decision, decisionReason, screeningStatus, screenedAt, null, false, null);
+    }
 }

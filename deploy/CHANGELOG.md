@@ -1,5 +1,59 @@
 # deploy — CHANGELOG
 
+## 2026-07-28 — kyb-adapter becomes deployable; config-registry's vault points at MinIO (gap T1-4)
+
+### Added
+- **`services/kyb-adapter/Dockerfile`** — the exclusion note below ("kyb-adapter
+  excluded (no Dockerfile)") is now obsolete. Same multi-stage shape as every other
+  service image, including the T5-5 non-root runtime (`USER 10001:10001`, jar
+  `root:10001 0640`, no writable path under `/app`).
+- **`kyb-adapter` in `docker-compose.yml`** — profiles `core, full`, host port
+  **9104** (the `8080..8099` band is fully allocated; `9103/9106/9107` are the
+  scheme simulators). `GMEPAY_INTERNAL_AUTH_SECRET` from the shared anchor —
+  **required to boot**: `/v1/kyb/screen`, `/v1/kyb/verify` and
+  `/v1/kyb/result/**` carry partner UBO / tax-id data and are now behind the
+  internal-auth gate, and `KybInternalAuthEnforcedConfig` refuses to start without
+  an armed gate. `/v1/kyb/health` stays anonymous for probes.
+- **`kyb-adapter` in `deploy/helm/gmepay/values.yaml`** (overlays inherit) with the
+  same secret key. Guarded by `scripts/check_internal_auth_wiring.py` (94/94), which
+  classifies it BOOT-CRITICAL and asserts it on all four surfaces.
+
+### Fixed
+- **`config-registry` now uses the MinIO that compose already runs.**
+  `GMEPAY_VAULT_ENDPOINT` was set in the Helm values but in **no** compose service,
+  so lib-vault fell back to `InMemoryVaultClient`: every uploaded KYB document
+  (business registration, AOA, UBO declaration, Wolfsberg CBDDQ) was held on the
+  heap and lost on restart, while its `partner_document` row survived and pointed at
+  an object that no longer existed. Compose now sets `GMEPAY_VAULT_ENDPOINT`,
+  `GMEPAY_VAULT_ACCESS_KEY`, `GMEPAY_VAULT_SECRET_KEY` (matching the `minio`
+  service's own `MINIO_ROOT_*` defaults) and `depends_on: minio`. lib-vault also
+  logs one startup WARN whenever the in-memory fallback is chosen, so this state can
+  never again be silent. Covered by `ComposeVaultWiringTest`, which parses the real
+  compose file and drives the auto-configuration with its values.
+- **`config-registry` KYB seam now leaves the JVM**: `GMEPAY_KYB_ADAPTER_CLIENT=rest`
+  + `GMEPAY_KYB_ADAPTER_BASE_URL` in compose **and** Helm. It was set nowhere, so
+  `StubKybClient` (`matchIfMissing=true`) won in every environment. This changes the
+  transport only — see the T1-4 honesty note next.
+
+### Honesty note (do not misread this entry)
+Deployable is **not** the same as screening. With `gmepay.kyb.provider=stub` (the
+default until ADR-014's Octa Solution sandbox credentials land) kyb-adapter consults
+no sanctions / PEP / adverse-media source. Every verdict now carries explicit
+provenance, a stub run's clean branch is recorded as `NOT_SCREENED_NO_PROVIDER`
+rather than `CLEAR`, a full verification can only reach `MANUAL_REVIEW`, and
+config-registry's activation gate **refuses** to activate a partner on it
+(`SANCTIONS_NOT_SCREENED`, not overridable by a risk rationale). Local/dev
+onboarding needs `gmepay.activation.allow-unscreened-kyb=true`, which must stay
+**false** in every deployed values file — it does not make the partner screened, it
+records `PARTNER_ACTIVATED_UNSCREENED` in the audit log.
+
+**Still open for kyb-adapter deployment:** it has **no PostgreSQL instance**, so its
+own `kyb_screening` run log is in-memory H2 and `GET /v1/kyb/result/{ref}` history
+dies with the pod/container. It was deliberately not given one because
+`scripts/backup/inventory.env` and its drift guard enumerate exactly the 15
+databases that exist; the 16th belongs with that inventory change. The
+regulator-defensible record (`partner_kyb`) is durable in config-registry.
+
 ## 2026-07-02 — Wire Nepal corridor into deploy manifests
 
 ### Added
@@ -36,7 +90,9 @@
   overlay + env. Renders a `Deployment` + `Service` for **18 deployables** (16
   backend services incl. ops-partner-bff + admin-ui + partner-portal-ui) from a
   single `services:` map ranged over by one `_deployment.tpl` helper (DRY — no
-  per-service template files). kyb-adapter excluded (no Dockerfile).
+  per-service template files). kyb-adapter excluded (no Dockerfile). **[SUPERSEDED
+  2026-07-28 — kyb-adapter now has a Dockerfile and IS in the chart; see the entry
+  at the top of this file.]**
   - `Chart.yaml`, `values.yaml` (schema + provider-neutral defaults).
   - `templates/`: `_helpers.tpl`, `_deployment.tpl`, `deployments.yaml`,
     `configmap.yaml` (non-secret ABI), `secret.yaml` (values-supplied,

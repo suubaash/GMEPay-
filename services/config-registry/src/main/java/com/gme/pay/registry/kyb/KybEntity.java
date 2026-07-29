@@ -83,8 +83,16 @@ public class KybEntity {
     @Column(name = "cbddq_doc_id")
     private Long cbddqDocId;
 
-    /** CLEAR | HIT | NEEDS_REVIEW (V011 CHECK); NULL before the first screening run. */
-    @Column(name = "screening_status", length = 15)
+    /**
+     * CLEAR | HIT | NEEDS_REVIEW | NOT_SCREENED_NO_PROVIDER (V042 CHECK); NULL
+     * before the first screening run.
+     *
+     * <p>T1-4: {@code CLEAR} is reachable only alongside
+     * {@link #screeningAuthoritative} TRUE — enforced by lib-kyb's
+     * {@code ScreeningResult} on the write path and by the V042 CHECK
+     * {@code ck_partner_kyb_clear_requires_authority} in the database.
+     */
+    @Column(name = "screening_status", length = 32)
     private String screeningStatus;
 
     @Column(name = "screening_provider_ref", length = 100)
@@ -92,6 +100,23 @@ public class KybEntity {
 
     @Column(name = "screened_at")
     private Instant screenedAt;
+
+    /** V042: producing provider id — {@code stub} / {@code unknown} / a vendor id. */
+    @Column(name = "screening_provider_id", length = 32)
+    private String screeningProviderId;
+
+    /**
+     * V042: TRUE only when a real screening provider consulted sanctions / PEP /
+     * adverse-media sources. NULL on rows that never screened. Anything other
+     * than TRUE means <b>the partner has not been screened</b>, and
+     * {@code ActivationGateService} refuses the sanctions pre-condition.
+     */
+    @Column(name = "screening_authoritative")
+    private Boolean screeningAuthoritative;
+
+    /** V042: why the run is not authoritative; NULL on an authoritative run. */
+    @Column(name = "screening_caveat", length = 512)
+    private String screeningCaveat;
 
     /**
      * Wave-3 (V036): the collapsed KYB-verify verdict from kyb-adapter
@@ -269,6 +294,45 @@ public class KybEntity {
     public void setScreenedAt(Instant screenedAt) {
         this.screenedAt = screenedAt;
     }
+
+    public String getScreeningProviderId() {
+        return screeningProviderId;
+    }
+
+    public void setScreeningProviderId(String screeningProviderId) {
+        this.screeningProviderId = screeningProviderId;
+    }
+
+    public Boolean getScreeningAuthoritative() {
+        return screeningAuthoritative;
+    }
+
+    public void setScreeningAuthoritative(Boolean screeningAuthoritative) {
+        this.screeningAuthoritative = screeningAuthoritative;
+    }
+
+    public String getScreeningCaveat() {
+        return screeningCaveat;
+    }
+
+    public void setScreeningCaveat(String screeningCaveat) {
+        this.screeningCaveat = screeningCaveat;
+    }
+
+    /**
+     * {@code true} only when this row's screening verdict came from a provider
+     * that actually screened (T1-4). The single predicate the activation gate and
+     * every reader should use — never {@code "CLEAR".equals(screeningStatus)}
+     * alone, and never merely "not HIT".
+     */
+    public boolean hasAuthoritativeScreening() {
+        return Boolean.TRUE.equals(screeningAuthoritative)
+                && screeningStatus != null
+                && !SCREENING_NOT_PERFORMED.equals(screeningStatus);
+    }
+
+    /** The honest status a non-authoritative provider records instead of CLEAR (lib-kyb roster). */
+    public static final String SCREENING_NOT_PERFORMED = "NOT_SCREENED_NO_PROVIDER";
 
     public String getVerificationDecision() {
         return verificationDecision;

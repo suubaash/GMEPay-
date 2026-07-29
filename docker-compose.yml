@@ -474,8 +474,29 @@ services:
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
       GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: rest
       GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
+      # ---- KYB screening must leave the JVM (gap T1-4) -----------------------------
+      # Without these, StubKybClient / StubKybVerifyClient (matchIfMissing=true) won
+      # in EVERY environment and "screening" was keyword matching inside this
+      # service. kyb-adapter is now deployable (see its block below), so the seam
+      # points at it. This changes the TRANSPORT, not the truthfulness: kyb-adapter
+      # itself still runs the same non-authoritative stub provider until ADR-014's
+      # vendor credentials land, and every verdict says so.
+      GMEPAY_KYB_ADAPTER_CLIENT: rest
+      GMEPAY_KYB_ADAPTER_BASE_URL: http://kyb-adapter:8080
+      # ---- ADR-006 document vault: MinIO, not the heap (gap T1-4) ------------------
+      # GMEPAY_VAULT_ENDPOINT was set in Helm but NOT here, so lib-vault fell back to
+      # InMemoryVaultClient and every uploaded KYB document (business registration,
+      # AOA, UBO declaration, Wolfsberg CBDDQ) was lost on restart — while compose
+      # was running MinIO the whole time. partner_document rows survived and pointed
+      # at objects that no longer existed. These three keys are what
+      # MinioVaultAutoConfiguration binds; the endpoint is the master switch.
+      GMEPAY_VAULT_ENDPOINT: http://minio:9000
+      GMEPAY_VAULT_ACCESS_KEY: ${MINIO_ROOT_USER:-gmepay}
+      GMEPAY_VAULT_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-gmepay-minio}
     depends_on:
       postgres-config: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      kyb-adapter: { condition: service_started }
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["core", "full"]
@@ -998,6 +1019,57 @@ services:
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["full"]
+
+  # ─────────────────────────── kyb-adapter (gap T1-4) ───────────────────────────
+  # Until this entry existed the service could not run ANYWHERE: it had no
+  # Dockerfile, was absent from this file, and was explicitly excluded from the
+  # Helm chart. config-registry therefore always fell back to the in-process
+  # StubKybClient (matchIfMissing=true), so "KYB screening" never left the JVM.
+  #
+  # HONESTY: making it deployable does NOT make screening real. With
+  # gmepay.kyb.provider=stub (the default until ADR-014's Octa sandbox credentials
+  # land) this service consults no sanctions / PEP / adverse-media source. Every
+  # verdict it returns is stamped non-authoritative, its clean branch is
+  # NOT_SCREENED_NO_PROVIDER rather than CLEAR, and the activation gate refuses to
+  # treat it as a passed pre-condition. GET /v1/kyb/health reports
+  # authoritative=false with the reason.
+  #
+  # Host port 9104: the 8080..8099 band is fully allocated (8097 = Keycloak) and
+  # 9103 / 9106 / 9107 are the scheme simulators — see docs/COMPOSE.md.
+  kyb-adapter:
+    build: { context: ., dockerfile: services/kyb-adapter/Dockerfile }
+    image: gmepay/kyb-adapter:dev
+    ports: ["9104:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # REQUIRED TO BOOT (T1-4). /v1/kyb/screen, /v1/kyb/verify and
+      # /v1/kyb/result/** take partner legal names, tax ids and the full UBO set
+      # (names + PEP flags) and return a compliance verdict, so the whole surface is
+      # gated; KybInternalAuthEnforcedConfig REFUSES TO START on a blank secret.
+      # config-registry presents the same value in X-Gme-Internal.
+      GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret
+      # Screening-result fan-out to gmepay.kyb.screening / gmepay.kyb.verification.
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # NOT SET DELIBERATELY: GMEPAY_KYB_PROVIDER stays 'stub' and
+      # GMEPAY_KYB_BIZREG_PROVIDER stays 'stub'. Setting either to a real vendor
+      # requires credentials that do not exist yet (ADR-014 / KFTC certificate);
+      # both real adapters fail fast rather than pretend.
+      #
+      # H2, ON PURPOSE — and a KNOWN LIMITATION: this service's kyb_screening run
+      # log is in-memory here, so GET /v1/kyb/result/{ref} loses its history on
+      # restart. It is NOT given a PostgreSQL instance because the backup inventory
+      # (scripts/backup/inventory.env) and its drift guard enumerate exactly the 15
+      # databases that exist; adding a 16th belongs with that inventory change. The
+      # regulator-defensible record is config-registry's partner_kyb (durable),
+      # which is what the wizard and the activation gate read — see T1-4 residuals.
+    depends_on:
+      kafka: { condition: service_healthy }
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    # core: config-registry (a core service) now calls this one over REST, so a
+    # core stack without it would 502 every screening run.
+    profiles: ["core", "full"]
 
   ops-partner-bff:
     build: { context: ., dockerfile: services/ops-partner-bff/Dockerfile }

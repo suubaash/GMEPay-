@@ -129,7 +129,18 @@ final class KybJson {
         sb.append("\"verificationDecision\":")
                 .append(jsonString(k.getVerificationDecision())).append(',');
         sb.append("\"verificationDecisionReason\":")
-                .append(jsonString(k.getVerificationDecisionReason()));
+                .append(jsonString(k.getVerificationDecisionReason())).append(',');
+        // T1-4 (V042) screening provenance — appended so the audit AFTER snapshot
+        // seals WHO produced the verdict, not only what it was. Same append-only
+        // discipline as the V036 verify fields above: existing sealed snapshots
+        // keep their bytes, new writes carry the provenance.
+        sb.append("\"screeningProviderId\":")
+                .append(jsonString(k.getScreeningProviderId())).append(',');
+        sb.append("\"screeningAuthoritative\":")
+                .append(k.getScreeningAuthoritative() == null
+                        ? "null" : k.getScreeningAuthoritative().toString()).append(',');
+        sb.append("\"screeningCaveat\":")
+                .append(jsonString(k.getScreeningCaveat()));
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

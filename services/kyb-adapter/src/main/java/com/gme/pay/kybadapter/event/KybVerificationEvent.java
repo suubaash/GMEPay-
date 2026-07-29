@@ -19,13 +19,20 @@ import java.time.Instant;
  *
  * <p>Only emitted for FRESH runs — an idempotent replay of a stored run does not
  * re-publish (the original run already fanned out).
+ *
+ * <p>T1-4: {@code screeningAuthoritative} states whether the decision rests on a
+ * screening that actually happened. A consumer treating this event as a
+ * completed KYB check must test it — {@link KybDecision} alone cannot
+ * distinguish "checked and clean" from "nothing was checked".
  */
 public record KybVerificationEvent(
         String partnerCode,
         String providerRef,
         KybDecision decision,
         String decisionReason,
-        Instant screenedAt) implements DomainEvent {
+        Instant screenedAt,
+        boolean screeningAuthoritative,
+        String screeningCaveat) implements DomainEvent {
 
     /** Builds the event straight from the orchestration {@link KybVerificationResult}. */
     public static KybVerificationEvent of(KybVerificationResult result) {
@@ -34,7 +41,9 @@ public record KybVerificationEvent(
                 result.providerRef(),
                 result.decision(),
                 result.decisionReason(),
-                result.screenedAt());
+                result.screenedAt(),
+                result.screeningAuthoritative(),
+                result.screeningCaveat());
     }
 
     @Override

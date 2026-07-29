@@ -5,6 +5,7 @@ import com.gme.pay.contracts.KybView;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.contracts.UboView;
 import com.gme.pay.kyb.KybSubject;
+import com.gme.pay.kyb.ScreeningProvenance;
 import com.gme.pay.kyb.ScreeningResult;
 import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
@@ -59,6 +60,9 @@ import org.springframework.web.server.ResponseStatusException;
  */
 @Service
 public class KybService {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(KybService.class);
 
     /** Aggregate-type discriminator on audit rows for KYB mutations. */
     public static final String AGGREGATE_TYPE = "partner_kyb";
@@ -154,10 +158,20 @@ public class KybService {
         priorOpt.ifPresent(prior -> copyStep3Fields(prior, fresh));
         fresh.setScreeningStatus(result.status() == null ? null : result.status().name());
         fresh.setScreeningProviderRef(result.providerRef());
+        // T1-4: WHO screened, and whether they are an authority, is stored with the
+        // verdict. lib-kyb guarantees a non-authoritative run cannot arrive as
+        // CLEAR, so this row cannot claim a clean screening nobody performed.
+        applyProvenance(fresh, result.provenance().providerId(),
+                result.authoritative(), result.caveat());
         // Defensive truncation: the stub already truncates, but a vendor
         // adapter may not — the stored TIMESTAMP must equal the entity value.
         fresh.setScreenedAt(result.screenedAt() == null
                 ? now : result.screenedAt().truncatedTo(ChronoUnit.MICROS));
+        if (!result.screeningPerformed()) {
+            log.warn("partner {} was NOT SCREENED: provider={} status={} — activation cannot treat"
+                            + " this as a satisfied sanctions pre-condition. {}",
+                    partnerCode, result.provenance().providerId(), result.status(), result.caveat());
+        }
 
         KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor, EVENT_TYPE_SCREENED,
@@ -200,6 +214,17 @@ public class KybService {
                 ? now : result.screenedAt().truncatedTo(ChronoUnit.MICROS));
         fresh.setVerificationDecision(result.decision());
         fresh.setVerificationDecisionReason(result.decisionReason());
+        // T1-4: the verify result carries the same provenance as the screen result
+        // (kyb-adapter threads it through), so a stored verification decision can
+        // never be read as resting on a screening that did not happen.
+        applyProvenance(fresh, result.screeningProviderId(),
+                result.screeningAuthoritative(), result.screeningCaveat());
+        if (!fresh.hasAuthoritativeScreening()) {
+            log.warn("partner {} verification decision {} rests on NO SANCTIONS SCREENING"
+                            + " (provider={}, screeningStatus={}). {}",
+                    partnerCode, result.decision(), result.screeningProviderId(),
+                    result.screeningStatus(), result.screeningCaveat());
+        }
 
         KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor, EVENT_TYPE_VERIFIED,
@@ -298,6 +323,11 @@ public class KybService {
     /**
      * Copy the screening + verify verdict between rows (step-3 saves keep
      * screening/verification state — a wizard save must never erase a verdict).
+     *
+     * <p>T1-4: the provenance travels with the verdict. If it did not, a wizard
+     * save would carry a CLEAR forward while dropping the authority that vouched
+     * for it — the V042 CHECK would then reject the row, which is the right
+     * failure mode but a needless one.
      */
     private static void carryForwardScreening(KybEntity from, KybEntity to) {
         to.setScreeningStatus(from.getScreeningStatus());
@@ -305,6 +335,29 @@ public class KybService {
         to.setScreenedAt(from.getScreenedAt());
         to.setVerificationDecision(from.getVerificationDecision());
         to.setVerificationDecisionReason(from.getVerificationDecisionReason());
+        to.setScreeningProviderId(from.getScreeningProviderId());
+        to.setScreeningAuthoritative(from.getScreeningAuthoritative());
+        to.setScreeningCaveat(from.getScreeningCaveat());
+    }
+
+    /**
+     * Stamp a run's provenance onto the fresh row. An absent provider id is
+     * recorded as the explicitly non-authoritative {@code unknown} producer with
+     * its caveat rather than left blank: a blank could be misread as "no opinion",
+     * and the whole point of T1-4 is that absence of provenance is never authority.
+     */
+    private static void applyProvenance(KybEntity row, String providerId,
+                                        boolean authoritative, String caveat) {
+        if (providerId == null || providerId.isBlank()) {
+            row.setScreeningProviderId(ScreeningProvenance.UNKNOWN_PROVIDER_ID);
+            row.setScreeningAuthoritative(Boolean.FALSE);
+            row.setScreeningCaveat(ScreeningProvenance.UNKNOWN_CAVEAT);
+            return;
+        }
+        row.setScreeningProviderId(providerId);
+        row.setScreeningAuthoritative(authoritative);
+        row.setScreeningCaveat(authoritative ? null
+                : (caveat == null || caveat.isBlank() ? ScreeningProvenance.UNKNOWN_CAVEAT : caveat));
     }
 
     /** Project the stored aggregate into the vendor-agnostic screening subject. */
