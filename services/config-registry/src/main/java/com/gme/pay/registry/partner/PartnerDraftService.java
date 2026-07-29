@@ -388,7 +388,12 @@ public class PartnerDraftService {
                 e.getStatus(),
                 e.getValidFrom(),
                 e.getValidTo(),
-                e.getRecordedAt());
+                e.getRecordedAt(),
+                // V025 partners.go_live_at — the real first-activation instant. NULL until the
+                // partner's first UAT -> LIVE transition; consumers (Partner Portal profile
+                // "onboardedAt") must render that NULL as "not yet live", never fall back to a
+                // bitemporal stamp, which moves on every edit.
+                e.getGoLiveAt());
     }
 
     private static AddressView addressView(String s1, String s2, String city, String state,

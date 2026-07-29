@@ -63,7 +63,9 @@ class ApiKeyControllerTest {
                 transactions, prefunding, settlement, configRegistry,
                 new StubApiKeyClient(),
                 new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
-                new StubStatementClient(), new OpsRbacGuard(true));
+                new StubStatementClient(),
+                new com.gme.pay.bff.client.stub.StubPortalWebhookClient(),
+                new OpsRbacGuard(true));
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
@@ -74,26 +76,36 @@ class ApiKeyControllerTest {
     }
 
     @Test
-    @DisplayName("GET /v1/portal/{p}/api-keys returns one PRIMARY and one ROTATING key")
-    void apiKeys_returnsPrimaryAndRotating() throws Exception {
+    @DisplayName("Stub mode reports NO api keys — never fabricated gpk_live_ credentials")
+    void apiKeys_stubModeReportsNoKeys() throws Exception {
+        // Gap T1-3: StubApiKeyClient used to mint two credential-shaped rows per partner
+        // (PRIMARY + ROTATING, gpk_live_<hash> prefixes, a two-scope grant list and a last-used
+        // instant), all derived from partnerId.hashCode(). With no RestApiKeyClient in existence
+        // that fiction was what every partner saw, indistinguishable from real credentials.
+        // An unconfigured BFF must now answer "I know of no keys".
         mvc.perform(get("/v1/portal/{p}/api-keys", "partner_test_001"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[0].status").value("PRIMARY"))
-                .andExpect(jsonPath("$[1].status").value("ROTATING"))
-                .andExpect(jsonPath("$[0].prefix").value(org.hamcrest.Matchers.startsWith("gpk_live_")))
-                .andExpect(jsonPath("$[1].prefix").value(org.hamcrest.Matchers.startsWith("gpk_live_")))
-                .andExpect(jsonPath("$[0].scopes.length()").value(2));
+                .andExpect(jsonPath("$.length()").value(0));
     }
 
     @Test
-    @DisplayName("GET /v1/portal/{p}/api-keys returns deterministic keys per partner")
-    void apiKeys_isDeterministicPerPartner() throws Exception {
-        // Two calls with the same partner should return identical keyIds.
-        mvc.perform(get("/v1/portal/{p}/api-keys", "partner_test_002"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].keyId").value("key_primary_partner_test_002"))
-                .andExpect(jsonPath("$[1].keyId").value("key_rotating_partner_test_002"));
+    @DisplayName("Stub mode invents no keys for any partner, including unknown ones")
+    void apiKeys_stubModeIsEmptyForEveryPartner() throws Exception {
+        for (String partner : new String[] {"partner_test_002", "GMEREMIT", "does-not-exist"}) {
+            mvc.perform(get("/v1/portal/{p}/api-keys", partner))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(0));
+        }
+    }
+
+    @Test
+    @DisplayName("The removed key fixtures cannot come back through the stub")
+    void apiKeys_removedFixturesStayGone() {
+        // Pin the regression directly at the client so a future edit to the stub cannot quietly
+        // reintroduce credential-shaped data behind the controller.
+        org.junit.jupiter.api.Assertions.assertTrue(
+                new StubApiKeyClient().listForPartner("partner_test_001").isEmpty(),
+                "StubApiKeyClient must report no keys rather than fabricate credentials");
     }
 }

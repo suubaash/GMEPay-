@@ -63,6 +63,14 @@ import java.time.Instant;
  *   <li>Bitemporal stamps (ADR-010, SCD Type 6): {@code validFrom}, {@code validTo}
  *       (half-open window {@code [validFrom, validTo)}, NULL upper bound =
  *       open-ended), {@code recordedAt} (system insert time of this version).</li>
+ *   <li>{@code goLiveAt} — V025 {@code partners.go_live_at}: the instant the partner was
+ *       activated for the FIRST time (first UAT → LIVE transition; a later
+ *       SUSPENDED → LIVE reactivation does NOT move it). This is the only real
+ *       "when did this partner come on board" fact the registry holds, so it is what
+ *       the Partner Portal's Profile page renders as {@code onboardedAt}. <b>NULL means
+ *       the partner has never gone live</b> — do not substitute a bitemporal stamp
+ *       ({@code validFrom}/{@code recordedAt} move on every edit, so they would read as a
+ *       plausible but wrong onboarding date).</li>
  * </ul>
  *
  * <p>{@code @JsonInclude(ALWAYS)} so {@code null} fields stay on the wire — the
@@ -90,7 +98,8 @@ public record PartnerView(
         PartnerStatus status,
         Instant validFrom,
         Instant validTo,
-        Instant recordedAt) {
+        Instant recordedAt,
+        Instant goLiveAt) {
 
     /**
      * Compact factory for the Slice 1 four-field aggregate (partnerCode, type,
@@ -118,6 +127,6 @@ public record PartnerView(
                 settlementCurrency,
                 null, null, null, null, null, null, null, null, null,
                 PartnerStatus.ONBOARDING,
-                null, null, null);
+                null, null, null, null);
     }
 }

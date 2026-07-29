@@ -32,6 +32,34 @@ public interface ConfigRegistryClient {
      */
     PartnerSummary getPartner(String partnerId);
 
+    /**
+     * Loads one partner as the canonical {@link PartnerView} — the SUPERSET of
+     * {@link #getPartner(String)}, which down-maps to the deprecated four-field
+     * {@link PartnerSummary} and therefore drops two facts the Partner Portal needs
+     * (gap register T1-3):
+     *
+     * <ul>
+     *   <li>{@link PartnerView#id()} — config-registry's numeric surrogate. Every other
+     *       service (auth-identity's API-key registry, notification-webhook's endpoint
+     *       registry, transaction-mgmt's query filter) keys the partner by that BIGINT,
+     *       while the portal path segment and the token's {@code partner_id} claim carry
+     *       the business CODE ({@code "GMEREMIT"}). This is the only read that bridges
+     *       the two — see {@link PartnerDirectory}.</li>
+     *   <li>{@link PartnerView#goLiveAt()} — the real first-activation instant behind the
+     *       Profile page's {@code onboardedAt}.</li>
+     * </ul>
+     *
+     * <p>Maps {@code GET /v1/partners/{partnerCode}}. Returns {@code null} for an unknown
+     * partner AND when the upstream cannot be reached — callers must treat {@code null} as
+     * "unresolved" and fail closed rather than widening a query.
+     *
+     * <p>Default returns {@code null} so the anonymous test fakes that only implement
+     * partner CRUD keep compiling (same additive convention as the draft endpoints below).
+     */
+    default PartnerView getPartnerView(String partnerCode) {
+        return null;
+    }
+
     /** Lists all known partners (currently used to populate Admin UI tables). */
     List<PartnerSummary> listPartners();
 

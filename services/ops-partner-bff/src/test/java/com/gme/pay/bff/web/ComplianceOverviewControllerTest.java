@@ -69,7 +69,7 @@ class ComplianceOverviewControllerTest {
     private static PartnerView partner(String code, String romanizedName, PartnerStatus status) {
         return new PartnerView(1L, code, PartnerType.OVERSEAS, "KRW", RoundingMode.HALF_UP,
                 "KRW", "KRW", null, romanizedName, null, null, "KR", null, null, null, null, status,
-                null, null, null);
+                null, null, null, null);
     }
 
     private static KybView kyb(String screeningStatus) {

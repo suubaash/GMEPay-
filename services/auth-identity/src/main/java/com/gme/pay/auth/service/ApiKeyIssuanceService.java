@@ -143,7 +143,11 @@ public class ApiKeyIssuanceService {
                 .flatMap(p -> apiKeyRepository.findByPrincipalId(p.getId()).stream())
                 .sorted(Comparator.comparing(ApiKeyEntity::getCreatedAt).reversed())
                 .map(k -> new KeyListItem(
-                        k.getApiKey(), displayPrefix(k.getApiKey()), environment, k.getCreatedAt()))
+                        k.getApiKey(), displayPrefix(k.getApiKey()), environment, k.getCreatedAt(),
+                        // Real api_keys.status / expires_at (gap T1-3). Both non-secret; they let
+                        // the portal distinguish a usable key from a revoked one.
+                        k.getStatus() == null ? null : k.getStatus().name(),
+                        k.getExpiresAt()))
                 .toList();
     }
 

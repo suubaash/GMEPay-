@@ -79,7 +79,7 @@ class RuleContractsTest {
                 1L, "ACME", PartnerType.OVERSEAS, "USD", RoundingMode.HALF_UP,
                 "KRW", "USD",
                 null, null, null, null, null, null, null, null, null,
-                PartnerStatus.ONBOARDING, null, null, null);
+                PartnerStatus.ONBOARDING, null, null, null, null);
 
         assertEquals("USD", view.settlementCurrency());
         assertEquals("KRW", view.collectionCcy());

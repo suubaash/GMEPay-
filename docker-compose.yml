@@ -889,8 +889,16 @@ services:
       # Live partner transactions: use the real REST client (talks to transaction-mgmt over
       # HTTP) instead of the in-memory stub, so the Partner Portal shows LIVE txns. Empty
       # until real payments exist — that is the point of "live".
+      # Also selects the Partner Portal CSV statement source: RestStatementClient builds the
+      # statement from these same transaction rows (gap T1-3), replacing 5 hardcoded TXN-100x rows.
       GMEPAY_TRANSACTION_MGMT_CLIENT: rest
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      # Live prefunding balances (gap T1-3). Without this the BFF fell back to StubPrefundingClient,
+      # whose only rows are partner_test_001..003 — so the Portal's Overview + Balance pages (and the
+      # ops partner-balance panel) 404'd for every REAL partner (GMEREMIT, SENDMN). prefunding keys
+      # its balance API by partner CODE, and RestPrefundingClient presents GMEPAY_INTERNAL_AUTH_SECRET
+      # (that API is behind the internal-auth gate since T0-5).
+      GMEPAY_PREFUNDING_CLIENT: rest
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       # Live double-entry journals + revenue summary (Journal page reads posted ledger
       # entries from revenue-ledger instead of StubRevenueLedgerClient fixtures).
@@ -903,9 +911,17 @@ services:
       # Real self-serve SANDBOX API keys: activate the live auth-identity clients
       # (default is the in-memory stub). Get-Started keys are then issued by
       # auth-identity (POST /internal/auth/keys, environment=SANDBOX) instead of
-      # StubSandboxKeyClient. NOTE: this selector also drives RestRbacAdminClient.
+      # StubSandboxKeyClient. NOTE: this selector also drives RestRbacAdminClient and,
+      # since gap T1-3, RestApiKeyClient — the Portal's API Keys page reads the real
+      # api_keys registry (GET /internal/auth/keys?partnerId=&environment=) instead of
+      # StubApiKeyClient's two fabricated gpk_live_ credentials.
       GMEPAY_AUTH_IDENTITY_CLIENT: rest
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      # Live partner webhook endpoints for the Portal's Webhooks page (gap T1-3): reads
+      # notification-webhook GET /v1/webhook-configs?partnerId=. That page used to be two
+      # partner.example.com rows hardcoded in PartnerPortalController with no client at all.
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: rest
       # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
       # Activates RestConfigRegistryClient / RestPlatformSettingsClient / RestAuditTrailClient.
       GMEPAY_CONFIG_REGISTRY_CLIENT: rest

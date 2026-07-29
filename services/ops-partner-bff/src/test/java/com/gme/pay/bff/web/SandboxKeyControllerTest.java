@@ -76,7 +76,9 @@ class SandboxKeyControllerTest {
 
         PartnerPortalController controller = new PartnerPortalController(
                 transactions, prefunding, settlement, configRegistry,
-                new StubApiKeyClient(), sandbox, new StubStatementClient(), new OpsRbacGuard(true));
+                new StubApiKeyClient(), sandbox, new StubStatementClient(),
+                new com.gme.pay.bff.client.stub.StubPortalWebhookClient(),
+                new OpsRbacGuard(true));
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())

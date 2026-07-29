@@ -2,6 +2,7 @@ package com.gme.pay.bff.web;
 
 import com.gme.pay.bff.client.ApiKeyClient;
 import com.gme.pay.bff.client.ConfigRegistryClient;
+import com.gme.pay.bff.client.PortalWebhookClient;
 import com.gme.pay.bff.client.PrefundingClient;
 import com.gme.pay.bff.client.SandboxKeyClient;
 import com.gme.pay.bff.client.SettlementClient;
@@ -12,6 +13,7 @@ import com.gme.pay.bff.web.dto.PartnerProfile;
 import com.gme.pay.bff.web.dto.TransactionDetail;
 import com.gme.pay.bff.web.dto.WebhookConfigView;
 import com.gme.pay.contracts.BalanceView;
+import com.gme.pay.contracts.PartnerView;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -27,7 +29,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -53,9 +54,28 @@ import java.util.Objects;
  *
  * <p>Phase-C4 endpoints:
  * <ul>
- *   <li>{@code GET /v1/portal/{partnerId}/api-keys} — API key list (PRIMARY + ROTATING)
+ *   <li>{@code GET /v1/portal/{partnerId}/api-keys} — API key list (PRODUCTION + SANDBOX rosters)
  *   <li>{@code GET /v1/portal/{partnerId}/statement?from&to} — CSV statement download
  * </ul>
+ *
+ * <h2>Every read is real data (gap register T1-3)</h2>
+ * <p>Each page here reads the service that OWNS the fact, and shows nothing when that service has
+ * nothing:
+ * <ul>
+ *   <li>overview / balance — prefunding ({@code GMEPAY_PREFUNDING_CLIENT=rest} on every deploy
+ *       target, so real partner codes resolve instead of only {@code partner_test_00*})</li>
+ *   <li>transactions / statement — transaction-mgmt (the CSV is built from persisted rows, not five
+ *       hardcoded {@code TXN-100x} samples)</li>
+ *   <li>api-keys — auth-identity's {@code api_keys} registry (not two fabricated
+ *       {@code gpk_live_…} keys)</li>
+ *   <li>webhooks — notification-webhook's endpoint registry (not two inline
+ *       {@code partner.example.com} rows)</li>
+ *   <li>profile — config-registry, with {@code onboardedAt} = the real {@code go_live_at} (not one
+ *       constant shared by every partner)</li>
+ * </ul>
+ * <p>Facts no service records ({@code lastUsedAt} on a key, {@code lastDeliveredAt} on a webhook, a
+ * key's {@code name}/{@code scopes}, {@code onboardedAt} before activation) are returned as
+ * {@code null}/empty and rendered as an em dash — never back-filled with a plausible value.
  *
  * <h2>Tenant isolation (gap register T0-4 — cross-partner IDOR)</h2>
  * <p>The {@code {partnerId}} path segment is <b>caller-supplied and is not an identity</b>. Every
@@ -84,6 +104,7 @@ public class PartnerPortalController {
     private final ApiKeyClient apiKeys;
     private final SandboxKeyClient sandboxKeys;
     private final StatementClient statements;
+    private final PortalWebhookClient webhooks;
     private final OpsRbacGuard rbac;
 
     public PartnerPortalController(
@@ -94,6 +115,7 @@ public class PartnerPortalController {
             ApiKeyClient apiKeys,
             SandboxKeyClient sandboxKeys,
             StatementClient statements,
+            PortalWebhookClient webhooks,
             OpsRbacGuard rbac) {
         this.transactions = transactions;
         this.prefunding = prefunding;
@@ -102,6 +124,7 @@ public class PartnerPortalController {
         this.apiKeys = apiKeys;
         this.sandboxKeys = sandboxKeys;
         this.statements = statements;
+        this.webhooks = webhooks;
         this.rbac = rbac;
     }
 
@@ -182,40 +205,62 @@ public class PartnerPortalController {
         return view;
     }
 
+    /**
+     * The partner's REAL webhook endpoints, read from notification-webhook's endpoint registry
+     * via {@link com.gme.pay.bff.client.PortalWebhookClient} (gap register T1-3).
+     *
+     * <p>This handler previously built two rows inline — {@code partner.example.com/{code}/webhook/
+     * payments} and {@code .../settlements}, both {@code ACTIVE}, with a literal
+     * {@code Instant.parse("2026-06-09T11:00:00Z")} last-delivery — so every partner saw the same
+     * two nonexistent endpoints under a domain nobody owns, and the page never consulted the
+     * service that actually delivers webhooks.
+     *
+     * <p>Empty list = this partner has no registered endpoints (or the registry is unreachable);
+     * the UI renders its "No webhooks configured" empty state. {@code lastDeliveredAt} is null
+     * because notification-webhook exposes no per-endpoint last-delivery read.
+     *
+     * <p>READ-ONLY: URL / event-type / secret-rotation writes remain the Phase-2 self-serve
+     * surface pending the T1-5 product decision.
+     */
     @GetMapping("/{partnerId}/webhooks")
     public List<WebhookConfigView> webhooks(@PathVariable String partnerId) {
         rbac.requirePartnerScope(partnerId);
-        // Phase-1 stub: return 1-2 deterministic rows so the Portal UI can bind.
-        // Production: GET notification-webhook/{partnerId}/webhooks.
-        return List.of(
-                new WebhookConfigView(
-                        "https://partner.example.com/" + partnerId + "/webhook/payments",
-                        List.of("payment.approved", "payment.failed"),
-                        "ACTIVE",
-                        Instant.parse("2026-06-09T11:00:00Z")),
-                new WebhookConfigView(
-                        "https://partner.example.com/" + partnerId + "/webhook/settlements",
-                        List.of("settlement.completed"),
-                        "ACTIVE",
-                        Instant.parse("2026-06-08T22:30:00Z")));
+        List<WebhookConfigView> configs = webhooks.listForPartner(partnerId);
+        return configs == null ? List.of() : configs;
     }
 
+    /**
+     * The partner's own registry record (gap register T1-3).
+     *
+     * <p>{@code onboardedAt} is now the REAL first-activation instant — V025
+     * {@code partners.go_live_at}, carried on {@link com.gme.pay.contracts.PartnerView#goLiveAt()}.
+     * It was previously a constant {@code Instant.parse("2026-01-01T00:00:00Z")} returned for
+     * <em>every</em> partner. A partner that has not yet gone live has no activation instant, so the
+     * field is {@code null} and the UI renders an em dash — deliberately NOT back-filled from
+     * {@code validFrom}/{@code recordedAt}, which move on every registry edit and would read as a
+     * plausible but wrong onboarding date.
+     */
     @GetMapping("/{partnerId}/profile")
     public PartnerProfile profile(@PathVariable String partnerId) {
         rbac.requirePartnerScope(partnerId);
+        // Preferred path: the canonical view, which carries goLiveAt.
+        PartnerView view = configRegistry.getPartnerView(partnerId);
+        if (view != null) {
+            return PartnerProfile.fromView(view, view.goLiveAt());
+        }
+        // Upstreams that only serve the legacy four-field summary: still a real profile, but the
+        // activation instant is not available on that shape -> honestly absent, never invented.
         ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(partnerId);
         if (partner == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "no partner with id " + partnerId);
         }
-        // Phase-1: synthesize an onboarding timestamp deterministically. In
-        // production this comes from config-registry's partner record.
         return new PartnerProfile(
                 partner.partnerId(),
                 partner.type(),
                 partner.settlementCurrency(),
                 partner.settlementRoundingMode(),
-                Instant.parse("2026-01-01T00:00:00Z"));
+                null);
     }
 
     @GetMapping("/{partnerId}/api-keys")

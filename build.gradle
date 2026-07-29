@@ -19,6 +19,33 @@ subprojects {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Prometheus metrics registry — fleet-wide, in ONE place (gap T3-2).
+    //
+    // Until this block existed, `/actuator/prometheus` did NOT exist on any
+    // service: api-gateway/build.gradle carried a comment claiming it and
+    // api-gateway's SecurityConfig even permitted it anonymously, but no
+    // module had a Micrometer registry on the classpath, so Boot never
+    // registered the scrape endpoint (404 everywhere). Nothing could be
+    // scraped, so nothing could be alerted on or measured for an SLA.
+    //
+    // Applied via `plugins.withId('org.springframework.boot')` so it lands on
+    // exactly the 20 deployable services and NOT on the libs (which are
+    // java-library modules with compileOnly Spring surfaces) or :e2e-tests.
+    // Version is managed by the Boot BOM each service already applies via
+    // io.spring.dependency-management — do not pin it here.
+    //
+    // Exposing the endpoint is the other half and is deliberately NOT done
+    // per-service either: com.gme.pay.platform.MetricsExposureEnvironmentPostProcessor
+    // in libs/lib-errors adds `prometheus` to
+    // management.endpoints.web.exposure.include for every service. See
+    // Documentation/RUNBOOK_MONITORING.md.
+    plugins.withId('org.springframework.boot') {
+        dependencies {
+            implementation 'io.micrometer:micrometer-registry-prometheus'
+        }
+    }
+
     dependencies {
         testImplementation platform('org.junit:junit-bom:5.10.3')
         testImplementation 'org.junit.jupiter:junit-jupiter'

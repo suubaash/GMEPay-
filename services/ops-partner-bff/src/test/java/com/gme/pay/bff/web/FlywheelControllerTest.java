@@ -50,7 +50,7 @@ class FlywheelControllerTest {
         return new PartnerView(
                 null, code, com.gme.pay.domain.PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP,
                 "KRW", "KRW", null, null, null, null, null, null, null, null, null,
-                status, onboardedAt, null, onboardedAt);
+                status, onboardedAt, null, onboardedAt, onboardedAt);
     }
 
     private static TransactionMgmtClient.TransactionSummary approvedTxn(String id, String deductedUsd) {

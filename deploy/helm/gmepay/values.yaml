@@ -331,8 +331,15 @@ services:
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       # Live partner transactions: activate the real REST transaction-mgmt client
       # (default is the in-memory stub). Portal then shows LIVE txns from transaction-mgmt.
+      # Also selects the Portal CSV statement source — RestStatementClient builds the statement
+      # from these same rows (gap T1-3) instead of 5 hardcoded TXN-100x samples.
       GMEPAY_TRANSACTION_MGMT_CLIENT: "rest"
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
+      # Live prefunding balances (gap T1-3). Without this the BFF fell back to StubPrefundingClient,
+      # which only knows partner_test_001..003, so the Portal's Overview + Balance pages 404'd for
+      # every REAL partner. RestPrefundingClient presents GMEPAY_INTERNAL_AUTH_SECRET (that balance
+      # API is behind the internal-auth gate since T0-5) — already in envSecretKeys above.
+      GMEPAY_PREFUNDING_CLIENT: "rest"
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       # Live double-entry journals + revenue summary from revenue-ledger.
       GMEPAY_REVENUE_LEDGER_CLIENT: "rest"
@@ -341,9 +348,16 @@ services:
       GMEPAY_SETTLEMENT_RECONCILIATION_CLIENT: "rest"
       # Real self-serve SANDBOX API keys via auth-identity (default is the
       # in-memory stub). Get-Started keys issued by POST /internal/auth/keys
-      # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient.
+      # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient and, since gap
+      # T1-3, RestApiKeyClient — the Portal's API Keys page reads the real api_keys
+      # registry instead of two fabricated gpk_live_ credentials.
       GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
       GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      # Live partner webhook endpoints for the Portal's Webhooks page (gap T1-3): reads
+      # notification-webhook GET /v1/webhook-configs?partnerId=. That page was previously two
+      # partner.example.com rows hardcoded in PartnerPortalController with no client at all.
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: "rest"
       # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
       GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
       # Live kill-switch: pause/suspend must reach config-registry's /v1/ops gate

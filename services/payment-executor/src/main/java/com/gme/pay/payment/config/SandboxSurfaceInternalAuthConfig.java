@@ -83,17 +83,40 @@ public class SandboxSurfaceInternalAuthConfig {
     static final String BALANCE_PATTERN = "/v1/balance";
 
     /**
+     * The service's internal-only surface, gated <b>unconditionally</b> for the same reason as
+     * {@link #BALANCE_PATTERN}: with a blank secret every caller is refused 401 rather than the surface
+     * being anonymous. {@code /internal/} is the platform convention for "never publicly routed", so
+     * gating it wholesale is intentional (it matches lib-errors'
+     * {@code InternalAuthProperties} default pattern list used by the other services).
+     *
+     * <p>Currently serves {@code GET /internal/ops/alerts}
+     * ({@link com.gme.pay.payment.web.OpsAlertQueryController}, gap T3-3) — the durable ops-alert
+     * history. Its rows name partners and schemes together with their decline rates, so it is exactly
+     * as sensitive as the balance inquiry.
+     */
+    static final String INTERNAL_PATTERN = "/internal/**";
+
+    /**
      * Introspection surfaces that leak the internal API shape and per-partner counters:
-     * {@code /actuator/metrics} (payment counts, decline rates), {@code /v3/api-docs} + Swagger UI
-     * (every route and DTO). Gated <b>opportunistically</b> — only when a secret happens to be
-     * configured, which it always is in a real deployment (payment-executor needs it anyway to call
-     * the now-gated prefunding service), never in a bare local dev run. They are deliberately NOT
-     * part of the fail-closed rule: unlike the sandbox runner these move no money, and making a
-     * secret mandatory for every payment-executor boot is a deployment change outside this fix.
-     * {@code /actuator/health/**} and {@code /actuator/info} stay anonymous for container probes.
+     * {@code /actuator/metrics} and {@code /actuator/prometheus} (payment counts, decline rates,
+     * per-URI latency), {@code /v3/api-docs} + Swagger UI (every route and DTO). Gated
+     * <b>opportunistically</b> — only when a secret happens to be configured, which it always is in a
+     * real deployment (payment-executor needs it anyway to call the now-gated prefunding service),
+     * never in a bare local dev run. They are deliberately NOT part of the fail-closed rule: unlike the
+     * sandbox runner these move no money, and making a secret mandatory for every payment-executor boot
+     * is a deployment change outside this fix. {@code /actuator/health/**} and {@code /actuator/info}
+     * stay anonymous for container probes.
+     *
+     * <p><b>T3-2:</b> {@code /actuator/prometheus} became real in this iteration (the Micrometer
+     * registry is now on every service's classpath and the endpoint is exposed fleet-wide by
+     * {@code com.gme.pay.platform.MetricsExposureEnvironmentPostProcessor}). It is listed here so the
+     * fix does not open a new anonymous surface: a scraper must present the platform internal token in
+     * the {@code X-Gme-Internal} header. See {@code Documentation/RUNBOOK_MONITORING.md} for the
+     * Prometheus scrape-config snippet.
      */
     static final List<String> INTROSPECTION_PATTERNS =
-            List.of("/actuator/metrics/**", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html");
+            List.of("/actuator/metrics/**", "/actuator/prometheus",
+                    "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html");
 
     /**
      * Registers the shared {@link InternalAuthFilter} over whichever dev/sandbox surfaces are
@@ -135,6 +158,8 @@ public class SandboxSurfaceInternalAuthConfig {
         // Always gated, secret or not: with a blank secret the filter refuses every credential, so
         // the balance inquiry answers 401 to everyone rather than leaking any partner's float.
         patterns.add(BALANCE_PATTERN);
+        // Same rule for the internal-only surface (ops-alert history, T3-3).
+        patterns.add(INTERNAL_PATTERN);
         if (haveSecret) {
             patterns.addAll(INTROSPECTION_PATTERNS);
         } else {

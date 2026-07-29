@@ -153,7 +153,26 @@ $fleet = @(
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }
-    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @('--gmepay.transaction-mgmt.client=rest', '--gmepay.auth-identity.client=rest', '--gmepay.auth-identity.base-url=http://localhost:18085', '--gmepay.config-registry.client=rest') }
+    # Every Partner Portal page must read the service that owns the fact (gap T1-3), so all five
+    # upstream selectors are 'rest' and each base-url is pinned to the 18xxx host band:
+    #   transaction-mgmt   -> Transactions page AND the CSV statement (RestStatementClient)
+    #   auth-identity      -> API Keys page (RestApiKeyClient) + sandbox key issuance + RBAC
+    #   config-registry    -> Profile page (real go_live_at) + the partner-code -> numeric-id
+    #                         resolution every other portal read depends on (PartnerDirectory)
+    #   prefunding         -> Overview + Balance pages for REAL partner codes, not just
+    #                         partner_test_001..003 (the stub's only rows)
+    #   notification-webhook -> Webhooks page (RestPortalWebhookClient)
+    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @(
+            '--gmepay.transaction-mgmt.client=rest'
+            '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
+            '--gmepay.auth-identity.client=rest'
+            '--gmepay.auth-identity.base-url=http://localhost:18085'
+            '--gmepay.config-registry.client=rest'
+            '--gmepay.config-registry.base-url=http://localhost:18081'
+            '--gmepay.prefunding.client=rest'
+            '--gmepay.prefunding.base-url=http://localhost:18088'
+            '--gmepay.notification-webhook.client=rest'
+            '--gmepay.notification-webhook.base-url=http://localhost:18086') }
     @{ name = 'kyb-adapter';                type = 'service'; port = 18098 }
     @{ name = 'rate-fx';                    type = 'service'; port = 18101 }
     @{ name = 'api-gateway';                type = 'service'; port = 18080 }

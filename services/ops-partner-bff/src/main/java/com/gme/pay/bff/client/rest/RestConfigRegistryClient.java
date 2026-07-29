@@ -88,6 +88,32 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
         }
     }
 
+    /**
+     * Canonical single-partner read (gap T1-3). Same upstream call as
+     * {@link #getPartner(String)} but WITHOUT the {@link PartnerSummary} down-map, so the
+     * numeric surrogate {@code id} and {@code goLiveAt} survive. 404 and transport faults
+     * both collapse to {@code null} = "unresolved" (callers fail closed).
+     */
+    @Override
+    public PartnerView getPartnerView(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return null;
+        }
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{id}", partnerCode)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
+                        // 404 = unknown partner; collapse to null below.
+                    })
+                    .body(PartnerView.class);
+        } catch (ResourceAccessException network) {
+            log.warn("config-registry unreachable on getPartnerView({}): {}",
+                    partnerCode, network.getMessage());
+            return null;
+        }
+    }
+
     @Override
     public List<PartnerSummary> listPartners() {
         try {

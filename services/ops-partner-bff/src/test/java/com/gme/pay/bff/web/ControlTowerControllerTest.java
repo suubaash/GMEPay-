@@ -74,7 +74,7 @@ class ControlTowerControllerTest {
     private static PartnerView partner(String code) {
         return new PartnerView(1L, code, PartnerType.OVERSEAS, "USD", RoundingMode.HALF_UP,
                 "USD", "USD", null, code, null, null, "KR", null, null, null, null, PartnerStatus.LIVE,
-                null, null, null);
+                null, null, null, null);
     }
 
     private static TransactionMgmtClient.Page<TransactionSummary> pageWithTotal(long total) {

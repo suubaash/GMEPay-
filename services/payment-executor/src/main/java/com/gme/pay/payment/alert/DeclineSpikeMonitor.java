@@ -4,6 +4,7 @@ import com.gme.pay.contracts.events.OpsAlertPayload;
 import com.gme.pay.events.EventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -26,19 +27,28 @@ import java.util.concurrent.ConcurrentHashMap;
  * (topic {@code gmepay.ops.alert}). With no broker wired, the seam's {@code LogEventPublisher}
  * fallback logs the alert instead.
  *
- * <p><b>Default off.</b> Enable with {@code gmepay.decline-spike.enabled=true}. When the bean is
- * absent, callers see {@code null} and skip recording (they null-guard the collaborator), so this is
- * purely additive and off by default.
+ * <p><b>Default ON</b> since gap T3-3 (COO#4). It used to be
+ * {@code @ConditionalOnProperty(havingValue = "true")} with no default, i.e. off unless a deployment
+ * remembered one env var — and no deployment did, so the platform's only decline safety net was
+ * switched off everywhere, including the money path. It is now {@code matchIfMissing = true}: present
+ * unless an operator explicitly sets {@code gmepay.decline-spike.enabled=false}. Callers still
+ * null-guard the collaborator, so an explicit opt-out degrades cleanly.
  *
  * <p><b>Window + guards.</b> Outcomes older than {@code window-seconds} (default 60s) are evicted per
  * subject. An alert fires only when the subject has at least {@code min-samples} (default 20)
  * outcomes in-window AND the decline rate strictly exceeds {@code threshold-rate} (default 0.5).
  * The min-samples guard stops a single early decline from tripping a 100% rate. After firing, a
  * per-subject cooldown ({@code cooldown-seconds}, default 300s) suppresses repeats so one spike does
- * not spam the topic. Alerting never throws into the pay path.
+ * not spam the topic. Every threshold is a {@code @Value} with a sane in-code default and can be
+ * overridden per deployment. Alerting never throws into the pay path.
+ *
+ * <p><b>Where the alert goes</b> (T3-3): through {@link OpsAlertPipeline} — persisted to
+ * {@code ops_alerts} first (so it survives a restart), then published on the {@code ops.alert} seam,
+ * then pushed to the configured {@link AlertSink}. Memory-only alerting was the other half of the gap.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.decline-spike.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "gmepay.decline-spike.enabled", havingValue = "true",
+        matchIfMissing = true)
 public class DeclineSpikeMonitor {
 
     private static final Logger log = LoggerFactory.getLogger(DeclineSpikeMonitor.class);
@@ -48,7 +58,7 @@ public class DeclineSpikeMonitor {
     static final String SEV_WARN = "WARN";
     static final String SEV_CRITICAL = "CRITICAL";
 
-    private final EventPublisher eventPublisher;
+    private final OpsAlertPipeline pipeline;
     private final Clock clock;
     private final Duration window;
     private final int minSamples;
@@ -57,18 +67,37 @@ public class DeclineSpikeMonitor {
 
     private final Map<String, Window> windows = new ConcurrentHashMap<>();
 
-    public DeclineSpikeMonitor(EventPublisher eventPublisher,
+    /**
+     * Production wiring (T3-3): alerts go through the persist → publish → notify pipeline. Explicitly
+     * {@code @Autowired} because this class has more than one constructor.
+     */
+    @Autowired
+    public DeclineSpikeMonitor(OpsAlertPipeline pipeline,
                                Clock clock,
                                @Value("${gmepay.decline-spike.window-seconds:60}") long windowSeconds,
                                @Value("${gmepay.decline-spike.min-samples:20}") int minSamples,
                                @Value("${gmepay.decline-spike.threshold-rate:0.5}") double thresholdRate,
                                @Value("${gmepay.decline-spike.cooldown-seconds:300}") long cooldownSeconds) {
-        this.eventPublisher = Objects.requireNonNull(eventPublisher);
+        this.pipeline = Objects.requireNonNull(pipeline);
         this.clock = Objects.requireNonNull(clock);
         this.window = Duration.ofSeconds(windowSeconds > 0 ? windowSeconds : 60L);
         this.minSamples = minSamples > 0 ? minSamples : 20;
         this.thresholdRate = (thresholdRate > 0 && thresholdRate <= 1) ? thresholdRate : 0.5;
         this.cooldown = Duration.ofSeconds(cooldownSeconds >= 0 ? cooldownSeconds : 300L);
+    }
+
+    /**
+     * Publish-only convenience constructor (no durable archive, log-only sink). Retained so unit tests
+     * and any caller holding just an {@link EventPublisher} can build the monitor directly.
+     */
+    public DeclineSpikeMonitor(EventPublisher eventPublisher,
+                               Clock clock,
+                               long windowSeconds,
+                               int minSamples,
+                               double thresholdRate,
+                               long cooldownSeconds) {
+        this(new OpsAlertPipeline(Objects.requireNonNull(eventPublisher)), clock,
+                windowSeconds, minSamples, thresholdRate, cooldownSeconds);
     }
 
     /**
@@ -93,18 +122,18 @@ public class DeclineSpikeMonitor {
             alert = w.evaluate(subjectRef, now);
         }
         if (alert != null) {
-            publish(alert);
+            emit(alert);
         }
     }
 
-    private void publish(OpsAlertPayload alert) {
+    private void emit(OpsAlertPayload alert) {
         try {
-            eventPublisher.publish(new OpsAlertEvent(alert));
-            log.warn("published DECLINE_SPIKE ops alert: severity={} subject={} {}",
-                    alert.severity(), alert.subjectRef(), alert.detail());
+            pipeline.emit(alert);
         } catch (RuntimeException e) {
-            // Alerting must never break the pay path; the broker publisher may throw.
-            log.error("failed to publish DECLINE_SPIKE ops alert ({}): {}", alert.detail(), e.getMessage(), e);
+            // The pipeline guards each leg itself; this is the belt-and-braces guarantee that nothing
+            // on the alerting path can ever propagate into the pay path.
+            log.error("failed to emit DECLINE_SPIKE ops alert ({}): {}",
+                    alert.detail(), e.getMessage(), e);
         }
     }
 

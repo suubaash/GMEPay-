@@ -45,6 +45,13 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     private final Map<String, PartnerView> draftStore = new LinkedHashMap<>();
     /** Stand-in for {@code partners_id_seq} so the stub-issued surrogate ids look real. */
     private final AtomicLong surrogateSeq = new AtomicLong(900_000L);
+    /**
+     * Surrogate id per seeded partner code, allocated on first {@link #getPartnerView} and then
+     * STABLE for the lifetime of the stub — the seeded {@link PartnerSummary} rows carry no id, but
+     * a code -> id mapping has to be repeatable or the numeric-id-keyed upstreams (auth-identity,
+     * notification-webhook, transaction-mgmt) would be queried under a different id each call.
+     */
+    private final Map<String, Long> seededSurrogateIds = new LinkedHashMap<>();
     /** Slice 2 contact sets — keyed by partner_code, mirrors the bulk-replace semantics. */
     private final Map<String, List<com.gme.pay.contracts.ContactView>> contactStore = new LinkedHashMap<>();
     /** Stand-in for the {@code partner_contact} BIGSERIAL. */
@@ -83,6 +90,48 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public PartnerSummary getPartner(String partnerId) {
         return store.get(partnerId);
+    }
+
+    /**
+     * Canonical single-partner read (gap T1-3). A draft created through this stub already IS a
+     * {@link PartnerView}, so that wins; otherwise the seeded four-field summary is widened via
+     * {@link PartnerView#ofCore} using the surrogate id this stub allocated for the code.
+     *
+     * <p>{@code goLiveAt} is deliberately left {@code null}: the stub has no activation history,
+     * and inventing one is exactly the fabricated {@code onboardedAt} that gap T1-3 removed.
+     */
+    @Override
+    public synchronized PartnerView getPartnerView(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return null;
+        }
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft != null) {
+            return draft;
+        }
+        PartnerSummary summary = store.get(partnerCode);
+        if (summary == null) {
+            return null;
+        }
+        return PartnerView.ofCore(
+                seededSurrogateIds.computeIfAbsent(
+                        partnerCode, code -> surrogateSeq.incrementAndGet()),
+                summary.partnerId(),
+                parseType(summary.type()),
+                summary.settlementCurrency(),
+                summary.settlementRoundingMode());
+    }
+
+    /** Best-effort {@link PartnerType} parse for the stub's String-typed summaries. */
+    private static PartnerType parseType(String type) {
+        if (type == null || type.isBlank()) {
+            return null;
+        }
+        try {
+            return PartnerType.valueOf(type.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Override
@@ -188,7 +237,10 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 prior.status(),
                 prior.validFrom(),
                 prior.validTo(),
-                Instant.now());
+                Instant.now(),
+                // Activation instant is carried forward, never re-stamped: go_live_at marks the
+                // FIRST activation and a currency-split edit is not one.
+                prior.goLiveAt());
         draftStore.put(partnerCode, merged);
         return merged;
     }
@@ -1621,7 +1673,9 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 PartnerStatus.ONBOARDING,
                 Instant.EPOCH,
                 null,
-                Instant.now());
+                Instant.now(),
+                // A fresh ONBOARDING draft has never gone live -> no activation instant.
+                null);
     }
 
     /** Apply non-null Step-1 fields from the request onto the prior view, returning a new PartnerView. */
@@ -1661,7 +1715,9 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 PartnerStatus.ONBOARDING,
                 prior.validFrom(),
                 prior.validTo(),
-                Instant.now());
+                Instant.now(),
+                // Carried forward: a step-1 identity edit never (re-)activates a partner.
+                prior.goLiveAt());
     }
 
     private static RoundingMode parseMode(String raw) {
