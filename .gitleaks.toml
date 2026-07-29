@@ -198,6 +198,14 @@ paths = [
   '''^services/config-registry/src/test/resources/certs/.*\.pem$''',
   # The GME Internal Root CA *public* certificate every Dockerfile imports.
   '''^docker/certs/gme-root-ca\.crt$''',
+  # This config's own test harness. It PLANTS 15 fabricated secrets and asserts
+  # every one is still caught, which is what stops an over-broad allowlist here
+  # from silencing a real credential. Those planted values are necessarily
+  # credential-shaped, so without this entry the checker permanently reports
+  # itself and the blocking `secret-scan` job can never be green. The file
+  # contains no live secret by construction — every value in it exists to be
+  # detected. Verified: all 22 self-findings originate in this one file.
+  '''^scripts/check_gitleaks_config\.py$''',
 
   # Lockfiles: their integrity hashes read as high-entropy secrets. Vulnerable
   # *versions* in these files are the dependency-scan job's business, not the
