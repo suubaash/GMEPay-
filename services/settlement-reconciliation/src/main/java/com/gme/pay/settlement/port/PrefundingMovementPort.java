@@ -15,10 +15,18 @@ import java.util.List;
 public interface PrefundingMovementPort {
 
     /**
-     * USD deductions recorded against {@code partnerCode}'s float on {@code settlementDate}.
+     * <b>All</b> USD float movements recorded against {@code partnerCode} on {@code settlementDate} —
+     * deductions <em>and</em> credits back (reversals), each signed per
+     * {@link PrefundingMovement#amountUsd()}.
+     *
+     * <p>Implementations MUST return the <b>complete</b> set for the date. Since T2-8 prefunding
+     * publishes a date-ranged, paged movement query with a total count, so a partial read is
+     * detectable and must be either completed or reported — never quietly returned as if it were the
+     * whole day. That matters because a movement missing from this leg becomes a MISSING_PREFUNDING
+     * break, i.e. a fabricated finance exception.
      *
      * @param partnerCode    prefunding partner code (e.g. {@code SENDMN})
-     * @param settlementDate business date being reconciled
+     * @param settlementDate business date being reconciled, in the corridor's settlement timezone
      * @return matching movements; empty (never null) when there were none or the source is
      *         unreachable. An empty list from an unreachable source would show up as
      *         MISSING_PREFUNDING breaks, so implementations MUST log loudly on transport failure.

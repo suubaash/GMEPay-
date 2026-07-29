@@ -17,7 +17,9 @@ import org.springframework.context.annotation.Configuration;
  * ({@code POST /v1/prefunding/{id}/deduct|credit|reverse|reserve|capture|release|cumulative-*},
  * {@code PUT .../credit-limit}, {@code POST /v1/prefunding/provision},
  * {@code POST /internal/v1/prefunding/{id}/deduct|reverse|reserve|release}) or <b>reads</b> it
- * ({@code GET .../balance|alerts|deductions}). The only legitimate callers are other GMEPay+
+ * ({@code GET .../balance|alerts|deductions|movements} — the last being a complete float statement
+ * for a partner over a date range, so if anything it is the most disclosive read here). The only
+ * legitimate callers are other GMEPay+
  * services. The actual gate is the shared {@link InternalAuthFilter} installed by lib-errors'
  * {@link InternalAuthAutoConfiguration} — see {@code application.properties}.
  *

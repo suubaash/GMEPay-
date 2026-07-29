@@ -97,7 +97,11 @@ class InternalAuthGateTest {
                         "{\"creditLimit\":\"500.00\"}"),
                 Arguments.of(HttpMethod.GET, "/v1/prefunding/" + PARTNER + "/balance", null),
                 Arguments.of(HttpMethod.GET, "/v1/prefunding/" + PARTNER + "/alerts", null),
-                Arguments.of(HttpMethod.GET, "/v1/prefunding/" + PARTNER + "/deductions", null));
+                Arguments.of(HttpMethod.GET, "/v1/prefunding/" + PARTNER + "/deductions", null),
+                // T2-8: the date-ranged movement query is a complete float statement for a partner
+                // over a window — strictly MORE disclosive than /deductions, so it is gated too.
+                Arguments.of(HttpMethod.GET, "/v1/prefunding/" + PARTNER
+                        + "/movements?from=2026-07-28T00:00:00Z&to=2026-07-29T00:00:00Z", null));
     }
 
     @ParameterizedTest(name = "no credential → 401: {0} {1}")

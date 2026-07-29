@@ -14,7 +14,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -580,6 +587,179 @@ public class PrefundingService {
 
     /** One deduction-history row: USD amount, the instant applied, and the originating txnRef. */
     public record DeductionHistoryRow(BigDecimal amountUsd, Instant at, String txnRef) {}
+
+    // ---- date-ranged float movements (GAP T2-8: finance / reconciliation read surface) ----
+
+    /** Direction label for an entry that reduces the partner's balance. */
+    public static final String DIRECTION_DEBIT = "DEBIT";
+    /** Direction label for an entry that increases the partner's balance. */
+    public static final String DIRECTION_CREDIT = "CREDIT";
+    /** Direction label for an entry that records something OTHER than a balance movement. */
+    public static final String DIRECTION_NONE = "NONE";
+
+    /**
+     * Every {@code entry_type} the ledger can hold — the vocabulary the {@code types} filter of
+     * {@code GET /v1/prefunding/{code}/movements} validates against. An unrecognised type is rejected
+     * rather than silently matching nothing: a typo that returned an empty page would read to a
+     * finance control exactly like "no movements happened".
+     */
+    public static final List<String> ALL_ENTRY_TYPES = List.of(
+            ENTRY_DEBIT, ENTRY_CREDIT, ENTRY_RESERVE, ENTRY_CAPTURE, ENTRY_RELEASE,
+            ENTRY_CUM_CHARGE, ENTRY_CUM_REVERSE);
+
+    /**
+     * The subset of entry types that actually move the balance: {@code DEBIT} and {@code CAPTURE}
+     * (down), {@code CREDIT} (up — this is what a reversal writes). Holds ({@code RESERVE},
+     * {@code RELEASE}) and the AML cumulative counters ({@code CUM_CHARGE}, {@code CUM_REVERSE})
+     * are excluded because they leave the balance untouched.
+     */
+    public static final List<String> BALANCE_MOVEMENT_TYPES =
+            List.of(ENTRY_DEBIT, ENTRY_CREDIT, ENTRY_CAPTURE);
+
+    /** Largest page a single movements request may ask for. */
+    public static final int MOVEMENTS_MAX_PAGE_SIZE = 1000;
+
+    /** Page size used when the caller does not specify one. */
+    public static final int MOVEMENTS_DEFAULT_PAGE_SIZE = 200;
+
+    /**
+     * All float movements for one partner in a date range, <b>paged</b> so the caller can tell a
+     * partial read from a complete one (GAP T2-8).
+     *
+     * <p>Window semantics: {@code [from, to)} — {@code from} <b>inclusive</b>, {@code to}
+     * <b>exclusive</b>. Consecutive windows therefore tile the timeline exactly once, which is the
+     * property a per-day reconciliation needs: an entry stamped precisely at a boundary belongs to
+     * one day only, so it can be neither double-counted nor lost.
+     *
+     * <p>Ordering is {@code created_at ASC, id ASC} — oldest first, with the surrogate key as
+     * tie-break so entries sharing an instant have one stable position and cannot repeat or vanish
+     * across page boundaries. (The older {@code recentDeductions} feed is newest-first because it
+     * backs a "recent activity" widget; a range query is a ledger read and reads forward.)
+     *
+     * <p>Unlike {@code recentDeductions} this method applies <b>no implicit cap</b>. {@code size}
+     * bounds one page (clamped to 1..{@value #MOVEMENTS_MAX_PAGE_SIZE}); the returned
+     * {@link MovementPage#totalElements()} and {@link MovementPage#hasNext()} tell the caller exactly
+     * how much more there is, so a set larger than any single page is walked in full rather than
+     * silently truncated.
+     *
+     * @param types entry types to include; {@code null}/empty means every type. Each must be a member
+     *              of {@link #ALL_ENTRY_TYPES} — an unknown value is a 400, never an empty result.
+     * @throws ApiException {@code VALIDATION_ERROR} if the window is absent/inverted or a type is unknown
+     */
+    @Transactional(readOnly = true)
+    public MovementPage movements(String partnerId, Instant from, Instant to,
+                                  Collection<String> types, int page, int size) {
+        if (from == null || to == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "from and to are required (ISO-8601 instants; from inclusive, to exclusive)");
+        }
+        if (!from.isBefore(to)) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "to (" + to + ") must be strictly after from (" + from + ") — the window is "
+                            + "half-open [from, to), so an empty or inverted range can never match");
+        }
+        int pageIndex = Math.max(page, 0);
+        int pageSize = size <= 0 ? MOVEMENTS_DEFAULT_PAGE_SIZE
+                : Math.min(size, MOVEMENTS_MAX_PAGE_SIZE);
+        List<String> filter = normaliseTypes(types);
+
+        Pageable pageable = PageRequest.of(pageIndex, pageSize,
+                Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+        Page<LedgerEntryEntity> found = filter.isEmpty()
+                ? ledger.findByPartnerIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                        partnerId, from, to, pageable)
+                : ledger.findByPartnerIdAndEntryTypeInAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                        partnerId, filter, from, to, pageable);
+
+        List<MovementRow> rows = found.getContent().stream()
+                .map(e -> new MovementRow(e.getId(), e.getTxnRef(), e.getEntryType(), e.getAmount(),
+                        balanceDelta(e.getEntryType(), e.getAmount()), direction(e.getEntryType()),
+                        e.getCurrency(), e.getCreatedAt()))
+                .toList();
+        return new MovementPage(rows, pageIndex, pageSize, found.getTotalElements(),
+                found.getTotalPages(), found.hasNext());
+    }
+
+    /** Validates + upper-cases the requested type filter; empty result means "no filter". */
+    private static List<String> normaliseTypes(Collection<String> types) {
+        if (types == null) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>(types.size());
+        for (String t : types) {
+            if (t == null || t.isBlank()) {
+                continue;
+            }
+            String upper = t.trim().toUpperCase(Locale.ROOT);
+            if (!ALL_ENTRY_TYPES.contains(upper)) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "unknown ledger entry type '" + t.trim() + "' — known types are "
+                                + ALL_ENTRY_TYPES);
+            }
+            if (!out.contains(upper)) {
+                out.add(upper);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Signed effect of one ledger entry on the partner's balance. DEBIT and CAPTURE reduce it;
+     * CREDIT (a top-up or a reversal) increases it; holds and AML counters are zero because they
+     * never touch the balance. Exposing this rather than making every consumer re-derive the sign
+     * from a type string is the point: the reconciliation nets a deduct against its reversal without
+     * having to know prefunding's internal vocabulary.
+     */
+    static BigDecimal balanceDelta(String entryType, BigDecimal amount) {
+        if (amount == null || entryType == null) {
+            return BigDecimal.ZERO;
+        }
+        return switch (entryType) {
+            case ENTRY_DEBIT, ENTRY_CAPTURE -> amount.negate();
+            case ENTRY_CREDIT -> amount;
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    /** Balance-movement direction of an entry type: DEBIT (down), CREDIT (up) or NONE. */
+    static String direction(String entryType) {
+        if (entryType == null) {
+            return DIRECTION_NONE;
+        }
+        return switch (entryType) {
+            case ENTRY_DEBIT, ENTRY_CAPTURE -> DIRECTION_DEBIT;
+            case ENTRY_CREDIT -> DIRECTION_CREDIT;
+            default -> DIRECTION_NONE;
+        };
+    }
+
+    /**
+     * One float movement.
+     *
+     * @param ledgerEntryId   the append-only ledger row's surrogate key — a stable citation for an
+     *                        auditor, and the tie-break that makes paging deterministic
+     * @param txnRef          reference the movement was keyed on ({@code null} for an operator
+     *                        top-up, which belongs to no transaction)
+     * @param entryType       prefunding's raw ledger type (DEBIT / CREDIT / CAPTURE / …)
+     * @param amountUsd       the magnitude exactly as stored, unsigned semantics per {@code entryType}
+     * @param balanceDeltaUsd signed change to the balance — negative = float consumed, positive =
+     *                        float returned, zero = no balance movement (hold / AML counter)
+     * @param direction       {@link #DIRECTION_DEBIT} / {@link #DIRECTION_CREDIT} / {@link #DIRECTION_NONE}
+     * @param currency        float currency (USD today)
+     * @param at              instant the movement was applied
+     */
+    public record MovementRow(Long ledgerEntryId, String txnRef, String entryType,
+                              BigDecimal amountUsd, BigDecimal balanceDeltaUsd, String direction,
+                              String currency, Instant at) {}
+
+    /**
+     * One page of movements plus the totals that make truncation impossible to miss.
+     *
+     * @param totalElements movements matching the whole window, not just this page
+     * @param hasNext       true when at least one more page exists — the caller's loop condition
+     */
+    public record MovementPage(List<MovementRow> rows, int page, int size, long totalElements,
+                               int totalPages, boolean hasNext) {}
 
     /** Net active hold for a (partner, txnRef) = sum RESERVE - sum CAPTURE - sum RELEASE. */
     private BigDecimal activeReservation(String partnerId, String txnRef) {

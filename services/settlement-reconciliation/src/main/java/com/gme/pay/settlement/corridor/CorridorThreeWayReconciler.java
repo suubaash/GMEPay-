@@ -38,7 +38,10 @@ import java.util.Set;
  * <p>The three legs, joined on the hub partner reference:
  * <ol>
  *   <li>{@link SchemeTransactionPort} — our transaction records (KRW charged, local paid, USD deducted);</li>
- *   <li>{@link PrefundingMovementPort} — our prefunding USD movements;</li>
+ *   <li>{@link PrefundingMovementPort} — our prefunding USD movements, <b>signed</b>: deductions and
+ *       reversals both, so movements for one reference sum to the NET float consumed (T2-8). This leg
+ *       used to be the weak one — it windowed a 500-row-capped, deductions-only endpoint client-side —
+ *       and is now a complete, paged, date-ranged read;</li>
  *   <li>{@link SchemeSettlementPort} — the adapter's record of what the scheme confirmed, with the
  *       registered rate and the USD owed.</li>
  * </ol>
@@ -139,6 +142,8 @@ public class CorridorThreeWayReconciler {
         }
         // Multiple movements / scheme rows for one reference are SUMMED, never collapsed: a duplicate
         // deduct or a double-confirmed payment must show up as an amount discrepancy, not be hidden.
+        // Since T2-8 the movements are SIGNED (positive = float consumed, negative = credited back),
+        // so the sum is the NET float consumed and a deduct nets against its own reversal here.
         Map<String, BigDecimal> prefundingByRef = new LinkedHashMap<>();
         for (PrefundingMovement m : movements) {
             if (m.reference() == null || m.amountUsd() == null) {
@@ -156,7 +161,18 @@ public class CorridorThreeWayReconciler {
 
         Set<String> references = new LinkedHashSet<>();
         references.addAll(txnByRef.keySet());
-        references.addAll(prefundingByRef.keySet());
+        // A prefunding-only reference whose movements NET TO ZERO consumed no float — the deduct was
+        // fully reversed — so on its own it is not a finding. Before T2-8 reversals were invisible,
+        // so such a reference looked like a live deduction and, because a reversed payment never
+        // becomes an APPROVED transaction, produced a MISSING_INTERNAL break for a payment that
+        // correctly did not happen. The filter applies to the UNION, not to the map: a reference some
+        // other leg does claim is still classified, and classify() still sees the zero (an APPROVED
+        // transaction whose float was reversed is a genuine DISCREPANCY, not a clean line).
+        for (Map.Entry<String, BigDecimal> e : prefundingByRef.entrySet()) {
+            if (e.getValue().signum() != 0) {
+                references.add(e.getKey());
+            }
+        }
         references.addAll(schemeByRef.keySet());
 
         List<ThreeWayLine> lines = new ArrayList<>(references.size());

@@ -107,11 +107,14 @@ gmepay:
     SENDMN:
       base-url: ${SCHEME_ADAPTER_SENDMN_URL:http://scheme-adapter-sendmn:8093}
   # Service-to-service internal-auth token (com.gme.pay.internalauth, #90). OUTBOUND only for this
-  # service: scheme-adapter-zeropay's /internal/** — including the §8.2 registration-status
-  # projection RestRegistrationStatusClient consults — is behind the gate since T0-2, so the token
-  # must ride on that call. NO default value: it comes from GMEPAY_INTERNAL_AUTH_SECRET. Blank ⇒ no
-  # header ⇒ the gated adapter answers 401 ⇒ the prerequisite fails CLOSED and settlement generation
-  # is blocked. Fail-closed, never a bypass.
+  # service, and now needed by TWO callers:
+  #   - scheme-adapter-zeropay's /internal/** — including the §8.2 registration-status projection
+  #     RestRegistrationStatusClient consults — behind the gate since T0-2. Blank ⇒ no header ⇒ 401
+  #     ⇒ the prerequisite fails CLOSED and settlement generation is blocked.
+  #   - prefunding's WHOLE surface (T0-5), which RestPrefundingMovementClient reads for corridor
+  #     tie-out leg (b). Blank ⇒ no header ⇒ 401 ⇒ leg (b) comes back empty and every line breaks
+  #     as MISSING_PREFUNDING. Loud and wrong-in-the-safe-direction, but it must be set.
+  # NO default value: it comes from GMEPAY_INTERNAL_AUTH_SECRET. Fail-closed, never a bypass.
   internal-auth:
     secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
 

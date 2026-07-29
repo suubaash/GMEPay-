@@ -310,6 +310,84 @@ class CorridorThreeWayReconcilerTest {
     }
 
     // ---------------------------------------------------------------------------------
+    // Reversals (T2-8: leg (b) now reports credits back, signed)
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a fully reversed deduct with no transaction is NOT a break — the old blind spot")
+    void fullyReversedFloatMovementIsNotABreak() {
+        // Before T2-8 leg (b) showed deductions only, so this reference looked like live consumed
+        // float with no APPROVED transaction behind it → a MISSING_INTERNAL break for a payment that
+        // correctly never completed. With the CREDIT leg visible the movements net to zero and there
+        // is nothing to report.
+        txns = List.of();
+        schemeRecords = List.of();
+        movements = List.of(
+                new PrefundingMovement("SENDMN-rev", new BigDecimal("75.00"), AT, "DEBIT"),
+                new PrefundingMovement("SENDMN-rev", new BigDecimal("-75.00"), AT, "CREDIT"));
+
+        CorridorReconResult result = reconciler.reconcile(DATE);
+
+        assertThat(result.lines()).isEmpty();
+        assertThat(savedExceptions).isEmpty();
+        assertThat(alerts).isEmpty();
+        assertThat(result.summary().getBreakCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("an APPROVED transaction whose float was reversed IS a break — netting must not hide it")
+    void approvedTransactionWithReversedFloatIsADiscrepancy() {
+        txns = List.of(txn("SENDMN-a", "100000", "239440", "75.00"));
+        schemeRecords = List.of(schemeRow("SENDMN-a", "239440", "73.00"));
+        movements = List.of(
+                new PrefundingMovement("SENDMN-a", new BigDecimal("75.00"), AT, "DEBIT"),
+                new PrefundingMovement("SENDMN-a", new BigDecimal("-75.00"), AT, "CREDIT"));
+
+        CorridorReconResult result = reconciler.reconcile(DATE);
+
+        assertThat(result.lines()).singleElement().satisfies(l -> {
+            assertThat(l.matchStatus()).isEqualTo(MatchStatus.DISCREPANCY);
+            assertThat(l.usdMovedPrefunding()).isEqualByComparingTo("0");
+            assertThat(l.usdDeducted()).isEqualByComparingTo("75.00");
+        });
+        assertThat(savedExceptions).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("a PARTIAL reversal nets to the residual and surfaces as an amount discrepancy")
+    void partialReversalNetsToTheResidual() {
+        txns = List.of(txn("SENDMN-a", "100000", "239440", "75.00"));
+        schemeRecords = List.of(schemeRow("SENDMN-a", "239440", "73.00"));
+        movements = List.of(
+                new PrefundingMovement("SENDMN-a", new BigDecimal("75.00"), AT, "DEBIT"),
+                new PrefundingMovement("SENDMN-a", new BigDecimal("-25.00"), AT, "CREDIT"));
+
+        CorridorReconResult result = reconciler.reconcile(DATE);
+
+        assertThat(result.lines()).singleElement().satisfies(l -> {
+            assertThat(l.matchStatus()).isEqualTo(MatchStatus.DISCREPANCY);
+            assertThat(l.usdMovedPrefunding()).isEqualByComparingTo("50.00");
+        });
+    }
+
+    @Test
+    @DisplayName("a reversal on a DIFFERENT reference does not net against an unrelated clean payment")
+    void reversalsAreNettedPerReferenceOnly() {
+        givenCleanPayment("SENDMN-clean");
+        List<PrefundingMovement> m = new ArrayList<>(movements);
+        m.add(new PrefundingMovement("SENDMN-other", new BigDecimal("10.00"), AT, "DEBIT"));
+        m.add(new PrefundingMovement("SENDMN-other", new BigDecimal("-10.00"), AT, "CREDIT"));
+        movements = m;
+
+        CorridorReconResult result = reconciler.reconcile(DATE);
+
+        // The clean payment still matches, and the reversed one contributes nothing at all.
+        assertThat(result.lines()).singleElement()
+                .extracting(ThreeWayLine::matchStatus).isEqualTo(MatchStatus.MATCHED);
+        assertThat(result.summary().getRateBasisVarianceUsd()).isEqualByComparingTo("2.00");
+    }
+
+    // ---------------------------------------------------------------------------------
     // Idempotency
     // ---------------------------------------------------------------------------------
 
