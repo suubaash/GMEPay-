@@ -68,8 +68,30 @@ abi:
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
   OIDC_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
-  # Telemetry (OTLP, vendor-neutral).
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  # ---- Telemetry ----------------------------------------------------------
+  # T3-2: OTEL_EXPORTER_OTLP_ENDPOINT used to be declared here (and in all three overlays) pointing at
+  # an `otel-collector` that this chart does not deploy. It was DEAD CONFIG: no service has an
+  # OpenTelemetry SDK / OTLP exporter / micrometer-tracing on its classpath, so nothing ever read the
+  # variable, and the chart contains no collector Deployment. It has been REMOVED rather than wired,
+  # because wiring it means adding a tracer to 20 services plus a collector — real work, not a config
+  # line. Distributed tracing is an OPEN gap, stated honestly in Documentation/RUNBOOK_MONITORING.md.
+  #
+  # What DOES exist now: every service serves /actuator/prometheus (Micrometer registry on all 20
+  # deployables), gated by the platform internal token. There is still no Prometheus/Grafana/Loki
+  # deployed by this chart — scraping is the operator's, and the endpoints are the contract. Pod
+  # annotations below advertise the target so a cluster-wide Prometheus can discover it.
+
+# ---------------------------------------------------------------------------
+# Monitoring (T3-2). This chart does NOT deploy Prometheus/Grafana/Alertmanager
+# or any log aggregation — that remains an open part of T3-2. What it does is
+# advertise every pod as a scrape target for an operator-supplied Prometheus.
+# The scrape needs the platform internal token in the X-Gme-Internal header;
+# Documentation/RUNBOOK_MONITORING.md carries the scrape_configs snippet.
+# ---------------------------------------------------------------------------
+monitoring:
+  # Stamp prometheus.io/{scrape,path,port} onto every pod (kubernetes_sd convention).
+  podAnnotations: true
+  scrapePath: /actuator/prometheus
 
 # ---------------------------------------------------------------------------
 # SECRET portability ABI. `create: true` renders a chart-managed Secret from
@@ -223,21 +245,45 @@ services:
     image: transaction-mgmt
     probe: { type: tcp }
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    # T0-2: gates /actuator/metrics + /v3/api-docs; REQUIRED if devtools on.
+                    # T0-2: gates /actuator/metrics + /actuator/prometheus + /v3/api-docs;
+                    # REQUIRED if devtools on.
                     GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-txn:5432/txndb
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # ---- Stuck / UNCERTAIN transaction alert sweep: ON (gap T3-3 / COO#4) -------
+      # StuckTransactionAlertSweeper is one of only two production safety nets on the money path (the
+      # other is payment-executor's DECLINE_SPIKE monitor). Its code default is still
+      # `gmepay.txn.stuck-alert.enabled:false` -- transaction-mgmt was owned by another workstream when
+      # T3-3 landed, so it is switched on HERE and in docker-compose.yml instead, which means every
+      # SHIPPED deployment has it armed. Flipping the code default remains a one-line follow-up
+      # (see Documentation/GAP_REGISTER.md T3-3).
+      # It emits UNCERTAIN_AGED / STUCK_TXN ops.alert events via the outbox -> gmepay.ops.alert; the
+      # operator recovery action is POST /v1/transactions/{txnRef}/resolve.
+      GMEPAY_TXN_STUCK_ALERT_ENABLED: "true"
+      # Sweep every 60s; WARN once a non-terminal row is 15min old, CRITICAL at 4x that (1h).
+      GMEPAY_TXN_STUCK_ALERT_INTERVAL_MS: "60000"
+      GMEPAY_TXN_STUCK_ALERT_THRESHOLD_SECONDS: "900"
+      GMEPAY_TXN_STUCK_ALERT_CRITICAL_MULTIPLIER: "4"
+      GMEPAY_TXN_STUCK_ALERT_STATUSES: "UNCERTAIN"
 
   payment-executor:
     image: payment-executor
     probe: { type: tcp }
-    envSecretKeys: [
-                    # T0-5/T0-2: gated prefunding debit + ZeroPay authorize/commit; also gates its own GET /v1/balance.
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # T0-5/T0-2: gated prefunding debit + ZeroPay authorize/commit; also gates its own
+                    # GET /v1/balance, GET /internal/ops/alerts and /actuator/prometheus.
                     GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
+      # FOUND WHILE CLOSING T3-3: this block had NO datasource at all, so a Helm-deployed
+      # payment-executor fell back to the in-code H2 in-memory default and silently lost
+      # execution_attempts / idempotency_keys / payment_authorizations on every restart — and would
+      # have lost the new ops_alerts table too. docker-compose.yml has always set it; the chart did
+      # not. Same DB the compose stack uses (postgres-executor / `executor`).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-executor:5432/executor
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
@@ -246,6 +292,16 @@ services:
       GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      # ---- Ops alert notification sink (gap T3-3) ----------------------------------
+      # DECLINE_SPIKE is ON by default (application.properties) and every alert is persisted to
+      # ops_alerts before publish, readable at GET /internal/ops/alerts (internal-token gated).
+      # To PAGE A HUMAN, uncomment ONE line and give it your pager/Slack/Opsgenie webhook URL. It is
+      # deliberately left unset: @ConditionalOnProperty matches an EMPTY value, so a blank URL would
+      # activate the webhook sink with no target and fail every delivery. Unset => LogAlertSink.
+      # There is no credential here — the token is inside the operator's URL.
+      #   GMEPAY_ALERT_SINK_WEBHOOK_URL: https://hooks.slack.com/services/REPLACE/ME
+      GMEPAY_ALERT_SINK_TIMEOUT_MS: "3000"
+      GMEPAY_ALERT_SINK_MAX_ATTEMPTS: "3"
 
   merchant-qr-data:
     image: merchant-qr-data
@@ -327,6 +383,20 @@ services:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
       SERVER_PORT: "8080"
+      # ---- Aggregate on-call paging (gap T3-3) -------------------------------------
+      # The BFF already ships the platform's paging port (PagingPort + LogPagingAdapter fallback +
+      # WebhookPagingAdapter). It consumes gmepay.ops.alert -- the consumer is
+      # @ConditionalOnProperty("spring.kafka.bootstrap-servers"), which every pod gets from the shared
+      # ABI ConfigMap, so it IS active here. Give it a target and alerts reach a human:
+      #   GMEPAY_OPS_PAGING_WEBHOOK_URL: https://hooks.slack.com/services/REPLACE/ME
+      # Left unset on purpose (an empty value would register the webhook adapter with no target).
+      #
+      # STILL OPEN (not fixable from a values file): the BFF's OpsAlertStore is an in-memory
+      # ArrayDeque capped at gmepay.ops.alerts.capacity, so the aggregate view is still lost on
+      # restart. payment-executor now persists what IT raises (ops_alerts, Flyway V006); giving the
+      # BFF a durable store is the remaining half of T3-3. Escalation
+      # (GMEPAY_OPS_PAGING_ESCALATION_ENABLED) stays off: it is documented single-replica-only, with
+      # no ShedLock, so arming it under >1 replica would double-page.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       # Live partner transactions: activate the real REST transaction-mgmt client

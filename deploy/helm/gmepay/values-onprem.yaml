@@ -34,7 +34,8 @@ abi:
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
   OIDC_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  # T3-2: the dead OTEL_EXPORTER_OTLP_ENDPOINT was removed from the base values and every overlay —
+  # no service has an OTLP exporter and no collector is deployed. See Documentation/RUNBOOK_MONITORING.md.
 
 # Credentials — PLACEHOLDERS. For real on-prem, prefer secrets.create=false and
 # a sealed-secret / Vault-backed Secret named <release>-credentials.

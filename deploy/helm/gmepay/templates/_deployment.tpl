@@ -53,6 +53,23 @@ spec:
       annotations:
         # Roll pods when the ABI config or secrets change.
         checksum/abi-config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- /*
+          T3-2 — advertise the Prometheus scrape target. Every service now really serves
+          /actuator/prometheus (Micrometer registry on all 20 deployables, endpoint exposed
+          fleet-wide by com.gme.pay.platform.MetricsExposureEnvironmentPostProcessor); before this
+          iteration the path 404'd everywhere despite comments claiming otherwise.
+
+          These annotations are the discovery convention for a kubernetes_sd Prometheus. They do NOT
+          deploy Prometheus — this chart still ships no monitoring stack, which stays an open part of
+          T3-2. The scrape requires the platform internal token (X-Gme-Internal), so the scrape job
+          also needs that header; see Documentation/RUNBOOK_MONITORING.md for the scrape_configs
+          snippet. Set monitoring.podAnnotations=false to suppress them.
+        */}}
+        {{- if $root.Values.monitoring.podAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: {{ $root.Values.monitoring.scrapePath | quote }}
+        prometheus.io/port: {{ $port | quote }}
+        {{- end }}
     spec:
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:

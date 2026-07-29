@@ -45,7 +45,7 @@ the **portability ABI**. These names are the exact ones the services read
 | Mongo           | `SPRING_DATA_MONGODB_URI`                                                                                  |
 | Object store    | `GMEPAY_VAULT_ENDPOINT`, `GMEPAY_VAULT_REGION`, `GMEPAY_VAULT_ACCESSKEY`, `GMEPAY_VAULT_SECRETKEY`, `GMEPAY_VAULT_PATH_STYLE` |
 | OIDC            | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` (provider-neutral alias `OIDC_ISSUER_URI`)         |
-| Telemetry       | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                              |
+| Telemetry       | *(none)* — `OTEL_EXPORTER_OTLP_ENDPOINT` was removed as dead config (gap T3-2): no service ships an OTLP exporter and no collector is deployed. Metrics are **pulled** from each pod's `/actuator/prometheus` (internal-token gated), which needs no injected endpoint at all. Tracing remains an open gap. |
 
 Non-secret values (endpoints, region, flags, issuer) ride in one **ConfigMap**
 mounted via `envFrom`. Credentials ride in a **K8s Secret** that is *never

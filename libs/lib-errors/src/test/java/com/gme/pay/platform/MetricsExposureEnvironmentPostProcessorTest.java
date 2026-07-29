@@ -117,6 +117,46 @@ class MetricsExposureEnvironmentPostProcessorTest {
     }
 
     @Test
+    @DisplayName("defaults the application metric tag from spring.application.name")
+    void defaultsTheApplicationTag() {
+        StandardEnvironment env = envWith(Map.of(
+                MetricsExposureEnvironmentPostProcessor.INCLUDE_KEY, "health,info,metrics",
+                MetricsExposureEnvironmentPostProcessor.APPLICATION_NAME_KEY, "prefunding"));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(MetricsExposureEnvironmentPostProcessor.APPLICATION_TAG_KEY))
+                .as("every series must be attributable to a service")
+                .isEqualTo("prefunding");
+    }
+
+    @Test
+    @DisplayName("a service's own application tag is never overridden")
+    void doesNotClobberAnExplicitApplicationTag() {
+        StandardEnvironment env = envWith(Map.of(
+                MetricsExposureEnvironmentPostProcessor.INCLUDE_KEY, "health,info,metrics",
+                MetricsExposureEnvironmentPostProcessor.APPLICATION_NAME_KEY, "payment-executor",
+                MetricsExposureEnvironmentPostProcessor.APPLICATION_TAG_KEY, "custom-name"));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(MetricsExposureEnvironmentPostProcessor.APPLICATION_TAG_KEY))
+                .isEqualTo("custom-name");
+    }
+
+    @Test
+    @DisplayName("no spring.application.name → no tag invented")
+    void skipsTheTagWhenThereIsNoApplicationName() {
+        StandardEnvironment env = envWith(Collections.singletonMap(
+                MetricsExposureEnvironmentPostProcessor.INCLUDE_KEY, "health,info,metrics"));
+
+        processor.postProcessEnvironment(env, null);
+
+        assertThat(env.getProperty(MetricsExposureEnvironmentPostProcessor.APPLICATION_TAG_KEY))
+                .isNull();
+    }
+
+    @Test
     @DisplayName("registered in spring.factories so every service inherits it")
     void registeredInSpringFactories() throws Exception {
         String factories;

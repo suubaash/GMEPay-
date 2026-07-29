@@ -42,8 +42,8 @@ abi:
   # (split-horizon DNS / private-only Keycloak). Keeping it unset lets discovery
   # run against the issuer above, which is correct for a publicly resolvable IdP.
   # SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
-  # OTLP -> ADOT collector / managed OTLP endpoint.
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://adot-collector.observability.svc:4317
+  # T3-2: the dead OTEL_EXPORTER_OTLP_ENDPOINT was removed from the base values and every overlay —
+  # no service has an OTLP exporter and no collector is deployed. See Documentation/RUNBOOK_MONITORING.md.
 
 # Prefer External Secrets Operator pulling from AWS Secrets Manager: set
 # create:false and provision <release>-credentials. Placeholders shown for

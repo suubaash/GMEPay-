@@ -556,6 +556,21 @@ services:
       # Inert until spring-kafka lands on the module classpath (17.4-G0x); the
       # internal listener address is already correct for that moment.
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # ---- Stuck / UNCERTAIN transaction alert sweep: ON (gap T3-3 / COO#4) ----
+      # StuckTransactionAlertSweeper is one of only two production safety nets on the money path (the
+      # other is payment-executor's DECLINE_SPIKE monitor) and both used to be default-OFF, so a stuck
+      # payment or a 3am decline spike alerted nobody. Its CODE default is still
+      # gmepay.txn.stuck-alert.enabled=false -- transaction-mgmt was owned by another workstream when
+      # T3-3 landed, so it is armed here (and in deploy/helm/gmepay/values.yaml) instead, which means
+      # every SHIPPED deployment has it on. Flipping the code default is a one-line follow-up.
+      # Emits UNCERTAIN_AGED / STUCK_TXN ops.alert via the outbox -> gmepay.ops.alert. Operator
+      # recovery action: POST /v1/transactions/{txnRef}/resolve.
+      GMEPAY_TXN_STUCK_ALERT_ENABLED: "true"
+      # Sweep every 60s; WARN at 15min in a non-terminal state, CRITICAL at 4x that (1h).
+      GMEPAY_TXN_STUCK_ALERT_INTERVAL_MS: "60000"
+      GMEPAY_TXN_STUCK_ALERT_THRESHOLD_SECONDS: "900"
+      GMEPAY_TXN_STUCK_ALERT_CRITICAL_MULTIPLIER: "4"
+      GMEPAY_TXN_STUCK_ALERT_STATUSES: "UNCERTAIN"
       # Introspection gate (T0-2). transaction-mgmt boots fine without this (its /__data ledger dump
       # is off by default), but with a secret present /actuator/metrics + /v3/api-docs + /swagger-ui/**
       # stop being anonymous. If GMEPAY_DEVTOOLS_ENABLED is ever set true this becomes mandatory —
@@ -599,9 +614,22 @@ services:
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
       # OUTBOUND + own gate (T0-5 / T0-2). payment-executor boots without this but every payment
       # DECLINES: its prefunding debit (RestPrefundingClient) and its ZeroPay authorize/commit
-      # (RestSchemeClient) both hit gated /internal/** surfaces. It also gates its own GET /v1/balance
-      # and, when a dev surface is on, /__data + /v1/sandbox/e2e/**.
+      # (RestSchemeClient) both hit gated /internal/** surfaces. It also gates its own GET /v1/balance,
+      # GET /internal/ops/alerts, /actuator/prometheus and, when a dev surface is on,
+      # /__data + /v1/sandbox/e2e/**.
       GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret
+      # ---- Ops alert notification sink (gap T3-3) ----
+      # DECLINE_SPIKE is ON by default and every alert it raises is persisted to ops_alerts
+      # (Flyway V006) before publish -- readable at GET /internal/ops/alerts with the token above, so
+      # alerts no longer vanish on restart. To PAGE A HUMAN, set this to your pager / Slack /
+      # Opsgenie / MS-Teams webhook URL; nothing else changes and no credential lives in this file
+      # (the token is inside the operator's URL). Leave it UNSET to keep the log-only fallback:
+      # @ConditionalOnProperty matches an EMPTY value, so a blank URL would activate the webhook sink
+      # with no target and fail every delivery. See Documentation/RUNBOOK_MONITORING.md.
+      # Blank/unset => LogAlertSink (AlertSinkConfig treats a blank URL as 'not configured', so
+      # `${VAR:-}` cannot activate a broken sink). Put the real URL in a .env file next to this
+      # compose file; nothing secret is committed.
+      GMEPAY_ALERT_SINK_WEBHOOK_URL: ${GMEPAY_ALERT_SINK_WEBHOOK_URL:-}
     depends_on:
       postgres-executor: { condition: service_healthy }
       config-registry: { condition: service_healthy }

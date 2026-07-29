@@ -1,5 +1,6 @@
 package com.gme.pay.gateway.config;
 
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,11 +14,16 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.oauth2.server.resource.authentication.ReactiveJwtAuthenticationConverterAdapter;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
 import org.springframework.core.annotation.Order;
+import org.springframework.web.server.WebFilter;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -54,9 +60,11 @@ import java.util.stream.Stream;
  *       the security layer delegates partner authentication to the HMAC filter, which
  *       still rejects missing/invalid signatures with 401 — so this does not weaken
  *       partner security, it relocates it to the correct layer.</li>
- *   <li><b>{@code @Order(1)} default chain</b> — health + Prometheus actuator endpoints
- *       are anonymous; everything else requires a valid Keycloak JWT (realm roles mapped
- *       to {@code ROLE_*}). This governs human/admin + BFF-originated traffic.</li>
+ *   <li><b>{@code @Order(1)} default chain</b> — health actuator endpoints are anonymous
+ *       (container probes); the Prometheus scrape requires the platform internal token
+ *       (T3-2, see {@link #metricsScrapeSecurityFilterChain}); everything else requires a
+ *       valid Keycloak JWT (realm roles mapped to {@code ROLE_*}). This governs
+ *       human/admin + BFF-originated traffic.</li>
  * </ul>
  *
  * <p>CSRF is disabled because the gateway only sees machine-to-machine traffic plus
@@ -65,6 +73,13 @@ import java.util.stream.Stream;
 @Configuration
 @EnableWebFluxSecurity
 public class SecurityConfig {
+
+    /**
+     * The Prometheus scrape path (T3-2). Gated by the platform internal token in
+     * {@link #metricsScrapeSecurityFilterChain}, NOT anonymous — the gateway is the one
+     * internet-reachable service. Visible for test usage.
+     */
+    public static final String PROMETHEUS_PATH = "/actuator/prometheus";
 
     /**
      * Spring authority prefix that {@code hasRole("OPERATOR")} expects.
@@ -112,8 +127,70 @@ public class SecurityConfig {
     }
 
     /**
+     * Prometheus scrape chain (T3-2) — {@code /actuator/prometheus} behind the platform internal token.
+     *
+     * <p>Before this existed, the {@code @Order(1)} chain below {@code permitAll}'d
+     * {@code /actuator/prometheus} on the ONE service that is internet-reachable through the ingress.
+     * The endpoint did not actually exist at the time (no Micrometer registry anywhere — that was gap
+     * T3-2), so nothing leaked; making the endpoint real without also gating it would have turned a
+     * dead comment into a live anonymous disclosure of route names, per-partner request volumes and
+     * latency histograms.
+     *
+     * <p>Rather than requiring a Keycloak JWT (a scraper is a machine, not a human, and the gateway is
+     * not an OIDC client), this reuses the platform's service-to-service mechanism: the same
+     * {@code X-Gme-Internal} shared token every other service's introspection surface uses
+     * ({@code gmepay.internal-auth.secret}). A scraper adds one static header — see
+     * {@code Documentation/RUNBOOK_MONITORING.md} for the {@code scrape_configs} snippet.
+     *
+     * <p><b>Fail-closed.</b> With a blank secret (a bare local run) no presented token can match, so the
+     * scrape answers 401 to everyone rather than being anonymous. That is deliberately stricter than the
+     * servlet services' "opportunistic" gate, because this is the edge.
+     *
+     * <p>Ordered ahead of the default chain and behind the partner chain, and scoped by
+     * {@code securityMatcher} to exactly one path, so no other route's authorisation changes.
+     */
+    @Bean
+    @Order(-1)
+    public SecurityWebFilterChain metricsScrapeSecurityFilterChain(
+            ServerHttpSecurity http,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        http
+                .securityMatcher(ServerWebExchangeMatchers.pathMatchers(PROMETHEUS_PATH))
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                // Authorisation is the token check in the WebFilter below; Spring Security itself has no
+                // principal to authenticate here.
+                .authorizeExchange(ex -> ex.anyExchange().permitAll())
+                .addFilterAt(internalTokenGate(internalSecret), SecurityWebFiltersOrder.AUTHENTICATION);
+        return http.build();
+    }
+
+    /**
+     * Constant-time {@code X-Gme-Internal} check for the scrape path. A miss is answered
+     * {@code 401} without a body (a scraper does not read error envelopes, and an error body on an
+     * unauthenticated edge is just more disclosure).
+     */
+    private WebFilter internalTokenGate(String internalSecret) {
+        byte[] expected = internalSecret == null
+                ? new byte[0] : internalSecret.getBytes(StandardCharsets.UTF_8);
+        return (exchange, chain) -> {
+            String presented = exchange.getRequest().getHeaders()
+                    .getFirst(InternalAuthHeaders.INTERNAL_TOKEN);
+            byte[] actual = presented == null
+                    ? new byte[0] : presented.getBytes(StandardCharsets.UTF_8);
+            // A blank configured secret can never match => fail-closed, not open.
+            boolean ok = expected.length > 0 && MessageDigest.isEqual(expected, actual);
+            if (ok) {
+                return chain.filter(exchange);
+            }
+            exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+            return exchange.getResponse().setComplete();
+        };
+    }
+
+    /**
      * Default (human/admin) security chain — ADR-011. Handles everything outside the
-     * partner {@code /v1/**} surface: actuator health + Prometheus scrape are anonymous;
+     * partner {@code /v1/**} surface: actuator health probes are anonymous, the Prometheus
+     * scrape is handled by {@link #metricsScrapeSecurityFilterChain} (internal token), and
      * all other paths require a valid Keycloak JWT (realm roles mapped to {@code ROLE_*}).
      */
     @Bean
@@ -122,8 +199,9 @@ public class SecurityConfig {
         http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
                 .authorizeExchange(ex -> ex
-                        // Actuator probes + Prometheus scrape are anonymous.
-                        .pathMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
+                        // Container probes only. /actuator/prometheus is NOT here any more (T3-2):
+                        // it is gated by the internal token in the @Order(-1) chain above.
+                        .pathMatchers("/actuator/health/**").permitAll()
                         .anyExchange().authenticated()
                 )
                 .oauth2ResourceServer(rs -> rs

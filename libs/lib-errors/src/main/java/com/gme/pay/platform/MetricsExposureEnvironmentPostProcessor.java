@@ -71,6 +71,16 @@ public class MetricsExposureEnvironmentPostProcessor implements EnvironmentPostP
     static final String EXCLUDE_KEY = "management.endpoints.web.exposure.exclude";
 
     /**
+     * Common tag identifying which service a metric came from. Defaulted to
+     * {@code spring.application.name} when the service has not set it, so one Prometheus can hold the
+     * whole fleet and every series is attributable — a scrape target list of 20 identical-looking
+     * JVM metric sets is not monitoring.
+     */
+    static final String APPLICATION_TAG_KEY = "management.metrics.tags.application";
+
+    static final String APPLICATION_NAME_KEY = "spring.application.name";
+
+    /**
      * Boot's own default when a service names nothing. Kept explicit so a service without an include
      * list still keeps its container probes working after this contributor runs.
      */
@@ -85,15 +95,26 @@ public class MetricsExposureEnvironmentPostProcessor implements EnvironmentPostP
         if (environment.getPropertySources().contains(PROPERTY_SOURCE_NAME)) {
             return;
         }
+        Map<String, Object> props = new LinkedHashMap<>();
+
         String merged = mergedInclude(
                 environment.getProperty(INCLUDE_KEY),
                 environment.getProperty(EXCLUDE_KEY));
-        if (merged == null) {
-            return; // already exposed, wildcarded, or deliberately excluded — leave it alone.
+        if (merged != null) {
+            props.put(INCLUDE_KEY, merged);
         }
-        Map<String, Object> props = new LinkedHashMap<>();
-        props.put(INCLUDE_KEY, merged);
+        // Only defaulted, never overridden: a service that names its own application tag keeps it.
+        if (environment.getProperty(APPLICATION_TAG_KEY) == null) {
+            String appName = environment.getProperty(APPLICATION_NAME_KEY);
+            if (appName != null && !appName.isBlank()) {
+                props.put(APPLICATION_TAG_KEY, appName);
+            }
+        }
+        if (props.isEmpty()) {
+            return; // already exposed/tagged, wildcarded, or deliberately excluded — leave it alone.
+        }
         // addFirst => wins over the service's own include list, which is the value being extended.
+        // Safe for the application tag too, because it is only put when the service set nothing.
         environment.getPropertySources().addFirst(new MapPropertySource(PROPERTY_SOURCE_NAME, props));
     }
 

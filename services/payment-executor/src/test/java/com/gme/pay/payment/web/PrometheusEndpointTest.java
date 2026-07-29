@@ -8,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpEntity;
@@ -36,6 +37,16 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
  *   <li><b>secret configured</b> (every real deployment) — the scrape requires the platform internal
  *       token, exactly like {@code /actuator/metrics}, while container probes stay anonymous.</li>
  * </ul>
+ *
+ * <h2>Why {@code @AutoConfigureObservability} is required here</h2>
+ * <p>Spring Boot's test support deliberately switches every metrics <em>exporter</em> off inside
+ * {@code @SpringBootTest} — it injects {@code management.defaults.metrics.export.enabled=false} into a
+ * {@code test} property source, so {@code PrometheusMetricsExportAutoConfiguration} backs off and the
+ * scrape endpoint would 404 <b>in the test only</b>. That is a property of the test harness, not of the
+ * shipped service: the condition report shows this as the single reason the autoconfiguration does not
+ * apply. {@code @AutoConfigureObservability} restores the production observability wiring for this
+ * context, which is exactly what must be asserted. {@code tracing = false} because the platform ships
+ * no tracer at all (a deliberate, documented gap — see {@code Documentation/RUNBOOK_MONITORING.md}).
  */
 class PrometheusEndpointTest {
 
@@ -52,6 +63,7 @@ class PrometheusEndpointTest {
     /** Bare local run: no internal secret, so introspection is not gated on this instance. */
     @Nested
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+    @AutoConfigureObservability(tracing = false)
     @DisplayName("no internal secret configured")
     class Ungated {
 
@@ -102,6 +114,7 @@ class PrometheusEndpointTest {
     @Nested
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
             properties = "gmepay.internal-auth.secret=" + SECRET)
+    @AutoConfigureObservability(tracing = false)
     @DisplayName("internal secret configured (deployment posture)")
     class Gated {
 

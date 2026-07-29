@@ -31,9 +31,16 @@ management:
   endpoints:
     web:
       exposure:
-        # feat/actuator-health: fleet-standard surface (health,info,metrics). prometheus dropped —
-        # micrometer-registry-prometheus is not on the classpath (offline env), so the endpoint
-        # never existed; env/beans/heapdump/shutdown stay off.
+        # feat/actuator-health: fleet-standard surface (health,info,metrics).
+        #
+        # T3-2: this comment used to say "prometheus dropped -- micrometer-registry-prometheus is not on
+        # the classpath", while build.gradle's comment claimed the endpoint and SecurityConfig
+        # permitAll'd it. That contradiction WAS gap T3-2: /actuator/prometheus 404'd on all 19 services.
+        # The registry is now on every deployable's classpath (root build.gradle) and `prometheus` is
+        # appended to this include list for every service by
+        # com.gme.pay.platform.MetricsExposureEnvironmentPostProcessor (libs/lib-errors) -- so do NOT
+        # add it here; the fleet-wide mechanism is the thing that cannot drift.
+        # env/beans/heapdump/shutdown stay off.
         include: health,info,metrics
   endpoint:
     health:
@@ -47,12 +54,16 @@ management:
     tags:
       application: api-gateway
 
-otel:
-  service:
-    name: api-gateway
-  exporter:
-    otlp:
-      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}
+# NOTE (T3-2): an `otel:` block used to sit here declaring an OTLP exporter endpoint
+# (${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4317}) together with a matching
+# OTEL_EXPORTER_OTLP_ENDPOINT in all four Helm values files. It was DEAD CONFIG: no service has an
+# OpenTelemetry SDK, an OTLP exporter or micrometer-tracing on its classpath, no collector is deployed
+# in docker-compose.yml or in the Helm chart, and `otel.*` is not a property namespace Spring Boot or
+# Micrometer reads on its own. It has been REMOVED rather than "wired", because wiring it means adding
+# a tracer to 20 services plus a collector deployment -- real work with a real operational cost, not a
+# config line. Distributed tracing is therefore an OPEN, HONESTLY-STATED gap; see
+# Documentation/RUNBOOK_MONITORING.md ("Not covered") and gap register T3-2. Correlation ids
+# (X-Correlation-Id, in every log line via lib-errors) are the current substitute for trace ids.
 
 # Per-API-version deprecation config (Phase 1: v1 is live, not deprecated)
 api:
