@@ -338,12 +338,16 @@ services:
     image: notification-webhook
     probe: { type: tcp }
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_WEBHOOK_SIGNING_SECRET]
+                    GMEPAY_WEBHOOK_SIGNING_SECRET,
+                    # T5-8: /v1/webhooks/endpoints/** mints and rotates whsec_ secrets — it must not
+                    # be reachable by anything with in-cluster network access.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notify:5432/notify
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       GMEPAY_WEBHOOK_DISPATCHER_ENABLED: "true"
+      GMEPAY_INTERNAL_AUTH_ENABLED: "true"
 
   settlement-reconciliation:
     image: settlement-reconciliation

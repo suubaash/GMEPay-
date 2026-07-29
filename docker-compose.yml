@@ -607,6 +607,17 @@ services:
       # Nepal corridor adapter (only reachable under the `full` profile; inert on
       # the Korea-only `core` path so no depends_on — a bare config string).
       GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
+      # ---- Nepal corridor commercial terms (gap T4-1) ----
+      # The KRW→NPR corridor now applies real FX + a service fee + a USD prefunding debit. Its FX
+      # margin and service fee are BUSINESS DECISIONS and are deliberately NOT defaulted: with both
+      # blank the corridor refuses every payment with 503 CORRIDOR_PRICING_NOT_CONFIGURED (no float
+      # moved, no scheme call) rather than mispricing. Supply them either in config-registry
+      # (partner_fx_config.margin_bps + partner_fee_schedule for schemeId=NEPAL/OVERSEAS — the
+      # preferred, per-partner, audited route) or, for a local/sim run, in a .env next to this file:
+      #   GMEPAY_PAYMENT_NEPAL_FX_MARGIN=0.0xx        # decimal fraction, owner-supplied
+      #   GMEPAY_PAYMENT_NEPAL_SERVICE_FEE_KRW=xxx    # KRW, owner-supplied
+      GMEPAY_PAYMENT_NEPAL_FX_MARGIN: ${GMEPAY_PAYMENT_NEPAL_FX_MARGIN:-}
+      GMEPAY_PAYMENT_NEPAL_SERVICE_FEE_KRW: ${GMEPAY_PAYMENT_NEPAL_SERVICE_FEE_KRW:-}
       # SendMN (Mongolia) corridor adapter (`full` profile only, like Nepal; inert on
       # the Korea-only `core` path so no depends_on — a bare config string).
       GMEPAY_SCHEME_ADAPTERS_SENDMN_BASE_URL: http://scheme-adapter-sendmn:8080
@@ -719,6 +730,14 @@ services:
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
       # Downstream partner endpoint (sim in single-host; real partner in cloud).
       GMEPAY_SCHEME_NEPAL_BASE_URL: http://sim-nepal-qr:8080
+      # Request signing (gap T4-1). The adapter signs /pay and /status with RSA-2048/PKCS#1/SHA-256
+      # and FAILS CLOSED with no key — the old constant placeholder signature is gone. NO key is
+      # committed here. EPHEMERAL_DEV mints a throwaway keypair at startup, which is valid ONLY
+      # against sim-nepal-qr (it soft-logs signatures); the real signing path still executes.
+      # Against the live partner, unset this and mount the Khalti-issued PKCS#8 key via
+      # GMEPAY_SCHEME_NEPAL_SIGNING_PRIVATE_KEY (or ..._PRIVATE_KEY_PATH) from your secret store.
+      GMEPAY_SCHEME_NEPAL_SIGNING_MODE: ${GMEPAY_SCHEME_NEPAL_SIGNING_MODE:-EPHEMERAL_DEV}
+      GMEPAY_SCHEME_NEPAL_SIGNING_PRIVATE_KEY: ${GMEPAY_SCHEME_NEPAL_SIGNING_PRIVATE_KEY:-}
     depends_on:
       sim-nepal-qr: { condition: service_healthy }
     healthcheck: *tcp-health
@@ -826,6 +845,11 @@ services:
       # environment (CI sets a throwaway value); the literal default is a clearly non-prod marker.
       # NOT a real credential — must be replaced by a Vault-backed resolver before LIVE traffic.
       GMEPAY_WEBHOOK_SIGNING_SECRET: ${GMEPAY_WEBHOOK_SIGNING_SECRET:-dev-webhook-secret-not-for-prod}
+      # T5-8 residual: /v1/webhooks/endpoints/** mints and rotates whsec_ secrets, so it must not be
+      # reachable by anything with in-cluster network access. The gate is declared in the service but
+      # defaults OFF because it previously received neither variable; arming it here closes that.
+      GMEPAY_INTERNAL_AUTH_ENABLED: "true"
+      GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret
     depends_on:
       postgres-notify: { condition: service_healthy }
       kafka: { condition: service_healthy }
