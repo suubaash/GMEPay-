@@ -1,6 +1,8 @@
 package com.gme.pay.settlement.persistence;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
@@ -32,4 +34,18 @@ public interface SettlementLineRepository extends JpaRepository<SettlementLineEn
      * against clawing the same refund twice across the morning/afternoon windows (idempotency marker).
      */
     boolean existsByTxnRefAndAmountLessThan(String txnRef, BigDecimal amount);
+
+    /**
+     * Total magnitude already clawed back for {@code txnRef} across every batch, as a POSITIVE number
+     * ({@code null} when nothing has been). T2-6: a partially refunded transaction can be refunded again, so
+     * the cumulative {@code refund_amount_krw} grows. A boolean "already clawed back?" gate would net only
+     * the FIRST refund and silently swallow every later increment; comparing against this sum lets the
+     * settlement window claw back exactly the DELTA that is not yet netted.
+     */
+    @Query("""
+            SELECT COALESCE(SUM(-l.amount), 0)
+            FROM SettlementLineEntity l
+            WHERE l.txnRef = :txnRef AND l.amount < 0
+            """)
+    BigDecimal sumClawedBackByTxnRef(@Param("txnRef") String txnRef);
 }

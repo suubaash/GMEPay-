@@ -91,10 +91,16 @@ public class SchemeClientRouter implements SchemeClient {
         defaultClient.cancelPayment(schemeTxnRef, reason);
     }
 
-    /** T2-7: route the cancel/refund by scheme code, exactly like {@link #submitMpm}. */
+    /**
+     * T2-7: route the cancel/refund by scheme code, exactly like {@link #submitMpm}.
+     *
+     * <p>T2-6: forwards the WHOLE {@link CancelRequest} rather than unpacking it into the two-arg form. It
+     * used to unpack, which silently discarded any field added to the request — including the partial-refund
+     * amount, whose entire purpose is to be refused by an adapter that cannot express it.
+     */
     @Override
     public void cancelPayment(CancelRequest request) {
-        route(request.schemeId()).cancelPayment(request.schemeTxnRef(), request.reason());
+        route(request.schemeId()).cancelPayment(request);
     }
 
     @Override

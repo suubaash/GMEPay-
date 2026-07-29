@@ -119,7 +119,16 @@ public record TransactionResponse(
          * End-customer / wallet identifier carried on the wallet payment (captured at create, V011).
          * Lets support look a payment up by what the CUSTOMER holds. Null on legacy rows.
          */
-        String userRef
+        String userRef,
+
+        /**
+         * T2-6: CUMULATIVE KRW already refunded for this transaction ({@code transactions.refund_amount_krw}),
+         * or null when nothing has been refunded. Exposed because payment-executor's refund path must know
+         * it to enforce "cumulative refunds may not exceed the original" — without it, a partial refund
+         * could be repeated until the customer was refunded more than they paid. Also the amount
+         * settlement's cross-date claw-back nets, so surfacing it here keeps the two readers on one number.
+         */
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal refundAmountKrw
 ) {
     /**
      * One entry in the status transition history.
@@ -178,7 +187,8 @@ public record TransactionResponse(
                 txn.failureReason(),                                    // failureReason (from domain)
                 CustomerStatusText.statusLabel(txn.status()),           // statusLabel
                 CustomerStatusText.declineReasonText(txn.failureReason()), // declineReasonText
-                txn.userRef()                                           // userRef (V011)
+                txn.userRef(),                                          // userRef (V011)
+                txn.refundAmountKrw()                                   // refundAmountKrw (T2-6)
         );
     }
 

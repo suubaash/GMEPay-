@@ -390,7 +390,10 @@ public class TransactionController {
                 req.payoutMarginUsd(),
                 req.collectionUsd(),
                 req.costRateColl(),
-                req.costRatePay());
+                req.costRatePay(),
+                // T2-6: cumulative refunded KRW, carried on the REFUNDED commit so the settlement
+                // claw-back has a real magnitude to net. Null on every non-refund patch.
+                req.refundAmountKrw());
         return ResponseEntity.noContent().build();
     }
 

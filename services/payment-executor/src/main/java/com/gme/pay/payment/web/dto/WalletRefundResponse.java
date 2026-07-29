@@ -26,12 +26,25 @@ public record WalletRefundResponse(
          * escalate to the manual reversal process) or {@code SCHEME_REFUND_FAILED} (the scheme declined
          * or was unreachable).
          */
-        @JsonProperty("errorCode")      String errorCode
+        @JsonProperty("errorCode")      String errorCode,
+        /**
+         * T2-6: the amount refunded, and the currency it is denominated in. Null on failure, and null on a
+         * full refund whose original amount could not be read. Present so a caller can see that a partial
+         * refund was applied for the amount it asked for.
+         */
+        @JsonProperty("refundedAmount")   java.math.BigDecimal refundedAmount,
+        @JsonProperty("refundedCurrency") String refundedCurrency
 ) {
 
     /** Back-compatible 5-arg form; {@code errorCode} defaults to null. */
     public WalletRefundResponse(String status, String schemeTxnRef, String authId,
                                 String refundedAt, String errorMessage) {
         this(status, schemeTxnRef, authId, refundedAt, errorMessage, null);
+    }
+
+    /** Back-compatible 6-arg (T2-7) form; the refunded-amount fields default to null. */
+    public WalletRefundResponse(String status, String schemeTxnRef, String authId,
+                                String refundedAt, String errorMessage, String errorCode) {
+        this(status, schemeTxnRef, authId, refundedAt, errorMessage, errorCode, null, null);
     }
 }

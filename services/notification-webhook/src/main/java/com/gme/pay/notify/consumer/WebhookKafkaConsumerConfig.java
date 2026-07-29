@@ -111,4 +111,14 @@ public class WebhookKafkaConsumerConfig {
     public PaymentApprovedKafkaConsumer paymentApprovedKafkaConsumer(PaymentApprovedEventHandler handler) {
         return new PaymentApprovedKafkaConsumer(handler);
     }
+
+    /**
+     * T2-6: the refund/reversal notification listener. Shares this configuration's container factory, error
+     * handler and consumer group with the approvals listener — one broker wiring, two topics — so arming
+     * refund webhooks needs no new configuration beyond the bootstrap servers that already gate this class.
+     */
+    @Bean
+    public PaymentReversedKafkaConsumer paymentReversedKafkaConsumer(PaymentReversedEventHandler handler) {
+        return new PaymentReversedKafkaConsumer(handler);
+    }
 }

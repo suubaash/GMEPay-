@@ -8,9 +8,11 @@ import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
 import com.gme.pay.payment.domain.LimitCheckUnavailableException;
 import com.gme.pay.payment.domain.OperationalGate;
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.QrSchemeClassifier;
 import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
+import com.gme.pay.payment.domain.RefundAmountInvalidException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
 import com.gme.pay.payment.domain.TransactionLimitExceededException;
@@ -557,6 +559,22 @@ public class WalletPayController {
      * scheme, escalate to the manual reversal process" — instead of the ZeroPay decline the scheme-less
      * cancel used to produce. Nothing downstream (transaction status, revenue-ledger) is touched on that
      * path, so no half-applied refund is recorded.
+     *
+     * <h2>T2-6 — this path was recording the wrong thing twice</h2>
+     * <ol>
+     *   <li>It patched the transaction to <b>{@code REVERSED}</b>, not {@code REFUNDED}. {@code refundedAt}
+     *       is stamped only on entry to {@code REFUNDED}, so every wallet refund was invisible to
+     *       {@code GET /v1/transactions/refunded} — and therefore to settlement's cross-date claw-back. It
+     *       now patches {@code REFUNDED}, which is also what emits the {@code payment.reversed} event that
+     *       runs revenue reversal and notifies the partner.</li>
+     *   <li>It posted a <b>ZERO rounding residual</b> ({@code postRoundingResidual(ref + "-REFUND", 0, KRW)})
+     *       — an amount of nothing, in the wrong account, under a reference no other posting uses. Nothing
+     *       was booked. It now posts a real reversal journal for the refunded amount via the existing
+     *       {@code REVENUE_REVERSAL} / {@code RECEIVABLE_PARTNER} pair.</li>
+     * </ol>
+     * The refunded amount comes from the request, or from the original payment when the request omits it.
+     * When neither is available nothing is journalled and the response carries no amount — an honest blank
+     * rather than a zero that reads as "booked".
      */
     @PostMapping("/{schemeTxnRef}/refund")
     public ResponseEntity<WalletRefundResponse> refund(
@@ -572,6 +590,8 @@ public class WalletPayController {
         String schemeId = (req != null && req.schemeId() != null && !req.schemeId().isBlank())
                 ? req.schemeId()
                 : null;
+        java.math.BigDecimal requestedAmount = req != null ? req.amount() : null;
+        String requestedCurrency = req != null ? req.currency() : null;
 
         if (schemeClient == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -579,13 +599,34 @@ public class WalletPayController {
                             null, "Scheme client not configured", "SCHEME_CLIENT_UNCONFIGURED"));
         }
 
+        // T2-6: resolve the original payment BEFORE the scheme call so an over-refund is refused without
+        // touching the scheme. A basis we cannot read only blocks a PARTIAL refund (see WalletRefundBasis).
+        WalletRefundBasis basis;
         try {
-            schemeClient.cancelPayment(new SchemeClient.CancelRequest(authId, reason, schemeId));
+            basis = resolveWalletRefundBasis(schemeTxnRef, requestedAmount, requestedCurrency);
+        } catch (RefundAmountInvalidException ex) {
+            log.warn("Wallet refund of {} rejected ({}): {}", schemeTxnRef, ex.code(), ex.getMessage());
+            return ResponseEntity.status(ex.retryable()
+                            ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
+        }
+
+        try {
+            schemeClient.cancelPayment(new SchemeClient.CancelRequest(
+                    authId, reason, schemeId, basis.schemePartialAmount(), basis.currency()));
         } catch (SchemeOperationNotSupportedException ex) {
             // NOT a decline: the corridor has no scheme refund round-trip at all. Surface it verbatim
             // with its stable code so the caller stops retrying and escalates.
             log.warn("Refund unsupported by scheme {} for schemeTxnRef={} authId={}: {}",
                     ex.schemeId(), schemeTxnRef, authId, ex.getMessage());
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
+        } catch (PartialRefundNotSupportedException ex) {
+            // The adapter cannot express a partial refund; a full cancel would over-refund at the scheme.
+            log.warn("Partial refund unsupported by scheme {} for schemeTxnRef={}: {}",
+                    ex.schemeId(), schemeTxnRef, ex.getMessage());
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                     .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
                             null, ex.getMessage(), ex.code()));
@@ -596,25 +637,32 @@ public class WalletPayController {
                             null, ex.getMessage(), "SCHEME_REFUND_FAILED"));
         }
 
-        // Record the reversal in transaction-mgmt (resilient)
+        // Record the refund in transaction-mgmt (resilient) — REFUNDED, carrying the cumulative refunded
+        // KRW so refundedAt is stamped, findRefundedOn finds it, the claw-back has a magnitude, and the
+        // payment.reversed event fires.
         if (transactionClient != null) {
             try {
                 transactionClient.commitStatus(schemeTxnRef,
-                        new TransactionClient.StatusPatch(
-                                PaymentStatus.REVERSED, schemeTxnRef, authId, null, null));
+                        TransactionClient.StatusPatch.refund(
+                                PaymentStatus.REFUNDED, schemeTxnRef, authId, null,
+                                basis.cumulativeRefundedKrw()));
             } catch (RuntimeException ex) {
-                log.warn("transaction-mgmt REVERSED update failed for {}: {}", schemeTxnRef, ex.getMessage());
+                log.warn("transaction-mgmt REFUNDED update failed for {}: {}", schemeTxnRef, ex.getMessage());
             }
         }
 
-        // Reverse revenue-ledger entry (resilient)
-        if (revenueLedgerClient != null) {
+        // Book a REAL reversal for the refunded amount (was: a zero rounding residual).
+        if (revenueLedgerClient != null && basis.amount() != null && basis.amount().signum() > 0
+                && basis.currency() != null) {
             try {
-                revenueLedgerClient.postRoundingResidual(schemeTxnRef + "-REFUND",
-                        java.math.BigDecimal.ZERO, "KRW");
+                revenueLedgerClient.postReversalJournal(schemeTxnRef, basis.amount(), basis.currency());
             } catch (RuntimeException ex) {
                 log.warn("revenue-ledger refund post failed for {}: {}", schemeTxnRef, ex.getMessage());
             }
+        } else if (revenueLedgerClient != null) {
+            log.warn("wallet refund of {} booked NO reversal journal: the refunded amount is unknown "
+                    + "(request carried none and the original payment was unreadable). Nothing is posted "
+                    + "rather than a zero that would read as booked.", schemeTxnRef);
         }
 
         return ResponseEntity.ok(new WalletRefundResponse(
@@ -622,7 +670,89 @@ public class WalletPayController {
                 schemeTxnRef,
                 authId,
                 Instant.now().toString(),
-                null
+                null,
+                null,
+                basis.amount(),
+                basis.currency()
         ));
+    }
+
+    /**
+     * Resolves and validates the wallet refund's amount against the original payment (T2-6).
+     *
+     * <p>Mirrors {@code PaymentOrchestrator.planRefund}'s rules on the wallet path, which has its own
+     * (pre-orchestrator) refund flow: cumulative refunds may not exceed the original, the currency may not
+     * differ from the collection currency, and an unreadable original blocks a PARTIAL refund but not a full
+     * one. It deliberately does NOT move float — the wallet path never did, and adding a float leg here would
+     * be a second, divergent money path rather than a fix.
+     */
+    private WalletRefundBasis resolveWalletRefundBasis(String txnRef,
+                                                       java.math.BigDecimal requestedAmount,
+                                                       String requestedCurrency) {
+        TransactionClient.RefundBasis basis = transactionClient == null
+                ? null
+                : transactionClient.findRefundBasis(txnRef).orElse(null);
+
+        if (basis == null || basis.collectionAmount() == null) {
+            if (requestedAmount != null) {
+                throw RefundAmountInvalidException.basisUnavailable(txnRef,
+                        "the original wallet payment could not be read, so a partial refund cannot be "
+                                + "validated");
+            }
+            return new WalletRefundBasis(null, null, null, true);
+        }
+
+        java.math.BigDecimal original = basis.collectionAmount();
+        String currency = basis.collectionCurrency();
+        java.math.BigDecimal already = basis.alreadyRefunded();
+
+        if (requestedAmount == null) {
+            java.math.BigDecimal remaining = original.subtract(already);
+            if (remaining.signum() <= 0) {
+                throw RefundAmountInvalidException.exceedsOriginal(txnRef,
+                        java.math.BigDecimal.ZERO, already, original, currency);
+            }
+            return new WalletRefundBasis(remaining, currency, original, true);
+        }
+
+        if (requestedAmount.signum() <= 0) {
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "the refund amount must be positive, got " + requestedAmount.toPlainString());
+        }
+        if (requestedCurrency != null && currency != null
+                && !requestedCurrency.equalsIgnoreCase(currency)) {
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "refund currency " + requestedCurrency + " is not the original collection currency "
+                            + currency);
+        }
+        java.math.BigDecimal cumulative = already.add(requestedAmount);
+        if (cumulative.compareTo(original) > 0) {
+            throw RefundAmountInvalidException.exceedsOriginal(txnRef, requestedAmount, already,
+                    original, currency);
+        }
+        return new WalletRefundBasis(requestedAmount, currency, cumulative,
+                cumulative.compareTo(original) == 0);
+    }
+
+    /**
+     * The validated wallet refund amounts.
+     *
+     * @param amount     this refund's amount, or null when it could not be determined
+     * @param currency   the original collection currency
+     * @param cumulative total refunded including this refund
+     * @param full       true when this refund completes the transaction
+     */
+    private record WalletRefundBasis(java.math.BigDecimal amount, String currency,
+                                     java.math.BigDecimal cumulative, boolean full) {
+
+        /** Set ONLY for a partial refund, so an adapter that cannot express one refuses it. */
+        java.math.BigDecimal schemePartialAmount() {
+            return full ? null : amount;
+        }
+
+        /** Cumulative refunded amount, but only when it really is KRW (see the orchestrator's note). */
+        java.math.BigDecimal cumulativeRefundedKrw() {
+            return "KRW".equalsIgnoreCase(currency) ? cumulative : null;
+        }
     }
 }

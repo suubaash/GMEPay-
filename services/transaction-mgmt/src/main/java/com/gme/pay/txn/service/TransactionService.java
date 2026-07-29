@@ -227,6 +227,48 @@ public class TransactionService {
                                    BigDecimal collectionUsd,
                                    BigDecimal costRateColl,
                                    BigDecimal costRatePay) {
+        return patchStatus(txnRef, newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd,
+                approvedAt, bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                collectionMarginUsd, payoutMarginUsd, collectionUsd, costRateColl, costRatePay, null);
+    }
+
+    /**
+     * T2-6 overload: additionally records {@code refundAmountKrw} — the CUMULATIVE KRW magnitude refunded
+     * for this transaction — so {@code GET /v1/transactions/refunded} carries a real claw-back amount.
+     *
+     * <p>Applied BEFORE the FSM transition, for two reasons that both matter:
+     * <ul>
+     *   <li>the {@code REFUNDED} transition re-stamps the refund enrichment fields from the aggregate, so a
+     *       value applied afterwards would be overwritten by the null it replaced;</li>
+     *   <li>the {@code payment.reversed} event the transition emits reads the refunded amount off the
+     *       aggregate, so the event and the row cannot disagree.</li>
+     * </ul>
+     *
+     * <p>{@code originalPaymentTxnRef} is defaulted to {@code txnRef} on a refund that does not already
+     * carry one. Today a refund is recorded ON the original transaction row (there is no separate refund-leg
+     * entity), so the refund leg's "original payment" IS itself — and settlement's
+     * {@code isCrossDateClawbackEligible} rejects any leg whose original ref is blank, which is the second
+     * reason the claw-back netted nothing even where an amount existed.
+     *
+     * <p>Null-skipped: a patch with a null {@code refundAmountKrw} never clears a previously recorded
+     * amount, so retries and non-refund patches are unaffected.
+     */
+    @Transactional
+    public Transaction patchStatus(String txnRef,
+                                   String newStatus,
+                                   String schemeTxnRef,
+                                   String schemeApprovalCode,
+                                   BigDecimal prefundDeductedUsd,
+                                   Instant approvedAt,
+                                   BigDecimal bookedSettlementAmount,
+                                   String settlementRoundingMode,
+                                   BigDecimal roundingResidual,
+                                   BigDecimal collectionMarginUsd,
+                                   BigDecimal payoutMarginUsd,
+                                   BigDecimal collectionUsd,
+                                   BigDecimal costRateColl,
+                                   BigDecimal costRatePay,
+                                   BigDecimal refundAmountKrw) {
         Transaction txn = getByTxnRef(txnRef);
 
         // Apply the lock fields — incl. the Wave-3 rate-lock pool (margins, collectionUsd, cost
@@ -242,6 +284,16 @@ public class TransactionService {
         // re-asserts the same status (idempotent retry) must still apply the lock fields, but
         // a self-edge is not legal in the FSM and would raise TransitionBlockedException.
         TransactionStatus target = mapPaymentStatus(newStatus);
+
+        // T2-6: record the refund magnitude + the netting key before the transition (see javadoc).
+        if (refundAmountKrw != null) {
+            txn.applyRefundEnrichment(
+                    refundAmountKrw,
+                    txn.qrCodeId(),
+                    txn.refundedAt(),
+                    txn.originalPaymentTxnRef() != null ? txn.originalPaymentTxnRef() : txn.txnRef());
+        }
+
         if (target != null && target != txn.status()) {
             stateMachine.transition(txn, target);
         }

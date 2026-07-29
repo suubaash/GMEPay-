@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -473,7 +474,11 @@ class WalletPayControllerTest {
         assertEquals("SMN-PAYMENT-1", captor.getValue().schemeTxnRef());
 
         // No half-applied refund: the txn status and the revenue ledger are left alone.
-        verifyNoInteractions(transactionClient);
+        // T2-6 narrowed this from verifyNoInteractions(transactionClient): the refund now READS the original
+        // payment (findRefundBasis) before the scheme call so an over-refund is refused without touching the
+        // scheme. A read is not a mutation — what must not happen is a status WRITE, which is what this now
+        // asserts, and it is still the exact guarantee T2-7 is about.
+        verify(transactionClient, never()).commitStatus(any(), any());
         verifyNoInteractions(revenueLedgerClient);
     }
 

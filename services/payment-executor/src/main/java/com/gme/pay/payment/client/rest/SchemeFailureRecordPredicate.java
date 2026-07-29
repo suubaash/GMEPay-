@@ -1,5 +1,6 @@
 package com.gme.pay.payment.client.rest;
 
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 
@@ -20,6 +21,10 @@ import java.util.function.Predicate;
  * no cancel round-trip, so no HTTP call was even made. Recording it would let a handful of refund
  * attempts on a single-shot corridor trip that scheme's breaker and take its PAY path offline.
  *
+ * <p>{@link PartialRefundNotSupportedException} is the same class of thing (T2-6): the adapter contract
+ * carries no refund amount, so the partial refund is refused locally with no HTTP call at all. A run of
+ * rejected partial-refund attempts must not take the scheme's PAY path offline.
+ *
  * <p>Referenced by {@code resilience4j.circuitbreaker.configs.default.record-failure-predicate};
  * resilience4j instantiates it via its public no-arg constructor.
  */
@@ -30,6 +35,7 @@ public class SchemeFailureRecordPredicate implements Predicate<Throwable> {
         // true  = record as a breaker failure (technical fault)
         // false = ignore for the failure rate (authoritative business decline / unsupported operation)
         return !(throwable instanceof SchemeDeclinedException)
-                && !(throwable instanceof SchemeOperationNotSupportedException);
+                && !(throwable instanceof SchemeOperationNotSupportedException)
+                && !(throwable instanceof PartialRefundNotSupportedException);
     }
 }

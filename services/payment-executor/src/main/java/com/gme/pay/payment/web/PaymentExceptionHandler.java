@@ -9,8 +9,10 @@ import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.LimitCheckUnavailableException;
 import com.gme.pay.payment.domain.MerchantNotFoundException;
 import com.gme.pay.payment.domain.OperationalGateException;
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
+import com.gme.pay.payment.domain.RefundAmountInvalidException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
@@ -111,6 +113,39 @@ public class PaymentExceptionHandler {
     @ExceptionHandler(SchemeOperationNotSupportedException.class)
     public ResponseEntity<ApiError> handleSchemeOperationNotSupported(
             SchemeOperationNotSupportedException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ApiError(ex.code(), ex.getMessage(), false, newRequestId()));
+    }
+
+    /**
+     * T2-6: the requested refund amount cannot be accepted. Carries the exception's own stable code so a
+     * caller can distinguish the three cases without string-matching a message:
+     * {@code REFUND_AMOUNT_EXCEEDS_ORIGINAL} (422, not retryable — the cumulative guard fired),
+     * {@code REFUND_AMOUNT_INVALID} (422, not retryable — non-positive or foreign currency) and
+     * {@code REFUND_BASIS_UNAVAILABLE} (503, retryable — the original payment could not be read, so we
+     * refuse rather than refund an unvalidated amount). Declared BEFORE the generic
+     * {@code PaymentException} paths; emitted via the {@link ApiError} string ctor because lib-errors is
+     * frozen (same pattern as {@code SchemeOperationNotSupportedException}).
+     */
+    @ExceptionHandler(RefundAmountInvalidException.class)
+    public ResponseEntity<ApiError> handleRefundAmountInvalid(RefundAmountInvalidException ex) {
+        HttpStatus status = ex.retryable()
+                ? HttpStatus.SERVICE_UNAVAILABLE
+                : HttpStatus.UNPROCESSABLE_ENTITY;
+        return ResponseEntity.status(status)
+                .body(new ApiError(ex.code(), ex.getMessage(), ex.retryable(), newRequestId()));
+    }
+
+    /**
+     * T2-6: a PARTIAL refund was asked of a scheme whose adapter contract carries no refund amount. 422 with
+     * the stable {@code PARTIAL_REFUND_UNSUPPORTED} code and {@code retryable=false} — refusing is correct,
+     * because the only instruction we could send is a FULL cancel, which would over-refund the customer at
+     * the scheme while our books recorded the smaller figure. Nothing was mutated: no float moved, no status
+     * was written, no journal was posted.
+     */
+    @ExceptionHandler(PartialRefundNotSupportedException.class)
+    public ResponseEntity<ApiError> handlePartialRefundNotSupported(
+            PartialRefundNotSupportedException ex) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(new ApiError(ex.code(), ex.getMessage(), false, newRequestId()));
     }

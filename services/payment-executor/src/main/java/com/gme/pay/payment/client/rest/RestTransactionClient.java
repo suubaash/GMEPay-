@@ -30,6 +30,9 @@ import java.time.Instant;
 @Primary
 public class RestTransactionClient implements TransactionClient {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(RestTransactionClient.class);
+
     private final RestClient restClient;
 
     @Autowired
@@ -106,7 +109,8 @@ public class RestTransactionClient implements TransactionClient {
                             patch.payoutMarginUsd(),
                             patch.collectionUsd(),
                             patch.costRateColl(),
-                            patch.costRatePay()))
+                            patch.costRatePay(),
+                            patch.refundAmountKrw()))
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException ex) {
@@ -188,7 +192,11 @@ public class RestTransactionClient implements TransactionClient {
             BigDecimal payoutMarginUsd,
             BigDecimal collectionUsd,
             BigDecimal costRateColl,
-            BigDecimal costRatePay
+            BigDecimal costRatePay,
+            // T2-6: cumulative refunded KRW; field name matches transaction-mgmt's StatusPatchRequest
+            // EXACTLY (Jackson binds by name — a mismatch would silently send null, which is precisely
+            // the failure mode this field exists to fix).
+            BigDecimal refundAmountKrw
     ) {
         /** Backwards-compatible 8-arg constructor; margin fields default null. */
         StatusPatchRequest(
@@ -202,7 +210,54 @@ public class RestTransactionClient implements TransactionClient {
                 BigDecimal roundingResidual) {
             this(newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
                     bookedSettlementAmount, settlementRoundingMode, roundingResidual,
-                    null, null, null, null, null);
+                    null, null, null, null, null, null);
         }
     }
+
+    /**
+     * T2-6: reads the refund basis from {@code GET /v1/transactions/{txnRef}}.
+     *
+     * <p>{@code sendAmount}/{@code sendCcy} on the response ARE the collection amount and currency (the
+     * V003 create path assigns {@code sendAmount = collectionAmount}), and {@code refundAmountKrw} is the
+     * cumulative refunded total.
+     *
+     * <p>Fails SOFT to {@link Optional#empty()} — including on 404 — because the caller
+     * ({@code PaymentOrchestrator.refundPayment}) is what decides the consequence: a full refund proceeds
+     * unchanged, a partial refund is refused with {@code REFUND_BASIS_UNAVAILABLE}. Throwing here would
+     * break the full-refund path on a transaction-mgmt hiccup, which this gap is not about.
+     */
+    @Override
+    public java.util.Optional<RefundBasis> findRefundBasis(String txnRef) {
+        try {
+            TransactionRefundBasisResponse body = restClient.get()
+                    .uri("/v1/transactions/{ref}", txnRef)
+                    .retrieve()
+                    .body(TransactionRefundBasisResponse.class);
+            if (body == null) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new RefundBasis(
+                    body.txnRef() != null ? body.txnRef() : txnRef,
+                    body.status(),
+                    body.sendAmount(),
+                    body.sendCcy(),
+                    body.prefundingDeductedUsd(),
+                    body.refundAmountKrw()));
+        } catch (RuntimeException ex) {
+            log.warn("transaction-mgmt GET /v1/transactions/{} unavailable for the refund basis: {}",
+                    txnRef, ex.toString());
+            return java.util.Optional.empty();
+        }
+    }
+
+    /** The refund-relevant projection of transaction-mgmt's {@code TransactionResponse}. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record TransactionRefundBasisResponse(
+            String txnRef,
+            String status,
+            BigDecimal sendAmount,
+            String sendCcy,
+            BigDecimal prefundingDeductedUsd,
+            BigDecimal refundAmountKrw
+    ) {}
 }

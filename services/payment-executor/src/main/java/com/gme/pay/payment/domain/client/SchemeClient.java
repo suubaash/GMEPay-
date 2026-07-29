@@ -141,11 +141,38 @@ public interface SchemeClient {
      *                     keeps the legacy behaviour (ZeroPay default) for callers that genuinely do
      *                     not know the scheme.
      */
-    record CancelRequest(String schemeTxnRef, String reason, String schemeId) {
+    /**
+     * A scheme-side cancel / refund instruction.
+     *
+     * @param schemeTxnRef the scheme's own transaction reference
+     * @param reason       cancellation / refund reason text
+     * @param schemeId     scheme CODE the payment was executed on; null = the ZeroPay default (T2-7)
+     * @param partialAmount   T2-6: set ONLY for a PARTIAL refund — the amount to refund, which is strictly
+     *                        less than what the scheme approved. {@code null} means "reverse the whole
+     *                        thing", which is the only shape any adapter contract can express today (the
+     *                        ZeroPay adapter's {@code /internal/scheme/zeropay/cancel} body carries a
+     *                        {@code schemeTxnRef} and nothing else). A non-null value therefore does NOT
+     *                        become a full cancel: {@code RestSchemeClient} refuses it with
+     *                        {@code PARTIAL_REFUND_UNSUPPORTED} rather than silently over-refunding the
+     *                        customer at the scheme. See {@link com.gme.pay.payment.domain.PartialRefundNotSupportedException}.
+     * @param partialCurrency ISO currency of {@code partialAmount}; null when the refund is full
+     */
+    record CancelRequest(String schemeTxnRef, String reason, String schemeId,
+                         BigDecimal partialAmount, String partialCurrency) {
+
+        /** Full cancel/refund on a known scheme (T2-7 shape). */
+        public CancelRequest(String schemeTxnRef, String reason, String schemeId) {
+            this(schemeTxnRef, reason, schemeId, null, null);
+        }
 
         /** Legacy scheme-less cancel (routes to the ZeroPay default). */
         public static CancelRequest of(String schemeTxnRef, String reason) {
             return new CancelRequest(schemeTxnRef, reason, null);
+        }
+
+        /** True when this instruction asks the scheme to refund only part of the approved amount. */
+        public boolean isPartial() {
+            return partialAmount != null;
         }
     }
 

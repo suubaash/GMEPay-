@@ -378,6 +378,13 @@ public class PaymentController {
      * back; a reversal journal is booked on revenue-ledger.
      *
      * <p>T2-7: {@code X-Scheme-Id} routes the scheme-side refund the same way {@code /cancel} does.
+     *
+     * <p>T2-6: the optional body {@code amount} (+ {@code currency}) makes this a PARTIAL refund. It is
+     * validated against the original payment and everything already refunded for it, so cumulative partial
+     * refunds cannot exceed the original ({@code 422 REFUND_AMOUNT_EXCEEDS_ORIGINAL}); the float is credited
+     * back pro-rata at the ORIGINAL locked rate; the cumulative refunded amount is persisted so settlement's
+     * claw-back nets it; and the REFUNDED commit now emits {@code payment.reversed}, so revenue reversal runs
+     * and the partner receives a refund webhook. Omitting {@code amount} is a full refund — unchanged.
      */
     @PostMapping("/{id}/refund")
     public ResponseEntity<RefundPaymentResponse> refundPayment(
@@ -397,13 +404,19 @@ public class PaymentController {
 
         PaymentOrchestrator.RefundResult result = orchestrator.refundPayment(
                 paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason,
-                resolvedSchemeId);
+                resolvedSchemeId,
+                req != null ? req.amount() : null,
+                req != null ? req.currency() : null);
 
         return ResponseEntity.ok(new RefundPaymentResponse(
                 result.paymentId(),
                 "refunded",
                 result.refundedAt(),
-                result.prefundReturnedUsd()
+                result.prefundReturnedUsd(),
+                result.refundedAmount(),
+                result.refundedCurrency(),
+                result.cumulativeRefundedAmount(),
+                result.fullyRefunded()
         ));
     }
 

@@ -71,6 +71,14 @@ public class JpaJournalStore implements JournalStore {
         // Rounding-residual idempotency backstop: insert the guard key in the SAME transaction. A
         // concurrent double-post of the same reference (racing LedgerPostingService's pre-check) trips
         // the PK on rounding_residual_keys and rolls back, so the residual is booked exactly once.
+        //
+        // T2-9: this is a real INSERT (RoundingResidualKeyEntity is Persistable with isNew()==true until
+        // loaded), so a duplicate reference now genuinely violates the PK instead of silently UPDATEing the
+        // guard row to point at the newer journal. The one caller that used to arrive here with an
+        // already-guarded reference was RevenueReversalService, which mirrored REVENUE_ROUNDING lines into
+        // its reversing journal; it no longer does (a residual is not captured revenue and has its own
+        // lifecycle), so the only remaining way to hit the constraint is a genuine concurrent double-post
+        // of the same residual — exactly what the guard is for.
         if (reference != null && isRoundingJournal(journal)) {
             roundingKeys.save(new RoundingResidualKeyEntity(reference, journal.journalId(), journal.postedAt()));
         }

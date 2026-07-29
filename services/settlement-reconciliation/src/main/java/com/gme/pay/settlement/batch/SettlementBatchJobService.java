@@ -527,7 +527,11 @@ public class SettlementBatchJobService {
             if (!isCrossDateClawbackEligible(leg)) {
                 continue;
             }
-            BigDecimal amount = krw(leg.refundAmountKrw());
+            // T2-6: claw back only the portion not already netted. The leg's refundAmountKrw is the
+            // CUMULATIVE refunded total, so on a second partial refund of the same transaction this is the
+            // increment; a boolean already-clawed-back gate (what this used to be) would have netted the
+            // first refund and silently dropped every later one.
+            BigDecimal amount = krw(leg.refundAmountKrw()).subtract(alreadyClawedBack(leg.refundTxnRef()));
             if (amount.signum() <= 0) {
                 continue;
             }
@@ -606,11 +610,20 @@ public class SettlementBatchJobService {
             log.debug("cross-date refund {} original {} not previously settled — nets to zero", refundRef, original);
             return false;
         }
-        if (lineRepo.existsByTxnRefAndAmountLessThan(refundRef, BigDecimal.ZERO)) {
-            log.debug("cross-date refund {} already clawed back — skipping (idempotent)", refundRef);
-            return false;
-        }
+        // T2-6: idempotency is now enforced by AMOUNT, not by presence (see foldCrossDateRefunds). A leg whose
+        // cumulative refunded total is fully netted yields a zero delta and is skipped there; a leg that has
+        // been refunded FURTHER since the last window yields the increment and is netted. Keying on presence
+        // here would have made every refund after the first invisible to settlement.
         return true;
+    }
+
+    /**
+     * The magnitude already netted for this refund leg across all batches, never null (T2-6). Kept as a tiny
+     * seam so the delta arithmetic in {@link #foldCrossDateRefunds} reads as one line.
+     */
+    private BigDecimal alreadyClawedBack(String refundTxnRef) {
+        BigDecimal sum = lineRepo.sumClawedBackByTxnRef(refundTxnRef);
+        return sum == null ? BigDecimal.ZERO : sum;
     }
 
     /** (merchantId, settlementType) grouping key — one settlement row per merchant per type. */

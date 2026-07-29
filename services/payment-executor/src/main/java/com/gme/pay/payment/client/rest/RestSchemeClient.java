@@ -1,6 +1,7 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
@@ -135,6 +136,23 @@ public class RestSchemeClient implements SchemeClient {
         } catch (RuntimeException ex) {
             throw new PaymentException("scheme-adapter cancel failed: " + ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * T2-6 fail-closed: the ZeroPay adapter's cancel contract is {@code {schemeTxnRef, reason}} — it carries
+     * no refund amount, and the 전문 cancel message it builds has no partial-amount field either. So a
+     * PARTIAL refund cannot be expressed here; the only thing we could send is a FULL cancel, which would
+     * refund the customer more at the scheme than our books recorded. We refuse instead, with the stable
+     * {@code PARTIAL_REFUND_UNSUPPORTED} code, and the orchestrator raises it BEFORE moving any float or
+     * writing any status — so nothing is half-applied. A full cancel/refund is byte-for-byte unchanged.
+     */
+    @Override
+    public void cancelPayment(CancelRequest request) {
+        if (request != null && request.isPartial()) {
+            throw new PartialRefundNotSupportedException(
+                    schemeId, request.partialAmount(), request.partialCurrency());
+        }
+        SchemeClient.super.cancelPayment(request);
     }
 
     @Override
