@@ -162,7 +162,8 @@ the rationale.
 | Start command | `start-dev --import-realm` (dev mode — no HTTPS required) |
 | Datastore | `postgres-keycloak` (Postgres 16, host port **5446**, db/user/password = `keycloak`) |
 | Master-realm admin | `admin / admin` (env vars `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`) |
-| Realm seed | `docker/keycloak/realm-gmepay.json` mounted read-only at `/opt/keycloak/data/import` |
+| Realm seed | `docker/keycloak/realm-gmepay.json` mounted read-only as `/opt/keycloak/data/import/realm-gmepay.json` (the FILE, not the directory, so `docker/keycloak/README.md` can sit beside it) |
+| Browser-facing base URL | `KC_HOSTNAME_URL` = `${KC_PUBLIC_URL:-http://localhost:8097}` — pins the `iss` claim; one knob also drives every resource server's `OIDC_ISSUER_URI` |
 | Healthcheck | TCP probe on 8080 (the `/health` endpoint lives on the management port, which is off in dev mode) |
 
 ### Seeded realm `gmepay`
@@ -172,12 +173,22 @@ skips re-import when the realm already exists). It seeds:
 
 | Kind | Name | Purpose |
 |---|---|---|
-| Client | `admin-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3000/*`, dev secret `admin-ui-dev-secret` |
-| Client | `partner-portal-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3001/*`, dev secret `partner-portal-ui-dev-secret` |
+| Client | `admin-ui` | **public** OIDC, auth-code + PKCE S256, redirect `http://localhost:3000/auth/callback` — **no secret** |
+| Client | `partner-portal-ui` | **public** OIDC, auth-code + PKCE S256, redirect `http://localhost:3001/auth/callback` — **no secret** |
+| Mapper (both clients) | `permissions` | multivalued user attribute → `permissions` claim; `ops-partner-bff` authorizes from this (`TokenClaims`) |
+| Mapper (both clients) | `partner_id` | user attribute → `partner_id` claim; scopes `/v1/portal/{partnerId}/**` |
 | Realm role | `OPERATOR` | back-office user; gates `/v1/admin/**` at the BFF |
 | Realm role | `PARTNER_USER` | partner-portal-ui human; per-partner scoping enforced at the BFF |
-| User | `admin / demo` | OPERATOR — replaces the legacy `password=demo` flow in admin-ui |
-| User | `partner-demo / demo` | PARTNER_USER — partner-portal-ui smoke-test login |
+| User | `admin / demo` | OPERATOR, full hub `permissions` — replaces the deleted `password=demo` BFF login |
+| User | `operator-readonly / demo` | OPERATOR with read-only permissions (admin writes 403) |
+| User | `partner-demo / demo` | PARTNER_USER, `partner_id=GMEREMIT` |
+| User | `partner-sendmn / demo` | PARTNER_USER, `partner_id=SENDMN` |
+
+Both clients were confidential with committed dev secrets until gap **T1-2**: a
+browser SPA cannot present a `client_secret`, so every token exchange returned
+`invalid_client`. They are public + PKCE now — see `docker/keycloak/README.md` for the
+canonical realm/client/issuer/port table per environment and
+`node docker/keycloak/check-topology.mjs` to verify every file still agrees.
 
 The richer `PARTNER_ADMIN` / `PARTNER_VIEWER` split mentioned in ADR-011
 §Consequences lands in **Slice 8** alongside per-partner self-service users.

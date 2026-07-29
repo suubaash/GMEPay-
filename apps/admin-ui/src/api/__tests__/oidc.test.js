@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   keycloakBaseUrl,
+  keycloakClientId,
   isDevLoginAllowed,
   callbackUrl,
   buildAuthRequest,
@@ -29,16 +30,35 @@ describe('api/oidc (admin-ui)', () => {
   // Config helpers
   // -----------------------------------------------------------------------
   describe('keycloakBaseUrl()', () => {
+    // T1-2 contract lock: realm `gmepay` on the compose Keycloak's host port
+    // 8097 (8090 is scheme-adapter-zeropay, see docs/COMPOSE.md).
     it('returns the default when no env is set', () => {
       const saved = process.env.NEXT_PUBLIC_KEYCLOAK_URL;
       delete process.env.NEXT_PUBLIC_KEYCLOAK_URL;
-      expect(keycloakBaseUrl()).toBe('http://localhost:8090/realms/gmepay');
+      expect(keycloakBaseUrl()).toBe('http://localhost:8097/realms/gmepay');
       process.env.NEXT_PUBLIC_KEYCLOAK_URL = saved;
     });
 
     it('honours NEXT_PUBLIC_KEYCLOAK_URL', () => {
       process.env.NEXT_PUBLIC_KEYCLOAK_URL = 'https://kc.example.com/realms/prod';
       expect(keycloakBaseUrl()).toBe('https://kc.example.com/realms/prod');
+    });
+  });
+
+  describe('keycloakClientId()', () => {
+    // Must equal the clientId in docker/keycloak/realm-gmepay.json. The old
+    // hardcoded `gmepay-admin-ui` existed in no seed file or chart.
+    it('returns the seeded admin client id when no env is set', () => {
+      const saved = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID;
+      delete process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID;
+      expect(keycloakClientId()).toBe('admin-ui');
+      if (saved !== undefined) process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID = saved;
+    });
+
+    it('honours NEXT_PUBLIC_KEYCLOAK_CLIENT_ID', () => {
+      process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID = 'custom-admin-client';
+      expect(keycloakClientId()).toBe('custom-admin-client');
+      delete process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID;
     });
   });
 
@@ -146,6 +166,12 @@ describe('api/oidc (admin-ui)', () => {
 
       const result = await exchangeCode({ code: 'auth-code-abc', state });
 
+      // T1-2: PUBLIC client — PKCE, never a client_secret in a browser bundle.
+      const body = globalThis.fetch.mock.calls[0][1].body;
+      expect(body).toContain('code_verifier=');
+      expect(body).toContain('client_id=admin-ui');
+      expect(body).not.toContain('client_secret');
+
       expect(result.access_token).toBe('access.jwt');
       expect(result.refresh_token).toBe('refresh.jwt');
       // PKCE state cleared after exchange
@@ -237,7 +263,7 @@ describe('api/oidc (admin-ui)', () => {
       expect(url).toContain('/protocol/openid-connect/logout');
       expect(url).toContain('id_token_hint=some.id.token');
       expect(url).toContain('post_logout_redirect_uri=');
-      expect(url).toContain('client_id=gmepay-admin-ui');
+      expect(url).toContain('client_id=admin-ui');
     });
 
     it('omits id_token_hint when not supplied', () => {

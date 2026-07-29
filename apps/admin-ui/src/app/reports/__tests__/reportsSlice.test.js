@@ -36,14 +36,18 @@ function makeStore() {
   return configureStore({ reducer: { reports: reportsReducer } });
 }
 
+// GAP T5-2: the retired `SUBMITTED` cannot be produced by any backend any more, so
+// even slice fixtures use the reachable vocabulary.
 const RUN_A = {
   id: 'rpt-001',
   type: 'BOK_FX1014',
   period: '2025-05',
-  status: 'SUBMITTED',
+  status: 'NOT_FILED_CHANNEL_UNAVAILABLE',
   recordCount: '1428',
   generatedAt: '2025-06-01T01:30:00Z',
-  downloadUrl: null,
+  downloadUrl: '/v1/admin/reports/rpt-001/download',
+  filingChannelUnavailableReason: 'BOK SFTP endpoint is not configured (OI-03).',
+  filingChannels: null,
 };
 
 const RUN_B = {

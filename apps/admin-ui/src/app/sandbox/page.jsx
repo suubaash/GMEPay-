@@ -50,11 +50,16 @@ const TABS = [
       'Nepal QR partner simulator (Khalti/Fonepay) — decode a Nepali QR, enter the amount, pay, and inspect the stored request/response the partner API exchanges with GMEPay+. Native console: data calls are proxied same-origin (/sim-nepal-qr) so it works remotely.',
   },
   {
+    // The automated runner is NOT reachable from the browser (GAP T0-5): it executes a
+    // real authorize+capture, so payment-executor serves it only behind
+    // gmepay.sandbox.e2e.enabled + the internal token, and the portal's same-origin
+    // /e2e proxy was removed. The tab explains that instead of failing opaquely.
     label: 'E2E Test',
     component: E2eTestConsole,
     sim: 'payment-executor',
+    sourceNote: 'developer tool — sandbox runner not enabled',
     caption:
-      'Run the full payment journey end-to-end for a country/partner and see exactly where it passes or fails. Every run is saved below. Native console: data calls are proxied same-origin (/e2e) so it works remotely.',
+      'Automated end-to-end payment-journey runner. Not available from the portal: it performs a real authorize+capture, so the payment-executor surface is off by default and internal-token gated, and the browser proxy to it was removed (GAP T0-5). The tab explains how to drive it from a dev machine.',
   },
 ];
 
@@ -114,9 +119,8 @@ export default function SandboxPage() {
             for settlement. &nbsp;
             (6) Open <em>Nepal QR</em> to decode a Nepali QR (Khalti/Fonepay), pay in NPR, and
             inspect the request/response the partner API exchanges with GMEPay+. &nbsp;
-            (7) Or skip the manual walk-through entirely: open <em>E2E Test</em>, pick a
-            country/partner/amount, and run the whole payment journey automatically — a
-            step-by-step pass/fail log shows exactly where it succeeds or breaks.
+            (7) The automated <em>E2E Test</em> runner is a developer-only tool and is not
+            enabled here — that tab explains why and how to drive it from a dev machine.
           </Typography>
         </Alert>
       </Box>
@@ -154,9 +158,17 @@ export default function SandboxPage() {
               </Typography>
               <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
                 &mdash;{' '}
-                <strong>{Component ? 'native console (same-origin proxy)' : t.url}</strong>{' '}
-                &nbsp;|&nbsp; start with:{' '}
-                <code>gradlew -p simulators/{t.sim} bootRun</code>
+                <strong>
+                  {t.sourceNote ?? (Component ? 'native console (same-origin proxy)' : t.url)}
+                </strong>
+                {/* A tab with its own sourceNote has no simulator to start. */}
+                {!t.sourceNote && (
+                  <>
+                    {' '}
+                    &nbsp;|&nbsp; start with:{' '}
+                    <code>gradlew -p simulators/{t.sim} bootRun</code>
+                  </>
+                )}
               </Typography>
             </Box>
             {Component ? (

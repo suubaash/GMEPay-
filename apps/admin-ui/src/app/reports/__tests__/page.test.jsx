@@ -4,8 +4,10 @@
  *  1. Renders the report-runs table with fixture data.
  *  2. Type filter change dispatches fetchReports with the new type.
  *  3. "Generate" button opens a confirm dialog; confirming dispatches triggerGenerate.
- *  4. Download button dispatches downloadReportRun for GENERATED / SUBMITTED runs.
+ *  4. Download button dispatches downloadReportRun for runs with a local artifact.
  *  5. Shows EmptyState when no runs match.
+ *  9. GAP T5-2: no run is presented as filed, and a retired SUBMITTED never looks like
+ *     a success.
  *
  * All reportsApi calls are mocked — the page renders from Redux state only.
  */
@@ -43,15 +45,26 @@ import ReportsPage from '../page';
 // ---------------------------------------------------------------------------
 // Fixture data
 // ---------------------------------------------------------------------------
+/** The 3-lane board the BFF now carries on every ReportRun (GAP T5-2). */
+const DARK_CHANNELS = ['BOK', 'KOFIU', 'HOMETAX'].map((lane) => ({
+  lane,
+  channelLive: false,
+  reachableStatus: 'NOT_FILED_CHANNEL_UNAVAILABLE',
+  reason: `${lane} channel is not configured.`,
+}));
+
 const RUNS = [
   {
     id: 'rpt-001',
     type: 'BOK_FX1014',
     period: '2025-05',
-    status: 'SUBMITTED',
+    // Terminal state for every lane today — generated locally, never transmitted.
+    status: 'NOT_FILED_CHANNEL_UNAVAILABLE',
     recordCount: '1428',
     generatedAt: '2025-06-01T01:30:00Z',
-    downloadUrl: null,
+    downloadUrl: '/v1/admin/reports/rpt-001/download',
+    filingChannelUnavailableReason: 'BOK SFTP endpoint is not configured (OI-03).',
+    filingChannels: DARK_CHANNELS,
   },
   {
     id: 'rpt-002',
@@ -147,10 +160,58 @@ describe('ReportsPage', () => {
     expect(within(table).getByText('312')).toBeInTheDocument();
     expect(within(table).getByText('2041')).toBeInTheDocument();
 
-    // Status chips
-    expect(within(table).getAllByText('SUBMITTED').length).toBeGreaterThan(0);
-    expect(within(table).getAllByText('GENERATED').length).toBeGreaterThan(0);
+    // Status chips — the honest vocabulary; "SUBMITTED" cannot appear at all now.
+    expect(within(table).queryByText('SUBMITTED')).not.toBeInTheDocument();
+    expect(within(table).getAllByText('NOT FILED — no channel').length).toBeGreaterThan(0);
+    expect(within(table).getAllByText('GENERATED (local)').length).toBeGreaterThan(0);
     expect(within(table).getAllByText('FAILED').length).toBeGreaterThan(0);
+    // Column header names the fact being reported.
+    expect(within(table).getByText('Filing status')).toBeInTheDocument();
+  });
+
+  // 1b. GAP T5-2 — the page states that nothing has been filed, with the lane board
+  it('shows a "nothing has been filed" banner with the per-lane channel board', async () => {
+    mockListReports.mockResolvedValue(RUNS);
+
+    renderPage();
+
+    const banner = await screen.findByTestId('not-filed-banner');
+    expect(within(banner).getByText(/nothing on this page has been filed/i)).toBeInTheDocument();
+    expect(
+      within(banner).getByText(/no regulatory lane has a live filing channel/i),
+    ).toBeInTheDocument();
+    const board = within(banner).getByTestId('filing-channel-board');
+    expect(within(board).getByText('BOK: no filing channel')).toBeInTheDocument();
+    expect(within(board).getByText('HOMETAX: no filing channel')).toBeInTheDocument();
+  });
+
+  // 1c. A retired/unknown status must never be dressed up as a success
+  it('renders a stale SUBMITTED as "not a valid state", not as filed', async () => {
+    mockListReports.mockResolvedValue([
+      {
+        ...RUNS[0],
+        id: 'rpt-stale',
+        status: 'SUBMITTED',
+      },
+    ]);
+
+    renderPage();
+
+    const table = await screen.findByRole('table', { name: /report runs/i });
+    expect(within(table).getByText('SUBMITTED — not a valid state')).toBeInTheDocument();
+    // Still flagged as unfiled at the page level.
+    expect(screen.getByTestId('not-filed-banner')).toBeInTheDocument();
+  });
+
+  // 1d. A run the backend reported as filed suppresses the blanket banner
+  it('drops the banner when a run really reports TRANSMITTED', async () => {
+    mockListReports.mockResolvedValue([{ ...RUNS[0], id: 'rpt-tx', status: 'TRANSMITTED' }]);
+
+    renderPage();
+
+    const table = await screen.findByRole('table', { name: /report runs/i });
+    expect(within(table).getByText('TRANSMITTED')).toBeInTheDocument();
+    expect(screen.queryByTestId('not-filed-banner')).not.toBeInTheDocument();
   });
 
   // 2. Type filter triggers a re-fetch
@@ -266,8 +327,10 @@ describe('ReportsPage', () => {
     expect(mockGenerateReport).not.toHaveBeenCalled();
   });
 
-  // 4. Download button dispatches downloadReportRun for GENERATED rows
-  it('download button is rendered for GENERATED/SUBMITTED rows and triggers download', async () => {
+  // 4. Download button dispatches downloadReportRun for rows with a local artifact
+  //    (GENERATED / VALIDATED / NOT_FILED_CHANNEL_UNAVAILABLE — never keyed off the
+  //    retired SUBMITTED, which used to be the only other allowed value)
+  it('download button is rendered for rows with an artifact and triggers download', async () => {
     mockListReports.mockResolvedValue(RUNS);
     // downloadReport returns a Blob — stub minimally
     const fakeBlob = new Blob(['fake'], { type: 'application/zip' });

@@ -1,35 +1,26 @@
 'use client';
 
 /**
- * Partner Portal auth helpers.
+ * Partner Portal auth helpers — Keycloak OIDC only.
  *
- * Phase 1: token + partnerId stored in localStorage, sent as
- *   Authorization: Bearer <token>
- *   X-Partner-Id: <partnerId>
+ * The single credential source is Keycloak (authorization-code + PKCE, see
+ * ./oidc.js). `ops-partner-bff` is an OAuth2 resource server: it verifies the
+ * access token's signature/issuer/expiry and takes BOTH authorization and the
+ * partner scope from the token's own claims (`security/TokenClaims.java`).
  *
- * Phase 2 (OIDC): Keycloak authorization-code + PKCE. The access_token from
- *   Keycloak becomes the bearer; api-gateway acts as the OAuth2 resource
- *   server. The dev-skip password form is retained behind
- *   NEXT_PUBLIC_ALLOW_DEV_LOGIN=true for local iteration without Keycloak.
+ * What was removed (gap register T0-1 / T0-4 / T1-2):
+ *   - `login()` POSTing `{username, password}` to `POST /v1/auth/login`. That
+ *     endpoint and its DTOs were DELETED from the BFF; it now 404s, and the
+ *     unsigned `role:ADMIN` token it used to mint is rejected by the resource
+ *     server anyway.
+ *   - the `X-Partner-Id` header as an identity. The BFF reads it nowhere; tenant
+ *     scope comes from the `partner_id` claim. It is kept here as a *local*
+ *     value only, because `/v1/portal/{partnerId}/**` needs it in the PATH.
  *
- * BFF wire contract (see docs/INTER_SERVICE_CONTRACTS.md):
- *   POST /v1/auth/login
- *     body  : { username, password }
- *     reply : { token, expiresAt, role }
- *
- * The BFF does NOT return a partnerId — the Portal UI treats the form's
- * `partnerId` field as the partner identity for `X-Partner-Id` and stores it
- * locally alongside the token.
- *
- * @typedef {object} LoginRequest
- * @property {string} partnerId  - Used as the X-Partner-Id header value (UI-local).
- * @property {string} password   - Demo password is "demo" in Phase 1.
- *
- * @typedef {object} LoginResponse
- * @property {string} token       - Mock JWT-shaped string from BFF.
- * @property {string} partnerId   - UI-local: mirrors the partnerId from the form.
- * @property {string} [expiresAt] - ISO-8601 instant when the token expires.
- * @property {string} [role]      - Role claim from the BFF (e.g. "ADMIN").
+ * The stored partner id therefore MUST come from the token, and must equal a
+ * partner code the platform actually knows (`GMEREMIT` / `SENDMN` from
+ * config-registry's PartnerSeeder). Anything else is a guaranteed 403 from
+ * `OpsRbacGuard.requirePartnerScope`.
  */
 import { decodeJwtPayload } from './oidc';
 
@@ -75,13 +66,13 @@ export function getPartnerId() {
 /**
  * Whether a session is present and not expired.
  *
- * For OIDC sessions we check the cached expiry epoch (set by
- * {@link storeOidcSession}). A token past its `exp` is treated as logged-out
- * so AuthGate can kick the partner back to Keycloak for a fresh login.
- * Signature verification is the BFF's job.
+ * We check the cached expiry epoch (set by {@link storeOidcSession}). A token
+ * past its `exp` is treated as logged-out so AuthGate can kick the partner back
+ * to Keycloak for a fresh login. Signature verification is the BFF's job.
  *
- * For Phase-1 password sessions (no EXPIRES_AT_KEY) we fall back to the
- * original "token + partnerId present" check.
+ * A token with no cached expiry (hand-injected in a test, or written by an older
+ * build) still requires a partner id to count as a session — without one no
+ * `/v1/portal/{partnerId}/**` call can be addressed at all.
  *
  * @returns {boolean}
  */
@@ -92,7 +83,7 @@ export function isAuthenticated() {
   if (!ls) return true;
   const epoch = ls.getItem(EXPIRES_AT_KEY);
   if (!epoch) {
-    // Phase-1 path: require partnerId too.
+    // No cached expiry: require a partner id before calling this a session.
     return Boolean(ls.getItem(PARTNER_ID_KEY));
   }
   const ms = Number(epoch);
@@ -100,14 +91,37 @@ export function isAuthenticated() {
   return Date.now() < ms;
 }
 
-function setToken(token) {
-  const ls = safeLocalStorage();
-  if (ls) ls.setItem(TOKEN_KEY, token);
+/**
+ * The partner code this token is scoped to, taken from the `partner_id` claim —
+ * the SAME claim `TokenClaims.partnerIdOf` reads server-side, checked on the
+ * access token first and the id_token second (the realm maps it into both).
+ *
+ * Returns null when the claim is absent. It deliberately does NOT fall back to
+ * `preferred_username` / `email`: the value is used as the `{partnerId}` path
+ * segment, so a username would produce a guaranteed 403 ("token is scoped to a
+ * different partner") that looks like a data bug instead of a missing mapper.
+ *
+ * @param {object} tokenResponse Keycloak token response
+ * @returns {string | null}
+ */
+export function partnerIdFromTokens(tokenResponse) {
+  const fromAccess = decodeJwtPayload(tokenResponse?.access_token)?.partner_id;
+  if (typeof fromAccess === 'string' && fromAccess.trim()) return fromAccess.trim();
+  const fromId = decodeJwtPayload(tokenResponse?.id_token)?.partner_id;
+  if (typeof fromId === 'string' && fromId.trim()) return fromId.trim();
+  return null;
 }
 
-function setPartnerId(id) {
-  const ls = safeLocalStorage();
-  if (ls) ls.setItem(PARTNER_ID_KEY, id);
+/**
+ * True when we hold a session but the token carries no partner scope — i.e. the
+ * Keycloak user has no `partner_id` attribute (or the `gmepay-partner-id`
+ * protocol mapper is missing from the client). Every portal page would 403/404,
+ * so AuthGate surfaces this explicitly instead of rendering broken pages.
+ *
+ * @returns {boolean}
+ */
+export function isPartnerScopeMissing() {
+  return Boolean(getToken()) && !getPartnerId();
 }
 
 /**
@@ -115,8 +129,7 @@ function setPartnerId(id) {
  * endpoint). The access_token becomes the bearer used by api/client.js.
  *
  * EXPIRES_AT_KEY is stored as ms-since-epoch for a numeric compare in
- * {@link isAuthenticated}. The Phase-1 dev-skip path stores an ISO string —
- * {@link isAuthenticated} handles both.
+ * {@link isAuthenticated}.
  *
  * @param {object} tokenResponse  Keycloak token response
  */
@@ -137,16 +150,14 @@ export function storeOidcSession(tokenResponse) {
       const epochMs = Date.now() + tokenResponse.expires_in * 1000;
       ls.setItem(EXPIRES_AT_KEY, String(epochMs));
     }
-    // Derive partnerId from the id_token claims when available, so that the
-    // X-Partner-Id header keeps working in the OIDC path.
-    const claims = decodeJwtPayload(tokenResponse.id_token);
-    if (claims) {
-      const pid =
-        claims.partner_id ??
-        claims.preferred_username ??
-        claims.email ??
-        null;
-      if (pid) ls.setItem(PARTNER_ID_KEY, pid);
+    // Partner scope comes from the token's partner_id claim ONLY (see
+    // partnerIdFromTokens). A stale value from a previous session must not
+    // survive a login as a different partner, hence the explicit remove.
+    const pid = partnerIdFromTokens(tokenResponse);
+    if (pid) {
+      ls.setItem(PARTNER_ID_KEY, pid);
+    } else {
+      ls.removeItem(PARTNER_ID_KEY);
     }
   } catch {
     /* quota / disabled */
@@ -171,64 +182,24 @@ export function clearAuth() {
 }
 
 /**
- * Sign in. POSTs `{ username, password }` to the BFF and, on success, stores
- * the returned token alongside the form-supplied partnerId. Throws on non-2xx
- * with a `.status` field so the login form can distinguish 401 from 5xx.
+ * Refresh the access token with the stored refresh_token and persist the result.
+ * Returns the new access token, or null when there is nothing to refresh / the
+ * refresh was rejected (caller should then start a fresh Keycloak login).
  *
- * Note: the BFF reply does NOT include a partnerId (per LoginResponse); we
- * mirror the form value so `X-Partner-Id` is always available client-side.
- *
- * @param {LoginRequest} req
- * @returns {Promise<LoginResponse>}
+ * @returns {Promise<string | null>}
  */
-export async function login(req) {
-  const base = process.env.NEXT_PUBLIC_BFF_BASE_URL || '';
-  const url = base ? `${base}/v1/auth/login` : `/api/v1/auth/login`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    // The BFF reads { username, password } — map partnerId -> username on the wire.
-    body: JSON.stringify({ username: req.partnerId, password: req.password }),
-    cache: 'no-store'
-  });
-
-  if (!res.ok) {
-    // Read the response body as text FIRST — once a Response body stream has
-    // been consumed (even by a failing res.json()), subsequent reads throw
-    // `TypeError: Body is unusable`. Parse JSON from the text if possible.
-    let body;
-    try {
-      const raw = await res.text();
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        body = raw;
-      }
-    } catch {
-      body = undefined;
-    }
-    const err = new Error(
-      res.status === 401 || res.status === 403
-        ? 'Invalid partner id or password'
-        : `Login failed (HTTP ${res.status})`
-    );
-    err.status = res.status;
-    err.body = body;
-    throw err;
+export async function refreshSession() {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const { refreshTokens } = await import('./oidc');
+    const tokenResponse = await refreshTokens(refreshToken);
+    if (!tokenResponse?.access_token) return null;
+    storeOidcSession(tokenResponse);
+    return tokenResponse.access_token;
+  } catch {
+    return null;
   }
-
-  const data = await res.json();
-  if (!data || !data.token) {
-    throw new Error('Login response missing token');
-  }
-  setToken(data.token);
-  setPartnerId(req.partnerId);
-  return {
-    token: data.token,
-    partnerId: req.partnerId,
-    expiresAt: data.expiresAt,
-    role: data.role
-  };
 }
 
 /**

@@ -7,38 +7,45 @@ import { configureStore } from '@reduxjs/toolkit';
 import authReducer from '@/store/authSlice';
 import { SnackbarProvider } from '@/components/SnackbarProvider';
 
+/**
+ * T1-2: the login page is Keycloak SSO ONLY.
+ *
+ * The Phase-1 `partnerId` + `password` form is gone: it POSTed to
+ * `POST /v1/auth/login`, which was deleted from ops-partner-bff (T0-1). These
+ * tests lock that in — a password field reappearing here is a regression, not a
+ * convenience.
+ */
 const replaceMock = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: replaceMock, push: vi.fn(), prefetch: vi.fn() }),
   usePathname: () => '/login'
 }));
 
-const loginMock = vi.fn();
+const startLoginMock = vi.fn();
+vi.mock('@/api/oidc', () => ({
+  startLogin: (...args) => startLoginMock(...args),
+  isDevLoginAllowed: () => true,
+  decodeJwtPayload: () => null
+}));
+
 vi.mock('@/api/auth', () => ({
   TOKEN_KEY: 'gmepay.partnerToken',
   PARTNER_ID_KEY: 'gmepay.partnerId',
+  EXPIRES_AT_KEY: 'gmepay.partnerTokenExpiresAt',
   getToken: () => null,
   getPartnerId: () => null,
+  partnerIdFromTokens: () => null,
   isAuthenticated: () => false,
-  login: (...args) => loginMock(...args),
+  isPartnerScopeMissing: () => false,
+  storeOidcSession: vi.fn(),
+  clearAuth: vi.fn(),
   logout: vi.fn()
-}));
-
-vi.mock('@/api/client', () => ({
-  portalApi: {
-    login: (...args) => loginMock(...args)
-  },
-  currentPartnerId: () => ''
 }));
 
 import LoginPage from '../page';
 
-function makeStore() {
-  return configureStore({ reducer: { auth: authReducer } });
-}
-
 function renderLogin() {
-  const store = makeStore();
+  const store = configureStore({ reducer: { auth: authReducer } });
   return render(
     <ReduxProvider store={store}>
       <SnackbarProvider>
@@ -50,83 +57,45 @@ function renderLogin() {
 
 describe('LoginPage', () => {
   beforeEach(() => {
-    loginMock.mockReset();
+    startLoginMock.mockReset().mockResolvedValue('https://kc.example.com/auth');
     replaceMock.mockReset();
   });
 
-  it('renders the partner-id and password fields', () => {
+  it('renders a single Keycloak SSO affordance', () => {
     renderLogin();
-    expect(screen.getByTestId('partner-id-input')).toBeInTheDocument();
-    expect(screen.getByTestId('password-input')).toBeInTheDocument();
-    expect(screen.getByTestId('login-submit')).toBeInTheDocument();
+    expect(screen.getByTestId('login-sso')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /sign in with keycloak/i })
+    ).toBeInTheDocument();
   });
 
-  it('shows validation errors when submitting an empty form', async () => {
-    renderLogin();
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId('login-submit'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Partner ID is required/i)).toBeInTheDocument();
-      expect(screen.getByText(/Password is required/i)).toBeInTheDocument();
-    });
-    expect(loginMock).not.toHaveBeenCalled();
+  it('offers NO password path (the BFF endpoint no longer exists)', () => {
+    const { container } = renderLogin();
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(container.querySelector('input')).toBeNull();
+    expect(screen.queryByTestId('password-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('partner-id-input')).not.toBeInTheDocument();
+    expect(screen.queryByText(/demo credentials/i)).not.toBeInTheDocument();
   });
 
-  it('rejects partner ids that contain invalid characters', async () => {
+  it('starts the OIDC redirect on click', async () => {
     renderLogin();
     const user = userEvent.setup();
-    await user.type(screen.getByTestId('partner-id-input'), 'invalid id!');
-    await user.type(screen.getByTestId('password-input'), 'demopass');
-    await user.click(screen.getByTestId('login-submit'));
-
-    await waitFor(() => {
-      expect(screen.getByText(/letters, digits, _ and -/i)).toBeInTheDocument();
-    });
-    expect(loginMock).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('login-sso'));
+    await waitFor(() => expect(startLoginMock).toHaveBeenCalledTimes(1));
+    expect(startLoginMock).toHaveBeenCalledWith('/');
   });
 
-  it('calls login() with the form values on a valid submit', async () => {
-    loginMock.mockResolvedValueOnce({
-      token: 'tkn',
-      partnerId: 'GMEREMIT',
-      expiresAt: '2026-06-09T13:15:30Z',
-      role: 'ADMIN'
-    });
+  it('surfaces a redirect failure instead of spinning forever', async () => {
+    startLoginMock.mockRejectedValueOnce(new Error('sessionStorage disabled'));
     renderLogin();
     const user = userEvent.setup();
-
-    await user.type(screen.getByTestId('partner-id-input'), 'GMEREMIT');
-    await user.type(screen.getByTestId('password-input'), 'demo');
-    await user.click(screen.getByTestId('login-submit'));
-
-    await waitFor(() => {
-      expect(loginMock).toHaveBeenCalledTimes(1);
-    });
-    expect(loginMock).toHaveBeenCalledWith({
-      partnerId: 'GMEREMIT',
-      password: 'demo'
-    });
-
-    await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith('/');
-    });
-  });
-
-  it('surfaces the rejection error to the user', async () => {
-    loginMock.mockRejectedValueOnce(new Error('Invalid partner id or password'));
-    renderLogin();
-    const user = userEvent.setup();
-
-    await user.type(screen.getByTestId('partner-id-input'), 'GMEREMIT');
-    await user.type(screen.getByTestId('password-input'), 'wrong');
-    await user.click(screen.getByTestId('login-submit'));
-
-    await waitFor(() => {
+    await user.click(screen.getByTestId('login-sso'));
+    await waitFor(() =>
       expect(screen.getByTestId('login-error')).toHaveTextContent(
-        /Invalid partner id or password/i
-      );
-    });
-    expect(replaceMock).not.toHaveBeenCalledWith('/');
+        /sessionStorage disabled/i
+      )
+    );
+    expect(screen.getByTestId('login-sso')).not.toBeDisabled();
   });
 });

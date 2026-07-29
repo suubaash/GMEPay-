@@ -5,15 +5,20 @@
  * `${NEXT_PUBLIC_BFF_BASE_URL}/...` (see next.config.mjs). In tests / SSR the
  * env var is read directly. All non-2xx responses throw {@link ApiError}.
  *
- * Authorization: when a JWT is present in localStorage under
- * `gmepay.adminToken` (see ./auth.js), every request automatically carries
- * `Authorization: Bearer <token>`. A 401 from the BFF clears the token and
- * the AuthGate then bounces the user to /login on the next render.
+ * Authorization: the Keycloak access token in localStorage under
+ * `gmepay.adminToken` (see ./auth.js) is attached as
+ * `Authorization: Bearer <token>` on every request. The BFF is an OAuth2
+ * resource server (default deny) and derives permissions from the token's own
+ * claims, so no `X-Gme-*` header carries authority any more.
+ *
+ * On 401 we try ONE silent refresh_token exchange and replay the request; if that
+ * fails the token is cleared and AuthGate bounces the operator to /login (which
+ * offers Keycloak SSO — there is no password endpoint).
  *
  * NOTE: keep this file free of TS — JS only. Field names matching the BFF
  * are documented inline via JSDoc.
  */
-import { TOKEN_KEY } from './auth';
+import { TOKEN_KEY, refreshSession } from './auth';
 import { startRequest, endRequest } from './requestLog';
 
 /**
@@ -94,6 +99,13 @@ async function multipartRequest(path, formData) {
   return _doFetch(url, { method: 'POST', body: formData, headers });
 }
 
+/**
+ * Replace the Authorization header on a copy of `init`.
+ */
+function withBearer(init, token) {
+  return { ...init, headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` } };
+}
+
 async function _doFetch(url, init) {
   // Record into requestLog so the role-gated RequestInspector overlay can show
   // the live request/response (see ./requestLog.js + components/RequestInspector).
@@ -111,6 +123,16 @@ async function _doFetch(url, init) {
     endRequest(logId, { status: 0, error: msg || 'network error', durationMs: Date.now() - startedAt });
     throw new ApiError(0, url, msg || 'network error');
   }
+  if (res.status === 401 && typeof window !== 'undefined' && !init?.__retried) {
+    // Access token expired (or the issuer rotated keys): try ONE silent refresh
+    // and replay. `__retried` guards against a refresh that itself yields 401.
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      endRequest(logId, { status: 401, error: 'token refreshed, retrying', durationMs: Date.now() - startedAt });
+      return _doFetch(url, { ...withBearer(init, refreshed), __retried: true });
+    }
+  }
+
   if (!res.ok) {
     if (res.status === 401 && typeof window !== 'undefined') {
       try {
@@ -156,23 +178,10 @@ async function _doFetch(url, init) {
  */
 export const adminApi = {
   // ---------- Auth ----------
-  /**
-   * POST /v1/auth/login  body { username, password }
-   * Returns { token, expiresAt, role }.
-   */
-  login: (body) =>
-    request('/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  /**
-   * POST /v1/auth/refresh body { token } -> { token, expiresAt, role }
-   */
-  refreshToken: (token) =>
-    request('/v1/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    }),
+  // Nothing here on purpose. `POST /v1/auth/login` and `POST /v1/auth/refresh`
+  // were DELETED from ops-partner-bff (gap T0-1): login now happens against
+  // Keycloak (api/oidc.js) and token renewal goes through
+  // `auth.refreshSession()` (refresh_token grant), not through the BFF.
 
   // ---------- Dashboard ----------
   /**

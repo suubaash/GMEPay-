@@ -1,82 +1,70 @@
 'use client';
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { useForm, Controller } from 'react-hook-form';
-import { yupResolver } from '@hookform/resolvers/yup';
-import * as yup from 'yup';
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
+  CircularProgress,
   Container,
   Stack,
-  TextField,
-  Typography,
-  CircularProgress
+  Typography
 } from '@mui/material';
+import LockIcon from '@mui/icons-material/Lock';
 import { useDispatch, useSelector } from 'react-redux';
-import { clearAuthError, hydrateFromStorage, loginThunk } from '@/store/authSlice';
-import { useSnackbar } from '@/components/SnackbarProvider';
+import { hydrateFromStorage } from '@/store/authSlice';
+import { startLogin } from '@/api/oidc';
 
 /**
- * Partner login form.
+ * Partner login page — Keycloak SSO only.
  *
- * Submits to POST /v1/auth/login. The BFF expects `{ username, password }`
- * and replies with `{ token, expiresAt, role }` — there is no `partnerId` on
- * the reply. `api/auth.login()` adapts both ends: it sends partnerId as
- * `username` on the wire and mirrors it onto the persisted LoginResponse so
- * the UI has a stable partner identity.
+ * The Phase-1 `partnerId` + `password=demo` form is GONE, and so is the
+ * "Phase 1 demo credentials" hint that told partners to use it. It POSTed to
+ * `POST /v1/auth/login` on the BFF, an endpoint that was deleted (gap T0-1):
+ * it minted an unsigned `role:ADMIN` token, and the BFF is now an OAuth2
+ * resource server that rejects anything Keycloak did not sign.
+ *
+ * The only affordance is therefore a redirect into the realm configured by
+ * `NEXT_PUBLIC_KEYCLOAK_URL` (default `http://localhost:8097/realms/gmepay`,
+ * client `partner-portal-ui`, authorization-code + PKCE S256). Keycloak returns
+ * to `/auth/callback`, which exchanges the code and stores the session.
+ *
+ * Mirrors `apps/admin-ui/src/app/login/page.jsx` deliberately: one login shape
+ * across both SPAs, so a topology change is a one-line env change in both.
  */
-const schema = yup.object({
-  partnerId: yup
-    .string()
-    .trim()
-    .required('Partner ID is required')
-    .min(2, 'Partner ID must be at least 2 characters')
-    .matches(/^[A-Za-z0-9_-]+$/, 'Partner ID may only contain letters, digits, _ and -'),
-  password: yup
-    .string()
-    .required('Password is required')
-    .min(4, 'Password must be at least 4 characters')
-});
-
 export default function LoginPage() {
   const dispatch = useDispatch();
   const router = useRouter();
-  const snackbar = useSnackbar();
   const auth = useSelector((s) => s.auth);
-
-  const { control, handleSubmit, formState } = useForm({
-    resolver: yupResolver(schema),
-    defaultValues: { partnerId: '', password: '' },
-    mode: 'onTouched'
-  });
+  const [ssoPending, setSsoPending] = React.useState(false);
+  const [error, setError] = React.useState(null);
 
   React.useEffect(() => {
     dispatch(hydrateFromStorage());
   }, [dispatch]);
 
+  // Already signed in (e.g. landed here via a stale link) — go to the portal.
   React.useEffect(() => {
     if (auth.token && auth.partnerId) {
       router.replace('/');
     }
   }, [auth.token, auth.partnerId, router]);
 
-  const onSubmit = async (values) => {
-    dispatch(clearAuthError());
-    const result = await dispatch(loginThunk(values));
-    if (loginThunk.fulfilled.match(result)) {
-      snackbar.showSuccess(`Welcome, ${result.payload.partnerId ?? values.partnerId}`);
-      router.replace('/');
-    } else {
-      const msg = result.payload ?? 'Login failed. Please try again.';
-      snackbar.showError(msg);
+  const handleSso = async () => {
+    setError(null);
+    setSsoPending(true);
+    try {
+      // startLogin navigates the window away; reaching the finally block means
+      // it could not (no window / sessionStorage blocked), so recover the button.
+      await startLogin('/');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSsoPending(false);
     }
   };
-
-  const submitting = auth.status === 'loading' || formState.isSubmitting;
 
   return (
     <Container maxWidth="sm" sx={{ py: { xs: 4, md: 10 } }}>
@@ -90,75 +78,39 @@ export default function LoginPage() {
 
         <Card sx={{ width: '100%' }}>
           <CardContent>
-            <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate>
-              <Stack spacing={2}>
-                {auth.error && (
-                  <Alert
-                    severity="error"
-                    onClose={() => dispatch(clearAuthError())}
-                    data-testid="login-error"
-                  >
-                    {auth.error}
-                  </Alert>
-                )}
+            <Stack spacing={2}>
+              {(error || auth.error) && (
+                <Alert severity="error" data-testid="login-error">
+                  {error ?? auth.error}
+                </Alert>
+              )}
 
-                <Controller
-                  name="partnerId"
-                  control={control}
-                  render={({ field, fieldState }) => (
-                    <TextField
-                      {...field}
-                      label="Partner ID"
-                      placeholder="e.g. GMEREMIT or SENDMN"
-                      autoComplete="username"
-                      autoFocus
-                      required
-                      fullWidth
-                      error={Boolean(fieldState.error)}
-                      helperText={fieldState.error?.message ?? ' '}
-                      inputProps={{ 'data-testid': 'partner-id-input' }}
-                    />
-                  )}
-                />
+              <Button
+                variant="contained"
+                size="large"
+                fullWidth
+                onClick={handleSso}
+                disabled={ssoPending}
+                data-testid="login-sso"
+                aria-label="Sign in with Keycloak"
+                startIcon={
+                  ssoPending ? (
+                    <CircularProgress size={18} color="inherit" />
+                  ) : (
+                    <LockIcon />
+                  )
+                }
+              >
+                Sign in with Keycloak
+              </Button>
 
-                <Controller
-                  name="password"
-                  control={control}
-                  render={({ field, fieldState }) => (
-                    <TextField
-                      {...field}
-                      label="Password"
-                      type="password"
-                      autoComplete="current-password"
-                      required
-                      fullWidth
-                      error={Boolean(fieldState.error)}
-                      helperText={fieldState.error?.message ?? ' '}
-                      inputProps={{ 'data-testid': 'password-input' }}
-                    />
-                  )}
-                />
-
-                <Button
-                  type="submit"
-                  variant="contained"
-                  size="large"
-                  disabled={submitting}
-                  data-testid="login-submit"
-                  startIcon={
-                    submitting ? <CircularProgress size={16} color="inherit" /> : null
-                  }
-                >
-                  {submitting ? 'Signing in…' : 'Sign in'}
-                </Button>
-
-                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  Phase 1 demo credentials: any partner id (e.g. <code>GMEREMIT</code>
-                  or <code>SENDMN</code>), password <code>demo</code>. Production
-                  deployments wire OAuth2 / partner SSO.
-                </Typography>
-              </Stack>
-            </Box>
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Single sign-on via the GMEPay+ identity provider. Your partner
+                account must carry a <code>partner_id</code> matching your partner
+                code — ask your GMEPay+ operator if sign-in succeeds but no data
+                appears.
+              </Typography>
+            </Stack>
           </CardContent>
         </Card>
       </Stack>

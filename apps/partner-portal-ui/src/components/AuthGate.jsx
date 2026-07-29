@@ -2,10 +2,10 @@
 import * as React from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useDispatch, useSelector } from 'react-redux';
-import { Box, CircularProgress, Stack, Typography } from '@mui/material';
-import { hydrateFromStorage } from '@/store/authSlice';
+import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { hydrateFromStorage, logoutAction } from '@/store/authSlice';
 import { isDevLoginAllowed, startLogin } from '@/api/oidc';
-import { isAuthenticated } from '@/api/auth';
+import { isAuthenticated, isPartnerScopeMissing } from '@/api/auth';
 
 /** Routes that do NOT require authentication. */
 const PUBLIC_ROUTES = new Set(['/login']);
@@ -19,10 +19,15 @@ const PUBLIC_ROUTES = new Set(['/login']);
  *
  * Redirect logic (after hydration, on protected routes):
  *   - If `isAuthenticated()` returns true → render children.
- *   - If `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` → redirect to in-app /login form
- *     (Phase-1 password form, also used by vitest).
+ *   - If `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` → redirect to the in-app /login page
+ *     (which offers the Keycloak SSO button; there is no password form any more).
  *   - Otherwise → trigger Keycloak OIDC login via {@link startLogin}, capturing
  *     the current path as the post-login return destination.
+ *
+ * Signed in but the token carries no `partner_id` claim: every
+ * `/v1/portal/{partnerId}/**` call would 403/404, so we stop and say exactly
+ * what is missing (the Keycloak user attribute or the `gmepay-partner-id`
+ * protocol mapper) instead of rendering a page of failed panels.
  *
  * The `/auth/callback` route and any path starting with `/auth/` are treated
  * as public so the callback page can complete the code exchange without being
@@ -84,6 +89,35 @@ export default function AuthGate({ children }) {
 
   if (!isPublic && !signedIn) {
     return null;
+  }
+
+  if (!isPublic && isPartnerScopeMissing()) {
+    return (
+      <Box sx={{ p: 3, display: 'flex', justifyContent: 'center' }}>
+        <Stack spacing={2} sx={{ maxWidth: 560 }} data-testid="no-partner-scope">
+          <Alert severity="warning">
+            You are signed in, but your account is not linked to a partner.
+          </Alert>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+            The access token carries no <code>partner_id</code> claim, so the
+            portal cannot address your data. Ask a GMEPay+ operator to set the{' '}
+            <code>partner_id</code> attribute on your Keycloak user to your
+            partner code (e.g. <code>GMEREMIT</code>) and confirm the{' '}
+            <code>gmepay-partner-id</code> protocol mapper is enabled on the{' '}
+            <code>partner-portal-ui</code> client.
+          </Typography>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              dispatch(logoutAction());
+              router.replace('/login');
+            }}
+          >
+            Sign out
+          </Button>
+        </Stack>
+      </Box>
+    );
   }
 
   return <>{children}</>;

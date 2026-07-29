@@ -54,10 +54,20 @@ abi:
   GMEPAY_VAULT_ENDPOINT: http://minio:9000
   GMEPAY_VAULT_REGION: us-east-1
   GMEPAY_VAULT_PATH_STYLE: "true"
-  # OIDC issuer (api-gateway resource-server). Provider-neutral var name kept as
-  # an alias; the binding var is the Spring property name.
-  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/gmepay
-  OIDC_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  # OIDC (api-gateway + ops-partner-bff resource servers). Provider-neutral var
+  # name kept as an alias; the binding var is the Spring property name.
+  #
+  # T1-2: the ISSUER must be the BROWSER-facing URL, because that is what Keycloak
+  # stamps into the token's `iss` and what the SPAs' NEXT_PUBLIC_KEYCLOAK_URL points
+  # at. An in-cluster `http://keycloak:8080/...` issuer can never match a token a
+  # browser obtained through the ingress, so every request 401'd. The JWKS URI stays
+  # in-cluster — that is the URL the PODS fetch keys from; Spring still validates the
+  # `iss` claim against issuer-uri when the decoder is built from jwk-set-uri.
+  # Realm and client ids come from docker/keycloak/realm-gmepay.json (realm `gmepay`,
+  # clients `admin-ui` / `partner-portal-ui`) — see docker/keycloak/README.md §1.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  OIDC_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
   # Telemetry (OTLP, vendor-neutral).
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
 
@@ -87,6 +97,13 @@ secrets:
 # Ingress — fronts api-gateway + the two UIs. Hosts/class/annotations are
 # overridden per target (nginx / ALB / App Gateway).
 # ---------------------------------------------------------------------------
+# NOTE (T1-2): Keycloak is NOT deployed by this chart — it is an external
+# dependency. `keycloak.gmepay.local` (abi.OIDC_ISSUER_URI + the UIs'
+# NEXT_PUBLIC_KEYCLOAK_URL) must resolve, from the BROWSER, to that external
+# Keycloak's realm base; the pods reach the same realm in-cluster at
+# http://keycloak:8080 for JWKS only. If you host Keycloak in-cluster, add a
+# `keycloak` entry to the services map + an ingress host here and keep the two
+# URLs pointing at the same realm.
 ingress:
   enabled: true
   className: nginx
@@ -128,6 +145,17 @@ services:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-config:5432/configreg
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # ---- Partner ACTIVATION must issue REAL credentials (gap T1-1) --------------
+      # Both selectors default to `rest` in the image's application.properties; pinned
+      # here too so the deployed wiring is auditable from the values file alone. With
+      # `stub` (the pre-T1-1 implicit default) activation returns local randomness: the
+      # API key resolves to found=false at auth-identity's
+      # POST /internal/auth/keys/resolve and the whsec_ secret is unknown to
+      # notification-webhook, so no partner request or webhook signature can verify.
+      GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: "rest"
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
 
   rate-fx:
     image: rate-fx
@@ -311,14 +339,21 @@ services:
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
 
   # ---- Human UIs (Next.js). NEXT_PUBLIC_* are read at runtime by npm start. ----
+  # BFF_PROXY_TARGET is server-side only: the Next node process proxies /api/* to it
+  # (next.config.mjs). NEXT_PUBLIC_BFF_BASE_URL is deliberately NOT set — it flips the
+  # browser into direct cross-origin calls and the BFF ships no CORS config, so every
+  # call would fail preflight (T1-2 task 4).
+  # NEXT_PUBLIC_KEYCLOAK_URL must be the URL the BROWSER can reach (ingress host), and
+  # must match abi.OIDC_ISSUER_URI above character-for-character.
   admin-ui:
     image: admin-ui
     component: ui
     containerPort: 3000
     probe: { type: tcp }
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
-      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay
+      BFF_PROXY_TARGET: http://ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: admin-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
 
   partner-portal-ui:
@@ -327,7 +362,7 @@ services:
     containerPort: 3001
     probe: { type: tcp }
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
-      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay-partners
-      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      BFF_PROXY_TARGET: http://ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: partner-portal-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

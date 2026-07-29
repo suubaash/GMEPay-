@@ -34,8 +34,14 @@ abi:
   GMEPAY_VAULT_PATH_STYLE: "false"
   # OIDC — Keycloak-on-EKS (shown) OR Cognito issuer:
   #   https://cognito-idp.<region>.amazonaws.com/<userPoolId>
+  # This MUST be the browser-facing issuer (identical to the UIs'
+  # NEXT_PUBLIC_KEYCLOAK_URL) because it is what lands in the token's `iss`.
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
   OIDC_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
+  # Set only when the pods cannot reach the public issuer for OIDC discovery
+  # (split-horizon DNS / private-only Keycloak). Keeping it unset lets discovery
+  # run against the issuer above, which is correct for a publicly resolvable IdP.
+  # SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
   # OTLP -> ADOT collector / managed OTLP endpoint.
   OTEL_EXPORTER_OTLP_ENDPOINT: http://adot-collector.observability.svc:4317
 
@@ -88,14 +94,19 @@ services:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-settlement.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/settlement }
   revenue-ledger:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-ledger.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/ledger }
+  # One realm (`gmepay`), one client id per SPA, and the SAME issuer string the
+  # resource servers expect (abi.OIDC_ISSUER_URI above) — see docker/keycloak/README.md.
+  # BFF_PROXY_TARGET is server-side only; NEXT_PUBLIC_BFF_BASE_URL is intentionally
+  # unset (it would make the browser call the BFF cross-origin, which has no CORS).
   admin-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
+      BFF_PROXY_TARGET: http://ops-partner-bff:8080
       NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: admin-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
   partner-portal-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
-      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay-partners
-      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      BFF_PROXY_TARGET: http://ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: partner-portal-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

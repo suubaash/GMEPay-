@@ -38,7 +38,7 @@
   .\run-fleet.ps1 stop            # kill the whole fleet + tracer
 
 .NOTES
-  Memory: all 22 JVMs need ~8-10 GB. If services get reaped, use -Subset money or
+  Memory: all ~28 JVMs need ~9-11 GB. If services get reaped, use -Subset money or
   lower -Xmx (e.g. -Xmx 224m). Run from any path (uses its own folder as the repo root).
   First run from a new shell may need:  Unblock-File .\run-fleet.ps1
 #>
@@ -64,8 +64,23 @@ $dashUrl = 'http://localhost:7099'
 # type: service jars are <name>-0.1.0.jar under services\<name>; sim jars are
 # <name>-*.jar under simulators\<name>. 'args' are extra Spring CLI args.
 $fleet = @(
-    @{ name = 'config-registry';           type = 'service'; port = 18081 }
-    @{ name = 'transaction-mgmt';           type = 'service'; port = 18082 }
+    # Partner ACTIVATION issues real credentials (gap T1-1): the auth-identity + notification-webhook
+    # clients default to `rest`, so the fleet must point them at the 18xxx band or activation 502s
+    # against the compose-internal hostnames. auth-identity = 18085, notification-webhook = 18086.
+    @{ name = 'config-registry';           type = 'service'; port = 18081; args = @(
+            '--gmepay.auth-identity.client=rest'
+            '--gmepay.auth-identity.base-url=http://localhost:18085'
+            '--gmepay.notification-webhook.client=rest'
+            '--gmepay.notification-webhook.base-url=http://localhost:18086') }
+    # transaction-mgmt persists to the REAL dockerized Postgres (txndb, host port 5434)
+    # instead of throwaway H2, so transactions survive fleet restarts; outbox events
+    # publish to the real Kafka (host EXTERNAL listener 29092).
+    @{ name = 'transaction-mgmt';           type = 'service'; port = 18082; args = @(
+            '--spring.datasource.url=jdbc:postgresql://localhost:5434/txndb'
+            '--spring.datasource.driver-class-name=org.postgresql.Driver'
+            '--spring.datasource.username=gmepay'
+            '--spring.datasource.password=gmepay'
+            '--spring.kafka.bootstrap-servers=localhost:29092') }
     @{ name = 'merchant-qr-data';           type = 'service'; port = 18083 }
     @{ name = 'payment-executor';           type = 'service'; port = 18084; args = @(
             '--gmepay.config-registry.base-url=http://localhost:18081'
@@ -76,6 +91,7 @@ $fleet = @(
             '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
             '--gmepay.revenue-ledger.base-url=http://localhost:18092'
             '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094'
+            '--gmepay.scheme-adapters.SENDMN.base-url=http://localhost:18096'
             '--gmepay.self.base-url=http://localhost:18084') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
@@ -84,6 +100,10 @@ $fleet = @(
     @{ name = 'qr-service';                 type = 'service'; port = 18089 }
     @{ name = 'scheme-adapter-zeropay';     type = 'service'; port = 18090; args = @('--gmepay.scheme.zeropay.base-url=http://localhost:9102/v1/scheme') }
     @{ name = 'scheme-adapter-nepal';       type = 'service'; port = 18094; args = @('--gmepay.scheme.nepal.base-url=http://localhost:9106') }
+    # SendMN (Mongolia) + 9Pay (Vietnam) scheme edges — QR_SCHEME_ACCOMMODATION_PLAN Phase 5.
+    # Adapter default ports (8093/8096) stay for standalone runs; the fleet uses the 18xxx band.
+    @{ name = 'scheme-adapter-sendmn';      type = 'service'; port = 18096; args = @('--sendmn.base-url=http://localhost:9108') }
+    @{ name = 'scheme-adapter-ninepay';     type = 'service'; port = 18097; args = @('--gmepay.scheme.ninepay.base-url=http://localhost:9107') }
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }
@@ -99,12 +119,23 @@ $fleet = @(
             '--gmepay.sim.gmeremit.gmepay-base-url=http://localhost:18084'
             '--gmepay.sim.nepal-qr.base-url=http://localhost:9106') }
     @{ name = 'sim-nepal-qr';               type = 'sim';     port = 9106 }
+    # sim-sendmn's application.yml default is 9106, but that is sim-nepal-qr's fleet port —
+    # the fleet pins 9108 via --server.port instead (scheme-adapter-sendmn above points there).
+    # fx-push.url targets the sendmn adapter's partner-hosted FX endpoint (push is off by
+    # default; trigger manually with POST /sim/fx-rate/push).
+    @{ name = 'sim-sendmn';                 type = 'sim';     port = 9108; args = @('--gmepay.sim.sendmn.fx-push.url=http://localhost:18096/partner-hosted/fx-rate') }
+    # sim-ninepay pushes terminal-status IPNs back into the ninepay adapter's inbound edge.
+    @{ name = 'sim-ninepay';                type = 'sim';     port = 9107; args = @('--sim.ninepay.ipn-url=http://localhost:18097/scheme/ipn') }
 )
 
-# Running all 22 JVMs at once needs ~8-10 GB RAM; on a tight box the OS may reap some.
+# Running all ~28 JVMs at once needs ~9-11 GB RAM; on a tight box the OS may reap some.
 # -Subset money boots just the core payment cascade (~14 components) which fits comfortably.
+# auth-identity is in the money subset because ops-partner-bff and config-registry BOTH point their
+# rest clients at it (--gmepay.auth-identity.client=rest): without it the RBAC page reads nothing and
+# partner activation 502s instead of minting a verifiable API key (gap T1-1).
 $moneyNames = @('config-registry', 'transaction-mgmt', 'payment-executor', 'scheme-adapter-zeropay',
     'scheme-adapter-nepal', 'rate-fx', 'prefunding', 'ops-partner-bff', 'merchant-qr-data', 'qr-service',
+    'auth-identity',
     'sim-scheme', 'sim-merchant', 'sim-gmeremit', 'sim-wallet', 'sim-nepal-qr', 'sim-rate-provider')
 if ($Subset -eq 'money') { $fleet = @($fleet | Where-Object { $moneyNames -contains $_.name }) }
 
@@ -153,11 +184,16 @@ function Build-Fleet($items) {
     if ($svc) {
         $tasks = $svc | ForEach-Object { ":services:$($_.name):bootJar" }
         Write-Host "  building services: $($svc.name -join ', ')" -ForegroundColor DarkGray
-        & (Join-Path $root 'gradlew.bat') -p $root @tasks --console=plain 2>$null | Out-Null
+        # cmd /c so gradle's stderr WARNINGS never become PowerShell NativeCommandErrors
+        # (with $ErrorActionPreference='Stop', a bare 2>$null on a native command turns any
+        # stderr line — even a deprecation warning — into a script-killing exception).
+        cmd /c "`"$(Join-Path $root 'gradlew.bat')`" -p `"$root`" $($tasks -join ' ') --console=plain 2>nul" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "service jar build failed (exit $LASTEXITCODE)" }
     }
     foreach ($s in ($items | Where-Object { $_.type -eq 'sim' })) {
         Write-Host "  building sim: $($s.name)" -ForegroundColor DarkGray
-        & (Join-Path $root 'gradlew.bat') -p (Join-Path $root "simulators\$($s.name)") bootJar --console=plain 2>$null | Out-Null
+        cmd /c "`"$(Join-Path $root 'gradlew.bat')`" -p `"$(Join-Path $root "simulators\$($s.name)")`" bootJar --console=plain 2>nul" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sim jar build failed: $($s.name) (exit $LASTEXITCODE)" }
     }
 }
 
@@ -176,7 +212,7 @@ function Start-TraceConsole {
 function Get-JvmFlags($c) {
     # Lean JVM tax: SerialGC (no G1 region overhead on small heaps), C1-only JIT
     # (small code cache, faster start), capped code-cache/metaspace, small stacks,
-    # JMX off. Heaps are STATIC per-tier — never MaxRAMPercentage (each of 23 JVMs
+    # JMX off. Heaps are STATIC per-tier — never MaxRAMPercentage (each of ~28 JVMs
     # would claim a % of the whole 16GB and over-commit instantly).
     $common = @(
         '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1', '-XX:ReservedCodeCacheSize=64m',
@@ -212,7 +248,14 @@ function Start-Component($c) {
     if ($traceEnabled) { $spring += '--gmepay.trace.enabled=true' }
     # Point every gmepay.<peer>.base-url at the peer's localhost fleet port (services only;
     # sims keep their own per-sim properties via $c.args below).
-    if ($c.type -eq 'service') { $spring += $downstreamArgs }
+    # NB: skip any key the component already sets explicitly in $c.args — Spring
+    # comma-joins repeated --key=value CLI args into "v1,v2", which breaks URI props
+    # (payment-executor merchant resolve failed with "unsupported URI http://...,http:/...").
+    if ($c.type -eq 'service') {
+        $explicitKeys = @()
+        if ($c.args) { $explicitKeys = @($c.args | ForEach-Object { ($_ -split '=', 2)[0] }) }
+        $spring += @($downstreamArgs | Where-Object { $explicitKeys -notcontains (($_ -split '=', 2)[0]) })
+    }
     if ($c.args) { $spring += $c.args }
     $a = (Get-JvmFlags $c) + @('-jar', $jar) + $spring
     Start-Process -FilePath 'java' -ArgumentList $a -WindowStyle Hidden `

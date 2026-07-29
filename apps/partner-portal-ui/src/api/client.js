@@ -10,32 +10,64 @@
  *  GET  /v1/portal/{partnerId}/profile       -> PartnerProfile
  *  GET  /v1/portal/{partnerId}/api-keys      -> List<ApiKeyView>
  *  GET  /v1/portal/{partnerId}/statement?from&to -> text/csv (Content-Disposition: attachment)
- *  POST /v1/auth/login                       -> LoginResponse
  *
- * Auth model:
- *  - Production: partner identity established at api-gateway (HMAC); BFF reads
- *    identity from the request session.
- *  - Local dev / Phase 1: Authorization: Bearer <token> + X-Partner-Id from
- *    localStorage (set by login flow), falling back to NEXT_PUBLIC_PARTNER_ID.
- *    Production deploys MUST NOT trust X-Partner-Id.
+ * Auth model (single, for every environment — gap register T0-4 / T1-2):
+ *  - `Authorization: Bearer <Keycloak access_token>` on every call. The BFF is an
+ *    OAuth2 resource server (default deny); a request without it gets 401.
+ *  - The `{partnerId}` path segment is authorized against the token's own
+ *    `partner_id` claim by `OpsRbacGuard.requirePartnerScope`. It is NOT an
+ *    identity, and the old `X-Partner-Id` header is no longer sent at all: the
+ *    BFF reads it nowhere, and sending it implied a trust that never existed.
+ *  - A 401 triggers ONE silent refresh_token attempt; if that fails the local
+ *    session is cleared so AuthGate bounces the partner back to Keycloak.
  *
  * Money fields on the wire are decimal strings (BigDecimal) + ISO-4217
  * currency. Never parse to Number in JS (precision loss).
  */
 import {
+  clearAuth,
   getPartnerId,
   getToken,
-  login as authLogin,
-  logout as authLogout
+  logout as authLogout,
+  refreshSession
 } from './auth';
 
 const BASE = process.env.NEXT_PUBLIC_BFF_BASE_URL || '';
-const ENV_PARTNER_ID = process.env.NEXT_PUBLIC_PARTNER_ID || '';
 
 function url(path) {
-  // When BASE is empty (browser dev), rely on next.config.mjs rewrite /api/* -> BFF.
+  // When BASE is empty (the supported setup), rely on the next.config.mjs rewrite
+  // /api/* -> BFF_PROXY_TARGET. Setting NEXT_PUBLIC_BFF_BASE_URL makes the BROWSER
+  // call the BFF cross-origin, and the BFF ships no CORS config — see next.config.mjs.
   if (!BASE) return `/api${path}`;
   return `${BASE}${path}`;
+}
+
+/**
+ * Fetch with the bearer attached, retrying ONCE after a silent token refresh on
+ * 401. On a second 401 the local session is dropped: the token is unusable and
+ * keeping it only produces a page full of failed panels.
+ */
+async function authedFetch(target, init, headers) {
+  const token = getToken();
+  const withAuth = token
+    ? { ...headers, Authorization: `Bearer ${token}` }
+    : { ...headers };
+
+  let res = await fetch(target, { ...init, headers: withAuth, cache: 'no-store' });
+  if (res.status !== 401) return res;
+
+  const refreshed = await refreshSession();
+  if (!refreshed) {
+    clearAuth();
+    return res;
+  }
+  res = await fetch(target, {
+    ...init,
+    headers: { ...headers, Authorization: `Bearer ${refreshed}` },
+    cache: 'no-store'
+  });
+  if (res.status === 401) clearAuth();
+  return res;
 }
 
 async function request(path, init) {
@@ -43,21 +75,12 @@ async function request(path, init) {
     Accept: 'application/json',
     ...(init && init.headers ? init.headers : {})
   };
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  const partnerId = getPartnerId() || ENV_PARTNER_ID;
-  if (partnerId) headers['X-Partner-Id'] = partnerId;
 
   if (init && init.body && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(url(path), {
-    ...init,
-    headers,
-    cache: 'no-store'
-  });
+  const res = await authedFetch(url(path), init, headers);
 
   if (!res.ok) {
     let body;
@@ -91,17 +114,8 @@ async function requestBlob(path, init) {
     Accept: 'text/csv,application/octet-stream;q=0.9,*/*;q=0.5',
     ...(init && init.headers ? init.headers : {})
   };
-  const token = getToken();
-  if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const partnerId = getPartnerId() || ENV_PARTNER_ID;
-  if (partnerId) headers['X-Partner-Id'] = partnerId;
-
-  const res = await fetch(url(path), {
-    ...init,
-    headers,
-    cache: 'no-store'
-  });
+  const res = await authedFetch(url(path), init, headers);
 
   if (!res.ok) {
     let body;
@@ -249,14 +263,13 @@ export const portalApi = {
     );
   },
 
-  /** POST /v1/auth/login */
-  login(req) {
-    return authLogin(req);
-  },
-
-  /** Phase 1 stub — placeholder for token refresh wiring. */
+  /**
+   * Silent token refresh against Keycloak (refresh_token grant). Resolves to the
+   * new access token, or null when there is no usable refresh token — there is no
+   * BFF refresh endpoint any more (`/v1/auth/refresh` was deleted with T0-1).
+   */
   refreshToken() {
-    return Promise.reject(new Error('refreshToken not implemented in Phase 1'));
+    return refreshSession();
   },
 
   logout() {
@@ -265,12 +278,14 @@ export const portalApi = {
 };
 
 /**
- * The active partner id used by the UI. Prefers the persisted (logged-in)
- * value, falls back to the dev env var so a fresh checkout can still browse
- * without going through the login screen.
+ * The active partner id used by the UI: the `partner_id` claim of the signed-in
+ * token, persisted by `storeOidcSession`. Empty string when there is no session
+ * or the token carries no partner scope (see `isPartnerScopeMissing`) — the old
+ * `NEXT_PUBLIC_PARTNER_ID` fallback is gone, because a hardcoded id that does not
+ * match the token's claim can only produce a 403.
  */
 export function currentPartnerId() {
-  return getPartnerId() || ENV_PARTNER_ID;
+  return getPartnerId() || '';
 }
 
 /**

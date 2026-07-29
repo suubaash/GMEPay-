@@ -1,10 +1,10 @@
 'use client';
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
-import { portalApi } from '@/api/client';
 import {
   getPartnerId,
   getToken,
   logout as authLogout,
+  partnerIdFromTokens,
   storeOidcSession,
   clearAuth,
   EXPIRES_AT_KEY
@@ -18,13 +18,14 @@ import { decodeJwtPayload } from '@/api/oidc';
  * components can subscribe to "am I signed in?" without each one reading
  * localStorage directly.
  *
- * BFF wire contract:
- *   POST /v1/auth/login  body { username, password } -> { token, expiresAt, role }
+ * There is exactly ONE way in: Keycloak authorization-code + PKCE, applied by
+ * {@link applyOidcSessionThunk} from the `/auth/callback` page. The old
+ * `loginThunk` (POST /v1/auth/login with `password=demo`) is deleted — that BFF
+ * endpoint no longer exists (gap T0-1) and the token it minted is rejected by
+ * the resource server.
  *
- * The form's `partnerId` field is what we send as `username` on the wire AND
- * what we mirror locally for X-Partner-Id. The BFF does not return a
- * partnerId — `api/auth.login()` synthesizes one onto the LoginResponse so
- * the slice + UI have a stable shape.
+ * `partnerId` is the token's `partner_id` claim, never a form field: it is what
+ * the BFF compares the `/v1/portal/{partnerId}/**` path segment against.
  *
  * State:
  *   { partnerId: string|null, token: string|null, role: string|null,
@@ -39,17 +40,6 @@ const initialState = {
   status: 'idle',
   error: null
 };
-
-export const loginThunk = createAsyncThunk(
-  'auth/login',
-  async (req, { rejectWithValue }) => {
-    try {
-      return await portalApi.login(req);
-    } catch (e) {
-      return rejectWithValue(e instanceof Error ? e.message : 'Login failed');
-    }
-  }
-);
 
 /**
  * Persist an OIDC token response into localStorage + the Redux slice.
@@ -67,11 +57,8 @@ export const applyOidcSessionThunk = createAsyncThunk(
     try {
       storeOidcSession(tokenResponse);
       const claims = decodeJwtPayload(tokenResponse.id_token) ?? {};
-      const partnerId =
-        claims.partner_id ??
-        claims.preferred_username ??
-        claims.email ??
-        null;
+      // partner_id claim only — a username here would mean a 403 on every call.
+      const partnerId = partnerIdFromTokens(tokenResponse);
       const role = claims.realm_access?.roles?.[0] ?? null;
       const expiresAtMs = Number.isFinite(tokenResponse.expires_in)
         ? Date.now() + tokenResponse.expires_in * 1000
@@ -125,20 +112,9 @@ const slice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(loginThunk.pending, (s) => {
+      .addCase(applyOidcSessionThunk.pending, (s) => {
         s.status = 'loading';
         s.error = null;
-      })
-      .addCase(loginThunk.fulfilled, (s, a) => {
-        s.status = 'succeeded';
-        s.token = a.payload.token;
-        s.partnerId = a.payload.partnerId ?? null;
-        s.role = a.payload.role ?? null;
-        s.error = null;
-      })
-      .addCase(loginThunk.rejected, (s, a) => {
-        s.status = 'failed';
-        s.error = a.payload ?? a.error.message ?? 'Login failed';
       })
       .addCase(applyOidcSessionThunk.fulfilled, (s, a) => {
         s.status = 'succeeded';

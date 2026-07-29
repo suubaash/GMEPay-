@@ -13,7 +13,7 @@
 # Every Spring Boot container listens on 8080 internally (SERVER_PORT env beats
 # any server.port in the module's application.yml/properties — OS env vars sit
 # above config files in Spring's property precedence). Host ports fan out over
-# 8080..8096.
+# 8080..8099 (8097 is Keycloak).
 
 networks:
   gmepay:
@@ -32,6 +32,8 @@ volumes:
   pg-notify:
   pg-authid:
   pg-scheme:
+  pg-sendmn:
+  pg-ninepay:
   pg-keycloak:
   mongo-data:
   minio-data:
@@ -161,6 +163,27 @@ services:
     networks: [gmepay]
     profiles: ["core", "full"]
 
+  # SendMN adapter datastore (smn_fx_rates + smn_payments idempotency/FX registry).
+  # Host port 5445 continues the per-service band (5446 is postgres-keycloak).
+  postgres-sendmn:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: smnadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5445:5432"]
+    volumes: ["pg-sendmn:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d smnadapter"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["full"]
+
+  # 9Pay adapter datastore (np_payouts idempotency registry + np_ipn_events audit).
+  postgres-ninepay:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: npadapter, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: gmepay }
+    ports: ["5447:5432"]
+    volumes: ["pg-ninepay:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d npadapter"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["full"]
+
   # Keycloak's own datastore (ADR-011: human IdP, PostgreSQL-backed). Kept on a
   # separate volume + host port (5446) from postgres-authid (5439) so the two
   # IdPs cannot accidentally share state — auth-identity continues to own
@@ -264,17 +287,30 @@ services:
   #
   # `start-dev --import-realm` runs Keycloak in dev mode (no HTTPS required) and
   # imports any realm JSON found under /opt/keycloak/data/import on first boot.
-  # docker/keycloak/realm-gmepay.json seeds:
-  #   - realm 'gmepay'
-  #   - clients 'admin-ui' + 'partner-portal-ui' (confidential OIDC, PKCE on)
-  #   - users 'admin/demo' (OPERATOR) + 'partner-demo/demo' (PARTNER_USER)
+  # docker/keycloak/realm-gmepay.json seeds (see docker/keycloak/README.md for the
+  # full canonical topology table — realm/client/issuer/port per environment):
+  #   - realm 'gmepay' (the ONLY realm; 'gmepay-partners' never existed and is gone)
+  #   - clients 'admin-ui' + 'partner-portal-ui' — PUBLIC, auth-code + PKCE S256
+  #     (a browser SPA cannot hold a client_secret; the old confidential clients
+  #     answered invalid_client on every exchange — gap T1-2)
+  #   - protocol mappers 'permissions' + 'partner_id', which ops-partner-bff's
+  #     TokenClaims REQUIRES: without them every caller is authenticated-but-403
+  #   - users admin/operator-readonly (OPERATOR) + partner-demo (partner_id=GMEREMIT)
+  #     + partner-sendmn (partner_id=SENDMN) — codes PartnerSeeder actually creates
   # Staging/prod use a different realm export with empty user lists; SCIM/LDAP
   # federation provisions real users (ADR-011 §Consequences).
   #
   # Host port 8097 (not 8090): the 8080..8096 application-port band is full,
   # and 8090 is already taken by scheme-adapter-zeropay. The Slice 1 brief
   # called for 8090 — this is the documented deviation. Internal port is
-  # Keycloak's default 8080.
+  # Keycloak's default 8080. NOTE: the Java default in ops-partner-bff /
+  # api-gateway is still :8090, so OIDC_ISSUER_URI MUST be set explicitly
+  # (done below) — that mismatch was half of gap T1-2.
+  #
+  # KC_HOSTNAME_URL pins the browser-facing base URL, which is what Keycloak
+  # stamps into the token's `iss`. It must equal the OIDC_ISSUER_URI every
+  # resource server expects; one knob (KC_PUBLIC_URL) drives both, so a tunnel
+  # /remote host only needs `KC_PUBLIC_URL=https://auth.example.com`.
   #
   # Healthcheck note: Keycloak 25 exposes /health on the *management* port
   # (9000) by default and that endpoint is off in dev mode. A TCP probe on the
@@ -293,11 +329,14 @@ services:
       KC_DB_PASSWORD: keycloak
       KC_HEALTH_ENABLED: "true"
       KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_URL: ${KC_PUBLIC_URL:-http://localhost:8097}
       KC_HOSTNAME_STRICT: "false"
       KC_HOSTNAME_STRICT_HTTPS: "false"
       JAVA_OPTS_APPEND: "-Xms256m -Xmx768m"
     volumes:
-      - ./docker/keycloak:/opt/keycloak/data/import:ro
+      # Mount the realm file only (not the directory) so docker/keycloak/README.md
+      # can live next to it without ever being handed to --import-realm.
+      - ./docker/keycloak/realm-gmepay.json:/opt/keycloak/data/import/realm-gmepay.json:ro
     depends_on:
       postgres-keycloak: { condition: service_healthy }
     healthcheck:
@@ -334,6 +373,18 @@ services:
       # Shared internal-auth token (#90) config-registry presents to auth-identity's internal-only
       # /internal/auth/keys (API-key issuance) — matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET.
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
+      # ---- Partner ACTIVATION must issue REAL credentials (gap T1-1) ----------------
+      # Without these, partner activation returns locally-fabricated strings: the API key
+      # resolves to found=false at auth-identity and the whsec_ secret is unknown to
+      # notification-webhook, so no partner request and no webhook signature can ever
+      # verify. Both selectors now default to `rest` in the service's own
+      # application.properties; they are repeated here so the deployed wiring is
+      # self-evident and an accidental image-level default change cannot silently
+      # re-fabricate credentials. Base URLs are the compose-internal 8080 listeners.
+      GMEPAY_AUTH_IDENTITY_CLIENT: rest
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: rest
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://notification-webhook:8080
     depends_on:
       postgres-config: { condition: service_healthy }
     healthcheck: *tcp-health
@@ -446,7 +497,14 @@ services:
       config-registry: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
-    profiles: ["full"]
+    # Promoted full -> core (gap T1-1): config-registry now issues partner credentials through
+    # auth-identity's POST /internal/auth/keys, and ops-partner-bff (core) drives the activation
+    # wizard. Without auth-identity in the core profile a core-only stack would 502 on every
+    # activation. postgres-authid was already core; notification-webhook + kafka (the webhook-secret
+    # leg) likewise — auth-identity was the only hole. NOTE: config-registry deliberately does NOT
+    # depends_on auth-identity, because auth-identity depends_on config-registry (that edge would
+    # be a compose cycle); the REST client is lazy, so boot order does not matter.
+    profiles: ["core", "full"]
 
   transaction-mgmt:
     build: { context: ., dockerfile: services/transaction-mgmt/Dockerfile }
@@ -493,6 +551,9 @@ services:
       # Nepal corridor adapter (only reachable under the `full` profile; inert on
       # the Korea-only `core` path so no depends_on — a bare config string).
       GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
+      # SendMN (Mongolia) corridor adapter (`full` profile only, like Nepal; inert on
+      # the Korea-only `core` path so no depends_on — a bare config string).
+      GMEPAY_SCHEME_ADAPTERS_SENDMN_BASE_URL: http://scheme-adapter-sendmn:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
     depends_on:
@@ -581,6 +642,88 @@ services:
       GMEPAY_SCHEME_NEPAL_BASE_URL: http://sim-nepal-qr:8080
     depends_on:
       sim-nepal-qr: { condition: service_healthy }
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
+
+  # ─────────── SENDMN CORRIDOR — Mongolia QR (profile: full) ───────────
+  # Same shape as the Nepal corridor: sim-sendmn stands in for the real SendMN
+  # (QPay-fronted) endpoint; scheme-adapter-sendmn is the real GME-side adapter.
+  # In a real cloud deploy the sim is dropped and SENDMN_BASE_URL points at the
+  # live SendMN API (base URLs pending onboarding — plan open issue O1).
+  sim-sendmn:
+    build: { context: ., dockerfile: simulators/sim-sendmn/Dockerfile }
+    image: gmepay/sim-sendmn:dev
+    ports: ["9106:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx256m -XX:+ExitOnOutOfMemoryError"
+      # Target of the manual FX-rate push (POST /sim/fx-rate/push; push is off by
+      # default). Canonical relaxed-binding form of gmepay.sim.sendmn.fx-push.url.
+      GMEPAY_SIM_SENDMN_FXPUSH_URL: http://scheme-adapter-sendmn:8080/partner-hosted/fx-rate
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
+
+  scheme-adapter-sendmn:
+    build: { context: ., dockerfile: services/scheme-adapter-sendmn/Dockerfile }
+    image: gmepay/scheme-adapter-sendmn:dev
+    # 8098: first free host port after keycloak's 8097 (8080..8096 band is full).
+    ports: ["8098:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # smn_fx_rates + smn_payments on owned PostgreSQL (module defaults to H2
+      # only when these are absent — same convention as scheme-adapter-zeropay).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-sendmn:5432/smnadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
+      # Downstream scheme endpoint (sim in single-host; real SendMN in cloud).
+      SENDMN_BASE_URL: http://sim-sendmn:8080
+    depends_on:
+      postgres-sendmn: { condition: service_healthy }
+      sim-sendmn: { condition: service_healthy }
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
+
+  # ─────────── NINEPAY CORRIDOR — Vietnam 9Pay payout (profile: full) ───────────
+  # Adapter-only corridor for now: hub payout orchestration is deferred (plan D4),
+  # so nothing depends on scheme-adapter-ninepay yet — it serves /scheme/payout et
+  # al. directly. sim-ninepay pushes terminal-status IPNs back into the adapter's
+  # /scheme/ipn inbound edge (config string only — no depends_on, the sim probes
+  # lazily at IPN time, avoiding a circular startup dependency).
+  sim-ninepay:
+    build: { context: ., dockerfile: simulators/sim-ninepay/Dockerfile }
+    image: gmepay/sim-ninepay:dev
+    ports: ["9107:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx256m -XX:+ExitOnOutOfMemoryError"
+      SIM_NINEPAY_IPN_URL: http://scheme-adapter-ninepay:8080/scheme/ipn
+    healthcheck: *tcp-health
+    networks: [gmepay]
+    profiles: ["full"]
+
+  scheme-adapter-ninepay:
+    build: { context: ., dockerfile: services/scheme-adapter-ninepay/Dockerfile }
+    image: gmepay/scheme-adapter-ninepay:dev
+    ports: ["8099:8080"]
+    environment:
+      SERVER_PORT: 8080
+      JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
+      # np_payouts + np_ipn_events on owned PostgreSQL (H2 fallback when absent).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ninepay:5432/npadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: gmepay
+      # Downstream scheme endpoint (sim in single-host; stg-api-console.9pay.mobi /
+      # api-console.9pay.vn in test/prod — see the module's application.yml).
+      GMEPAY_SCHEME_NINEPAY_BASE_URL: http://sim-ninepay:8080
+    depends_on:
+      postgres-ninepay: { condition: service_healthy }
+      sim-ninepay: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["full"]
@@ -716,6 +859,22 @@ services:
       # Shared internal-auth token (#90) the BFF presents to auth-identity's internal-only
       # /v1/rbac/** + /v1/approvals/** (matches auth-identity's GMEPAY_INTERNAL_AUTH_SECRET).
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: ${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}
+      # ---- Identity boundary (T0-1/T0-2) + OIDC topology (T1-2) --------------------
+      # The BFF is an OAuth2 resource server (config/BffSecurityConfig.java): default
+      # deny, only /actuator/health** anonymous. Two URLs, deliberately different:
+      #   OIDC_ISSUER_URI  — the BROWSER-facing issuer, i.e. exactly the `iss` Keycloak
+      #                      stamps (pinned by the keycloak service's KC_HOSTNAME_URL).
+      #                      The Java default is :8090, which is scheme-adapter-zeropay
+      #                      here, so it MUST be set — that was half of gap T1-2.
+      #   ..._JWK_SET_URI  — where THIS CONTAINER fetches the signing keys. A container
+      #                      cannot resolve localhost:8097, so discovery against the
+      #                      issuer would fail; pinning JWKS in-network keeps `iss`
+      #                      validation intact (Spring validates the issuer claim
+      #                      against issuer-uri even when the decoder is built from
+      #                      jwk-set-uri).
+      # Do NOT set GMEPAY_OPS_RBAC_ENFORCE=false — the default is enforce.
+      OIDC_ISSUER_URI: ${KC_PUBLIC_URL:-http://localhost:8097}/realms/gmepay
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
     depends_on:
       config-registry: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
@@ -753,6 +912,11 @@ services:
       GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
       GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      # Same resource-server pair as ops-partner-bff — one IdP config serves both
+      # (ADR-011). Browser-facing issuer for the `iss` check, in-network JWKS for
+      # the key fetch. See docker/keycloak/README.md §1.
+      OIDC_ISSUER_URI: ${KC_PUBLIC_URL:-http://localhost:8097}/realms/gmepay
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
     depends_on:
       payment-executor: { condition: service_healthy }
       auth-identity: { condition: service_healthy }

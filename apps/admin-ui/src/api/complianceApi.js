@@ -27,6 +27,14 @@
  *          lifecycleStatus: 'LIVE' | 'SUSPENDED' | 'ONBOARDING' | 'TERMINATED',
  *        }
  *
+ *     WHAT THE *Set FLAGS MEAN (GAP T5-2): "the per-partner regulatory CONFIG was
+ *     entered", and nothing more. They do NOT mean the lane can file, and they never
+ *     meant it. The BFF now also excludes placeholder values — `stub-cert-id`,
+ *     `TODO_OI03`, blank — which used to render a green tick on a lane holding no
+ *     credential at all. Render these flags exactly as the BFF reports them; do NOT
+ *     re-derive them here, and do NOT pair them with a success affordance: whether a
+ *     lane can transmit is a separate fact, carried by `filingChannels` below.
+ *
  *   GET /v1/admin/partners/{code}/regulatory
  *     -> RegulatoryConfigView = {
  *          bok:        { txnCode, fxReportingCategory, remitterType } | null,
@@ -38,6 +46,14 @@
  *
  *   GET /v1/admin/partners/{code}/kyb
  *     -> KybView (same shape as src/store/kybSlice.js)
+ *
+ *   GET /v1/admin/reports  (read ONLY for the filing-channel board)
+ *     -> ReportRun[], each carrying filingChannels: [{ lane, channelLive,
+ *        reachableStatus, reason }] and filingChannelUnavailableReason.
+ *        There is deliberately no /v1/admin/compliance/filing-channels endpoint — the
+ *        BFF chose not to add a passthrough for reporting-compliance's
+ *        GET /v1/reports/filing-channels because the per-lane board already rides on
+ *        every ReportRun. getFilingChannels() below reads it from there.
  *
  *   GET /v1/admin/audit?aggregate={code}&from={ISO}&to={ISO}&page={n}
  *     -> Page<AuditEntry> = {
@@ -117,6 +133,23 @@ async function request(path, init) {
 // ---------------------------------------------------------------------------
 // Fixtures — used when the BFF has not yet landed (404 / network error).
 // ---------------------------------------------------------------------------
+
+/**
+ * Offline board: all three regulatory lanes dark, with the reason. Mirrors what the
+ * BFF's StubReportingClient and reporting-compliance's FilingChannelRegistry report,
+ * so the fixture cannot look rosier than the real thing (GAP T5-2).
+ */
+export const FIXTURE_FILING_CHANNEL_REASON =
+  'Offline fixture data: the reporting endpoint is absent. No regulatory lane has a live filing '
+  + 'channel — BOK SFTP endpoint (OI-03), NTS mTLS certificate (OI-02), and the KoFIU endpoint + '
+  + 'file layout are all externally gated.';
+
+export const FIXTURE_FILING_CHANNELS = ['BOK', 'KOFIU', 'HOMETAX'].map((lane) => ({
+  lane,
+  channelLive: false,
+  reachableStatus: 'NOT_FILED_CHANNEL_UNAVAILABLE',
+  reason: FIXTURE_FILING_CHANNEL_REASON,
+}));
 
 /** @type {import('./complianceApi').ComplianceRow[]} */
 export const FIXTURE_OVERVIEW = [
@@ -210,6 +243,45 @@ export async function getComplianceOverview() {
   } catch (e) {
     if (e.status === 404 || e.status === 0 || !e.status) {
       return FIXTURE_OVERVIEW;
+    }
+    throw e;
+  }
+}
+
+/**
+ * The per-lane FILING CHANNEL board (GAP T5-2) — "can this lane transmit at all?",
+ * which is a different question from the per-partner `*Set` config flags on the
+ * overview rows and from whether anything was actually filed.
+ *
+ * Read from `GET /v1/admin/reports`, because the board rides on every `ReportRun`
+ * (`filingChannels[]` + `filingChannelUnavailableReason`) and the BFF deliberately
+ * added no separate filing-channels endpoint. Any run carries the same board, so the
+ * first one that reports it wins.
+ *
+ * Returns `{ channels: null }` — never a fabricated all-clear — when the backend
+ * reports no board, so the UI can say "not reported" instead of implying availability.
+ *
+ * @returns {Promise<{ channels: Array<{lane: string, channelLive: boolean,
+ *   reachableStatus: string, reason: string|null}>|null, reason: string|null }>}
+ */
+export async function getFilingChannels() {
+  try {
+    const runs = await request('/v1/admin/reports');
+    const rows = Array.isArray(runs) ? runs : [];
+    const withBoard = rows.find(
+      (r) => Array.isArray(r?.filingChannels) && r.filingChannels.length > 0,
+    );
+    if (withBoard) {
+      return {
+        channels: withBoard.filingChannels,
+        reason: withBoard.filingChannelUnavailableReason ?? null,
+      };
+    }
+    const withReason = rows.find((r) => r?.filingChannelUnavailableReason);
+    return { channels: null, reason: withReason?.filingChannelUnavailableReason ?? null };
+  } catch (e) {
+    if (e.status === 404 || e.status === 0 || !e.status) {
+      return { channels: FIXTURE_FILING_CHANNELS, reason: FIXTURE_FILING_CHANNEL_REASON };
     }
     throw e;
   }

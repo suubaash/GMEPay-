@@ -26,9 +26,14 @@ abi:
   GMEPAY_VAULT_ENDPOINT: http://minio:9000
   GMEPAY_VAULT_REGION: us-east-1
   GMEPAY_VAULT_PATH_STYLE: "true"
-  # Self-hosted Keycloak (realm gmepay).
-  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/gmepay
-  OIDC_ISSUER_URI: http://keycloak:8080/realms/gmepay
+  # Self-hosted Keycloak, realm `gmepay` (docker/keycloak/realm-gmepay.json).
+  # ISSUER = the BROWSER-facing URL (what Keycloak stamps into `iss`); JWKS = the
+  # in-cluster URL the pods fetch keys from. Using the in-cluster URL as the issuer
+  # (as this file did) can never match a token the browser obtained through the
+  # ingress -> every request 401'd. See docker/keycloak/README.md §1.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  OIDC_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
 
 # Credentials — PLACEHOLDERS. For real on-prem, prefer secrets.create=false and

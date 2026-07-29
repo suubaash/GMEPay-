@@ -12,6 +12,11 @@ import DateField, { DATE_FLOOR, todayISO } from '@/components/DateField';
 /**
  * Report-type taxonomy.
  *
+ * These describe the statutory OBLIGATION for each artifact (who it is owed to and
+ * when) — not a capability of this platform. GMEPay+ generates and locally validates
+ * these files; no lane has a live filing channel, so nothing here is transmitted to an
+ * authority (GAP T5-2, external gates OI-02 / OI-03).
+ *
  * BOK (Bank of Korea) FX declaration reports:
  *   BOK_FX1014  — Monthly FX declaration (Form 1014), submitted to BOK by the 10th.
  *   BOK_FX1015  — Supplementary FX declaration (Form 1015), filed alongside 1014.

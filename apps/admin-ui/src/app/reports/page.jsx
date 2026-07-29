@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
+  AlertTitle,
   Box,
   Button,
   CircularProgress,
@@ -31,6 +33,8 @@ import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import EmptyState from '@/components/EmptyState';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import FilingChannelBoard from '@/components/FilingChannelBoard';
+import { hasLocalArtifact, notFiledSummary } from '@/api/filingStatus';
 import ReportTypeFilter, { REPORT_TYPES } from './ReportTypeFilter';
 import ReportStatusChip from './ReportStatusChip';
 
@@ -124,6 +128,12 @@ export default function ReportsPage() {
 
   const rows = Array.isArray(items) ? items : [];
 
+  // GAP T5-2: a "Status" column alone let an operator read a locally generated file as
+  // a completed filing. State it once, from what the rows actually say — the banner
+  // disappears the moment any run reports a real TRANSMITTED/ACKNOWLEDGED.
+  const notFiled = notFiledSummary(rows);
+  const channelRow = rows.find((r) => Array.isArray(r.filingChannels) && r.filingChannels.length);
+
   return (
     <Box>
       {/* Page header */}
@@ -160,6 +170,23 @@ export default function ReportsPage() {
         severity="warning"
       />
 
+      {/* Filing truth — no green "done" affordance for a lane that cannot transmit. */}
+      {notFiled && (
+        <Alert severity="warning" sx={{ mb: 2 }} data-testid="not-filed-banner">
+          <AlertTitle>Nothing on this page has been filed</AlertTitle>
+          {notFiled}
+          {channelRow && (
+            <Box sx={{ mt: 1 }}>
+              <FilingChannelBoard
+                channels={channelRow.filingChannels}
+                reason={channelRow.filingChannelUnavailableReason}
+                dense
+              />
+            </Box>
+          )}
+        </Alert>
+      )}
+
       {/* Table */}
       {loading && rows.length === 0 ? (
         <LoadingSkeleton variant="table" rows={6} />
@@ -177,7 +204,7 @@ export default function ReportsPage() {
               <TableRow>
                 <TableCell>Type</TableCell>
                 <TableCell>Period / Date</TableCell>
-                <TableCell>Status</TableCell>
+                <TableCell>Filing status</TableCell>
                 <TableCell align="right">Records</TableCell>
                 <TableCell>Generated at (KST)</TableCell>
                 <TableCell align="center">Download</TableCell>
@@ -233,16 +260,21 @@ function ReportRow({
   onDownload,
   onGenerate,
 }) {
-  const canDownload =
-    (run.status === 'GENERATED' || run.status === 'SUBMITTED') &&
-    run.downloadUrl !== null;
+  // A download needs a locally produced artifact — which is exactly what
+  // GENERATED / VALIDATED / NOT_FILED_CHANNEL_UNAVAILABLE (and, one day,
+  // TRANSMITTED / ACKNOWLEDGED) mean. The old rule keyed off `SUBMITTED`, a state
+  // that can no longer be produced, so those rows would have lost their download.
+  const canDownload = hasLocalArtifact(run.status) && !!run.downloadUrl;
 
   return (
     <TableRow hover>
       <TableCell>{labelFor(run.type)}</TableCell>
       <TableCell>{run.period ?? '—'}</TableCell>
       <TableCell>
-        <ReportStatusChip status={run.status} />
+        <ReportStatusChip
+          status={run.status}
+          reason={run.filingChannelUnavailableReason}
+        />
       </TableCell>
       {/* recordCount is BigDecimal-as-string — render as-is, never Number()-cast */}
       <TableCell align="right">{run.recordCount ?? '—'}</TableCell>

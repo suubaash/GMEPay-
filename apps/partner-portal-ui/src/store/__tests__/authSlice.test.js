@@ -1,32 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// authSlice imports portalApi + auth helpers; stub them to avoid real fetches.
-vi.mock('@/api/client', () => ({
-  portalApi: { login: vi.fn() }
-}));
+// The slice imports auth helpers; stub them so no localStorage/network is touched.
 vi.mock('@/api/auth', () => ({
   getToken: () => null,
   getPartnerId: () => null,
   logout: vi.fn(),
-  // The slice also imports these (OIDC + logout paths); the mock must export them
-  // or the import resolves to undefined and logoutAction() throws when it calls clearAuth().
   clearAuth: vi.fn(),
   storeOidcSession: vi.fn(),
+  // T1-2: partner scope comes from the token's partner_id claim.
+  partnerIdFromTokens: () => 'GMEREMIT',
   EXPIRES_AT_KEY: 'gmepay.partnerTokenExpiresAt'
 }));
 
 import reducer, {
-  loginThunk,
+  applyOidcSessionThunk,
   hydrateFromStorage,
   logoutAction,
   clearAuthError
 } from '../authSlice';
 
 /**
- * Contract lock: the BFF LoginResponse is `{ token, expiresAt, role }` —
- * there is NO partnerId on the wire. `api/auth.login()` adapter mirrors the
- * form's partnerId onto the LoginResponse so the slice has a stable partner
- * identity. This test exercises the post-adapter shape only.
+ * Contract lock: there is exactly ONE way into this slice — a Keycloak token
+ * response applied by `applyOidcSessionThunk` from the /auth/callback page.
+ * `loginThunk` (POST /v1/auth/login, `password=demo`) is gone with the endpoint
+ * it called (T0-1), so a re-appearing password path would fail to compile here.
  */
 describe('authSlice', () => {
   it('starts unauthenticated', () => {
@@ -40,38 +37,44 @@ describe('authSlice', () => {
     });
   });
 
-  it('stores token + partnerId + role on login success', () => {
+  it('does not export a password login thunk any more', async () => {
+    const mod = await import('../authSlice');
+    expect(mod.loginThunk).toBeUndefined();
+  });
+
+  it('stores token + partnerId + role from an applied OIDC session', () => {
     const state = reducer(undefined, {
-      type: loginThunk.fulfilled.type,
+      type: applyOidcSessionThunk.fulfilled.type,
       payload: {
-        token: 'mock.eyJabc',
-        partnerId: 'GMEREMIT', // mirrored from the form (NOT from the wire)
-        expiresAt: '2026-06-09T13:15:30Z',
-        role: 'ADMIN'
+        token: 'kc-access-token',
+        partnerId: 'GMEREMIT', // from the partner_id claim, never a form field
+        role: 'PARTNER_USER',
+        expiresAt: '9999999999999'
       }
     });
     expect(state.status).toBe('succeeded');
-    expect(state.token).toBe('mock.eyJabc');
+    expect(state.token).toBe('kc-access-token');
     expect(state.partnerId).toBe('GMEREMIT');
-    expect(state.role).toBe('ADMIN');
+    expect(state.role).toBe('PARTNER_USER');
+    expect(state.expiresAt).toBe('9999999999999');
     expect(state.error).toBeNull();
   });
 
   it('captures the error from rejectWithValue on failure', () => {
     const state = reducer(undefined, {
-      type: loginThunk.rejected.type,
-      payload: 'Invalid partner id or password',
+      type: applyOidcSessionThunk.rejected.type,
+      payload: 'OIDC state mismatch — refusing token exchange',
       error: { message: 'rejected' }
     });
     expect(state.status).toBe('failed');
-    expect(state.error).toBe('Invalid partner id or password');
+    expect(state.error).toBe('OIDC state mismatch — refusing token exchange');
   });
 
   it('clearAuthError leaves token alone', () => {
     const seeded = {
       partnerId: 'GMEREMIT',
       token: 'tkn',
-      role: 'ADMIN',
+      role: 'PARTNER_USER',
       status: 'failed',
       error: 'bad'
     };
@@ -85,7 +88,7 @@ describe('authSlice', () => {
     const seeded = {
       partnerId: 'GMEREMIT',
       token: 'tkn',
-      role: 'ADMIN',
+      role: 'PARTNER_USER',
       status: 'succeeded',
       error: null
     };

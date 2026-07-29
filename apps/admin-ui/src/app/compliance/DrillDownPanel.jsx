@@ -142,6 +142,17 @@ export default function DrillDownPanel({ partnerCode }) {
         <Typography variant="h3" sx={{ mb: 1 }}>
           Regulatory configuration
         </Typography>
+        {/*
+          GAP T5-2: these are stored config values, shown verbatim — they are not a
+          filing capability. Placeholders that ship with the platform (e.g.
+          `stub-cert-id`, `TODO_OI03`) appear here as the text they are; the BFF does
+          not count them as configured, and no lane has a live filing channel.
+        */}
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+          Stored configuration values, verbatim. Entering these does not enable filing —
+          placeholders such as <code>stub-cert-id</code> or <code>TODO_OI03</code> are config text
+          only, and no regulatory lane currently has a live filing channel.
+        </Typography>
         <ErrorAlert message={regulatoryError} title="Could not load regulatory config" />
         {regulatoryLoading ? (
           <LoadingSkeleton variant="card" />
