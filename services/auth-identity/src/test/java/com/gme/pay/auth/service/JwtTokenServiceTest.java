@@ -48,9 +48,17 @@ class JwtTokenServiceTest {
     void verify_tamperedSignature_isRejectedAsInvalid() {
         JwtTokenService svc = service(1800, 3600);
         String token = svc.issue(new IssueTokenRequest("svc:x", null, null)).token();
-        // Flip the last character of the signature segment.
-        String tampered = token.substring(0, token.length() - 1)
-                + (token.endsWith("A") ? "B" : "A");
+        // Flip the FIRST character of the signature segment, not the last. An HS256 signature is 32
+        // bytes = 43 base64url characters, and only 2 of the final character's 6 bits are
+        // significant — so flipping the last character (e.g. 'A'→'B') often decodes to the identical
+        // byte array and the "tampered" token verifies fine. That made this test intermittently
+        // fail depending on the random jti/iat in the payload. The first character of the segment
+        // always carries 6 significant bits, so this mutation is always a real one.
+        int sigStart = token.lastIndexOf('.') + 1;
+        char first = token.charAt(sigStart);
+        String tampered = token.substring(0, sigStart)
+                + (first == 'A' ? 'B' : 'A')
+                + token.substring(sigStart + 1);
 
         VerifyTokenResponse verified = svc.verify(tampered);
         assertThat(verified.valid()).isFalse();

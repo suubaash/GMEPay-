@@ -44,7 +44,6 @@ public class GatewayRoutingConfig {
 
     private final String paymentExecutorUri;
     private final String rateFxUri;
-    private final String prefundingUri;
     private final String smartRouterUri;
     private final String merchantQrDataUri;
     private final String configRegistryUri;
@@ -59,8 +58,6 @@ public class GatewayRoutingConfig {
             String paymentExecutorUri,
             @Value("${gmepay.rate-fx.base-url:http://rate-fx:8080}")
             String rateFxUri,
-            @Value("${gmepay.prefunding.base-url:http://prefunding:8080}")
-            String prefundingUri,
             @Value("${gmepay.smart-router.base-url:http://smart-router:8080}")
             String smartRouterUri,
             @Value("${gmepay.merchant-qr-data.base-url:http://merchant-qr-data:8080}")
@@ -79,7 +76,6 @@ public class GatewayRoutingConfig {
             String qrServiceUri) {
         this.paymentExecutorUri          = paymentExecutorUri;
         this.rateFxUri                   = rateFxUri;
-        this.prefundingUri               = prefundingUri;
         this.smartRouterUri              = smartRouterUri;
         this.merchantQrDataUri           = merchantQrDataUri;
         this.configRegistryUri           = configRegistryUri;
@@ -115,12 +111,22 @@ public class GatewayRoutingConfig {
                         .filters(f -> f.rewritePath(REWRITE_REGEX, REWRITE_REPLACEMENT))
                         .uri(rateFxUri))
 
-                // ----- prefunding : GET + POST /v1/prefunding/** -----
-                .route("prefunding", r -> r
-                        .path("/v1/prefunding/**")
-                        .and().method(HttpMethod.GET, HttpMethod.POST)
-                        .filters(f -> f.rewritePath(REWRITE_REGEX, REWRITE_REPLACEMENT))
-                        .uri(prefundingUri))
+                // ----- prefunding : DELIBERATELY NOT ROUTED (T0-2 / T0-5) -----
+                // There used to be a `GET|POST /v1/prefunding/**` route here, publishing the whole
+                // partner-float API to the internet: deduct, credit, reverse, reserve, capture,
+                // release, cumulative-charge and credit-limit — i.e. "move any partner's money" —
+                // plus balance/alerts/deductions reads. No partner may call any of that, and no
+                // legitimate caller needed the route: every consumer (payment-executor, qr-service,
+                // config-registry, ops-partner-bff) talks to prefunding directly over the internal
+                // network using gmepay.prefunding.base-url, and the e2e/test-platform suites do the
+                // same. prefunding now also refuses any request without the internal-auth token, so
+                // the route returned 401 — but it still advertised the surface and would have become
+                // a live money API again the moment the gateway forwarded a token. Removed.
+                //
+                // If a partner-visible balance inquiry is ever wanted, it belongs as a NEW read-only
+                // route restricted to GET /v1/prefunding/{code}/balance, with the gateway injecting
+                // the internal token server-side and scoping {code} to the authenticated partner —
+                // not as a wildcard proxy.
 
                 // ----- smart-router : GET /v1/route -----
                 .route("smart-router", r -> r

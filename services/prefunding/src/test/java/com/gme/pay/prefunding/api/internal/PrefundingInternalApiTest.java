@@ -20,6 +20,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.gme.pay.prefunding.testsupport.TestInternalAuth;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * MockMvc test for the cross-service {@link PrefundingInternalController} consumed by
@@ -35,6 +38,16 @@ class PrefundingInternalApiTest {
     private static final String PARTNER = "INT_P1";
 
     @Autowired private MockMvc mvc;
+
+    /**
+     * Every prefunding endpoint sits behind the internal-auth gate (T0-5), so these tests call as a
+     * trusted in-cluster service. The gate itself (missing/wrong token → 401) is proved in
+     * {@link com.gme.pay.prefunding.api.InternalAuthGateTest}.
+     */
+    private ResultActions call(MockHttpServletRequestBuilder rb) throws Exception {
+        return mvc.perform(TestInternalAuth.authed(rb));
+    }
+
     @Autowired private PartnerBalanceRepository balances;
     @Autowired private LedgerEntryRepository ledger;
     @Autowired private BalanceAlertRepository alerts;
@@ -53,7 +66,7 @@ class PrefundingInternalApiTest {
     void deduct_returnsBalanceAndLedgerId_andIsIdempotent() throws Exception {
         String body = "{\"idempotencyKey\":\"TXN-1\",\"amountUsd\":\"250.00\"}";
 
-        String response = mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        String response = call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.partnerId").value(PARTNER))
@@ -65,7 +78,7 @@ class PrefundingInternalApiTest {
 
         // Replay with the SAME key must not debit again: balance unchanged, replayed=true, same entry id.
         Long firstId = idFrom(response);
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balance").value(750.0))
@@ -82,13 +95,13 @@ class PrefundingInternalApiTest {
     @DisplayName("POST /deduct: Idempotency-Key header is honoured when body key is absent")
     void deduct_honoursHeaderIdempotencyKey() throws Exception {
         String body = "{\"amountUsd\":\"100.00\"}";
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .header("Idempotency-Key", "HDR-1")
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balance").value(900.0));
         // Same header key replays.
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .header("Idempotency-Key", "HDR-1")
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
@@ -99,7 +112,7 @@ class PrefundingInternalApiTest {
     @Test
     @DisplayName("POST /deduct: insufficient funds → 402 INSUFFICIENT_PREFUNDING, nothing written")
     void deduct_insufficientFunds_402() throws Exception {
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"idempotencyKey\":\"TXN-BIG\",\"amountUsd\":\"5000.00\"}"))
                 .andExpect(status().isPaymentRequired())
@@ -110,7 +123,7 @@ class PrefundingInternalApiTest {
     @Test
     @DisplayName("POST /deduct: missing idempotency key (body+header) → 400")
     void deduct_missingKey_400() throws Exception {
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"amountUsd\":\"100.00\"}"))
                 .andExpect(status().isBadRequest());
@@ -119,12 +132,12 @@ class PrefundingInternalApiTest {
     @Test
     @DisplayName("POST /reverse: restores balance, reports credit entry id; second reverse is 0 no-op")
     void reverse_restoresBalance_andIsIdempotent() throws Exception {
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"idempotencyKey\":\"TXN-R\",\"amountUsd\":\"250.00\"}"))
                 .andExpect(status().isOk());
 
-        mvc.perform(post("/internal/v1/prefunding/{p}/reverse", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reverse", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"txnRef\":\"TXN-R\"}"))
                 .andExpect(status().isOk())
@@ -134,7 +147,7 @@ class PrefundingInternalApiTest {
                 .andExpect(jsonPath("$.ledgerEntryId").isNumber());
 
         // Second reverse: idempotent no-op (0 reversed, balance unchanged).
-        mvc.perform(post("/internal/v1/prefunding/{p}/reverse", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reverse", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"txnRef\":\"TXN-R\"}"))
                 .andExpect(status().isOk())

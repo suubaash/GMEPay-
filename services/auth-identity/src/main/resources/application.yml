@@ -47,20 +47,43 @@ gme:
     # Base URL of the config-registry service. Production injects this via env var.
     base-url: ${GME_CONFIG_REGISTRY_BASE_URL:http://config-registry:8080}
 
-# Service-to-service internal-auth gate (#90). auth-identity's /v1/rbac/** (resolution + management),
-# /v1/approvals/** (approval decisions), and /internal/** (API-key issuance + HMAC verify) are
-# internal-only — reached server-to-server by the api-gateway claim resolver, the ops BFF, and
-# config-registry, NOT through the gateway's strip/stamp filter — so without a gate any actor with
-# network reach could enumerate/mint RBAC claims, mutate the catalogue, forge an approval, or issue
-# partner API keys. When enabled, a request to those paths must carry the shared X-Gme-Internal token
-# (default path-patterns in InternalAuthProperties cover all three). Disabled by default so
-# local single-service dev / H2 tests are unaffected; docker-compose + production set both env vars
-# (the auto-config fails the service closed if enabled with a blank secret). NOTE: this gate asserts
-# "a trusted internal service is calling" — operator-level authority (rbac.manage) is enforced upstream.
+# Service-to-service internal-auth gate (#90, hardened under T0-2). auth-identity has NO public
+# surface: every controller it ships is internal-only —
+#   /internal/auth/token/**  JWT MINTING (a token here makes the bearer anyone)
+#   /internal/auth/keys/**   partner API-key + webhook-secret ISSUANCE and rotation (T1-1)
+#   /internal/auth/verify    HMAC signature verification
+#   /v1/rbac/**              RBAC resolution + catalogue management
+#   /v1/approvals/**         approval decisions (which trust an X-Gme-Permissions header)
+# — all reached server-to-server by the api-gateway claim resolver, the ops BFF and config-registry,
+# NOT through the gateway's strip/stamp filter. Without a gate any actor with network reach could
+# mint a JWT, issue itself a partner API key, enumerate/mutate the authority matrix, or forge an
+# approval. A request to those paths must carry the shared X-Gme-Internal token.
+#
+# T0-2: `enabled` used to be ${GMEPAY_INTERNAL_AUTH_ENABLED:false} — i.e. an unconfigured deploy (a
+# bare `bootRun`, a hand-rolled compose, a new environment that forgot the env var) served JWT
+# minting and API-key issuance ANONYMOUSLY. With the shared auto-configuration "flag absent" and
+# "flag false" both mean *no filter at all*, so the safe default has to be ON. It is now pinned true
+# and no longer env-overridable in any meaningful way: InternalAuthEnforcedConfig refuses to start
+# when the gate is not genuinely armed (see that class). The secret has NO default — an absent or
+# blank GMEPAY_INTERNAL_AUTH_SECRET fails the service closed at startup rather than issuing
+# credentials to anonymous callers.
+#
+# NOTE: this gate asserts "a trusted internal service is calling" — operator-level authority
+# (rbac.manage) is enforced upstream.
 gmepay:
   internal-auth:
-    enabled: ${GMEPAY_INTERNAL_AUTH_ENABLED:false}
+    enabled: true
     secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
+    # Explicit rather than relying on InternalAuthProperties' defaults, so a change to the shared
+    # default can never silently un-gate this service. /actuator/health/** and /actuator/info stay
+    # anonymous for container probes; /actuator/metrics, /v3/api-docs and Swagger UI (which publish
+    # the credential-issuance API shape) are gated with everything else.
+    #
+    # Written as a comma-delimited scalar, NOT a YAML block sequence: a sequence binds to indexed
+    # keys (path-patterns[0], [1], ...) which InternalAuthEnforcedConfig's @Value cannot read, so the
+    # fail-closed assertion would reject a correct configuration. Spring binds this scalar to the
+    # List<String> on InternalAuthProperties just the same.
+    path-patterns: /internal/**,/v1/rbac/**,/v1/approvals/**,/actuator/metrics/**,/v3/api-docs/**,/swagger-ui/**,/swagger-ui.html
 
 logging:
   level:
