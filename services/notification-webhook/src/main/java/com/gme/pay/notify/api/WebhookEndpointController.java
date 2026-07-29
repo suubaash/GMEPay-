@@ -3,16 +3,20 @@ package com.gme.pay.notify.api;
 import com.gme.pay.contracts.WebhookEndpointRegistrationCommand;
 import com.gme.pay.contracts.WebhookEndpointRegistrationView;
 import com.gme.pay.notify.provisioning.WebhookEndpointProvisioningService;
+import com.gme.pay.notify.provisioning.WebhookEndpointSigningHealthView;
 import com.gme.pay.notify.provisioning.WebhookSecretRotationView;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Slice 8 Lane D — the thin partner-activation registration endpoint that
@@ -22,7 +26,12 @@ import org.springframework.web.bind.annotation.RestController;
  * <pre>
  * POST /v1/webhooks/endpoints                            — register an endpoint + mint its signing secret
  * POST /v1/webhooks/endpoints/{id}/rotate-secret          — issue the next generation (T5-4)
+ * GET  /v1/webhooks/endpoints/signing-health[?partnerId=] — which endpoints can be signed for (T5-8)
  * </pre>
+ *
+ * <p>The rotate + signing-health pair is what the ops BFF's admin surface calls (T5-8):
+ * before it existed, rotation had no caller anywhere and the endpoints that T5-4 correctly
+ * refuses to sign for were invisible outside the delivery log.
  *
  * <p>Returns 201 Created with the endpoint id and the ONE-TIME plaintext
  * signing secret when a new registration was made; 200 OK with the existing
@@ -69,6 +78,24 @@ public class WebhookEndpointController {
             @PathVariable Long endpointId,
             @RequestParam(name = "overlapMinutes", required = false) Long overlapMinutes) {
         return ResponseEntity.ok(provisioningService.rotateSecret(endpointId, overlapMinutes));
+    }
+
+    /**
+     * Reports which active endpoints can actually be signed for — gap T5-8.
+     *
+     * <p>Read-only and secret-free: it returns a classification per endpoint, never a derived
+     * secret or the stored digest. {@code partnerId} narrows the sweep; omitted, it reports
+     * every active endpoint, which is how an operator finds the pre-T5-4 rows that have been
+     * silently failing to deliver.
+     *
+     * <p>Nothing here rotates anything — see
+     * {@link WebhookEndpointProvisioningService#signingHealth} for why auto-repair would be
+     * wrong.
+     */
+    @GetMapping("/signing-health")
+    public List<WebhookEndpointSigningHealthView> signingHealth(
+            @RequestParam(name = "partnerId", required = false) Long partnerId) {
+        return provisioningService.signingHealth(partnerId);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

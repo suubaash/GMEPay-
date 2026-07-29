@@ -5,8 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.notify.persistence.WebhookDeliveryEntity;
 import com.gme.pay.notify.persistence.WebhookEndpointEntity;
 import com.gme.pay.notify.persistence.WebhookEndpointRepository;
-import com.gme.pay.notify.provisioning.SigningSecrets;
 import com.gme.pay.notify.provisioning.WebhookSecretDeriver;
+import com.gme.pay.notify.provisioning.WebhookSecretVerifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -118,21 +118,13 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
     /**
      * Re-derives one generation's secret and proves it is the one the row was created
      * with. Returns {@code null} when that cannot be proven — the caller fails closed.
+     *
+     * <p>Delegates to {@link WebhookSecretVerifier} (T5-8) so that the operator-facing
+     * signing-health read reports exactly the rule this dispatcher enforces. Behaviour is
+     * unchanged from the T5-4 implementation this replaced.
      */
     private String deriveAndVerify(WebhookEndpointEntity endpoint, int generation, String expectedHash) {
-        if (expectedHash == null || expectedHash.isBlank()) {
-            // Legacy V003 row (secret was Vault-only) — nothing to verify against.
-            return null;
-        }
-        String candidate;
-        try {
-            candidate = deriver.derive(endpoint.getPartnerId(), endpoint.getEnvironment(), generation);
-        } catch (RuntimeException e) {
-            log.error("webhook secret derivation failed for endpointId={} generation={}: {}",
-                    endpoint.getId(), generation, e.getMessage());
-            return null;
-        }
-        return SigningSecrets.matches(candidate, expectedHash) ? candidate : null;
+        return WebhookSecretVerifier.deriveAndVerify(deriver, endpoint, generation, expectedHash);
     }
 
     /**

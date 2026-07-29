@@ -2,6 +2,7 @@ package com.gme.pay.registry.client;
 
 import com.gme.pay.contracts.WebhookEndpointRegistrationCommand;
 import com.gme.pay.contracts.WebhookEndpointRegistrationView;
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -67,8 +68,31 @@ public class RestNotificationWebhookClient implements NotificationWebhookClient 
     @Autowired
     public RestNotificationWebhookClient(
             @Value("${gmepay.notification-webhook.base-url:http://notification-webhook:8080}")
-            String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        this(builderFor(baseUrl, internalSecret).build());
+    }
+
+    /**
+     * Builds the {@link RestClient.Builder} the production constructor uses: base URL plus, when
+     * a secret is configured, the {@code X-Gme-Internal} default header.
+     *
+     * <p>Gap T5-8: notification-webhook's {@code /v1/webhooks/endpoints/**} surface mints and
+     * reveals {@code whsec_} plaintext and is machine-to-machine only, so it now declares the
+     * platform internal-auth gate (default OFF until the deployment supplies the secret).
+     * Presenting the token here — the same way this service's other gated-peer clients do —
+     * means arming that gate is a pure deployment change and never breaks partner activation.
+     * A blank secret sends no header, which is exactly today's behaviour.
+     *
+     * <p>Package-private so a test can bind a {@code MockRestServiceServer} to the very same
+     * builder and assert the header really goes on the wire.
+     */
+    static RestClient.Builder builderFor(String baseUrl, String internalSecret) {
+        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        }
+        return b;
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

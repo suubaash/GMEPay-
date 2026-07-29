@@ -28,6 +28,7 @@ import { useAppDispatch, useAppSelector } from '@/store';
 import { getPartner, updatePartnerRoundingMode } from '@/store/partnersSlice';
 import StatusHeader from './StatusHeader';
 import CredentialRotationPanel from './CredentialRotationPanel';
+import WebhookSecretPanel from './WebhookSecretPanel';
 import AuditLogPanel from './AuditLogPanel';
 import RegulatorySettingsTab from './RegulatorySettingsTab';
 import StatusActionHistory from './StatusActionHistory';
@@ -37,7 +38,7 @@ import StatusActionHistory from './StatusActionHistory';
  *
  * Tab layout:
  *   0: Overview  — StatusHeader + summary cards + rounding-mode edit
- *   1: Credentials — CredentialRotationPanel
+ *   1: Credentials — CredentialRotationPanel + WebhookSecretPanel (webhook signing secrets, T5-8)
  *   2: Schemes & Corridors — (placeholder, full build in Slice 7)
  *   3: Regulatory — RegulatorySettingsTab
  *   4: Audit — AuditLogPanel (per-partner audit trail)
@@ -207,10 +208,20 @@ export default function PartnerDetailPage() {
         </Box>
       )}
 
-      {/* Credentials tab */}
+      {/* Credentials tab — API/HMAC credentials, then webhook signing secrets (gap T5-8) */}
       {activeTab === TAB_CREDENTIALS && (
         <Box role="tabpanel" id="partner-tabpanel-1" aria-labelledby="partner-tab-1">
-          <CredentialRotationPanel partnerCode={partnerCode} />
+          <Stack spacing={4}>
+            <CredentialRotationPanel partnerCode={partnerCode} />
+            {/*
+              Webhook signing secrets are a separate rotation lifecycle from the API/HMAC
+              credentials above: they live in notification-webhook, are derived per endpoint,
+              and endpoints registered before per-endpoint derivation cannot sign until an
+              operator rotates them. Same tab because "what secrets does this partner hold"
+              is one question to an operator.
+            */}
+            <WebhookSecretPanel partnerCode={partnerCode} />
+          </Stack>
         </Box>
       )}
 

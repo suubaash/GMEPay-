@@ -192,6 +192,40 @@ public class WebhookEndpointProvisioningService {
                 nextGeneration, overlapUntil);
     }
 
+    /**
+     * Reports the signing state of every active endpoint — gap <b>T5-8</b>, the
+     * "detect the undeliverable rows" half.
+     *
+     * <p>T5-4 made the dispatcher refuse to sign for an endpoint whose secret cannot be
+     * re-derived and verified. That is correct, but it turned a whole class of endpoints —
+     * every row minted before per-endpoint derivation existed — into silent non-deliverers
+     * whose only symptom was an ERROR line per attempt. This read surfaces them, applying
+     * {@link WebhookSecretVerifier} — literally the same rule the dispatcher enforces — so
+     * an operator can see, before a partner complains, which endpoints are dead and which of
+     * those rotation would revive.
+     *
+     * <p><b>Deliberately read-only.</b> Nothing here auto-rotates: rotation replaces a secret
+     * the partner must be told about out of band, so it stays an explicit operator action
+     * with a one-time reveal. Silently re-keying an endpoint would swap one broken state
+     * (no signature) for a worse one (a signature the partner cannot verify and has no way
+     * to learn about).
+     *
+     * <p>No secret material is derived into the response — only a pass/fail classification.
+     *
+     * @param partnerId restrict to one partner, or {@code null} for every active endpoint
+     */
+    @Transactional(readOnly = true)
+    public List<WebhookEndpointSigningHealthView> signingHealth(Long partnerId) {
+        List<WebhookEndpointEntity> rows = partnerId == null
+                ? repository.findByActiveTrueOrderByIdAsc()
+                : repository.findByPartnerIdAndActiveTrueOrderByIdAsc(partnerId);
+        Instant now = Instant.now(clock);
+        return rows.stream()
+                .map(row -> WebhookEndpointSigningHealthView.of(
+                        row, WebhookSecretVerifier.statusOf(deriver, row), now))
+                .toList();
+    }
+
     private static void validate(WebhookEndpointRegistrationCommand request) {
         if (request == null) {
             throw new IllegalArgumentException("request body required");

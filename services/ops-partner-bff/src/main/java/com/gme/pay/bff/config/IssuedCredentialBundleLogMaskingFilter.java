@@ -43,6 +43,8 @@ import java.io.IOException;
  * <ul>
  *   <li>{@code POST /v1/admin/partners/{code}/credentials/rotate}</li>
  *   <li>{@code POST /v1/admin/partners/{code}/lifecycle/activate}</li>
+ *   <li>{@code POST /v1/admin/webhooks/endpoints/{id}/rotate-secret} (gap T5-8 — the
+ *       one-time {@code whsec_} webhook signing secret)</li>
  * </ul>
  */
 @Component
@@ -95,6 +97,12 @@ public class IssuedCredentialBundleLogMaskingFilter implements Filter {
         }
         // POST /v1/admin/partners/{code}/lifecycle/activate
         if (path.endsWith("/lifecycle/activate")) {
+            return true;
+        }
+        // POST /v1/admin/webhooks/endpoints/{endpointId}/rotate-secret (gap T5-8) — the response
+        // carries the one-time whsec_ plaintext, exactly the same disclosure class as a rotated
+        // partner credential.
+        if (path.endsWith("/rotate-secret")) {
             return true;
         }
         return false;

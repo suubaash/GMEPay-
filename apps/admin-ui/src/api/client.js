@@ -1111,6 +1111,38 @@ export const adminApi = {
       { method: 'POST', body: JSON.stringify({ credentialId }) },
     ),
 
+  // ---------- Webhook endpoint signing secrets (gap T5-8) ----------
+  /**
+   * GET /v1/admin/webhooks/endpoints?partnerCode=
+   * -> EndpointSigningHealth[] {
+   *      endpointId, partnerId, environment, webhookUrl, secretGeneration,
+   *      status: 'SIGNABLE'|'SECRET_NOT_DERIVABLE'|'NO_SECRET_DIGEST'|'ROOT_KEY_MISSING',
+   *      deliverable, fixableByRotation, detail,
+   *      rotationOverlapExpiresAt, createdAt, updatedAt }
+   *
+   * `deliverable: false` means this partner is receiving NO webhooks right now. Endpoints
+   * registered before per-endpoint signing secrets existed cannot sign at all — their secret
+   * can never be re-derived — and rotation is the only fix. Carries no secret material.
+   */
+  getWebhookEndpointHealth: (partnerCode) =>
+    request(`/v1/admin/webhooks/endpoints${qs({ partnerCode })}`),
+
+  /**
+   * POST /v1/admin/webhooks/endpoints/{endpointId}/rotate-secret
+   * body: { reason?, overlapMinutes? }
+   * -> { endpointId, signingSecretPlaintext, secretGeneration, previousSecretExpiresAt }
+   *
+   * signingSecretPlaintext is shown ONCE and is unrecoverable afterwards — the platform stores
+   * only its digest. Never log or persist it. Requires the `ops:operate` permission.
+   * `overlapMinutes` keeps the retired secret riding along as a second signature so the partner
+   * can redeploy on their own schedule; 0 cuts over immediately.
+   */
+  rotateWebhookEndpointSecret: (endpointId, { reason, overlapMinutes } = {}) =>
+    request(
+      `/v1/admin/webhooks/endpoints/${encodeURIComponent(endpointId)}/rotate-secret`,
+      { method: 'POST', body: JSON.stringify({ reason, overlapMinutes }) },
+    ),
+
   /**
    * GET /v1/admin/partners/{code}/audit?page=&size=
    * -> Page<AuditEntry> { content, page, size, total }
