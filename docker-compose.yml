@@ -37,6 +37,13 @@ volumes:
   pg-keycloak:
   mongo-data:
   minio-data:
+  # T3-7: without these, Kafka's topic logs and __consumer_offsets lived in the
+  # containers' writable layer and were DESTROYED by `docker compose down`, taking
+  # every consumer's replay position with them. Named volumes make the broker's
+  # state survive a normal stop/start like every other datastore here.
+  kafka-data:
+  zookeeper-data:
+  zookeeper-log:
 
 # ─────────── REUSABLE HEALTHCHECK SHAPES (extension fields + anchors) ───────────
 # Only api-gateway ships spring-boot-starter-actuator, so every other Spring
@@ -252,6 +259,11 @@ services:
     # hangs while ZK is still starting; the healthcheck timeout converts that
     # into a retry until the ensemble answers.
     healthcheck: { test: ["CMD-SHELL", "zookeeper-shell localhost:2181 ls / >/dev/null 2>&1"], interval: 10s, timeout: 10s, retries: 30 }
+    # T3-7: ZK's snapshot dir + txn log must outlive the container, else the broker
+    # metadata it holds is lost with it.
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
     networks: [gmepay]
     profiles: ["core", "full"]
 
@@ -276,6 +288,11 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
     healthcheck: { test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"], interval: 10s, timeout: 10s, retries: 18, start_period: 20s }
+    # T3-7: topic logs + __consumer_offsets. Note the DB outbox tables remain the
+    # durable record of intent; this only preserves broker/consumer state so a
+    # restart does not silently replay or skip.
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     networks: [gmepay]
     profiles: ["core", "full"]
 
