@@ -34,6 +34,63 @@ global:
     limits:
       memory: 640Mi
 
+  # =========================================================================
+  # Container hardening — gap T5-5 (CISO audit 2026-07-28 §14).
+  #
+  # Before this block the chart set NO securityContext at all, so every pod
+  # inherited the image's user. 23 of the 24 images ran as root, which meant a
+  # remote-code-execution in any service was root in its container, with the
+  # full default capability set and a writable filesystem.
+  #
+  # The image side of the same fix is in every services/*/Dockerfile and
+  # simulators/*/Dockerfile (UID 10001, numeric USER) plus apps/*/Dockerfile
+  # (UID 1001). The two must stay in sync: if you change a Dockerfile's UID,
+  # change runAsUser here, and vice versa.
+  #
+  # Overridable per service via services.<svc>.podSecurityContext /
+  # .containerSecurityContext / .writablePaths — see templates/_deployment.tpl.
+  # The three overlays (values-{aws,azure,onprem}.yaml) inherit all of this;
+  # they intentionally override only registry/tag/endpoints.
+  # =========================================================================
+  podSecurityContext:
+    # Refuse to start the pod at all if the image's user resolves to UID 0. This
+    # is the assertion that keeps a future Dockerfile regression from silently
+    # reintroducing root — hence the numeric USER in the Dockerfiles, which is
+    # what lets the kubelet check this BEFORE the container runs.
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # Group-own mounted volumes so the emptyDirs below are writable by the JVM.
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # setuid/setgid/file-capability escalation off: the process cannot regain
+    # privileges it was started without.
+    allowPrivilegeEscalation: false
+    privileged: false
+    # No service needs to write to its own image. The paths that ARE written are
+    # enumerated in writablePaths and mounted as emptyDir instead — leaving the
+    # root filesystem writable everywhere to accommodate a handful of temp dirs
+    # is what this deliberately avoids.
+    readOnlyRootFilesystem: true
+    capabilities:
+      # Nothing here binds a privileged port (all listeners are >= 3000) or does
+      # any raw-socket / chown / mknod work, so the entire default set goes.
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  # Paths every container must still be able to write with a read-only root.
+  # /tmp is java.io.tmpdir: embedded Tomcat's work directory lives there, and so
+  # do scheme-adapter-zeropay's ${java.io.tmpdir}/gmepay/{inbound,outbound}
+  # settlement-file staging dirs. Nothing in the fleet logs to a file (verified —
+  # no FileAppender / logging.file.* anywhere), so no log volume is needed.
+  writablePaths:
+    - /tmp
+
 # ---------------------------------------------------------------------------
 # NON-SECRET portability ABI — rendered into one ConfigMap, mounted into EVERY
 # pod via envFrom. Endpoints/regions/flags only; credentials go in `secrets`.
@@ -316,6 +373,13 @@ services:
   merchant-qr-data:
     image: merchant-qr-data
     probe: { type: tcp }
+    # T5-5: the ZeroPay merchant-feed sync works in a WORKDIR-relative directory
+    # (gmepay.merchant-sync.inbound-dir=./data/zeropay-inbound => /app/data), so
+    # readOnlyRootFilesystem needs that path mounted. An emptyDir is the safe
+    # default; a real deployment should replace it with the shared inbound volume
+    # the feed is actually delivered to.
+    writablePaths:
+      - /app/data
     env:
       SERVER_PORT: "8080"
       # Mongo URI comes from the shared ABI ConfigMap (SPRING_DATA_MONGODB_URI).
@@ -382,6 +446,15 @@ services:
   reporting-compliance:
     image: reporting-compliance
     probe: { type: tcp }
+    # T5-5: the only service that WRITES under its WORKDIR by default — the BOK
+    # FX and KOFIU feed builders emit files to ./build/bok-out and ./build/kofiu-out
+    # (=> /app/build). Mounted as an emptyDir so readOnlyRootFilesystem holds.
+    # NOTE the operational consequence, which is not new but is now explicit: an
+    # emptyDir dies with the pod, so a generated filing file is lost on restart.
+    # That is acceptable only because the filing channels are not live (OI-02 /
+    # OI-03 are externally gated); before real filing this must become a PVC.
+    writablePaths:
+      - /app/build
     env:
       SERVER_PORT: "8080"
       GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
@@ -490,6 +563,23 @@ services:
     component: ui
     containerPort: 3000
     probe: { type: tcp }
+    # ---- T5-5 -------------------------------------------------------------
+    # The two SPAs are node:20-alpine images running as nextjs:1001, NOT the JVM
+    # images' 10001, so runAsUser/runAsGroup/fsGroup are overridden here. Only
+    # these three keys are overridden; runAsNonRoot / allowPrivilegeEscalation /
+    # readOnlyRootFilesystem / capabilities-drop / seccomp all still come from
+    # global.*SecurityContext.
+    podSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+      fsGroup: 1001
+    containerSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+    # `next start` writes the ISR / image-optimiser cache at runtime, so this one
+    # subtree must be writable; the rest of the image stays read-only.
+    writablePaths:
+      - /app/.next/cache
     env:
       BFF_PROXY_TARGET: http://ops-partner-bff:8080
       NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay
@@ -501,6 +591,19 @@ services:
     component: ui
     containerPort: 3001
     probe: { type: tcp }
+    # T5-5 — same node:20-alpine / nextjs:1001 identity as admin-ui above. This
+    # was the ONE image that already dropped root before this change; the chart
+    # still has to state the UID explicitly, because its Dockerfile uses a NAMED
+    # `USER nextjs` which the kubelet cannot resolve to check runAsNonRoot.
+    podSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+      fsGroup: 1001
+    containerSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+    writablePaths:
+      - /app/.next/cache
     env:
       BFF_PROXY_TARGET: http://ops-partner-bff:8080
       NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay

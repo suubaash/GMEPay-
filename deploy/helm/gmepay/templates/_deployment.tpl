@@ -21,6 +21,15 @@ Per-service value object shape (see values.yaml for the full schema):
     port          probe port (default containerPort)
   serviceType     ClusterIP (default) | NodePort | LoadBalancer
   ingress         (handled separately in ingress.yaml)
+
+  --- container hardening (gap T5-5) ---
+  podSecurityContext        overrides merged ON TOP of global.podSecurityContext
+  containerSecurityContext  overrides merged ON TOP of global.containerSecurityContext
+                            (the two SPAs need runAsUser 1001, not the JVM images' 10001)
+  writablePaths             list of paths that MUST stay writable under
+                            readOnlyRootFilesystem; each becomes an emptyDir
+                            mount. Appended to global.writablePaths (which
+                            carries /tmp for every JVM's java.io.tmpdir).
 */}}
 {{- define "gmepay.deployment" -}}
 {{- $key := .key -}}
@@ -32,6 +41,14 @@ Per-service value object shape (see values.yaml for the full schema):
 {{- $probeType := $probe.type | default "tcp" -}}
 {{- $probePath := $probe.path | default $root.Values.global.healthPath -}}
 {{- $probePort := $probe.port | default $port -}}
+{{- /* ---------------------------------------------------------------------
+     T5-5 container hardening. deepCopy before mergeOverwrite because
+     mergeOverwrite MUTATES its first argument — without the copy, the first
+     service rendered would permanently rewrite global.* for every later one.
+     -------------------------------------------------------------------- */}}
+{{- $podSec := mergeOverwrite (deepCopy ($root.Values.global.podSecurityContext | default dict)) ($svc.podSecurityContext | default dict) -}}
+{{- $ctrSec := mergeOverwrite (deepCopy ($root.Values.global.containerSecurityContext | default dict)) ($svc.containerSecurityContext | default dict) -}}
+{{- $writable := concat ($root.Values.global.writablePaths | default list) ($svc.writablePaths | default list) | uniq -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,10 +92,22 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /* Pod-level: runAsNonRoot/runAsUser/fsGroup + seccomp. Gap T5-5. */}}
+      {{- with $podSec }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ $key }}
           image: {{ include "gmepay.image" (dict "svc" $svc "root" $root) }}
           imagePullPolicy: {{ $svc.imagePullPolicy | default $root.Values.global.imagePullPolicy }}
+          {{- /* Container-level: the fields the kubelet actually enforces per
+                 process — no privilege escalation, ALL capabilities dropped,
+                 read-only root filesystem. Gap T5-5. */}}
+          {{- with $ctrSec }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ $port }}
@@ -149,6 +178,28 @@ spec:
             periodSeconds: {{ $probe.periodSeconds | default 10 }}
             failureThreshold: {{ $probe.failureThreshold | default 6 }}
           {{- end }}
+          {{- /* ---------------------------------------------------------------
+               T5-5: readOnlyRootFilesystem is on for every container, so the few
+               paths a process legitimately writes are mounted as emptyDir rather
+               than the whole filesystem being left writable. global.writablePaths
+               carries /tmp (every JVM's java.io.tmpdir — embedded Tomcat's work
+               dir and scheme-adapter-zeropay's ${java.io.tmpdir}/gmepay/{in,out}bound
+               live there); per-service writablePaths add the rest.
+               ------------------------------------------------------------- */}}
+          {{- if $writable }}
+          volumeMounts:
+            {{- range $writable }}
+            - name: writable-{{ . | trimPrefix "/" | replace "/" "-" | replace "." "-" | replace "_" "-" | lower }}
+              mountPath: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+      {{- if $writable }}
+      volumes:
+        {{- range $writable }}
+        - name: writable-{{ . | trimPrefix "/" | replace "/" "-" | replace "." "-" | replace "_" "-" | lower }}
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

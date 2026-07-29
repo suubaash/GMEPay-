@@ -1,0 +1,292 @@
+# =============================================================================
+# gitleaks configuration — GMEPay+ (gap T5-5, CISO audit 2026-07-28 §13/§14)
+#
+# Documentation/services_backlog/platform-infra.md:2057 specified a secret-
+# scanning workflow that was never implemented. This file plus the `secret-scan`
+# and `secret-scan-history` jobs in .github/workflows/ci.yml are that workflow.
+#
+# DESIGN RULE FOR THIS FILE — read before adding anything to [allowlist]:
+#   An allowlist entry may only silence a literal that is *provably* a
+#   placeholder, a header/property NAME, or a test fixture. It may NOT silence a
+#   real credential shape to make CI green. If a real secret is committed, the
+#   fix is rotate + remove, never a new path here. Every entry below says why it
+#   is safe.
+#
+# The intentional non-prod literals this repo really does carry (and which the
+# default ruleset would otherwise flag) are exactly three families:
+#   1. the docker-compose `x-*-secret` YAML anchors — `${VAR:-dev-…-not-for-prod}`
+#      shaped, i.e. an env-var indirection whose fallback is self-labelled dev;
+#   2. the Helm `CHANGE_ME_*` / `REPLACE_*` placeholders in
+#      deploy/helm/gmepay/values{,-aws,-azure,-onprem}.yaml;
+#   3. test fixtures and Javadoc/markdown that *quote* credential shapes
+#      (`pk_live_…`, `gpk_live_<hash>`, `sk_live_<64-char-hex>`) with no key body.
+#
+# Deliberately NOT allowlisted — real, low-value-but-real, non-prod credentials
+# that must stay visible in scan output as remediation debt (see T5-5):
+#   * docker/keycloak/realm-gmepay.json — the four demo users' `"value": "demo"`
+#     passwords. (Both OIDC clients are now public/PKCE, so no committed client
+#     secret remains; T0-2/T1-2 removed those. Nothing here is muted regardless.)
+#   * libs/lib-vault/.../VaultProperties.java — the `gmepay` / `gmepay-minio`
+#     MinIO credentials baked in as Java field defaults.
+#   * the `uatstaging` SQL Server login: removed from the working tree, still
+#     reachable in git history. Keeping it unmuted is the point of the
+#     non-blocking `secret-scan-history` job.
+# =============================================================================
+
+title = "GMEPay+ secret scan"
+
+# Start from gitleaks' bundled ruleset (~170 provider rules: AWS, GCP, Azure,
+# Stripe, Slack, GitHub, PEM private-key blocks, generic high-entropy
+# assignments). We only ADD rules, never replace the set, so provider rules
+# shipped by a future gitleaks upgrade land automatically.
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Repo-specific rules — credential shapes this platform mints that gitleaks
+# cannot know about. Each requires a key BODY, so documentation that merely
+# writes `pk_live_…` or `sk_live_<64-char-hex>` does not match.
+# -----------------------------------------------------------------------------
+
+[[rules]]
+id = "gmepay-partner-api-key"
+description = "GMEPay+ partner API key (auth-identity issued, presented as X-API-Key)"
+# 39 chars total per Documentation/services_backlog/auth-identity.md, so >= 24
+# body characters after the prefix. `gpk_` / `gmepk_` variants included.
+regex = '''\b(?:g|gme)?pk_(?:live|test)_[0-9a-zA-Z]{24,}\b'''
+keywords = ["pk_live_", "pk_test_"]
+
+[[rules]]
+id = "gmepay-partner-api-secret"
+description = "GMEPay+ partner API secret (the one-time sk_live_/sk_test_ plaintext)"
+regex = '''\b(?:g|gme)?sk_(?:live|test)_[0-9a-fA-F]{32,}\b'''
+keywords = ["sk_live_", "sk_test_"]
+
+[[rules]]
+id = "gmepay-webhook-endpoint-secret"
+description = "GMEPay+ per-endpoint webhook signing secret (whsec_, HKDF-derived — T5-4)"
+regex = '''\bwhsec_[0-9a-zA-Z_\-]{24,}\b'''
+keywords = ["whsec_"]
+
+[[rules]]
+id = "gmepay-internal-platform-token"
+description = "GMEPay+ platform internal service token (X-Gme-Internal / GMEPAY_INTERNAL_AUTH_SECRET)"
+# Needed because gitleaks' generic rule keys off the words key/api/token/secret/
+# auth/… and NONE of them appears in `X-Gme-Internal: <value>` — a negative
+# control showed the platform's most privileged shared secret sailing straight
+# through. This is the token that gates every /internal/** endpoint, so it gets
+# its own rule. Placeholder values are handled by the [allowlist] below
+# (`${VAR}`, CHANGE_ME_*, REPLACE_*, dev-…-not-for-prod).
+regex = '''(?i)(?:X-Gme-Internal|GMEPAY_INTERNAL_AUTH_SECRET|gmepay\.internal\.auth\.secret)["']?\s*[:=]\s*["']?([A-Za-z0-9._+/=\-]{12,})'''
+keywords = ["x-gme-internal", "gmepay_internal_auth_secret", "gmepay.internal.auth.secret"]
+
+[[rules]]
+id = "gmepay-inline-db-password"
+description = "Password inlined into a JDBC / MongoDB connection URI"
+# NOTE: gitleaks compiles rules with Go's RE2, which has NO lookahead — so the
+# `${VAR}` / CHANGE_ME_ / REPLACE_ placeholder cases are excluded by keeping `$`,
+# `{` and `<` out of the password character class and by the [allowlist] below,
+# not by a negative lookahead. Do not "improve" this into `(?!...)`; the config
+# will fail to load.
+regex = '''(?i)\b(?:jdbc:[a-z0-9]+|mongodb(?:\+srv)?)://[^\s:@/${<]+:[^\s:@/${<]{6,}@'''
+keywords = ["jdbc:", "mongodb://", "mongodb+srv://"]
+
+# -----------------------------------------------------------------------------
+# Allowlist.
+#
+# regexTarget = "line" — the regexes below describe placeholder / NAME shapes
+# that live on the same source line as the flagged value (`SPRING_DATASOURCE_
+# PASSWORD: CHANGE_ME_PG_PASSWORD`, `${VAR:-dev-…-not-for-prod}`), and several of
+# those characters (`$`, `{`, `}`) fall outside the default rules' capture
+# groups, so matching the captured secret alone would not see them.
+# -----------------------------------------------------------------------------
+[allowlist]
+description = "GMEPay+ intentional non-prod placeholders, property NAMES, fixtures and build output"
+regexTarget = "line"
+
+regexes = [
+  # --- family 1: env-var indirection (every compose x-*-secret anchor) --------
+  # `${GMEPAY_INTERNAL_AUTH_SECRET:-dev-internal-svc-secret-not-for-prod}`,
+  # `${GMEPAY_RBAC_SECRET}`, Spring's `${gmepay.foo.secret:}` fail-closed empty
+  # defaults. The value is a reference, so nothing is disclosed.
+  '''\$\{[A-Za-z0-9_.\-]+(?::-?[^}]*)?\}''',
+  '''\$\([A-Za-z0-9_]+\)''',
+
+  # --- family 2: Helm / compose placeholders ---------------------------------
+  '''\bCHANGE_ME[A-Z0-9_]*\b''',
+  '''\bREPLACE(?:_[A-Z0-9]+)*\b''',
+  # Self-labelled dev literals: `dev-rbac-edge-secret-not-for-prod`, etc.
+  '''(?i)not[-_]for[-_]prod''',
+  # `keytool … -storepass changeit` — the JDK cacerts default, present in all 22
+  # JVM Dockerfiles' CA-import step.
+  '''(?i)-storepass\s+changeit\b''',
+  # Generic no-op values, quoted or bare, on the value side of an assignment.
+  '''(?i)(?:[:=]\s*|["'])(?:changeit|changeme|change-me|placeholder|example|dummy|sample|redacted|masked|x{3,}|\*{3,}|todo|tbd|unset|not-?set)["']?\s*(?:#.*)?$''',
+
+  # --- family 3: (deliberately empty) ---------------------------------------
+  # NAME-shaped entries (`GMEPAY_*`, `spring.*`, `X-Gme-*`, `secretKey`) USED to
+  # live here and were REMOVED, because at line scope they are actively
+  # dangerous: `GMEPAY_INTERNAL_AUTH_SECRET: <real 32-hex>` matches the name
+  # pattern and the whole line — including the real secret — would be silenced.
+  # A negative-control test caught exactly that. Name shapes now live in the
+  # `generic-api-key` rule's own allowlist further down, where the regex is
+  # tested against the CAPTURED VALUE instead of the line, so a real credential
+  # next to a credential-ish name is still reported. Do not move them back up.
+
+  # --- family 4: CODE SHAPES, not literals ----------------------------------
+  # The generic high-entropy rule fires on ordinary Java/JS plumbing because it
+  # sees `...Secret`/`...Key`/`...Token` followed by `=` or `:` and then an
+  # IDENTIFIER. An identifier is not a secret — a secret is a quoted literal or a
+  # bare high-entropy blob. Each entry below therefore requires code punctuation
+  # (a statement `;`, a member `.`, a JS `??`) that a `.env` / properties /
+  # values.yaml line carrying a real credential does NOT have. That is what stops
+  # these from silencing `API_KEY=AKIA…` in a config file.
+  #
+  #   this.authorizationService = authorizationService;
+  '''this\.[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[A-Za-z_$][A-Za-z0-9_$.]*\s*;''',
+  #   PublicKey cached = ninepayPublicKey;   /   Collection<X> a = extract(b);
+  '''\b[A-Za-z_$][A-Za-z0-9_$<>\[\], ]*\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[A-Za-z_$][A-Za-z0-9_$.]*\s*[;(]''',
+  #   PaymentAuthorizationEntity e = authorizationRepository      <- fluent chain
+  #   continued on the next line, so no `;`. The mandatory whitespace between the
+  #   TYPE and the NAME is what keeps this off `API_KEY=AKIA…` in a config file.
+  '''\b[A-Z][A-Za-z0-9_$<>\[\], ]*\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[A-Za-z_$][A-Za-z0-9_$.]*\s*$''',
+  #   private static final char[] TOKEN_ALPHABET = "ABCDEFGH…".toCharArray();
+  '''"[A-Za-z0-9]{16,}"\s*\.toCharArray\(\)''',
+  #   plaintextWebhookSecret: result.plaintextWebhookSecret ?? null,
+  '''[:=]\s*[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?\?|;|,|\)|$)''',
+  #   case MISSING_IDEMPOTENCY_KEY -> HttpStatus.BAD_REQUEST;
+  '''\bcase\s+[A-Z][A-Z0-9_]*\s*(?:->|:)''',
+
+  # --- family 5: explicit placeholder VALUES in code/docs -------------------
+  # `sendmn-authkey-placeholder`, `sk_test_YOUR_SANDBOX_KEY`, `CPM-TOKEN-XYZ`,
+  # and `changeme-internal-token` (the T0-2 literal, which now survives only in
+  # comments explaining that it was REMOVED — the comment is the audit trail).
+  # No leading `\b`: these words show up glued to an underscore
+  # (`KEY_PLACEHOLDER`, `sk_test_YOUR_SANDBOX_KEY`), and `_` is a word character,
+  # so a word boundary would never fire there.
+  '''(?i)(?:^|[\W_])(?:placeholder|your[-_][a-z0-9_-]*|changeme)''',
+  '''(?i)\b(?:xyz|[a-z0-9_-]*-example)\b''',
+
+  # --- family 6: PEM headers in parsing code / Javadoc ----------------------
+  # The default `private-key` rule matches the BEGIN line on its own, with no key
+  # body. These two shapes are the header appearing as documentation or as the
+  # argument to a string operation that STRIPS it. An actual key would be the
+  # header followed by base64 on the next lines, which neither shape produces.
+  '''\{@code\s*-{5}BEGIN''',
+  '''(?:replaceAll|replace|replaceFirst|startsWith|endsWith|contains|equals|matches|split|indexOf|strip)\(\s*"-{5}BEGIN''',
+]
+
+# Paths that cannot hold a production secret.
+paths = [
+  # Generated output. These are copies of tracked sources, so scanning them just
+  # doubles every finding; they are .gitignore'd anyway.
+  '''(^|/)build/''',
+  '''(^|/)\.gradle/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+
+  # Test sources and fixtures. They exist to exercise credential handling, so
+  # they necessarily contain credential-shaped strings; none is a live secret.
+  # Kept deliberately narrow — `src/test/**` only, never `src/main/**`.
+  '''(^|/)src/test/''',
+  '''(^|/)__tests__/''',
+  '''\.(?:test|spec)\.(?:js|jsx|ts|tsx)$''',
+  # Deterministic X.509 fixtures for the partner mTLS pinning tests. Public
+  # certificates only; the private halves are generated at test time and are not
+  # committed (verified — no `BEGIN … PRIVATE KEY` block exists anywhere in the
+  # working tree).
+  '''^services/config-registry/src/test/resources/certs/.*\.pem$''',
+  # The GME Internal Root CA *public* certificate every Dockerfile imports.
+  '''^docker/certs/gme-root-ca\.crt$''',
+
+  # Lockfiles: their integrity hashes read as high-entropy secrets. Vulnerable
+  # *versions* in these files are the dependency-scan job's business, not the
+  # secret scanner's.
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)yarn\.lock$''',
+
+  # Committed SIMULATOR RUNTIME STATE. `data/sim-scheme/{feed,payments}.jsonl` are
+  # append-only JSONL files the ZeroPay scheme simulator wrote during a local
+  # smoke run. Their contents are synthetic domain identifiers — `authId`
+  # ("AUTH-80E4C46777A0"), `schemeTxnRef`, `payerRef` — which the generic rule
+  # reads as high-entropy tokens beside the word "auth". No credential is in
+  # them: the simulator has none.
+  # FOLLOW-UP (recorded under T5-5): these files look ACCIDENTALLY COMMITTED —
+  # `.gitignore` covers `e2e-tests/data/` but not the top-level `data/`. Deleting
+  # + ignoring them is the real fix and belongs to whoever owns the simulators;
+  # this entry only stops them wedging the gate in the meantime.
+  '''^data/sim-scheme/.*\.jsonl$''',
+
+  # Audit / gap write-ups and the service backlog. They quote credential SHAPES
+  # when describing a gap ("pk_live_<32-char-hex>"); the T0-7 plaintexts were
+  # never in them. Reviewed before this entry was added.
+  '''^outputs/agent/.*\.md$''',
+  '''^Documentation/services_backlog/.*\.md$''',
+  '''^Documentation/GAP_REGISTER\.md$''',
+
+  # This config's own prose names every shape it matches.
+  '''^\.gitleaks\.toml$''',
+]
+
+# =============================================================================
+# generic-api-key — the default rule, REDEFINED so it can carry a
+# VALUE-scoped allowlist.
+#
+# gitleaks resolves a duplicate rule id in favour of THIS file (the extended
+# default is skipped with a warning), so the `regex` below must stay a faithful
+# copy of gitleaks' bundled generic-api-key. It is copied verbatim; if you bump
+# the pinned gitleaks version in .github/workflows/ci.yml, re-diff it.
+#
+# WHY the allowlist has to live here and not in the global [allowlist]: the
+# global block is `regexTarget = "line"`, and a NAME-shaped pattern at line scope
+# silences the whole line. `GMEPAY_INTERNAL_AUTH_SECRET: <real 32-hex>` matches
+# `GMEPAY_[A-Z_]+`, so the real secret would have been silenced with it — a
+# negative-control test caught precisely that. `regexTarget = "match"` here is
+# gitleaks' name for "test the regex against the CAPTURED SECRET", i.e. the
+# right-hand side only. A credential-ish NAME therefore proves nothing; the
+# VALUE has to look benign on its own.
+#
+# Every entry below is fully anchored (^...$) so the ENTIRE captured value must
+# match. A partial match is not enough — that is what stops
+# `apiKey = "restClientsk_live_deadbeef…"` style bypasses.
+# =============================================================================
+[[rules]]
+id = "generic-api-key"
+description = "Detected a Generic API Key (GMEPay+: narrowed with a value-scoped allowlist)"
+regex = '''(?i)(?:key|api|token|secret|client|passwd|password|auth|access)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\||:|<=|=>|:=)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{10,150})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["key", "api", "token", "secret", "client", "passwd", "password", "auth", "access"]
+entropy = 3.5
+secretGroup = 1
+
+  [rules.allowlist]
+  description = "values that are provably identifiers, property paths or module names"
+  regexTarget = "match"
+  regexes = [
+    # A camelCase identifier: `authorizationService`, `ninepayPublicKey`,
+    # `restClient`, `previousSecretExpiresAt`, `tokenValidityMinutes`.
+    # Two shape constraints do the work, and BOTH were added because a
+    # negative-control test defeated the looser version:
+    #   * >= 3 leading lower-case/digit chars, which rejects base64 (`aG91c2Vib…`
+    #     has an upper-case letter in position 2);
+    #   * every subsequent hump must be Capital + lower-case, which rejects
+    #     mixed-case entropy blobs.
+    # An all-lower-case passphrase (`hunter2passwordthatisreal`) has no hump and
+    # is likewise NOT exempt.
+    '''^[a-z_$][a-z0-9_$]{2,}(?:[A-Z][a-z][A-Za-z0-9_$]*)+$''',
+    # A dotted member expression or property path, camelCase or kebab:
+    # `result.plaintextWebhookSecret`, `gmepay.adminTokenExpiresAt`,
+    # `prefunding.alert.tier1.pct`, `sim.ninepay.partner-public-key-pem`.
+    # Segments are capped at 30 chars so a dotted TOKEN (a JWT's
+    # `eyJhbGci…….eyJzdWIi…….sig`) cannot slip through this.
+    '''^[a-zA-Z_$][A-Za-z0-9_$\-]{0,30}(?:\.[A-Za-z_$][A-Za-z0-9_$\-]{0,30}){1,6}$''',
+    # A SCREAMING_SNAKE enum / sentinel constant: `BIZREG_NOTFOUND`,
+    # `MISSING_IDEMPOTENCY_KEY`. At least ONE underscore is mandatory — without
+    # it this would also exempt `AKIAIOSFODNN7EXAMPLE`-shaped all-caps tokens.
+    '''^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$''',
+    # One of OUR OWN module / service / simulator names, which show up as the
+    # "value" in prose and comments ("Callers: payment-executor + …",
+    # "partner -> api-gateway -> payment-executor").
+    '''^(?:api-gateway|auth-identity|config-registry|kyb-adapter|merchant-qr-data|notification-webhook|ops-partner-bff|payment-executor|prefunding|qr-service|rate-fx|reporting-compliance|revenue-ledger|scheme-adapter-(?:nepal|ninepay|sendmn|zeropay)|settlement-reconciliation|smart-router|transaction-mgmt|admin-ui|partner-portal-ui|sim-[a-z][a-z-]+|lib-[a-z][a-z-]+)$''',
+    # Hyphenated English prose from a comment: "masked-by-default text field".
+    '''(?i)^(?:masked|redacted|hidden|disabled|enabled)-by-(?:default|design)$''',
+  ]

@@ -1,6 +1,12 @@
 # GMEPay+ — CI (Phase 2 -> Phase 3 handoff artifact).
 # Runs ./gradlew build on every push to main and every pull request.
 # Uploads test reports as an artifact when the build fails so failures are debuggable from the PR.
+#
+# SECURITY GATES (gap T5-5, added 2026-07-28) — what blocks a merge and what only
+# reports is documented in ONE place: docs/CI.md. Read that before assuming a job
+# is a gate. Summary: `secret-scan`, `dependency-scan` and `dependency-scan-npm`
+# BLOCK; `secret-scan-history` REPORTS ONLY, and so does `compose-smoke`
+# (continue-on-error, unchanged).
 
 name: CI
 
@@ -38,6 +44,13 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
+
+      # T5-5: the wrapper jar is executable code committed to the repo and
+      # gradle-wrapper.properties still has no `distributionSha256Sum`, so a
+      # swapped jar or a redirected distributionUrl would have gone unnoticed.
+      # This action checks the jar against Gradle's published checksums.
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -222,4 +235,293 @@ jobs:
         with:
           name: ui-${{ matrix.app }}-logs
           path: apps/${{ matrix.app }}/.next/build-trace
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # SECURITY / SUPPLY-CHAIN GATES — gap T5-5 (CISO audit 2026-07-28 §14:
+  # "Zero supply-chain or security gates in CI"). Before these jobs existed the
+  # pipeline had no secret scanning, no dependency scanning and no SAST, and
+  # `npm audit` was explicitly disabled with --no-audit.
+  #
+  # Which of these BLOCK a merge and which only REPORT is stated on every job
+  # and collected in docs/CI.md. Do not turn a REPORT job into a gate (or the
+  # reverse) without updating that document.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # secret-scan — gitleaks over the WORKING TREE. **BLOCKING.**
+  #
+  # Documentation/services_backlog/platform-infra.md:2057 specified this job in
+  # Phase 2; it was never implemented. Config, plus the reasoning behind every
+  # allowlist entry: /.gitleaks.toml (read its DESIGN RULE header before adding
+  # anything to that allowlist).
+  #
+  # `--redact` is mandatory: without it a finding would print the secret into a
+  # CI log, which is itself a disclosure.
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Guards the gate itself. An allowlist fails SILENTLY: widen one entry and
+      # gitleaks keeps passing while detecting nothing. This asserts every regex
+      # is RE2-compatible (a bad one makes gitleaks fail to LOAD its config,
+      # which is not a clean scan) and that 15 planted credential shapes are
+      # still reported. Stdlib-only, no network.
+      - name: Self-test the gitleaks config (allowlist not blind)
+        run: python3 scripts/check_gitleaks_config.py
+
+      - name: Prepare report directory
+        run: mkdir -p "$RUNNER_TEMP/gitleaks"
+
+      # The official image is used rather than gitleaks-action@v2 on purpose:
+      # that action requires a GITLEAKS_LICENSE for organisation-owned repos, and
+      # a security gate must not be able to fail for a licensing reason.
+      # `--user $(id -u)` makes the in-container user match the checkout's owner,
+      # otherwise git rejects the mount as "dubious ownership".
+      - name: gitleaks — working tree (BLOCKING)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD:/repo:ro" \
+            -v "$RUNNER_TEMP/gitleaks:/out" \
+            ghcr.io/gitleaks/gitleaks:v8.18.4 \
+              detect \
+              --source=/repo \
+              --config=/repo/.gitleaks.toml \
+              --no-git \
+              --redact \
+              --report-format=sarif \
+              --report-path=/out/worktree.sarif \
+              --exit-code=1 \
+              --verbose
+
+      - name: Upload gitleaks working-tree report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-worktree
+          path: ${{ runner.temp }}/gitleaks/worktree.sarif
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # secret-scan-history — the same rules over the FULL git history.
+  # **REPORT ONLY, by design.**
+  #
+  # History cannot be cleaned by a CI job: it needs a coordinated rewrite plus
+  # rotation of whatever is found, and blocking every PR on a commit from months
+  # ago would simply get the gate switched off. `--exit-code=0` is therefore
+  # deliberate — this job publishes an inventory, and the standing items are
+  # recorded in Documentation/GAP_REGISTER.md under T5-5.
+  #
+  # Known at the time of writing: a `uatstaging` SQL Server login is still
+  # reachable in history (T0-6 removed it from the working tree). It must be
+  # ROTATED; removing it from history is a separate, scheduled operation.
+  # ---------------------------------------------------------------------------
+  secret-scan-history:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare report directory
+        run: mkdir -p "$RUNNER_TEMP/gitleaks"
+
+      - name: gitleaks — full history (REPORT ONLY)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD:/repo:ro" \
+            -v "$RUNNER_TEMP/gitleaks:/out" \
+            ghcr.io/gitleaks/gitleaks:v8.18.4 \
+              detect \
+              --source=/repo \
+              --config=/repo/.gitleaks.toml \
+              --redact \
+              --report-format=json \
+              --report-path=/out/history.json \
+              --exit-code=0
+
+      - name: Summarise history findings
+        if: always()
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/gitleaks/history.json"
+          COUNT=0
+          if [ -s "$REPORT" ]; then
+            COUNT=$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))))" "$REPORT" || echo 0)
+          fi
+          {
+            echo "### gitleaks — git history (report only)"
+            echo
+            echo "Findings in history: **$COUNT**"
+            echo
+            echo "This job never fails the build. A history finding is remediated by"
+            echo "ROTATING the credential, not by editing CI. Track them as T5-5 items"
+            echo "in Documentation/GAP_REGISTER.md; a history rewrite is a separate,"
+            echo "scheduled operation. Secrets are redacted in the uploaded report."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload gitleaks history report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-history
+          path: ${{ runner.temp }}/gitleaks/history.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # dependency-scan — known-vulnerable JVM dependencies.
+  # HIGH/CRITICAL **BLOCK**; every other severity is reported as an artifact.
+  #
+  # This repo resolves through the Spring Boot BOM and pins nothing in-repo, and
+  # has no Gradle lockfile or verification-metadata.xml, so there is no manifest
+  # for a scanner to read. `.github/gradle/dependency-scan.init.gradle` (applied
+  # with -I, so no module build file changes) flattens the resolved
+  # runtimeClasspath into build/dependency-scan/jars and Trivy identifies the
+  # jars directly. runtimeClasspath is deliberate: it is what ships inside the
+  # bootJar, so a CVE in a test-only library does not fail the build.
+  #
+  # NOT done here, on purpose: nothing was upgraded in this pass. The
+  # out-of-support framework floor (Spring Boot 3.3.4, Spring Cloud 2023.0.3,
+  # Next.js 14.2.x, EOL ESLint 8) is a separate, deliberate decision — see T5-5
+  # in Documentation/GAP_REGISTER.md and docs/CI.md. This job's purpose is to
+  # make the consequences visible; .github/dependabot.yml keeps them current.
+  # ---------------------------------------------------------------------------
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-dep-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-dep-${{ runner.os }}-
+
+      - name: Cache Trivy DB
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: trivy-db-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Export the resolved runtime classpath for scanning
+        run: >-
+          ./gradlew exportDependencyJars
+          -I .github/gradle/dependency-scan.init.gradle
+          --console=plain --no-daemon
+
+      - name: Trivy — JVM dependencies, HIGH + CRITICAL (BLOCKING)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.cache/trivy"
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy:0.53.0 \
+              fs --scanners vuln \
+                 --severity HIGH,CRITICAL \
+                 --exit-code 1 \
+                 --no-progress \
+                 /work/build/dependency-scan/jars
+
+      - name: Trivy — JVM dependencies, every severity (REPORT ONLY)
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sca" "$HOME/.cache/trivy"
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -v "$RUNNER_TEMP/sca:/out" \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy:0.53.0 \
+              fs --scanners vuln \
+                 --exit-code 0 \
+                 --no-progress \
+                 --format json --output /out/trivy-jvm.json \
+                 /work/build/dependency-scan/jars
+
+      - name: Upload JVM dependency report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-jvm
+          path: ${{ runner.temp }}/sca/trivy-jvm.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # dependency-scan-npm — the front-ends. HIGH/CRITICAL in SHIPPED (production)
+  # dependencies **BLOCK**; dev-dependency findings are reported only, because a
+  # CVE in a build-time tool is not a CVE in the deployed bundle.
+  #
+  # This is the counterpart to the audit's other finding on the same line: both
+  # the `ui-build` job above and apps/admin-ui/Dockerfile pass `--no-audit`, so
+  # npm's own advisory check was switched OFF at both entry points. Rather than
+  # re-enable it inside `npm ci` — where a newly-published advisory would break an
+  # unrelated build with no way to triage — the check gets its own job with an
+  # explicit threshold.
+  # ---------------------------------------------------------------------------
+  dependency-scan-npm:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [admin-ui, partner-portal-ui]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/${{ matrix.app }}/package-lock.json
+
+      - name: npm audit — production dependencies, high+ (BLOCKING)
+        working-directory: apps/${{ matrix.app }}
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: npm audit — full tree incl. dev deps (REPORT ONLY)
+        if: always()
+        working-directory: apps/${{ matrix.app }}
+        run: |
+          npm audit --json > "$RUNNER_TEMP/npm-audit-${{ matrix.app }}.json" || true
+          npm audit > "$RUNNER_TEMP/npm-audit-${{ matrix.app }}.txt" || true
+          {
+            echo "### npm audit — ${{ matrix.app }} (full tree, report only)"
+            echo ""
+            sed -e 's/^/    /' "$RUNNER_TEMP/npm-audit-${{ matrix.app }}.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-npm-${{ matrix.app }}
+          path: |
+            ${{ runner.temp }}/npm-audit-${{ matrix.app }}.json
+            ${{ runner.temp }}/npm-audit-${{ matrix.app }}.txt
           if-no-files-found: ignore

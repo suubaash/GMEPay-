@@ -21,6 +21,12 @@ services/
 ```
 Requires JDK 21. (Docker-based integration tests are added later and need Docker.)
 
+**CI:** [`docs/CI.md`](docs/CI.md) is the single source of truth for which pipeline
+jobs *block* a merge (build, integration, e2e, ui-build, secret scanning,
+dependency scanning) and which only *report* — plus the security gates that still
+do **not** exist (SAST, image scanning, SBOM, digest pinning). Read it before
+treating a green pipeline as coverage.
+
 ## Status
 Phase F0 (foundation) complete and green. See `PROGRESS.md` for the build manifest.
 

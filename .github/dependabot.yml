@@ -1,0 +1,123 @@
+# =============================================================================
+# Dependabot — gap T5-5 (CISO audit 2026-07-28 §14: "no dependabot/renovate").
+#
+# WHAT THIS IS FOR, precisely: the audit's dependency finding has two halves.
+#   (a) "nothing in CI would ever surface a CVE"  -> the `dependency-scan` /
+#       `dependency-scan-npm` jobs in .github/workflows/ci.yml close that; they
+#       fail the build on HIGH/CRITICAL in shipped dependencies.
+#   (b) "no standing upgrade cadence"             -> this file. It opens PRs; it
+#       does not upgrade anything on its own.
+#
+# NOT closed by either half: the out-of-support FRAMEWORK FLOOR (Spring Boot
+# 3.3.4 -> Spring Framework 6.1.13 / Spring Security 6.3.3 / nimbus-jose-jwt
+# 9.37.3 / Tomcat 10.1.30, Spring Cloud 2023.0.3, Next.js 14.2.x, EOL ESLint 8).
+# Moving those release trains is a coordinated migration with real behavioural
+# risk across 20 services, so it is a DECISION, recorded under T5-5 in
+# Documentation/GAP_REGISTER.md — deliberately not attempted in this pass.
+#
+# Grouping is deliberate: the Spring release trains move together (a Boot bump
+# that drags a partial Spring Framework bump is worse than no bump), so they are
+# raised as ONE reviewable PR rather than a dozen unmergeable ones.
+# =============================================================================
+version: 2
+
+updates:
+  # ---- GitHub Actions themselves --------------------------------------------
+  # Cheapest supply-chain win in the file: every job here runs third-party
+  # actions by mutable major tag (@v4), so an upstream compromise is an
+  # unreviewed code-execution path into CI.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels: [dependencies, ci, security]
+
+  # ---- Gradle (the whole multi-module JVM build) -----------------------------
+  # One entry covers the root build: settings.gradle pins the Boot and
+  # dependency-management plugin versions, and every module resolves through the
+  # Boot BOM, so that is where a bump has to land.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies, jvm]
+    groups:
+      spring-boot-train:
+        patterns:
+          - "org.springframework.boot*"
+          - "io.spring.dependency-management*"
+          - "org.springframework:*"
+          - "org.springframework.security:*"
+      spring-cloud-train:
+        patterns:
+          - "org.springframework.cloud*"
+      testing:
+        patterns:
+          - "org.junit*"
+          - "org.mockito*"
+          - "org.assertj*"
+          - "org.testcontainers*"
+          - "com.squareup.okhttp3:mockwebserver"
+
+  # ---- npm: the two Next.js front-ends --------------------------------------
+  # Separate entries because each app has its own package.json + lockfile and the
+  # two have already drifted apart on patch level (14.2.18 vs 14.2.5), which is a
+  # finding in its own right — a grouped bump is how that stops recurring.
+  - package-ecosystem: npm
+    directory: /apps/admin-ui
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies, admin-ui]
+    groups:
+      next:
+        patterns: ["next", "eslint-config-next", "@next/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react*"]
+      lint-and-test:
+        dependency-type: development
+
+  - package-ecosystem: npm
+    directory: /apps/partner-portal-ui
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies, partner-portal-ui]
+    groups:
+      next:
+        patterns: ["next", "eslint-config-next", "@next/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react*"]
+      lint-and-test:
+        dependency-type: development
+
+  # ---- Docker base images ---------------------------------------------------
+  # 24 Dockerfiles, none digest-pinned (eclipse-temurin:21-jre, node:20-alpine).
+  # Dependabot cannot pin a digest for us, but it does surface base-image moves,
+  # which is strictly better than the previous zero visibility. Digest pinning
+  # stays an open T5-5 item.
+  - package-ecosystem: docker
+    directories:
+      - /services/*
+      - /simulators/*
+      - /apps/*
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+    labels: [dependencies, docker]
