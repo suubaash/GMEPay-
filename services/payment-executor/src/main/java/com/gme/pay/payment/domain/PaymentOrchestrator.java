@@ -35,6 +35,9 @@ import java.time.ZoneId;
  */
 public class PaymentOrchestrator {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(PaymentOrchestrator.class);
+
     /** KST — the revenue date booked on a capture is the Korea business-calendar date of the commit. */
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     /**
@@ -215,8 +218,8 @@ public class PaymentOrchestrator {
         // Step 1c (authorize gate 0 — AML/regulatory): resolve the partner's limits ONCE (keyed by partner
         // CODE, like commission-split), then enforce the per-transaction USD cap (the statutory 소액해외송금업
         // ceiling among them) on the USD value of the agreed collection amount, BEFORE any side effect. The
-        // CUMULATIVE daily/monthly/annual cap is charged after the float hold (Step 4) so it rides the
-        // OVERSEAS path + prefunding's atomic per-partner lock.
+        // CUMULATIVE daily/monthly/annual + velocity caps are charged after the float hold (Step 4) so they
+        // ride prefunding's atomic per-partner lock — for EVERY partner type (T4-2), not just OVERSEAS.
         BigDecimal holdUsd = quote.collectionUsd().add(serviceFeeUsd(quote));
         PartnerConfigClient.TxnLimits limits = resolveLimits(cmd.partnerCode());
         TransactionLimitPolicy.enforcePerTransaction(cmd.partnerCode(), holdUsd, limits);
@@ -259,20 +262,33 @@ public class PaymentOrchestrator {
                 safeFailTxn(txn.txnRef());
                 throw ex;
             }
-            // Authorize gate 0b (AML cumulative): now that the hold is placed, charge the partner's
-            // daily/monthly/annual usage (race-free under prefunding's per-partner lock). On breach — or any
-            // error — void the authorization (release the hold + fail the orphan txn) and propagate; the
-            // reverseCumulative inside voidAuthorization is a no-op here since nothing was charged.
-            if (hasCumulativeCap(limits)) {
-                try {
-                    prefundingClient.chargeCumulative(cmd.partnerId(), txn.txnRef(), holdUsd,
-                            limits.dailyCapUsd(), limits.monthlyCapUsd(), limits.annualCapUsd(),
-                            limits.dailyTxnCountLimit());
-                } catch (RuntimeException ex) {
-                    voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
-                    throw ex;
-                }
+        }
+
+        // Authorize gate 0b (AML cumulative): charge the partner's daily/monthly/annual usage + the
+        // daily velocity count, race-free under prefunding's per-partner lock. On breach — or any
+        // error — void the authorization (release any hold + fail the orphan txn) and propagate.
+        //
+        // T4-2: this used to sit INSIDE the OVERSEAS branch above, so a LOCAL partner's configured
+        // caps were never evaluated — an implicit, undocumented "LOCAL partners are uncapped" rule.
+        // partner_limits (V020) has no partner-type discrimination and no seeded rows: a LOCAL
+        // partner's row looks exactly like an OVERSEAS one, and the statutory ceilings are a property
+        // of the LICENCE (license_type), not of the funding model. The float RESERVE stays
+        // OVERSEAS-only — that is a genuine funding fact (LOCAL partners hold no float) — but cap
+        // enforcement now applies to EVERY partner type whenever a cap is actually configured. A LOCAL
+        // partner with no caps configured is still unconstrained, now explicitly (null caps) rather
+        // than by branch.
+        if (hasCumulativeCap(limits)) {
+            try {
+                prefundingClient.chargeCumulative(cmd.partnerId(), txn.txnRef(), holdUsd,
+                        limits.dailyCapUsd(), limits.monthlyCapUsd(), limits.annualCapUsd(),
+                        limits.dailyTxnCountLimit());
+            } catch (RuntimeException ex) {
+                voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
+                throw ex;
             }
+        } else if (partnerType == PartnerType.LOCAL) {
+            log.debug("LOCAL partner {} has no cumulative cap configured — authorize proceeds"
+                    + " uncapped by configuration, not by partner type", cmd.partnerCode());
         }
 
         // Step 5 (authorize gate 2): scheme balance-check — does GME hold enough prepaid balance WITH
@@ -307,9 +323,10 @@ public class PaymentOrchestrator {
         } catch (SchemeDeclinedException ex) {
             if (ctx.partnerType() == PartnerType.OVERSEAS) {
                 prefundingClient.release(ctx.partnerId(), ctx.txnRef());
-                // Return the cumulative cap the authorize charged — this txn will not complete (no-op if uncharged).
-                prefundingClient.reverseCumulative(ctx.partnerId(), ctx.txnRef());
             }
+            // Return the cumulative cap the authorize charged — this txn will not complete (no-op if
+            // uncharged). T4-2: outside the OVERSEAS branch, because a LOCAL authorize now charges too.
+            prefundingClient.reverseCumulative(ctx.partnerId(), ctx.txnRef());
             transactionClient.commitStatus(ctx.txnRef(),
                     new TransactionClient.StatusPatch(PaymentStatus.FAILED, null, null, null, null));
             throw ex;
@@ -406,8 +423,10 @@ public class PaymentOrchestrator {
     public void releaseHold(long partnerId, String txnRef, PartnerType partnerType) {
         if (partnerType == PartnerType.OVERSEAS) {
             prefundingClient.release(partnerId, txnRef);
-            prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap for an abandoned authorize
         }
+        // T4-2: the cap reverse is partner-type-independent — a LOCAL authorize charges cap too, so an
+        // abandoned LOCAL authorize must free it. No-op when nothing was charged.
+        prefundingClient.reverseCumulative(partnerId, txnRef);
     }
 
     /**
@@ -419,10 +438,16 @@ public class PaymentOrchestrator {
         if (partnerType == PartnerType.OVERSEAS) {
             try {
                 prefundingClient.release(partnerId, txnRef);
-                prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap (no-op if uncharged)
             } catch (RuntimeException ignore) {
                 // best-effort; the reservation sweeper / recon will close it otherwise
             }
+        }
+        try {
+            // T4-2: free the cap for EVERY partner type (LOCAL authorizes now charge it). No-op if
+            // uncharged; a failure here leaves cap consumed, which is the fail-safe direction.
+            prefundingClient.reverseCumulative(partnerId, txnRef);
+        } catch (RuntimeException ignore) {
+            // best-effort compensation
         }
         safeFailTxn(txnRef);
     }
@@ -610,14 +635,9 @@ public class PaymentOrchestrator {
     }
 
     /**
-     * Cancels an approved same-day payment.
-     *
-     * @param paymentId     the GMEPay+ payment ID
-     * @param schemeTxnRef  the scheme's own transaction reference
-     * @param partnerType   whether the partner is OVERSEAS (triggers reversal) or LOCAL
-     * @param partnerId     the authenticated partner
-     * @param reason        human-readable cancellation reason
-     * @return cancellation result
+     * Scheme-less cancel — kept for callers that genuinely do not know the scheme. Routes to the
+     * ZeroPay default (unchanged legacy behaviour). Prefer
+     * {@link #cancelPayment(String, String, PartnerType, long, String, String, String)}.
      */
     public CancelResult cancelPayment(String paymentId,
                                       String schemeTxnRef,
@@ -625,8 +645,35 @@ public class PaymentOrchestrator {
                                       long partnerId,
                                       String txnRef,
                                       String reason) {
+        return cancelPayment(paymentId, schemeTxnRef, partnerType, partnerId, txnRef, reason, null);
+    }
 
-        schemeClient.cancelPayment(schemeTxnRef, reason);
+    /**
+     * Cancels an approved same-day payment.
+     *
+     * <p>T2-7: the scheme cancel is dispatched by {@code schemeId} so a Nepal/SendMN cancel reaches its
+     * own adapter. Because the scheme call is the FIRST step, a scheme without a cancel round-trip
+     * raises {@link SchemeOperationNotSupportedException} before any float is reversed or any status is
+     * written — the transaction is left exactly as it was, and the caller sees a structured
+     * {@code SCHEME_OPERATION_UNSUPPORTED} rather than a foreign ZeroPay decline.
+     *
+     * @param paymentId     the GMEPay+ payment ID
+     * @param schemeTxnRef  the scheme's own transaction reference
+     * @param partnerType   whether the partner is OVERSEAS (triggers reversal) or LOCAL
+     * @param partnerId     the authenticated partner
+     * @param reason        human-readable cancellation reason
+     * @param schemeId      scheme CODE the payment was executed on; null/blank = ZeroPay default
+     * @return cancellation result
+     */
+    public CancelResult cancelPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason,
+                                      String schemeId) {
+
+        schemeClient.cancelPayment(new SchemeClient.CancelRequest(schemeTxnRef, reason, schemeId));
 
         BigDecimal returnedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
@@ -667,9 +714,28 @@ public class PaymentOrchestrator {
                                       long partnerId,
                                       String txnRef,
                                       String reason) {
+        return refundPayment(paymentId, schemeTxnRef, partnerType, partnerId, txnRef, reason, null);
+    }
+
+    /**
+     * Scheme-routed refund (T2-7). Same contract as
+     * {@link #refundPayment(String, String, PartnerType, long, String, String)} but the scheme cancel is
+     * dispatched by {@code schemeId}; a single-shot scheme raises
+     * {@link SchemeOperationNotSupportedException} before the float is credited back or the status is
+     * moved to REFUNDED, so a corridor with no scheme refund path never produces a half-applied refund.
+     *
+     * @param schemeId scheme CODE the payment was executed on; null/blank = ZeroPay default
+     */
+    public RefundResult refundPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason,
+                                      String schemeId) {
 
         // Scheme-side refund (ZeroPay: the 결제취소/refund path). Same call the cancel uses.
-        schemeClient.cancelPayment(schemeTxnRef, reason);
+        schemeClient.cancelPayment(new SchemeClient.CancelRequest(schemeTxnRef, reason, schemeId));
 
         BigDecimal returnedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {

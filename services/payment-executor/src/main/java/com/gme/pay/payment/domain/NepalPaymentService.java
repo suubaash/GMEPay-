@@ -59,20 +59,30 @@ public class NepalPaymentService {
     private final SchemeClient schemeClient;
     private final ExecutionAttemptRepository attemptRepository;
     @Nullable private final TransactionClient transactionClient;
+    /** T4-2: per-txn + cumulative regulatory limit gate. Never null (see {@link WalletLimitGate#disabled()}). */
+    private final WalletLimitGate limitGate;
 
     /** Production constructor. */
     @Autowired
     public NepalPaymentService(SchemeClient schemeClient,
                                ExecutionAttemptRepository attemptRepository,
-                               @Nullable TransactionClient transactionClient) {
+                               @Nullable TransactionClient transactionClient,
+                               @Nullable WalletLimitGate limitGate) {
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.transactionClient = transactionClient;
+        this.limitGate = limitGate != null ? limitGate : WalletLimitGate.disabled();
     }
 
     /** Test constructor — no transaction client. */
     NepalPaymentService(SchemeClient schemeClient, ExecutionAttemptRepository attemptRepository) {
-        this(schemeClient, attemptRepository, null);
+        this(schemeClient, attemptRepository, null, null);
+    }
+
+    /** Test constructor with the T4-2 limit gate wired. */
+    NepalPaymentService(SchemeClient schemeClient, ExecutionAttemptRepository attemptRepository,
+                        @Nullable WalletLimitGate limitGate) {
+        this(schemeClient, attemptRepository, null, limitGate);
     }
 
     /**
@@ -84,8 +94,37 @@ public class NepalPaymentService {
      * @return result — check {@link WalletResult#approved()} before reading scheme fields
      */
     public WalletResult pay(String qrPayload, BigDecimal amount, String userRef) {
+        // Back-compat overload — no known limit subject. The gate then logs that it is running
+        // unconstrained rather than pretending limits were checked.
+        return pay(qrPayload, amount, userRef, WalletPartnerRef.none());
+    }
+
+    /**
+     * As {@link #pay(String, BigDecimal, String)} but with an explicit limit subject (T4-2).
+     *
+     * <p><b>Nepal caveat.</b> This corridor still moves no prefunding float and applies no FX
+     * (register item T4-1), so there is no USD money basis to reuse: the gate converts the NPR amount
+     * with the live {@code USD/NPR} rate. If that rate is unavailable AND the partner has limits
+     * configured, the payment is refused ({@code LIMIT_CHECK_UNAVAILABLE}) — fail CLOSED, never
+     * silently unlimited.
+     */
+    public WalletResult pay(String qrPayload, BigDecimal amount, String userRef,
+                            WalletPartnerRef partner) {
 
         String partnerTxnRef = "NEPAL-" + UUID.randomUUID();
+
+        // T4-2 regulatory gate: per-txn USD min/max + cumulative daily/monthly/annual + velocity,
+        // BEFORE the (irreversible) adapter submit. A breach never reaches the scheme.
+        WalletLimitGate.LimitCharge limitCharge;
+        try {
+            limitCharge = limitGate.enforce(partner, partnerTxnRef, amount, "NPR");
+        } catch (TransactionLimitExceededException | CumulativeLimitExceededException
+                 | LimitCheckUnavailableException ex) {
+            log.warn("Nepal limit gate refused partner={} ref={} amount={} NPR: {}",
+                    partner.code(), partnerTxnRef, amount, ex.getMessage());
+            persistAttempt(partnerTxnRef, PaymentStatus.FAILED, null);
+            throw ex;
+        }
 
         // Submit to the Nepal adapter via the router (schemeId=NEPAL). No ZeroPay merchant lookup:
         // the Nepal adapter/sim resolves the merchant from the QR itself.
@@ -103,12 +142,16 @@ public class NepalPaymentService {
             );
         } catch (SchemeDeclinedException ex) {
             log.warn("Nepal scheme declined userRef={} ref={}: {}", userRef, partnerTxnRef, ex.getMessage());
+            limitGate.reverse(limitCharge);   // T4-2: declined ⇒ do not consume cap
             persistAttempt(partnerTxnRef, PaymentStatus.FAILED, null);
             // Carry the adapter's own reason, not a generic HUB_ERROR.
             return WalletResult.declined(null, ex.schemeErrorCode());
         } catch (PaymentException ex) {
             // Timeout / transport / non-2xx from the Nepal adapter — surface the adapter reason.
             log.warn("Nepal adapter failure userRef={} ref={}: {}", userRef, partnerTxnRef, ex.getMessage());
+            // NOTE: a TIMEOUT leaves the outcome unknown, but this corridor has no lookupStatus probe
+            // (T4-1); the cap is released on the same best-effort basis as the attempt record.
+            limitGate.reverse(limitCharge);
             persistAttempt(partnerTxnRef, PaymentStatus.FAILED, null);
             return WalletResult.declined(null, ex.getMessage());
         }
@@ -119,6 +162,7 @@ public class NepalPaymentService {
         if (!approved) {
             log.warn("Nepal submit not APPROVED (status={}) ref={}",
                     schemeResp.schemeApprovalCode(), partnerTxnRef);
+            limitGate.reverse(limitCharge);   // T4-2: not approved ⇒ do not consume cap
             persistAttempt(partnerTxnRef, PaymentStatus.FAILED, schemeResp.schemeTxnRef());
             return WalletResult.declined(null,
                     schemeResp.schemeApprovalCode() != null ? schemeResp.schemeApprovalCode() : "NEPAL_DECLINED");

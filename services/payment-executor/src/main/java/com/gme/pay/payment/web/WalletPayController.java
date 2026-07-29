@@ -1,14 +1,19 @@
 package com.gme.pay.payment.web;
 
 import com.gme.pay.payment.alert.DeclineSpikeMonitor;
+import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.LimitCheckUnavailableException;
 import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.QrSchemeClassifier;
 import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
+import com.gme.pay.payment.domain.TransactionLimitExceededException;
+import com.gme.pay.payment.domain.WalletPartnerRef;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
@@ -310,26 +315,52 @@ public class WalletPayController {
         // candidate. ZeroPay QRs (com.zeropay / 5802KR) keep the unchanged GMEREMIT/SENDMN paths
         // so their merchant validation + fee behaviour is preserved exactly.
         Classification qr = gateQr;
+        // partner=SENDMN is an EXPLICIT corridor selection: the wallet already ran
+        // /v1/pay/classify, learned the QR resolves to SENDMN, and is paying a KRW amount
+        // through the KRW→MNT FX corridor (SendmnPaymentService: FX + ₩500 fee + USD
+        // prefunding). Routing that request through the failover pass-through would treat
+        // the KRW amount as MNT and skip fee/prefunding — so an explicit SENDMN partner
+        // always dispatches to its documented corridor below (a QPay/MN QR would otherwise
+        // classify as a known non-ZeroPay network and be hijacked here).
         boolean routeViaFailover = failoverPaymentRouter != null
                 && qr.isKnown()
-                && !isZeroPayNetwork(qr.networkIdentifier());
+                && !isZeroPayNetwork(qr.networkIdentifier())
+                && !PARTNER_SENDMN.equalsIgnoreCase(req.partner());
 
-        if (routeViaFailover) {
-            // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
-            // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
-            // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
-            // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
-            result = failoverPaymentRouter.pay(
-                    req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency());
-        } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
-            result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
-                    req.userRef(), SENDMN_PARTNER_ID);
-        } else if (PARTNER_GMEREMIT.equalsIgnoreCase(req.partner())) {
-            result = gmeremitPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
-        } else {
-            throw new IllegalArgumentException(
-                    "Unsupported partner: " + req.partner()
-                            + ". Supported: GMEREMIT, SENDMN");
+        // T4-2: the regulatory limit subject is the WALLET partner (the issuer charging the customer),
+        // whose alias IS its config-registry partner code — that is the licence whose per-txn /
+        // cumulative caps apply, not the receiving partner a QR routes to.
+        WalletPartnerRef limitSubject =
+                WalletPartnerRef.of(req.partner(), resolvePartnerId(req.partner()));
+
+        try {
+            if (routeViaFailover) {
+                // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
+                // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
+                // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
+                // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
+                result = failoverPaymentRouter.pay(
+                        req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency(),
+                        limitSubject);
+            } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
+                result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
+                        req.userRef(), SENDMN_PARTNER_ID);
+            } else if (PARTNER_GMEREMIT.equalsIgnoreCase(req.partner())) {
+                result = gmeremitPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
+            } else {
+                throw new IllegalArgumentException(
+                        "Unsupported partner: " + req.partner()
+                                + ". Supported: GMEREMIT, SENDMN");
+            }
+        } catch (TransactionLimitExceededException | CumulativeLimitExceededException
+                 | LimitCheckUnavailableException ex) {
+            // A limit refusal IS a decline: feed the DECLINE_SPIKE monitor before the structured error
+            // leaves the controller, so a burst of cap rejections is as visible as a scheme decline.
+            if (declineSpikeMonitor != null) {
+                declineSpikeMonitor.record(req.partner(),
+                        qr.isKnown() ? qr.networkIdentifier() : null, false);
+            }
+            throw ex;
         }
 
         // DECLINE_SPIKE monitor (defect #5): record the outcome per partner + classified network so a
@@ -390,6 +421,7 @@ public class WalletPayController {
         // country. Still GMEPay+-sourced — the wallet must not hardcode it.
         Classification c = QrSchemeClassifier.classify(req.qrPayload());
         String currency = "NP".equalsIgnoreCase(c.country()) ? "NPR"
+                : "MN".equalsIgnoreCase(c.country()) ? "MNT"
                 : "KR".equalsIgnoreCase(c.country()) ? "KRW" : null;
         return ResponseEntity.ok(new FailoverPaymentRouter.QrClassification(
                 c.isKnown(), c.networkIdentifier(), c.country(), currency,
@@ -485,6 +517,14 @@ public class WalletPayController {
      *
      * <p>Response: 200 OK with {@link WalletRefundResponse}.
      * 422 if the scheme declines the refund (already refunded, etc.).
+     *
+     * <p>T2-7: the optional {@code schemeId} body field routes the scheme-side refund to the adapter the
+     * payment was actually executed on. A cross-border corridor with no scheme refund path (SENDMN /
+     * NEPAL — both single-shot) now answers 422 with the structured
+     * {@code errorCode=SCHEME_OPERATION_UNSUPPORTED} — an explicit "this cannot be refunded at the
+     * scheme, escalate to the manual reversal process" — instead of the ZeroPay decline the scheme-less
+     * cancel used to produce. Nothing downstream (transaction status, revenue-ledger) is touched on that
+     * path, so no half-applied refund is recorded.
      */
     @PostMapping("/{schemeTxnRef}/refund")
     public ResponseEntity<WalletRefundResponse> refund(
@@ -497,20 +537,31 @@ public class WalletPayController {
                 ? req.authId()
                 : schemeTxnRef;
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_REFUND";
+        String schemeId = (req != null && req.schemeId() != null && !req.schemeId().isBlank())
+                ? req.schemeId()
+                : null;
 
         if (schemeClient == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
-                            null, "Scheme client not configured"));
+                            null, "Scheme client not configured", "SCHEME_CLIENT_UNCONFIGURED"));
         }
 
         try {
-            schemeClient.cancelPayment(authId, reason);
+            schemeClient.cancelPayment(new SchemeClient.CancelRequest(authId, reason, schemeId));
+        } catch (SchemeOperationNotSupportedException ex) {
+            // NOT a decline: the corridor has no scheme refund round-trip at all. Surface it verbatim
+            // with its stable code so the caller stops retrying and escalates.
+            log.warn("Refund unsupported by scheme {} for schemeTxnRef={} authId={}: {}",
+                    ex.schemeId(), schemeTxnRef, authId, ex.getMessage());
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
         } catch (RuntimeException ex) {
             log.warn("Refund failed for schemeTxnRef={} authId={}: {}", schemeTxnRef, authId, ex.getMessage());
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                     .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
-                            null, ex.getMessage()));
+                            null, ex.getMessage(), "SCHEME_REFUND_FAILED"));
         }
 
         // Record the reversal in transaction-mgmt (resilient)

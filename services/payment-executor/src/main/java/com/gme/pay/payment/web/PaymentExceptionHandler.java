@@ -5,12 +5,14 @@ import com.gme.pay.errors.ApiError;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
+import com.gme.pay.payment.domain.LimitCheckUnavailableException;
 import com.gme.pay.payment.domain.MerchantNotFoundException;
 import com.gme.pay.payment.domain.OperationalGateException;
 import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.TransactionLimitExceededException;
 import org.springframework.http.HttpStatus;
@@ -60,11 +62,40 @@ public class PaymentExceptionHandler {
                         ex.getMessage(), newRequestId()));
     }
 
+    /**
+     * T4-2: the partner HAS a regulatory limit configured but it could not be evaluated (no USD basis
+     * for the corridor amount, or the cumulative-usage ledger was unreachable). We refuse rather than
+     * bypass the cap, so this is a 503 with {@code retryable=true} and the stable
+     * {@code LIMIT_CHECK_UNAVAILABLE} code — not a breach (422) and not a silent approval. Emitted via
+     * the {@link ApiError} string ctor because lib-errors is frozen (same pattern as
+     * {@code OperationalGateException}).
+     */
+    @ExceptionHandler(LimitCheckUnavailableException.class)
+    public ResponseEntity<ApiError> handleLimitCheckUnavailable(LimitCheckUnavailableException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ApiError(ex.code(), ex.getMessage(), true, newRequestId()));
+    }
+
     @ExceptionHandler(SchemeDeclinedException.class)
     public ResponseEntity<ApiError> handleSchemeDeclined(SchemeDeclinedException ex) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiError.of(ErrorCode.SCHEME_UNAVAILABLE,
                         ex.getMessage(), newRequestId()));
+    }
+
+    /**
+     * T2-7: the resolved scheme has no cancel/refund round-trip (NEPAL / SENDMN are single-shot).
+     * 422 with the STABLE {@code SCHEME_OPERATION_UNSUPPORTED} code and {@code retryable=false} — it is
+     * a contract fact, not a decline and not a transient fault, so the caller must stop retrying and
+     * route the reversal through the manual/ops process. Declared BEFORE the generic
+     * {@code PaymentException} paths; emitted via the {@link ApiError} string ctor because lib-errors is
+     * frozen (not yet an {@link ErrorCode} member — same pattern as {@code OperationalGateException}).
+     */
+    @ExceptionHandler(SchemeOperationNotSupportedException.class)
+    public ResponseEntity<ApiError> handleSchemeOperationNotSupported(
+            SchemeOperationNotSupportedException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ApiError(ex.code(), ex.getMessage(), false, newRequestId()));
     }
 
     @ExceptionHandler(SchemeTimeoutException.class)

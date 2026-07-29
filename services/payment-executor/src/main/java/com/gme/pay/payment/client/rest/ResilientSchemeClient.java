@@ -91,10 +91,25 @@ public class ResilientSchemeClient implements SchemeClient {
 
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
-        // cancelPayment carries no scheme id (ZeroPay two-phase concept). The router pins it to the
-        // ZeroPay default; wrap it on the ZeroPay breaker for consistency.
+        // Legacy scheme-less cancel: the router pins it to the ZeroPay default, so guard it on the
+        // ZeroPay breaker. Scheme-aware callers use cancelPayment(CancelRequest) below (T2-7).
         guarded("ZEROPAY", () -> {
             delegate.cancelPayment(schemeTxnRef, reason);
+            return null;
+        });
+    }
+
+    /**
+     * T2-7: scheme-routed cancel/refund, guarded on the TARGET scheme's own breaker/bulkhead (a dead
+     * SendMN adapter must not trip ZeroPay's breaker). A
+     * {@link com.gme.pay.payment.domain.SchemeOperationNotSupportedException} from an adapter that has
+     * no cancel round-trip propagates unchanged — it is a terminal contract fact, not a fault to fail
+     * over on (and {@code SchemeFailureRecordPredicate} governs whether it counts against the breaker).
+     */
+    @Override
+    public void cancelPayment(CancelRequest request) {
+        guarded(request.schemeId(), () -> {
+            delegate.cancelPayment(request);
             return null;
         });
     }

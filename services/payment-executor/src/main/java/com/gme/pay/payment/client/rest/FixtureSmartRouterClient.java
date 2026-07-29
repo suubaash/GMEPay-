@@ -23,6 +23,9 @@ import java.util.Locale;
  *   <li>{@code com.zeropay} &rarr; ZeroPay (schemeId {@code zeropay}, partner 0).</li>
  *   <li>{@code fonepay.com} / {@code nepalpay} / {@code khalti} &rarr; Nepal
  *       (schemeId {@code NEPAL}, partner 1).</li>
+ *   <li>{@code qpay} / {@code mn.qpay} / {@code sendmn} &rarr; SendMN
+ *       (schemeId {@code SENDMN}, partner 2 — placeholder QPay identifiers, see
+ *       {@code QrSchemeClassifier}).</li>
  *   <li>anything else &rarr; empty (caller declines / SCHEME_UNAVAILABLE).</li>
  * </ul>
  */
@@ -43,6 +46,12 @@ public class FixtureSmartRouterClient implements SmartRouterClient {
         if (n.contains("fonepay") || n.contains("nepalpay") || n.contains("npqr")
                 || n.contains("khalti") || n.contains("mobank")) {
             return List.of(new PartnerSchemeView(1L, "Nepal", "NEPAL", 0));
+        }
+        if (n.contains("qpay") || n.contains("sendmn")) {
+            // SendMN (Mongolia). "qpay" also matches the parsed EMVCo sub-tag-00 form
+            // "mn.qpay..."; identifiers are placeholders until SendMN confirms the real
+            // QPay AID (QR scheme plan Phase 2). Partner 2 = the SENDMN sandbox partner.
+            return List.of(new PartnerSchemeView(2L, "SendMN", "SENDMN", 0));
         }
         return List.of();
     }

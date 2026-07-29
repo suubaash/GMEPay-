@@ -16,6 +16,9 @@ class SchemeIdTest {
         assertEquals(2L, SchemeId.resolve("BAKONG"));
         assertEquals(4L, SchemeId.resolve("NAPAS_247"));
         assertEquals(7L, SchemeId.resolve("QRIS"));
+        assertEquals(8L, SchemeId.resolve("NEPAL"));
+        assertEquals(9L, SchemeId.resolve("SENDMN"));
+        assertEquals(9L, SchemeId.resolve("sendmn"));
     }
 
     @Test

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.payment.client.rest.RestClientSupport;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -21,6 +22,7 @@ import org.springframework.web.client.RestClient;
  * the raw body string.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.sandbox.e2e.enabled", havingValue = "true")
 public class SelfPayClient {
 
     private final RestClient restClient;

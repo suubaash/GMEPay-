@@ -334,6 +334,11 @@ public class PaymentController {
      *
      * <p>Only APPROVED or PENDING payments on the same calendar day (KST) may be cancelled.
      * For OVERSEAS partners the prefunding deduction is reversed.
+     *
+     * <p>T2-7: {@code X-Scheme-Id} (optional) carries the scheme CODE the payment was executed on so
+     * the scheme cancel is dispatched to THAT adapter. Absent → the ZeroPay default (unchanged legacy
+     * behaviour). A scheme with no cancel round-trip (NEPAL / SENDMN) answers
+     * {@code 422 SCHEME_OPERATION_UNSUPPORTED} and nothing is mutated.
      */
     @PostMapping("/{id}/cancel")
     public ResponseEntity<CancelPaymentResponse> cancelPayment(
@@ -342,15 +347,18 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader,
             @RequestHeader(value = "X-Txn-Ref", required = false) String txnRef,
-            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef) {
+            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef,
+            @RequestHeader(value = "X-Scheme-Id", required = false) String schemeIdHeader) {
 
         PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_INITIATED";
         String resolvedTxnRef = txnRef != null ? txnRef : paymentId;
         String resolvedSchemeTxnRef = schemeTxnRef != null ? schemeTxnRef : paymentId;
+        String resolvedSchemeId = resolveSchemeId(schemeIdHeader, req);
 
         CancelResult result = orchestrator.cancelPayment(
-                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
+                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason,
+                resolvedSchemeId);
 
         eventPublisher.publish(new PaymentEvents.PaymentCancelled(
                 result.paymentId(), Instant.now(), partnerId, reason, result.prefundReturnedUsd()));
@@ -368,6 +376,8 @@ public class PaymentController {
      * locked rate, SETTLEMENT_FLOW_SPEC). Distinct from /cancel (a same-day void): a refund reverses
      * an already-settled txn → REFUNDED. For OVERSEAS partners the captured prefund USD is credited
      * back; a reversal journal is booked on revenue-ledger.
+     *
+     * <p>T2-7: {@code X-Scheme-Id} routes the scheme-side refund the same way {@code /cancel} does.
      */
     @PostMapping("/{id}/refund")
     public ResponseEntity<RefundPaymentResponse> refundPayment(
@@ -376,15 +386,18 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader,
             @RequestHeader(value = "X-Txn-Ref", required = false) String txnRef,
-            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef) {
+            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef,
+            @RequestHeader(value = "X-Scheme-Id", required = false) String schemeIdHeader) {
 
         PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_INITIATED";
         String resolvedTxnRef = txnRef != null ? txnRef : paymentId;
         String resolvedSchemeTxnRef = schemeTxnRef != null ? schemeTxnRef : paymentId;
+        String resolvedSchemeId = resolveSchemeId(schemeIdHeader, req);
 
         PaymentOrchestrator.RefundResult result = orchestrator.refundPayment(
-                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
+                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason,
+                resolvedSchemeId);
 
         return ResponseEntity.ok(new RefundPaymentResponse(
                 result.paymentId(),
@@ -392,6 +405,21 @@ public class PaymentController {
                 result.refundedAt(),
                 result.prefundReturnedUsd()
         ));
+    }
+
+    /**
+     * T2-7 scheme resolution for cancel/refund: the {@code X-Scheme-Id} header wins, then the optional
+     * {@code schemeId} body field, else null (ZeroPay default). Null/blank is preserved as null so the
+     * router's legacy fallback is unchanged.
+     */
+    private static String resolveSchemeId(String schemeIdHeader, CancelPaymentRequest req) {
+        if (schemeIdHeader != null && !schemeIdHeader.isBlank()) {
+            return schemeIdHeader;
+        }
+        if (req != null && req.schemeId() != null && !req.schemeId().isBlank()) {
+            return req.schemeId();
+        }
+        return null;
     }
 
     /**

@@ -19,6 +19,8 @@ import java.util.Map;
  * <h2>Routing</h2>
  * <ul>
  *   <li>{@code NEPAL} &rarr; {@link NepalRestSchemeClient} (Nepal adapter, single-phase submit).</li>
+ *   <li>{@code SENDMN} &rarr; {@link SendmnRestSchemeClient} (SendMN/QPay adapter,
+ *       verify-qr + Confirm two-step folded into one submit).</li>
  *   <li>anything else / unknown / null &rarr; the default {@link RestSchemeClient}
  *       (ZeroPay). Its behaviour and base-url default are <strong>unchanged</strong>.</li>
  * </ul>
@@ -28,9 +30,16 @@ import java.util.Map;
  * scheme-keyed dispatch behaviour is unchanged.
  *
  * <p>The scheme code is read from {@code request.schemeId()} on submit and from the
- * explicit {@code schemeId} arg on {@code checkBalance}. {@code cancelPayment} carries no
- * scheme code and is single-phase-N/A for Nepal, so it always routes to the default
- * (ZeroPay) client — the only scheme with a cancel round-trip today.
+ * explicit {@code schemeId} arg on {@code checkBalance}.
+ *
+ * <h2>Cancel routing (T2-7)</h2>
+ * {@code cancelPayment(CancelRequest)} now carries the scheme code and routes exactly like
+ * {@code submitMpm}, so a Nepal/SendMN cancel or refund reaches ITS OWN adapter client and raises a
+ * structured {@link com.gme.pay.payment.domain.SchemeOperationNotSupportedException} (both schemes are
+ * single-shot and expose no cancel) instead of silently posting to
+ * {@code /internal/scheme/zeropay/cancel} and returning a ZeroPay decline. The legacy scheme-less
+ * two-arg {@code cancelPayment} still routes to the ZeroPay default, unchanged, for callers that
+ * genuinely do not know the scheme.
  *
  * <p>Per-scheme adapter base-urls are configured as {@code gmepay.scheme-adapters.<CODE>.base-url}
  * (e.g. {@code gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18091}); each keyed
@@ -43,9 +52,13 @@ public class SchemeClientRouter implements SchemeClient {
     private final SchemeClient defaultClient;
     private final Map<String, SchemeClient> byScheme;
 
-    public SchemeClientRouter(RestSchemeClient zeropayClient, NepalRestSchemeClient nepalClient) {
+    public SchemeClientRouter(RestSchemeClient zeropayClient,
+                              NepalRestSchemeClient nepalClient,
+                              SendmnRestSchemeClient sendmnClient) {
         this.defaultClient = zeropayClient;
-        this.byScheme = Map.of(NepalRestSchemeClient.SCHEME_CODE, nepalClient);
+        this.byScheme = Map.of(
+                NepalRestSchemeClient.SCHEME_CODE, nepalClient,
+                SendmnRestSchemeClient.SCHEME_CODE, sendmnClient);
     }
 
     /** Resolve the delegate for a scheme code; falls back to the ZeroPay default. */
@@ -73,8 +86,15 @@ public class SchemeClientRouter implements SchemeClient {
 
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
-        // No scheme code on this call; cancel is a ZeroPay two-phase concept.
+        // Legacy scheme-less call: no code to route on, so it keeps hitting the ZeroPay default.
+        // Scheme-aware callers must use cancelPayment(CancelRequest) — see the class doc (T2-7).
         defaultClient.cancelPayment(schemeTxnRef, reason);
+    }
+
+    /** T2-7: route the cancel/refund by scheme code, exactly like {@link #submitMpm}. */
+    @Override
+    public void cancelPayment(CancelRequest request) {
+        route(request.schemeId()).cancelPayment(request.schemeTxnRef(), request.reason());
     }
 
     @Override

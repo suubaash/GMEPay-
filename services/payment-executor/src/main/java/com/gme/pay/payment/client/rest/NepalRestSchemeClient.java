@@ -3,6 +3,7 @@ package com.gme.pay.payment.client.rest;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -104,13 +105,17 @@ public class NepalRestSchemeClient implements SchemeClient {
         }
     }
 
+    /**
+     * Nepal pay is single-phase (submit = authorize+commit) and the adapter exposes no cancel endpoint,
+     * so there is nothing to call. T2-7: this now raises the structured
+     * {@link SchemeOperationNotSupportedException} ({@code SCHEME_OPERATION_UNSUPPORTED}) so the caller
+     * gets an unambiguous "this corridor has no refund path" answer — previously the router discarded
+     * the scheme code and a Nepal refund came back as a ZeroPay decline.
+     */
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
-        // Nepal pay is single-phase (submit = authorize+commit); the adapter exposes no
-        // cancel endpoint. Cancellation is not part of the Nepal contract, so this is a
-        // no-op rather than a misrouted call to a non-existent endpoint.
-        throw new PaymentException(
-                "NEPAL is single-phase (submit=authorize+commit); cancelPayment is not supported");
+        throw new SchemeOperationNotSupportedException(SCHEME_CODE, "cancelPayment",
+                "NEPAL is single-phase (submit=authorize+commit); the adapter exposes no cancel endpoint");
     }
 
     /**

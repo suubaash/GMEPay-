@@ -4,7 +4,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import com.gme.pay.payment.domain.client.SchemeClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
@@ -36,9 +39,19 @@ import java.time.Instant;
  * {@code @Primary}: {@link SchemeClientRouter} is the primary bean and delegates
  * ZeroPay (and any non-NEPAL/unknown scheme) here, so this class's behaviour and
  * base-url default are unchanged.
+ *
+ * <p><b>Internal auth (T0-2):</b> scheme-adapter-zeropay's whole {@code /internal/scheme/**} surface
+ * is now behind the service-to-service internal-auth gate ({@code com.gme.pay.internalauth}), so
+ * payment-executor — a trusted in-cluster caller — presents the shared secret from
+ * {@code gmepay.internal-auth.secret} in the {@code X-Gme-Internal} header on every call. A blank
+ * secret sends no header (local dev against an ungated sim); against a real, gated adapter that
+ * yields 401 on every call, which is the intended fail-closed outcome of a missing
+ * {@code GMEPAY_INTERNAL_AUTH_SECRET} rather than a silent bypass.
  */
 @Component
 public class RestSchemeClient implements SchemeClient {
+
+    private static final Logger log = LoggerFactory.getLogger(RestSchemeClient.class);
 
     private final RestClient restClient;
     private final String schemeId = "zeropay";
@@ -48,7 +61,8 @@ public class RestSchemeClient implements SchemeClient {
             RestClient.Builder builder,
             @Value("${gmepay.scheme-adapter-zeropay.base-url:http://scheme-adapter-zeropay:8080}") String baseUrl,
             @Value("${gmepay.scheme.connect-timeout-millis:2000}") long connectTimeoutMillis,
-            @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis) {
+            @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
         // Hard connect + read timeout so a HUNG scheme socket aborts in a few seconds (surfacing as
         // ResourceAccessException → SchemeTimeoutException) instead of hanging the pay path forever.
         // These sync timeouts are the call-timeout leg of the resilience trio (breaker+bulkhead live
@@ -56,9 +70,16 @@ public class RestSchemeClient implements SchemeClient {
         ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
                 .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
                 .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
-        this.restClient = builder.baseUrl(baseUrl)
-                .requestFactory(ClientHttpRequestFactories.get(timeouts))
-                .build();
+        RestClient.Builder b = builder.baseUrl(baseUrl)
+                .requestFactory(ClientHttpRequestFactories.get(timeouts));
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        } else {
+            log.warn("gmepay.internal-auth.secret is blank — calls to scheme-adapter-zeropay will "
+                    + "carry no {} header and a gated adapter will refuse them (401). Set "
+                    + "GMEPAY_INTERNAL_AUTH_SECRET.", InternalAuthHeaders.INTERNAL_TOKEN);
+        }
+        this.restClient = b.build();
     }
 
     RestSchemeClient(RestClient restClient) {

@@ -5,6 +5,7 @@ import com.gme.pay.contracts.PrefundingDeductionHistoryView;
 import com.gme.pay.contracts.PrefundingReleaseRequest;
 import com.gme.pay.contracts.PrefundingReserveRequest;
 import com.gme.pay.contracts.PrefundingReserveResponse;
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.InsufficientPrefundingException;
 import com.gme.pay.payment.domain.PaymentException;
@@ -35,6 +36,14 @@ import java.math.BigDecimal;
  * {@code http://prefunding:8080}). A 402 Payment Required response is mapped to
  * {@link InsufficientPrefundingException} so the orchestrator can short-circuit before
  * touching the scheme.
+ *
+ * <p><b>Internal auth (T0-5 / CISO#6):</b> prefunding's entire balance API is now behind the
+ * service-to-service internal-auth gate ({@code com.gme.pay.internalauth}), so payment-executor —
+ * a trusted in-cluster caller — presents the shared secret from
+ * {@code gmepay.internal-auth.secret} in the {@code X-Gme-Internal} header on every call. A blank
+ * secret sends no header (local dev against an ungated stub); against a real, gated prefunding it
+ * yields 401 on every call, which is the intended fail-closed outcome of a missing
+ * {@code GMEPAY_INTERNAL_AUTH_SECRET} rather than a silent bypass.
  */
 @Component
 @Primary
@@ -47,8 +56,17 @@ public class RestPrefundingClient implements PrefundingClient {
     @Autowired
     public RestPrefundingClient(
             RestClient.Builder builder,
-            @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+            @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        RestClient.Builder b = builder.baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        } else {
+            log.warn("gmepay.internal-auth.secret is blank — calls to prefunding will carry no {} "
+                    + "header and a gated prefunding will refuse them (401). Set "
+                    + "GMEPAY_INTERNAL_AUTH_SECRET.", InternalAuthHeaders.INTERNAL_TOKEN);
+        }
+        this.restClient = b.build();
     }
 
     RestPrefundingClient(RestClient restClient) {
@@ -67,7 +85,9 @@ public class RestPrefundingClient implements PrefundingClient {
             if (body == null) {
                 throw new PaymentException("prefunding returned empty body for deduct " + txnRef);
             }
-            return new DeductionResult(body.deductedUsd(), body.balanceAfter());
+            // A 2xx means the FULL requested amount was debited (anything short answers 402),
+            // so deductedUsd is the requested amount; the wire body only echoes the balance.
+            return new DeductionResult(amountUsd, body.balance());
         } catch (RestClientResponseException ex) {
             HttpStatusCode status = ex.getStatusCode();
             if (status.value() == HttpStatus.PAYMENT_REQUIRED.value()) {
@@ -363,7 +383,13 @@ public class RestPrefundingClient implements PrefundingClient {
         return v == null ? BigDecimal.ZERO : v;
     }
 
-    record DeductRequest(String txnRef, BigDecimal amountUsd) {}
+    /**
+     * Wire format for {@code POST /v1/prefunding/{partner}/deduct} — the amount field is
+     * named {@code amount} on prefunding's {@code PrefundingController.DeductRequest}
+     * (found by the SENDMN hub-through E2E: sending {@code amountUsd} bound null and the
+     * service rejected every deduct with 400 "amount must be positive").
+     */
+    record DeductRequest(String txnRef, BigDecimal amount) {}
 
     record ReverseRequest(String txnRef) {}
 
@@ -373,8 +399,9 @@ public class RestPrefundingClient implements PrefundingClient {
                                    BigDecimal dailyCapUsd, BigDecimal monthlyCapUsd, BigDecimal annualCapUsd,
                                    Integer dailyTxnCountLimit) {}
 
+    /** Wire format of prefunding's deduct answer ({@code BalanceResponse}: partnerId + balance). */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record DeductResponse(BigDecimal deductedUsd, BigDecimal balanceAfter) {}
+    record DeductResponse(String partnerId, BigDecimal balance) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ReverseResponse(String partnerId, BigDecimal reversedUsd, BigDecimal balance) {}

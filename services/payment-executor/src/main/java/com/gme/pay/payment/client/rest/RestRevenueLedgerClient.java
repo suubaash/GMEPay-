@@ -1,6 +1,7 @@
 package com.gme.pay.payment.client.rest;
 
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
+import com.gme.pay.payment.persistence.RevenuePostingFailureStore;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
@@ -21,8 +23,16 @@ import org.springframework.web.client.RestClient;
  *
  * <p>Failures DO NOT throw to the orchestrator (the commit path must not fail because of a
  * downstream residual posting). 4xx responses are logged at WARN; 5xx are logged at ERROR;
- * the caller continues. The residual remains locked on the transaction (see
- * {@code Transaction.lockSettlementBooking}) so it can be replayed by an out-of-band job.
+ * the caller continues.
+ *
+ * <h2>Durability (gap T2-1 / CFO#6)</h2>
+ * "The caller continues" used to mean the posting was simply LOST: the only trace of a revenue capture
+ * that never reached revenue-ledger was a log line, so a ledger outage during peak silently dropped
+ * revenue. Every swallowed failure — on all four surfaces — is now handed to
+ * {@link RevenuePostingFailureStore}, which persists the exact request payload keyed by
+ * {@code (reference, postingType)} for replay (revenue-ledger is idempotent on those references, so a
+ * replay cannot double-book). The recorder is optional: when absent (minimal/test contexts) the client
+ * behaves exactly as before.
  */
 @Component
 @Primary
@@ -35,15 +45,37 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
     private static final String COMMISSION_SPLIT_PATH = "/v1/revenue/commission-split";
 
     private final RestClient restClient;
+    /** Durable failure sink; null in minimal contexts (behaviour then matches the pre-T2-1 client). */
+    @Nullable private final RevenuePostingFailureStore failureStore;
 
     @Autowired
-    public RestRevenueLedgerClient(@Value("${gmepay.revenue-ledger.base-url:http://revenue-ledger:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+    public RestRevenueLedgerClient(
+            @Value("${gmepay.revenue-ledger.base-url:http://revenue-ledger:8080}") String baseUrl,
+            @Nullable RevenuePostingFailureStore failureStore) {
+        this(RestClient.builder().baseUrl(baseUrl).build(), failureStore);
     }
 
-    /** Test-friendly constructor that takes a pre-built {@link RestClient}. */
+    /** Test-friendly constructor that takes a pre-built {@link RestClient}; no durable failure sink. */
     public RestRevenueLedgerClient(RestClient restClient) {
+        this(restClient, null);
+    }
+
+    /** Test-friendly constructor with an explicit failure sink. */
+    public RestRevenueLedgerClient(RestClient restClient,
+                                   @Nullable RevenuePostingFailureStore failureStore) {
         this.restClient = restClient;
+        this.failureStore = failureStore;
+    }
+
+    /**
+     * Persist a swallowed posting failure for replay. Never throws — see
+     * {@link RevenuePostingFailureStore#record}.
+     */
+    private void recordFailure(String reference, String postingType,
+                               Map<String, Object> payload, String error) {
+        if (failureStore != null) {
+            failureStore.record(reference, postingType, payload, error);
+        }
     }
 
     @Override
@@ -65,11 +97,15 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
         } catch (HttpServerErrorException ex) {
             log.error("revenue-ledger 5xx posting rounding residual ref={} residual={} {}: {}",
                     reference, residual, currency, ex.getStatusCode(), ex);
-            // do NOT propagate — residual is locked on the txn for offline retry
+            // do NOT propagate — persisted for replay instead (T2-1)
+            recordFailure(reference, RevenuePostingFailureStore.TYPE_ROUNDING_RESIDUAL, body,
+                    ex.toString());
         } catch (Exception ex) {
             // Could be 4xx, connection refused, timeout, etc. Same policy: log and continue.
             log.warn("revenue-ledger residual post failed ref={} residual={} {}: {}",
                     reference, residual, currency, ex.toString());
+            recordFailure(reference, RevenuePostingFailureStore.TYPE_ROUNDING_RESIDUAL, body,
+                    ex.toString());
         }
     }
 
@@ -100,9 +136,13 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
         } catch (HttpServerErrorException ex) {
             log.error("revenue-ledger 5xx posting revenue capture ref={} {}: {}",
                     txnRef, ex.getStatusCode(), ex.toString());
-            // do NOT propagate — capture is best-effort, retriable offline
+            // do NOT propagate — persisted for replay instead (T2-1)
+            recordFailure(txnRef, RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE, body,
+                    ex.toString());
         } catch (Exception ex) {
             log.warn("revenue-ledger capture post failed ref={}: {}", txnRef, ex.toString());
+            recordFailure(txnRef, RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE, body,
+                    ex.toString());
         }
     }
 
@@ -131,9 +171,13 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
         } catch (HttpServerErrorException ex) {
             log.error("revenue-ledger 5xx posting commission split ref={} {}: {}",
                     txnRef, ex.getStatusCode(), ex.toString());
-            // do NOT propagate — the payment already committed; the split is retriable offline
+            // do NOT propagate — the payment already committed; persisted for replay (T2-1)
+            recordFailure(txnRef, RevenuePostingFailureStore.TYPE_COMMISSION_SPLIT, body,
+                    ex.toString());
         } catch (Exception ex) {
             log.warn("revenue-ledger commission-split post failed ref={}: {}", txnRef, ex.toString());
+            recordFailure(txnRef, RevenuePostingFailureStore.TYPE_COMMISSION_SPLIT, body,
+                    ex.toString());
         }
     }
 
@@ -156,10 +200,14 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
         } catch (HttpServerErrorException ex) {
             log.error("revenue-ledger 5xx posting reversal ref={} amount={} {}: {}",
                     reference, reversalAmount, currency, ex.getStatusCode(), ex);
-            // do NOT propagate — the cancel already happened; reversal is retriable offline
+            // do NOT propagate — the cancel already happened; persisted for replay (T2-1)
+            recordFailure(reference, RevenuePostingFailureStore.TYPE_REVERSAL_JOURNAL, body,
+                    ex.toString());
         } catch (Exception ex) {
             log.warn("revenue-ledger reversal post failed ref={} amount={} {}: {}",
                     reference, reversalAmount, currency, ex.toString());
+            recordFailure(reference, RevenuePostingFailureStore.TYPE_REVERSAL_JOURNAL, body,
+                    ex.toString());
         }
     }
 }

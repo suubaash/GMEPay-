@@ -22,10 +22,33 @@ public interface SchemeClient {
     /**
      * Cancels a previously approved payment at the scheme.
      *
+     * <p><b>Per-scheme primitive.</b> Each adapter client implements this; it carries no scheme code,
+     * so callers that know which scheme the payment was executed on MUST use
+     * {@link #cancelPayment(CancelRequest)} instead so the call is dispatched to the right adapter
+     * (see {@code SchemeClientRouter}). Calling this two-arg form on the router routes to the ZeroPay
+     * default — correct only for ZeroPay.
+     *
      * @param schemeTxnRef the scheme's own transaction reference
      * @param reason       cancellation reason text
      */
     void cancelPayment(String schemeTxnRef, String reason);
+
+    /**
+     * Scheme-routed cancel/refund (T2-7). Mirrors {@link #submitMpm}: the scheme code rides on the
+     * request so {@code SchemeClientRouter} can dispatch to the per-scheme adapter client instead of
+     * unconditionally hitting ZeroPay's {@code /internal/scheme/zeropay/cancel}.
+     *
+     * <p>The default delegates to the two-arg {@link #cancelPayment(String, String)} so every
+     * per-scheme client and hand-written test fake stays valid without change; only the router and the
+     * resilience decorator override it to route/guard by scheme.
+     *
+     * @param request the cancel request (scheme txn ref + reason + scheme code)
+     * @throws com.gme.pay.payment.domain.SchemeOperationNotSupportedException when the resolved scheme
+     *         has no cancel/refund round-trip (e.g. NEPAL, SENDMN — both single-shot)
+     */
+    default void cancelPayment(CancelRequest request) {
+        cancelPayment(request.schemeTxnRef(), request.reason());
+    }
 
     /**
      * Submits a CPM payment (customer-presented mode) to the scheme.
@@ -107,6 +130,24 @@ public interface SchemeClient {
             String schemeTxnRef,
             Instant approvedAt
     ) {}
+
+    /**
+     * Scheme-routed cancel/refund request (T2-7).
+     *
+     * @param schemeTxnRef the scheme's own transaction reference (or the authorise-level authId for
+     *                     the wallet refund path)
+     * @param reason       cancellation reason text
+     * @param schemeId     scheme CODE the payment was executed on (e.g. {@code "SENDMN"}). Null/blank
+     *                     keeps the legacy behaviour (ZeroPay default) for callers that genuinely do
+     *                     not know the scheme.
+     */
+    record CancelRequest(String schemeTxnRef, String reason, String schemeId) {
+
+        /** Legacy scheme-less cancel (routes to the ZeroPay default). */
+        public static CancelRequest of(String schemeTxnRef, String reason) {
+            return new CancelRequest(schemeTxnRef, reason, null);
+        }
+    }
 
     record CpmSubmitRequest(
             String txnRef,

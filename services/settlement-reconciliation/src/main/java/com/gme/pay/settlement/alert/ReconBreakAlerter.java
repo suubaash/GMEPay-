@@ -59,6 +59,24 @@ public class ReconBreakAlerter {
      * @param allLines the full recon result (MATCHED + exception lines) from the diff engine
      */
     public void alertOnBreak(String batchId, List<ReconLine> allLines) {
+        alertOnBreak(batchId, allLines, KRW_SYMBOL);
+    }
+
+    /** Won-denominated batches (the ZeroPay file recon). */
+    static final String KRW_SYMBOL = "₩";
+
+    /**
+     * Same alert, for a batch whose break amounts are NOT in won — the cross-border three-way
+     * tie-out reconciles USD (GAP T2-2), so its alert must not render dollars behind a ₩ sign.
+     *
+     * <p>The amount thresholds stay as configured: they are calibrated for won, so a USD batch is
+     * effectively alerted on count and on the presence of a missing/variance line rather than on the
+     * won-scaled value bands. That is deliberately conservative (it over-alerts rather than
+     * under-alerts) and is the honest behaviour until per-currency thresholds are agreed with finance.
+     *
+     * @param currencySymbol symbol/label prefixed to the total in the alert detail (e.g. {@code "$"})
+     */
+    public void alertOnBreak(String batchId, List<ReconLine> allLines, String currencySymbol) {
         List<ReconLine> breaks = allLines.stream().filter(ReconLine::requiresAttention).toList();
         if (breaks.isEmpty()) {
             return;   // clean batch — no alert
@@ -71,8 +89,8 @@ public class ReconBreakAlerter {
 
         String severity = severityFor(breaks.size(), missing, totalBreak);
         String detail = String.format(
-                "reconciliation break on batch %s: %d exception line(s) (%d missing), total break ₩%s",
-                batchId, breaks.size(), missing, totalBreak.toPlainString());
+                "reconciliation break on batch %s: %d exception line(s) (%d missing), total break %s%s",
+                batchId, breaks.size(), missing, currencySymbol, totalBreak.toPlainString());
 
         OpsAlertPayload payload = new OpsAlertPayload(
                 OpsAlertPayload.EVENT_TYPE,
@@ -83,8 +101,8 @@ public class ReconBreakAlerter {
                 Instant.now().toString());
 
         publisher.publish(new ReconAlertEvent(payload));
-        log.info("RECON_BREAK alert emitted: batchId={} severity={} breaks={} total=₩{}",
-                batchId, severity, breaks.size(), totalBreak.toPlainString());
+        log.info("RECON_BREAK alert emitted: batchId={} severity={} breaks={} total={}{}",
+                batchId, severity, breaks.size(), currencySymbol, totalBreak.toPlainString());
     }
 
     private static String severityFor(int breakCount, long missing, BigDecimal totalBreak) {

@@ -8,6 +8,7 @@ import com.gme.pay.payment.sandbox.dto.E2eOptions;
 import com.gme.pay.payment.sandbox.dto.E2eRunDetail;
 import com.gme.pay.payment.sandbox.dto.E2eRunRequest;
 import com.gme.pay.payment.sandbox.dto.E2eRunSummary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,9 +33,24 @@ import java.util.List;
  *   <li>{@code GET  /runs}       — newest-first run summaries (limit via {@code ?limit=}).
  *   <li>{@code GET  /runs/{id}}  — a single run's detail incl. steps.
  * </ul>
+ *
+ * <h2>DISABLED by default (T0-5 / CISO#6)</h2>
+ * <p>{@code POST /run} is a <b>payment runner</b>: it drives a real authorize+capture through the
+ * real pay path (prefunding debit, scheme call, ledger postings). It exists for corridor debugging
+ * and must never be reachable outside a deliberately-enabled dev/sandbox deployment. Two controls,
+ * both required:
+ * <ol>
+ *   <li>This bean is only registered when {@code gmepay.sandbox.e2e.enabled=true} (default
+ *       {@code false} in {@code application.properties}). When off, the mapping does not exist at
+ *       all — the endpoints answer {@code 404}, not {@code 403}, so there is nothing to probe.</li>
+ *   <li>When on, {@code SandboxSurfaceInternalAuthConfig} gates {@code /v1/sandbox/e2e/**} behind
+ *       the shared service-to-service {@code X-Gme-Internal} token and the service refuses to
+ *       start without that secret. Enabling the runner therefore cannot, by itself, expose it.</li>
+ * </ol>
  */
 @RestController
 @RequestMapping("/v1/sandbox/e2e")
+@ConditionalOnProperty(name = "gmepay.sandbox.e2e.enabled", havingValue = "true")
 public class SandboxE2eController {
 
     private static final int DEFAULT_LIMIT = 50;

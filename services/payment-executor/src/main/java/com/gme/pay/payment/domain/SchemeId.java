@@ -40,7 +40,10 @@ public final class SchemeId {
             // NEPAL (scheme-adapter-nepal) is a later addition to the roster; appended
             // with a fresh id (8) rather than inserted at its catalog position so the
             // existing 1..7 ids stay stable for already-persisted transaction rows.
-            Map.entry("NEPAL", 8L));
+            Map.entry("NEPAL", 8L),
+            // SENDMN (scheme-adapter-sendmn, Mongolia/QPay) — appended with the next
+            // free id (9), same append-only discipline as NEPAL.
+            Map.entry("SENDMN", 9L));
 
     private SchemeId() {
     }

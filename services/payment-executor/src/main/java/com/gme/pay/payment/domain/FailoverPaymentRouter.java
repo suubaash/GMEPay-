@@ -92,25 +92,37 @@ public class FailoverPaymentRouter {
     private final ExecutionAttemptRepository attemptRepository;
     private final int maxHops;
     @Nullable private final TransactionClient transactionClient;
+    /** T4-2: per-txn + cumulative regulatory limit gate. Never null (see {@link WalletLimitGate#disabled()}). */
+    private final WalletLimitGate limitGate;
 
     @Autowired
     public FailoverPaymentRouter(SmartRouterClient smartRouterClient,
                                  SchemeClient schemeClient,
                                  ExecutionAttemptRepository attemptRepository,
                                  @Value("${gmepay.routing.max-hops:3}") int maxHops,
-                                 @Nullable TransactionClient transactionClient) {
+                                 @Nullable TransactionClient transactionClient,
+                                 @Nullable WalletLimitGate limitGate) {
         this.smartRouterClient = smartRouterClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.maxHops = maxHops > 0 ? maxHops : 3;
         this.transactionClient = transactionClient;
+        this.limitGate = limitGate != null ? limitGate : WalletLimitGate.disabled();
     }
 
     /** Test constructor — no transaction client, default max-hops. */
     FailoverPaymentRouter(SmartRouterClient smartRouterClient,
                           SchemeClient schemeClient,
                           ExecutionAttemptRepository attemptRepository) {
-        this(smartRouterClient, schemeClient, attemptRepository, 3, null);
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, null);
+    }
+
+    /** Test constructor with the T4-2 limit gate wired. */
+    FailoverPaymentRouter(SmartRouterClient smartRouterClient,
+                          SchemeClient schemeClient,
+                          ExecutionAttemptRepository attemptRepository,
+                          @Nullable WalletLimitGate limitGate) {
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate);
     }
 
     /**
@@ -137,6 +149,26 @@ public class FailoverPaymentRouter {
      */
     public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction,
                             @Nullable String payCurrency) {
+        // Back-compat overload — no known limit subject (legacy/test callers). The gate logs that it is
+        // running unconstrained rather than pretending limits were checked.
+        return pay(qrPayload, amount, userRef, direction, payCurrency, WalletPartnerRef.none());
+    }
+
+    /**
+     * As {@link #pay(String, BigDecimal, String, String, String)} but carrying the limit subject —
+     * the wallet partner whose {@code partner_limits} row (V020) governs this payment (T4-2).
+     *
+     * <p>The gate runs ONCE per payment, after routing candidates are resolved and before the first
+     * (irreversible) scheme submit, keyed on a stable payment-level reference so a failover across
+     * candidates cannot double-charge the cumulative cap. It is reversed when the payment ends in a
+     * terminal decline or exhausts its candidates; an APPROVED/PENDING outcome keeps the cap consumed
+     * (fail-safe: a payment that may have landed must not free cap).
+     *
+     * <p>This is the LIVE cross-border wallet path (a Fonepay/NepalPay scan arrives here, not at
+     * {@code NepalPaymentService}), so it is the enforcement point that actually matters for Nepal.
+     */
+    public WalletResult pay(String qrPayload, BigDecimal amount, String userRef, String direction,
+                            @Nullable String payCurrency, WalletPartnerRef partner) {
 
         Classification classification = QrSchemeClassifier.classify(qrPayload);
         if (!classification.isKnown()) {
@@ -154,6 +186,26 @@ public class FailoverPaymentRouter {
             log.warn("No routing candidates for network={} country={} (userRef={})",
                     classification.networkIdentifier(), classification.country(), userRef);
             return WalletResult.declined(null, "unsupported_qr");
+        }
+
+        // T4-2 regulatory gate — per-transaction min/max USD + cumulative daily/monthly/annual USD +
+        // the daily velocity count, on the wallet partner's V020 limits row. Keyed on ONE stable
+        // payment-level reference (candidate references change per hop) so failover cannot double-charge
+        // the cap. The USD basis uses the currency the payment will execute in via the platform's single
+        // USD-basis source (UsdAmountBasis); a configured cap that cannot be evaluated fails CLOSED.
+        String limitRef = "FO-LIMIT-" + UUID.randomUUID();
+        String gateCurrency = resolveCurrency(payCurrency, candidates.get(0).schemeId());
+        WalletLimitGate.LimitCharge limitCharge;
+        try {
+            limitCharge = limitGate.enforce(partner, limitRef, amount, gateCurrency);
+        } catch (TransactionLimitExceededException | CumulativeLimitExceededException
+                 | LimitCheckUnavailableException ex) {
+            log.warn("Failover limit gate refused partner={} ref={} amount={} {}: {}",
+                    partner.code(), limitRef, amount, gateCurrency, ex.getMessage());
+            // Persist the attempt the way other declines are, then surface the structured limit error.
+            recordAttempt(candidates.get(0), limitRef, PaymentStatus.FAILED, null,
+                    ex.getClass().getSimpleName());
+            throw ex;
         }
 
         int hops = Math.min(candidates.size(), maxHops);
@@ -187,6 +239,7 @@ public class FailoverPaymentRouter {
                 recordAttempt(candidate, reference, PaymentStatus.FAILED, resp.schemeTxnRef(), reason);
                 log.warn("Candidate {} declined (status={}) — TERMINAL, no failover",
                         candidate.schemeId(), reason);
+                limitGate.reverse(limitCharge);   // T4-2: terminal decline ⇒ do not consume cap
                 return WalletResult.declined(null, reason);
 
             } catch (SchemeDeclinedException ex) {
@@ -197,6 +250,7 @@ public class FailoverPaymentRouter {
                     recordAttempt(candidate, reference, PaymentStatus.FAILED, null, code);
                     log.warn("Candidate {} business-declined ({}) — TERMINAL, no failover",
                             candidate.schemeId(), code);
+                    limitGate.reverse(limitCharge);   // T4-2: terminal decline ⇒ do not consume cap
                     return WalletResult.declined(null, code);
                 }
                 // A decline with a non-business code is treated as a technical failure: probe then
@@ -221,6 +275,9 @@ public class FailoverPaymentRouter {
         }
 
         log.warn("All {} candidate(s) exhausted for userRef={} — SCHEME_UNAVAILABLE", hops, userRef);
+        // T4-2: nothing was paid on any candidate (the anti-double-charge guard short-circuits when a
+        // charge may have landed), so the cumulative cap is returned.
+        limitGate.reverse(limitCharge);
         return WalletResult.declined(null, lastReason);
     }
 
@@ -365,13 +422,16 @@ public class FailoverPaymentRouter {
         return false;
     }
 
-    /** ZeroPay is KRW; other schemes (Nepal) carry their local currency handled by the adapter. */
+    /** ZeroPay is KRW; other schemes (Nepal, SendMN) carry their local currency handled by the adapter. */
     private static String currencyFor(String schemeId) {
         if (schemeId != null && schemeId.toLowerCase(Locale.ROOT).contains("zeropay")) {
             return "KRW";
         }
         if (schemeId != null && schemeId.equalsIgnoreCase("NEPAL")) {
             return "NPR";
+        }
+        if (schemeId != null && schemeId.equalsIgnoreCase("SENDMN")) {
+            return "MNT";
         }
         return "KRW";
     }

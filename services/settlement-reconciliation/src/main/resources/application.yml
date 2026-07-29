@@ -59,6 +59,26 @@ gmepay:
       morning-cron: "0 0 5 * * *"     # ZP0061 morning request, 05:00 KST
       afternoon-cron: "0 0 14 * * *"  # ZP0063 afternoon request, 14:00 KST
       detail-cron: "0 0 22 * * *"     # ZP0065 + ZP0066 detail files, 22:00 KST
+    # Cross-border three-way tie-out (GAP T2-2): our transactions ↔ our prefunding USD movements ↔
+    # the scheme adapter's record of what the scheme confirmed. Needs NO partner file — SendMN's
+    # recon file format is an open external question (plan gate O4).
+    corridor-recon:
+      # Gate: set to true in production only (same discipline as settlement.recon.enabled).
+      enabled: ${CORRIDOR_RECON_ENABLED:false}
+      # 02:30 UTC = 11:30 KST — reconciles YESTERDAY, after the KST day closed.
+      cron: "0 30 2 * * *"
+    corridor:
+      # Business-day zone for all three legs' date windows.
+      settlement-zone: "Asia/Seoul"
+      sendmn:
+        # Observations of payment-executor's SENDMN path, needed to reconstruct the KRW charged and to
+        # recognise a deduction priced off the hardcoded fallback rather than a live rate. NOT settings
+        # this service owns — keep in step with that service if it changes them.
+        service-fee-krw: "500"
+        fallback-krw-per-usd: "1350"
+        fallback-match-tolerance-krw: "0.5"
+        # USD shortfall tolerated before a line is flagged RATE_BASIS_VARIANCE. 0 = any shortfall breaks.
+        rate-basis-tolerance-usd: "0"
   clients:
     transaction-mgmt:
       base-url: ${TRANSACTION_MGMT_URL:http://transaction-mgmt:8082}
@@ -77,6 +97,15 @@ gmepay:
       # transmitted + ZP0012 received, read from the adapter's registration-status endpoint,
       # fail-CLOSED on outage). Default false → PermissiveRegistrationStatusAdapter in dev/test.
       enabled: ${SCHEME_ADAPTER_ZEROPAY_ENABLED:false}
+  # Cross-border tie-out leg (b): prefunding's float-movement read surface. Property name and default
+  # match every other consumer of prefunding in the repo (gmepay.prefunding.base-url).
+  prefunding:
+    base-url: ${PREFUNDING_URL:http://prefunding:8080}
+  # Cross-border tie-out leg (c): the scheme adapters' own settlement records. Same property shape
+  # payment-executor uses to reach them (gmepay.scheme-adapters.<CODE>.base-url).
+  scheme-adapters:
+    SENDMN:
+      base-url: ${SCHEME_ADAPTER_SENDMN_URL:http://scheme-adapter-sendmn:8093}
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:
