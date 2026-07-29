@@ -158,6 +158,44 @@ public class TransactionService {
                                                   BigDecimal costRatePay,
                                                   BigDecimal payoutUsdCost,
                                                   String userRef) {
+        return createFromPaymentExecutor(partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                targetPayout, payoutCurrency, collectionAmount, collectionCurrency, merchantId,
+                quoteId, merchantFeeRate, collectionMarginUsd, payoutMarginUsd, collectionUsd,
+                costRateColl, costRatePay, payoutUsdCost, userRef, null);
+    }
+
+    /**
+     * T4-4 create overload: additionally captures {@code merchantName} — the merchant DISPLAY NAME
+     * the calling corridor resolved at payment time — so every later receipt / transaction-detail
+     * read carries it. Before this the name existed only on the synchronous wallet response and was
+     * lost the instant it was returned, leaving the portal to render an em dash forever.
+     *
+     * <p>{@code merchantName} is nullable and null is PRESERVED, not defaulted: a corridor that
+     * cannot resolve a name (CPM has no QR decode) stores null and the UI shows "—". This method
+     * deliberately does no fallback to {@code merchantId} and no placeholder substitution — the
+     * caller's null is the honest answer and inventing a name here would forge a receipt field.
+     */
+    @Transactional
+    public Transaction createFromPaymentExecutor(Long partnerId,
+                                                  String partnerTxnRef,
+                                                  String schemeId,
+                                                  String direction,
+                                                  String paymentMode,
+                                                  BigDecimal targetPayout,
+                                                  String payoutCurrency,
+                                                  BigDecimal collectionAmount,
+                                                  String collectionCurrency,
+                                                  String merchantId,
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate,
+                                                  BigDecimal collectionMarginUsd,
+                                                  BigDecimal payoutMarginUsd,
+                                                  BigDecimal collectionUsd,
+                                                  BigDecimal costRateColl,
+                                                  BigDecimal costRatePay,
+                                                  BigDecimal payoutUsdCost,
+                                                  String userRef,
+                                                  String merchantName) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -191,6 +229,9 @@ public class TransactionService {
                 costRateColl, costRatePay, payoutUsdCost);
         // CS quick-wins (V011): capture the end-customer / wallet identifier for support lookup.
         txn.applyUserRef(userRef);
+        // T4-4 (V012): snapshot the merchant display name the corridor resolved. Stored verbatim,
+        // including null — the read path turns null into "—" rather than guessing a name.
+        txn.applyMerchantName(blankToNull(merchantName));
         return repository.save(txn);
     }
 
@@ -750,5 +791,14 @@ public class TransactionService {
             default -> throw new ApiException(ErrorCode.VALIDATION_ERROR,
                     "resolution must be COMPLETED or REVERSED, was: " + resolution);
         };
+    }
+
+    /**
+     * Normalises an absent/blank optional string to null. Used for the T4-4 merchant name so a
+     * caller sending {@code ""} is stored as "unknown" (null → em dash on the receipt) rather than
+     * as an empty name that reads like a real, blank-named merchant.
+     */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 }

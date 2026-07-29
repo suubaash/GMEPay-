@@ -342,7 +342,8 @@ public class TransactionController {
                 req.costRateColl(),
                 req.costRatePay(),
                 req.payoutUsdCost(),
-                req.userRef());
+                req.userRef(),
+                req.merchantName());   // T4-4: persisted so receipts/detail reads carry the real name
         return CreateTransactionResponse.from(txn);
     }
 

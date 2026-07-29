@@ -71,6 +71,14 @@ public class Transaction {
     // rehydration; does NOT bump updatedAt.
     private String userRef;
 
+    // T4-4 (V012): merchant DISPLAY NAME resolved by the corridor at payment time and carried on the
+    // create contract (merchant-qr-data for GMEREMIT/ZeroPay, the SendMN adapter's verify-qr for
+    // SENDMN, the Nepal adapter's decode for NEPAL). A creation-time snapshot like userRef, replayed
+    // on rehydration; does NOT bump updatedAt. Null is MEANINGFUL and must be preserved: it means the
+    // name is not known (legacy row, or a corridor such as CPM that has no QR decode), and the read
+    // path shows an em dash rather than substituting the merchant id or a placeholder.
+    private String merchantName;
+
     // V005: gross merchant fee rate snapshot (config-registry merchant_fee_schedule, V032),
     // captured at creation — the rate that applied then. Nullable on legacy / pre-resolution rows.
     private BigDecimal merchantFeeRate;
@@ -452,6 +460,19 @@ public class Transaction {
     }
 
     /**
+     * Captures the merchant DISPLAY NAME the corridor resolved at payment time (T4-4, V012). Set on
+     * the create path and replayed during rehydration, so it does NOT bump {@code updatedAt}.
+     *
+     * <p>Null-tolerant, and null is not a failure: a corridor that cannot resolve a name (or a legacy
+     * row that never captured one) leaves this empty and the receipt/detail read renders an em dash.
+     * Callers must NOT pass the merchant id, a synthesised label, or a lenient-mode placeholder here —
+     * a fabricated name on a receipt is worse than a blank one.
+     */
+    public void applyMerchantName(String merchantName) {
+        this.merchantName = merchantName;
+    }
+
+    /**
      * Snapshots the gross merchant fee rate resolved at creation (V005). Set on the create
      * path and on rehydration from the DB. The rate is immutable for the life of the txn (the
      * rate that applied at creation), so settlement always reads a stable value. Does NOT bump
@@ -670,6 +691,8 @@ public class Transaction {
     public Instant approvedAt()          { return approvedAt; }
     public String failureReason()        { return failureReason; }
     public String userRef()              { return userRef; }
+    /** T4-4 (V012): merchant display name captured at payment time; null = not known. */
+    public String merchantName()         { return merchantName; }
     public BigDecimal merchantFeeRate()  { return merchantFeeRate; }
 
     // V007 committed-FX accessors

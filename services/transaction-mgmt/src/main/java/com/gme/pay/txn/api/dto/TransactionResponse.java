@@ -37,7 +37,8 @@ import java.util.List;
  *   <li>{@code prefundingDeductedUsd}– USD deducted from prefunding balance (= prefundDeductedUsd)</li>
  *   <li>{@code statusHistory}        – ordered status transitions (TODO: wire tracking table)</li>
  *   <li>{@code merchantId}           – scheme merchant terminal identifier</li>
- *   <li>{@code merchantName}         – merchant display name (TODO: from scheme-adapter)</li>
+ *   <li>{@code merchantName}         – merchant display name captured at payment time (T4-4/V012);
+ *       null when the corridor could not resolve one, which readers render as an em dash</li>
  * </ul>
  *
  * <p>ADDITIVE ONLY – do not rename or remove existing fields; payment-executor and
@@ -78,7 +79,13 @@ public record TransactionResponse(
         List<StatusEntry> statusHistory,
         /** Merchant terminal/store id from the QR scheme. */
         String merchantId,
-        /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
+        /**
+         * T4-4 (V012): merchant DISPLAY NAME captured at payment time from whichever source the
+         * corridor actually resolved (merchant-qr-data for GMEREMIT/ZeroPay, the SendMN adapter's
+         * verify-qr for SENDMN, the Nepal adapter's decode for NEPAL). Null means the name is NOT
+         * KNOWN — a legacy row (V012 back-filled nothing) or a corridor with no QR decode. Readers
+         * must render null as "—" and never fall back to {@code merchantId}.
+         */
         String merchantName,
         /** V005: gross merchant fee rate snapshotted at creation ("0.0080" = 0.80%); null when unset. */
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal merchantFeeRate,
@@ -178,7 +185,7 @@ public record TransactionResponse(
                 txn.prefundDeductedUsd(),   // prefundingDeductedUsd
                 buildStatusHistory(txn),    // statusHistory — derived from stored timestamps
                 txn.merchantId(),   // merchantId — from V003
-                null,               // merchantName — TODO: from scheme-adapter
+                txn.merchantName(), // merchantName — T4-4/V012 real captured name; null = not known
                 txn.merchantFeeRate(),  // merchantFeeRate — V005 snapshot
                 txn.approvedAt(),       // approvedAt — drives settlement window cutoff
                 txn.schemeTxnRef(),     // schemeTxnRef — real scheme settlement id (merchant-paid proof)

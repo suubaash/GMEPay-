@@ -20,6 +20,9 @@ import java.math.BigDecimal;
  *   <li>{@code collectionAmount}   – BigDecimal: amount collected from payer</li>
  *   <li>{@code collectionCurrency} – String: ISO-4217 collection currency (e.g. "USD")</li>
  *   <li>{@code merchantId}         – String: scheme merchant terminal identifier (nullable)</li>
+ *   <li>{@code merchantName}       – String: merchant DISPLAY NAME resolved by the corridor at
+ *       payment time (T4-4, V012). Nullable — null means "the corridor could not resolve a name",
+ *       which the read path renders as an em dash; never send the merchant id as a stand-in.</li>
  *   <li>{@code quoteId}            – String: rate-quote reference (nullable)</li>
  *   <li>{@code merchantFeeRate}    – BigDecimal: gross merchant fee rate resolved at
  *       creation (e.g. 0.0080 = 0.80%), snapshotted onto the txn (nullable — null leaves
@@ -66,7 +69,15 @@ public record CreateTransactionRequest(
          * Optional — persisted onto the txn so customer support can look a payment up by what the
          * CUSTOMER holds. Null / omitted leaves it empty (current behaviour).
          */
-        String userRef
+        String userRef,
+        /**
+         * T4-4 (V012): the merchant DISPLAY NAME the calling corridor resolved at payment time.
+         * Persisted onto the txn so every later receipt / transaction-detail read carries it instead
+         * of an em dash. Optional: a corridor that cannot resolve a name MUST send null (or omit the
+         * field) rather than the merchant id, a synthesised label, or a lenient-mode placeholder —
+         * transaction-mgmt stores whatever it is given, so a fake here becomes a fake on the receipt.
+         */
+        String merchantName
 ) {
     /** Backwards-compatible 12-arg constructor (pre-Wave-3 shape); pool + userRef fields default null. */
     public CreateTransactionRequest(
@@ -84,7 +95,36 @@ public record CreateTransactionRequest(
             BigDecimal merchantFeeRate) {
         this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
                 payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
-                merchantFeeRate, null, null, null, null, null, null, null, null, null);
+                merchantFeeRate, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /** Back-compat 21-arg constructor (pre-T4-4 shape); {@code merchantName} defaults null. */
+    public CreateTransactionRequest(
+            long partnerId,
+            String partnerTxnRef,
+            String schemeId,
+            String direction,
+            String paymentMode,
+            BigDecimal targetPayout,
+            String payoutCurrency,
+            BigDecimal collectionAmount,
+            String collectionCurrency,
+            String merchantId,
+            String quoteId,
+            BigDecimal merchantFeeRate,
+            BigDecimal offerRateColl,
+            BigDecimal crossRate,
+            BigDecimal costRateColl,
+            BigDecimal costRatePay,
+            BigDecimal collectionUsd,
+            BigDecimal payoutUsdCost,
+            BigDecimal collectionMarginUsd,
+            BigDecimal payoutMarginUsd,
+            String userRef) {
+        this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                merchantFeeRate, offerRateColl, crossRate, costRateColl, costRatePay,
+                collectionUsd, payoutUsdCost, collectionMarginUsd, payoutMarginUsd, userRef, null);
     }
 
     /** Back-compat 20-arg constructor (Wave-3 shape, pre CS quick-wins); userRef defaults null. */
@@ -112,6 +152,6 @@ public record CreateTransactionRequest(
         this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
                 payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
                 merchantFeeRate, offerRateColl, crossRate, costRateColl, costRatePay,
-                collectionUsd, payoutUsdCost, collectionMarginUsd, payoutMarginUsd, null);
+                collectionUsd, payoutUsdCost, collectionMarginUsd, payoutMarginUsd, null, null);
     }
 }

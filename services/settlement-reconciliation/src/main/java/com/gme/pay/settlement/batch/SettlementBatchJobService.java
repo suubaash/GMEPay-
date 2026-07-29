@@ -9,6 +9,8 @@ import com.gme.pay.settlement.builder.DetailBuildContext;
 import com.gme.pay.settlement.builder.ZP0061RequestBuilder;
 import com.gme.pay.settlement.builder.ZP0065PaymentDetailBuilder;
 import com.gme.pay.settlement.builder.ZP0066RefundDetailBuilder;
+import com.gme.pay.settlement.calendar.BusinessCalendar;
+import com.gme.pay.settlement.calendar.BusinessDayVerdict;
 import com.gme.pay.settlement.model.TransactionRecord;
 import com.gme.pay.settlement.outbox.OutboxAppender;
 import com.gme.pay.settlement.outbox.SettlementCompletedEvent;
@@ -106,6 +108,14 @@ public class SettlementBatchJobService {
     private final LocalTime morningCutoff;
     private final LocalTime afternoonCutoff;
 
+    /**
+     * T3-4: the configured business-day calendar. Consulted HERE, not only in the scheduler, so no caller —
+     * scheduler, operator re-run, or a future direct one — can generate a settlement file for a date the
+     * calendar declares closed. Defaults to {@link BusinessCalendar#empty()} in the legacy constructors,
+     * which classifies every date UNVERIFIED (fail-open) and so preserves existing behaviour exactly.
+     */
+    private final BusinessCalendar calendar;
+
     @org.springframework.beans.factory.annotation.Autowired
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -116,6 +126,7 @@ public class SettlementBatchJobService {
                                      @Qualifier(OutboxAppender.BEAN_NAME) EventPublisher outbox,
                                      RefundedTransactionPort refundedPort,
                                      RegistrationStatusPort registrationPort,
+                                     BusinessCalendar calendar,
                                      @Value("${settlement.morning-cutoff:04:30}") String morningCutoff,
                                      @Value("${settlement.afternoon-cutoff:13:30}") String afternoonCutoff) {
         this.txnPort = txnPort;
@@ -127,6 +138,7 @@ public class SettlementBatchJobService {
         this.outbox = outbox;
         this.refundedPort = refundedPort;
         this.registrationPort = registrationPort;
+        this.calendar = calendar == null ? BusinessCalendar.empty() : calendar;
         this.morningCutoff = parseCutoff(morningCutoff, "morning-cutoff");
         this.afternoonCutoff = parseCutoff(afternoonCutoff, "afternoon-cutoff");
     }
