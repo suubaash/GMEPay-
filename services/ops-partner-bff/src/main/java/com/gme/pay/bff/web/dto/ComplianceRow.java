@@ -12,7 +12,8 @@ package com.gme.pay.bff.web.dto;
  *                         KYB row exists yet.
  * @param sanctionsResult  {@code CLEAR | NEEDS_REVIEW | HIT | null} — the KYB {@code screeningStatus}
  *                         verbatim ({@code null} before the first screening run)
- * @param regulatoryConfig per-lane "configured?" flags (BOK / Hometax / KoFIU / Travel Rule)
+ * @param regulatoryConfig per-lane "configured?" flags (BOK / Hometax / KoFIU / Travel Rule) —
+ *                         a placeholder value does NOT count as configured (GAP T5-2)
  * @param lifecycleStatus  partner {@code PartnerStatus} name (e.g. {@code LIVE | SUSPENDED | ONBOARDING
  *                         | TERMINATED | DRAFT})
  */

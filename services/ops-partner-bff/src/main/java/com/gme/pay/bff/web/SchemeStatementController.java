@@ -77,9 +77,8 @@ public class SchemeStatementController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @RequestParam(defaultValue = "50") int size) {
+        rbac.requireTxnView();
 
         Instant end = to != null ? to : Instant.now();
         Instant start = from != null ? from : end.minus(Duration.ofDays(DEFAULT_WINDOW_DAYS));

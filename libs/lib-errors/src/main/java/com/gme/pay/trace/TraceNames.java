@@ -19,7 +19,9 @@ final class TraceNames {
     private static final Map<Integer, String> PORT_NAMES = Map.ofEntries(
             Map.entry(8084, "payment-executor"),
             Map.entry(8090, "scheme-adapter"),
+            Map.entry(8093, "sendmn-adapter"),
             Map.entry(8095, "ops-partner-bff"),
+            Map.entry(8096, "ninepay-adapter"),
             Map.entry(8087, "reporting-compliance"),
             Map.entry(8098, "kyb-adapter"),
             Map.entry(9101, "sim-rate-provider"),
@@ -27,6 +29,9 @@ final class TraceNames {
             Map.entry(9103, "sim-wallet"),
             Map.entry(9104, "sim-merchant"),
             Map.entry(9105, "sim-gmeremit"),
+            Map.entry(9106, "sim-sendmn"),   // compose/local port; run-fleet uses 9108
+            Map.entry(9107, "sim-ninepay"),
+            Map.entry(9108, "sim-sendmn"),   // run-fleet port (9106 taken by sim-nepal-qr there)
             Map.entry(18081, "config-registry"),
             Map.entry(18082, "transaction-mgmt"),
             Map.entry(3000, "admin-ui"),

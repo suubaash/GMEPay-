@@ -31,11 +31,16 @@ import java.util.Map;
  * {@link OpsWebhookActionController} under their own URL roots.)
  *
  * <h2>RBAC (fail closed)</h2>
- * <p>The platform forwards the caller's permissions in {@code X-Gme-Permissions}
- * ({@link RbacHeaders#PERMISSIONS}). Authorization is delegated to {@link OpsRbacGuard},
- * which DENIES (403) when the header is absent or lacks the ops operate permission —
+ * <p>Authorization is delegated to {@link OpsRbacGuard}, which reads the caller's permissions
+ * from the <b>verified access token</b> (T0-3 — the previous {@code X-Gme-Permissions} request
+ * header was client-supplied, so {@code curl -H 'X-Gme-Permissions: ops:operate'} authorized a
+ * global platform pause). It DENIES (403) when the token lacks the ops operate permission —
  * no permission ⇒ no privileged action (config-overridable only via the dev flag
  * {@code gmepay.ops.rbac.enforce}, default = enforce).
+ *
+ * <p>{@code X-Gme-Principal-Id} is still accepted, but only as a <em>fallback label</em> for the
+ * audit row when no token subject is present; the token subject always wins
+ * ({@link OpsRbacGuard#actor(String)}), so an operator cannot audit under another name.
  *
  * <h2>Audit (fail closed for money-affecting actions)</h2>
  * <p>Every action here is money/state-affecting, so the operator-action audit record is
@@ -67,10 +72,9 @@ public class OpsActionController {
 
     @PostMapping("/ops/pause")
     public OperationalStatusView pause(@RequestBody(required = false) Map<String, String> body,
-                                       @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                       @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                       @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String reason = reason(body);
         audit.recordDurable("ops.pause", "system", actor, reason);
         return opsControl.pause(actor, reason);
@@ -78,20 +82,18 @@ public class OpsActionController {
 
     @PostMapping("/ops/resume")
     public OperationalStatusView resume(@RequestBody(required = false) Map<String, String> body,
-                                        @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                        @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                        @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         audit.recordDurable("ops.resume", "system", actor, reason(body));
         return opsControl.resume(actor);
     }
 
     @PostMapping("/ops/maintenance")
     public OperationalStatusView maintenance(@RequestBody(required = false) Map<String, String> body,
-                                             @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                             @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                             @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String reason = reason(body);
         audit.recordDurable("ops.maintenance", "system", actor, reason);
         return opsControl.maintenance(actor, reason);
@@ -99,10 +101,9 @@ public class OpsActionController {
 
     @PostMapping("/ops/suspend")
     public OperationalStatusView suspend(@RequestBody(required = false) Map<String, String> body,
-                                         @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                         @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                         @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String scope = str(body, "scope");
         String ref = str(body, "ref");
         String reason = reason(body);
@@ -115,10 +116,9 @@ public class OpsActionController {
 
     @PostMapping("/ops/unsuspend")
     public OperationalStatusView unsuspend(@RequestBody(required = false) Map<String, String> body,
-                                           @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                           @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                           @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String scope = str(body, "scope");
         String ref = str(body, "ref");
         if (ref == null || ref.isBlank()) {
@@ -130,10 +130,9 @@ public class OpsActionController {
 
     @PostMapping("/settlements/recon/rerun")
     public SettlementClient.ReconRerunResult reconRerun(@RequestBody(required = false) Map<String, String> body,
-                                                        @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-                                                        @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = actor(principal);
+                                                        @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String date = str(body, "date");
         String reason = reason(body);
         audit.recordDurable("settlement.recon.rerun", date == null ? "system" : date, actor, reason);
@@ -141,10 +140,6 @@ public class OpsActionController {
     }
 
     // -------- shared helpers ----------------------------------------------------
-
-    static String actor(String principal) {
-        return principal == null || principal.isBlank() ? "unknown" : principal;
-    }
 
     static String reason(Map<String, String> body) {
         return str(body, "reason");

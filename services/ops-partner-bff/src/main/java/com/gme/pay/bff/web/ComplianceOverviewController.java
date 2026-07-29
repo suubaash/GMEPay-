@@ -27,7 +27,9 @@ import java.util.List;
  * partner never 500s the whole board.
  *
  * <p>Reflects only what was CONFIGURED, not that any real filing channel exists — the BOK/Hometax/KoFIU
- * submission lanes remain OI-02/OI-03 gated (gov file formats, SFTP endpoints, mTLS certs).
+ * submission lanes remain OI-02/OI-03 gated (gov file formats, SFTP endpoints, mTLS certs). And
+ * "configured" now excludes placeholders: a lane holding {@code stub-cert-id} or {@code TODO_OI03}
+ * reports {@code false}, see {@link com.gme.pay.bff.compliance.ConfiguredValues} (GAP T5-2).
  */
 @RestController
 @RequestMapping("/v1/admin/compliance")

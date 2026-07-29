@@ -56,6 +56,16 @@ import java.util.Objects;
  *   <li>{@code GET /v1/portal/{partnerId}/api-keys} — API key list (PRIMARY + ROTATING)
  *   <li>{@code GET /v1/portal/{partnerId}/statement?from&to} — CSV statement download
  * </ul>
+ *
+ * <h2>Tenant isolation (gap register T0-4 — cross-partner IDOR)</h2>
+ * <p>The {@code {partnerId}} path segment is <b>caller-supplied and is not an identity</b>. Every
+ * handler here first calls {@link OpsRbacGuard#requirePartnerScope(String)}, which authorizes the
+ * path only when it matches the partner claim of the verified access token — or when the caller is
+ * a platform operator holding the explicit cross-partner read permission. Previously the portal
+ * trusted the path segment (and the UI's {@code X-Partner-Id} header, sourced from
+ * {@code localStorage}) on an unauthenticated BFF, so partner A could read partner B's balances,
+ * transactions, profile, API keys and CSV statements by editing a URL, and could mint sandbox keys
+ * in B's name.
  */
 @RestController
 @RequestMapping("/v1/portal")
@@ -74,6 +84,7 @@ public class PartnerPortalController {
     private final ApiKeyClient apiKeys;
     private final SandboxKeyClient sandboxKeys;
     private final StatementClient statements;
+    private final OpsRbacGuard rbac;
 
     public PartnerPortalController(
             TransactionMgmtClient transactions,
@@ -82,7 +93,8 @@ public class PartnerPortalController {
             ConfigRegistryClient configRegistry,
             ApiKeyClient apiKeys,
             SandboxKeyClient sandboxKeys,
-            StatementClient statements) {
+            StatementClient statements,
+            OpsRbacGuard rbac) {
         this.transactions = transactions;
         this.prefunding = prefunding;
         this.settlement = settlement;
@@ -90,10 +102,12 @@ public class PartnerPortalController {
         this.apiKeys = apiKeys;
         this.sandboxKeys = sandboxKeys;
         this.statements = statements;
+        this.rbac = rbac;
     }
 
     @GetMapping("/{partnerId}/overview")
     public PartnerOverview overview(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         com.gme.pay.contracts.BalanceView balance = prefunding.getAdminBalance(partnerId);
         List<TransactionMgmtClient.TransactionSummary> recent =
                 transactions.recent(partnerId, DEFAULT_PAGE_SIZE);
@@ -120,6 +134,7 @@ public class PartnerPortalController {
     public List<TransactionMgmtClient.TransactionSummary> transactions(
             @PathVariable String partnerId,
             @RequestParam(name = "limit", required = false, defaultValue = "20") int limit) {
+        rbac.requirePartnerScope(partnerId);
         int capped = Math.min(Math.max(1, limit), MAX_PAGE_SIZE);
         return transactions.recent(partnerId, capped);
     }
@@ -138,6 +153,7 @@ public class PartnerPortalController {
     public TransactionDetail transactionDetail(
             @PathVariable String partnerId,
             @PathVariable String txnId) {
+        rbac.requirePartnerScope(partnerId);
         TransactionMgmtClient.TransactionSummary summary = transactions.getTransaction(txnId);
         // 404 covers both "unknown" and "not owned by this partner" — we do NOT
         // leak whether the txn exists under a different partner.
@@ -157,6 +173,7 @@ public class PartnerPortalController {
      */
     @GetMapping("/{partnerId}/balance")
     public BalanceView balance(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         BalanceView view = prefunding.getAdminBalance(partnerId);
         if (view == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -167,6 +184,7 @@ public class PartnerPortalController {
 
     @GetMapping("/{partnerId}/webhooks")
     public List<WebhookConfigView> webhooks(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         // Phase-1 stub: return 1-2 deterministic rows so the Portal UI can bind.
         // Production: GET notification-webhook/{partnerId}/webhooks.
         return List.of(
@@ -184,6 +202,7 @@ public class PartnerPortalController {
 
     @GetMapping("/{partnerId}/profile")
     public PartnerProfile profile(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(partnerId);
         if (partner == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -201,6 +220,7 @@ public class PartnerPortalController {
 
     @GetMapping("/{partnerId}/api-keys")
     public List<ApiKeyClient.ApiKeyView> apiKeys(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         List<ApiKeyClient.ApiKeyView> keys = apiKeys.listForPartner(partnerId);
         return keys == null ? List.of() : keys;
     }
@@ -220,6 +240,7 @@ public class PartnerPortalController {
     public ResponseEntity<SandboxKeyClient.IssuedSandboxKey> issueSandboxKey(
             @PathVariable String partnerId,
             @RequestBody(required = false) IssueSandboxKeyRequest body) {
+        rbac.requirePartnerScope(partnerId);
         String name = body == null ? null : body.name();
         SandboxKeyClient.IssuedSandboxKey issued = sandboxKeys.issue(partnerId, name);
         return ResponseEntity.status(HttpStatus.CREATED).body(issued);
@@ -232,6 +253,7 @@ public class PartnerPortalController {
      */
     @GetMapping("/{partnerId}/sandbox-keys")
     public List<SandboxKeyClient.SandboxKeyView> sandboxKeys(@PathVariable String partnerId) {
+        rbac.requirePartnerScope(partnerId);
         List<SandboxKeyClient.SandboxKeyView> keys = sandboxKeys.listForPartner(partnerId);
         return keys == null ? List.of() : keys;
     }
@@ -244,6 +266,7 @@ public class PartnerPortalController {
             @PathVariable String partnerId,
             @RequestParam LocalDate from,
             @RequestParam LocalDate to) {
+        rbac.requirePartnerScope(partnerId);
         if (from == null || to == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "from and to are required");

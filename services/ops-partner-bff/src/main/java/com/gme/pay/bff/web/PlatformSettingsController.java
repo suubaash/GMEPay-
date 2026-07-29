@@ -47,17 +47,15 @@ public class PlatformSettingsController {
     }
 
     @GetMapping
-    public List<PlatformSettingView> list(
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+    public List<PlatformSettingView> list() {
+        rbac.requireTxnView();
         return client.list();
     }
 
     @GetMapping("/{key}")
     public PlatformSettingView get(
-            @PathVariable String key,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @PathVariable String key) {
+        rbac.requireTxnView();
         return client.get(key);
     }
 
@@ -65,15 +63,14 @@ public class PlatformSettingsController {
     public PlatformSettingView put(
             @PathVariable String key,
             @RequestBody(required = false) Map<String, String> body,
-            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
+            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
         String value = body == null ? null : body.get("value");
-        // Forward the authenticated principal as the operator on config-registry's audit row;
-        // fall back to a body-supplied updatedBy when the principal header is absent (dev).
-        String updatedBy = principal != null && !principal.isBlank()
+        // Forward the token-verified subject as the operator on config-registry's audit row;
+        // fall back to the legacy principal header / body updatedBy only when unauthenticated (dev).
+        String updatedBy = rbac.actor(principal != null && !principal.isBlank()
                 ? principal
-                : (body == null ? null : body.get("updatedBy"));
+                : (body == null ? null : body.get("updatedBy")));
         return client.update(key, value, updatedBy);
     }
 }

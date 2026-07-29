@@ -1,6 +1,8 @@
 package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.ReportingClient;
+import com.gme.pay.bff.compliance.FilingStatuses;
+import com.gme.pay.bff.web.dto.FilingChannelState;
 import com.gme.pay.bff.web.dto.ReportRun;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -17,12 +19,32 @@ import java.util.List;
  *
  * <p>Returns deterministic BOK FX1014/FX1015 runs over the requested range so the Reports
  * page renders a realistic timeline offline.
+ *
+ * <h2>Filing honesty (GAP T5-2)</h2>
+ * <p>Offline data must not claim a filing. This stub used to report status {@code "GENERATED"} per
+ * run and write {@code submission_status=SUBMITTED} into its CSV — the same untruth the admin-UI
+ * mocks still carry, and worse than the Rest adapter's hardcode because nothing upstream exists at
+ * all here. Both now state {@link FilingStatuses#NOT_FILED_CHANNEL_UNAVAILABLE} with a reason
+ * naming this stub, and the channel board reports all three lanes dark.
  */
 @Component
 @ConditionalOnProperty(name = "gmepay.reporting-compliance.client", havingValue = "stub", matchIfMissing = true)
 public class StubReportingClient implements ReportingClient {
 
     private static final String GENERATED_AT = "2026-06-01T01:30:00Z";
+
+    /** Why nothing here is filed — stated on every row rather than left to be inferred. */
+    static final String STUB_REASON =
+            "reporting-compliance is not wired (gmepay.reporting-compliance.client=stub); "
+                    + "these rows are offline placeholder data and nothing has been generated or filed";
+
+    /** All three regulatory lanes, dark, for the readiness board. */
+    private static final List<FilingChannelState> CHANNELS = List.of(
+            dark("BOK"), dark("KOFIU"), dark("HOMETAX"));
+
+    private static FilingChannelState dark(String lane) {
+        return new FilingChannelState(lane, false, FilingStatuses.NOT_FILED_CHANNEL_UNAVAILABLE, STUB_REASON);
+    }
 
     @Override
     public List<ReportRun> listReports(String type, LocalDate from, LocalDate to) {
@@ -40,13 +62,14 @@ public class StubReportingClient implements ReportingClient {
     public byte[] downloadCsv(String reportType, LocalDate from, LocalDate to) {
         String csv = "txn_id,txn_ref,report_type,report_date,partner_id,collection_amount,"
                 + "collection_ccy,payout_amount,payout_ccy,offer_rate_coll,cross_rate,usd_amount,submission_status\n"
-                + "1001,PTXN0001," + reportType + "," + from + ",1,1000000,KRW,73000,NPR,,,750.00,SUBMITTED\n";
+                + "1001,PTXN0001," + reportType + "," + from + ",1,1000000,KRW,73000,NPR,,,750.00,"
+                + FilingStatuses.NOT_FILED_CHANNEL_UNAVAILABLE + "\n";
         return csv.getBytes(StandardCharsets.UTF_8);
     }
 
     private static ReportRun run(String type, String period, LocalDate from, LocalDate to, String count) {
         String id = type + "~" + from + "~" + to;
-        return new ReportRun(id, type, period, "GENERATED", count, GENERATED_AT,
-                "/v1/admin/reports/" + id + "/download");
+        return new ReportRun(id, type, period, FilingStatuses.NOT_FILED_CHANNEL_UNAVAILABLE, count,
+                GENERATED_AT, "/v1/admin/reports/" + id + "/download", STUB_REASON, CHANNELS);
     }
 }

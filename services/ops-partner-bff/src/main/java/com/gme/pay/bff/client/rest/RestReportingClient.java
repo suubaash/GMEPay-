@@ -2,6 +2,8 @@ package com.gme.pay.bff.client.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.gme.pay.bff.client.ReportingClient;
+import com.gme.pay.bff.compliance.FilingStatuses;
+import com.gme.pay.bff.web.dto.FilingChannelState;
 import com.gme.pay.bff.web.dto.ReportRun;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +17,7 @@ import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +32,17 @@ import java.util.Map;
  * for parity with the other Rest* adapters. Degrades gracefully (empty list) when
  * reporting-compliance is unreachable, so the Reports page shows a real-but-empty state
  * rather than an error.
+ *
+ * <h2>Filing honesty (GAP T5-2)</h2>
+ * <p>This adapter used to stamp the literal {@code "GENERATED"} onto every run it returned. Since
+ * {@code GET /v1/reports} now carries an honest {@code filing_status} (plus
+ * {@code filing_channel_unavailable_reason} and the per-lane {@code filing_channels[]} board),
+ * hardcoding a status would re-fabricate a rosier reality one layer above the service that just
+ * stopped doing exactly that. The status is therefore read from the envelope and mapped through
+ * {@link FilingStatuses}, which never invents a success: an absent field becomes
+ * {@code UNKNOWN}, and the retired {@code SUBMITTED}/{@code ACCEPTED} vocabulary is reclassified
+ * rather than echoed. The same normalisation is applied to the {@code submission_status} column of
+ * the CSV download, because that file is an artifact an operator may hand onward.
  */
 @Component
 @Primary
@@ -46,6 +60,9 @@ public class RestReportingClient implements ReportingClient {
             "txn_id", "txn_ref", "report_type", "report_date", "partner_id",
             "collection_amount", "collection_ccy", "payout_amount", "payout_ccy",
             "offer_rate_coll", "cross_rate", "usd_amount", "submission_status"};
+
+    /** The one CSV column that carries a filing claim, and therefore gets normalised. */
+    private static final String SUBMISSION_STATUS_COL = "submission_status";
 
     private final RestClient restClient;
 
@@ -71,6 +88,13 @@ public class RestReportingClient implements ReportingClient {
         String generatedAt = isoUtc(textOrNull(resp, "generated_at"));
         String period = from + ".." + to;
 
+        // The filing truth for this run, as reported by the service — never synthesized here.
+        String rawFilingStatus = textOrNull(resp, "filing_status");
+        String filingStatus = FilingStatuses.fromUpstream(rawFilingStatus);
+        String unavailableReason = FilingStatuses.reasonFor(
+                rawFilingStatus, textOrNull(resp, "filing_channel_unavailable_reason"));
+        List<FilingChannelState> channels = filingChannels(resp.path("filing_channels"));
+
         Map<String, Integer> counts = new LinkedHashMap<>();
         if (isBok(type)) {
             counts.put(type, 0); // always show the requested BOK type, even at 0 records
@@ -85,9 +109,10 @@ public class RestReportingClient implements ReportingClient {
         return counts.entrySet().stream().map(e -> {
             String runType = e.getKey();
             String id = runType + "~" + from + "~" + to;
-            return new ReportRun(id, runType, period, "GENERATED",
+            return new ReportRun(id, runType, period, filingStatus,
                     String.valueOf(e.getValue()), generatedAt,
-                    "/v1/admin/reports/" + id + "/download");
+                    "/v1/admin/reports/" + id + "/download",
+                    unavailableReason, channels);
         }).toList();
     }
 
@@ -101,7 +126,13 @@ public class RestReportingClient implements ReportingClient {
                 StringBuilder row = new StringBuilder();
                 for (int i = 0; i < CSV_COLS.length; i++) {
                     if (i > 0) row.append(',');
-                    row.append(csvCell(textOrNull(rec, CSV_COLS[i])));
+                    String cell = textOrNull(rec, CSV_COLS[i]);
+                    // Same honesty rule as the run status: a downloadable artifact must not
+                    // carry a retired "SUBMITTED"/"ACCEPTED" claim either.
+                    if (SUBMISSION_STATUS_COL.equals(CSV_COLS[i]) && cell != null) {
+                        cell = FilingStatuses.fromUpstream(cell);
+                    }
+                    row.append(csvCell(cell));
                 }
                 csv.append(row).append('\n');
             }
@@ -128,6 +159,27 @@ public class RestReportingClient implements ReportingClient {
             log.warn("reporting-compliance error on /v1/reports: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Project the envelope's {@code filing_channels[]} board. Returns {@code null} (not an empty
+     * list) when the service did not report one, so "no board" is distinguishable from
+     * "board with no lanes".
+     */
+    private static List<FilingChannelState> filingChannels(JsonNode node) {
+        if (node == null || !node.isArray() || node.isEmpty()) {
+            return null;
+        }
+        List<FilingChannelState> out = new ArrayList<>(node.size());
+        for (JsonNode ch : node) {
+            JsonNode live = ch.get("channel_live");
+            out.add(new FilingChannelState(
+                    textOrNull(ch, "lane"),
+                    live != null && live.asBoolean(false),
+                    FilingStatuses.fromUpstream(textOrNull(ch, "reachable_status")),
+                    textOrNull(ch, "reason")));
+        }
+        return List.copyOf(out);
     }
 
     private static boolean isBok(String type) {

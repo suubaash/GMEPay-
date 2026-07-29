@@ -25,7 +25,14 @@ dependencies {
     // surface in the control tower + GET /v1/admin/ops/alerts. The listener wiring is gated
     // on spring.kafka.bootstrap-servers, so no broker is required for the local default.
     implementation 'org.springframework.kafka:spring-kafka'
+    // T0-1/T0-2 (identity boundary): this BFF is an OAuth2 resource server. Both SPAs proxy to it
+    // through an unauthenticated Next.js /api/* rewrite and no gateway route fronts it, so it must
+    // verify the OIDC access token itself. Same starter + same issuer property style as api-gateway
+    // (ADR-011) — see config/BffSecurityConfig.java.
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.kafka:spring-kafka-test'
+    // MockMvc security post-processors (jwt()) + SecurityContext test plumbing.
+    testImplementation 'org.springframework.security:spring-security-test'
 }

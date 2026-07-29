@@ -271,9 +271,8 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/transactions/recent")
-    public List<TransactionMgmtClient.TransactionSummary> recentTransactions(
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+    public List<TransactionMgmtClient.TransactionSummary> recentTransactions() {
+        rbac.requireTxnView();
         return transactions.recent(null, RECENT_LIMIT);
     }
 
@@ -285,9 +284,8 @@ public class AdminDashboardController {
             @RequestParam(required = false) LocalDate fromDate,
             @RequestParam(required = false) LocalDate toDate,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @RequestParam(defaultValue = "20") int size) {
+        rbac.requireTxnView();
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size <= 0 ? DEFAULT_PAGE_SIZE : size), MAX_PAGE_SIZE);
         TransactionMgmtClient.Page<TransactionMgmtClient.TransactionSummary> upstream =
@@ -298,9 +296,8 @@ public class AdminDashboardController {
 
     @GetMapping("/transactions/{txnId}")
     public TransactionDetail transactionDetail(
-            @PathVariable String txnId,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @PathVariable String txnId) {
+        rbac.requireTxnView();
         TransactionMgmtClient.TransactionSummary summary = transactions.getTransaction(txnId);
         if (summary == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,

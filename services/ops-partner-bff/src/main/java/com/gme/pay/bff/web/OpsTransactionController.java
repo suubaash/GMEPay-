@@ -66,9 +66,8 @@ public class OpsTransactionController {
             @RequestParam(required = false) String userRef,
             @RequestParam(required = false) String reference,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @RequestParam(defaultValue = "20") int size) {
+        rbac.requireTxnView();
         int safeSize = size <= 0 ? DEFAULT_SIZE : size;
         TransactionMgmtClient.Page<TransactionSummary> upstream = transactions.search(
                 new TransactionMgmtClient.SearchQuery(
@@ -84,14 +83,13 @@ public class OpsTransactionController {
     public TransactionSummary resolve(
             @PathVariable String ref,
             @RequestBody(required = false) Map<String, String> body,
-            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
+            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
         String resolution = OpsActionController.str(body, "resolution");
         if (resolution == null || resolution.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "resolution is required");
         }
-        String actor = OpsActionController.actor(principal);
+        String actor = rbac.actor(principal);
         String reason = OpsActionController.reason(body);
         audit.recordDurable("transaction.resolve", ref, actor, reason);
         TransactionSummary result = transactions.resolve(ref, resolution, actor, reason);

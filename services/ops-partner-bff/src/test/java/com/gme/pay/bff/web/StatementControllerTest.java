@@ -19,6 +19,8 @@ import com.gme.pay.bff.client.stub.StubPrefundingClient;
 import com.gme.pay.bff.client.stub.StubSettlementClient;
 import com.gme.pay.bff.client.stub.StubStatementClient;
 import com.gme.pay.bff.client.stub.StubTransactionMgmtClient;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,22 @@ class StatementControllerTest {
 
     private MockMvc mvc;
 
+    /**
+     * Portal endpoints are tenant-scoped against the verified token (T0-4). These tests exercise
+     * portal FUNCTIONALITY, so they authenticate as a platform operator holding the explicit
+     * cross-partner read permission; the scope rules themselves are covered by
+     * {@link PartnerPortalScopeTest}.
+     */
+    @BeforeEach
+    void authenticateAsCrossReadingOperator() {
+        TestTokens.hubOperator("partner.view");
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
+
     @BeforeEach
     void setUp() {
         TransactionMgmtClient transactions = new StubTransactionMgmtClient();
@@ -47,7 +65,7 @@ class StatementControllerTest {
                 transactions, prefunding, settlement, configRegistry,
                 new StubApiKeyClient(),
                 new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
-                new StubStatementClient());
+                new StubStatementClient(), new OpsRbacGuard(true));
 
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())

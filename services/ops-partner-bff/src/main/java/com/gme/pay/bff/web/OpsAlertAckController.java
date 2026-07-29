@@ -50,10 +50,10 @@ public class OpsAlertAckController {
     public OpsAlertView ack(
             @PathVariable long id,
             @RequestBody(required = false) Map<String, String> body,
-            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String operator = firstNonBlank(str(body, "operator"), principal, "unknown");
+            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        // Token subject wins; body/header values are only a fallback label (T0-3).
+        String operator = rbac.actor(firstNonBlank(str(body, "operator"), principal, "unknown"));
         String note = str(body, "note");
         // Fail-closed durable audit BEFORE mutating.
         audit.recordDurable("ops.alert.ack", String.valueOf(id), operator, note);

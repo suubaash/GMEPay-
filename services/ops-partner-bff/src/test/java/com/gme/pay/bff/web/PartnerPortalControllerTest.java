@@ -18,6 +18,8 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +39,22 @@ class PartnerPortalControllerTest {
     private static final String PARTNER = "p1";
 
     private MockMvc mvc;
+
+    /**
+     * Portal endpoints are tenant-scoped against the verified token (T0-4). These tests exercise
+     * portal FUNCTIONALITY, so they authenticate as a platform operator holding the explicit
+     * cross-partner read permission; the scope rules themselves are covered by
+     * {@link PartnerPortalScopeTest}.
+     */
+    @BeforeEach
+    void authenticateAsCrossReadingOperator() {
+        TestTokens.hubOperator("partner.view");
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
 
     @BeforeEach
     void setUp() {
@@ -126,7 +144,7 @@ class PartnerPortalControllerTest {
                 new PartnerPortalController(transactions, prefunding, settlement, configRegistry,
                         partnerId -> java.util.List.of(),
                         new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
-                        (partnerId, from, to) -> new byte[0]);
+                        (partnerId, from, to) -> new byte[0], new OpsRbacGuard(true));
 
         // Configure Jackson with JavaTimeModule + ISO strings for Instant/LocalDate (not arrays of numbers).
         ObjectMapper om = new ObjectMapper()
