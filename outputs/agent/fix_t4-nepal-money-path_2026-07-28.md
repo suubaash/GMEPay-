@@ -5,6 +5,11 @@
 Branch `feat/exec-gap-closure-2026-07-28`. Touched only `services/payment-executor`,
 `services/scheme-adapter-nepal`, `docker-compose.yml` (additive), `Documentation/GAP_REGISTER.md`.
 
+> **Commit note.** My `docker-compose.yml` and `Documentation/GAP_REGISTER.md` edits were swept into
+> another agent's commit `425f164` ("fix(security): arm the internal-auth gate on notification-webhook")
+> while they were on disk — that commit staged both shared files wholesale. The content is correct and
+> present in HEAD; it is simply attributed to the wrong commit. Everything else is in `06a2396`.
+
 ---
 
 ## 1. What was broken
