@@ -145,9 +145,12 @@ public class HubClient {
     ) {
         HubPayRequest(String qrPayload, String amount, String currency,
                       String partner, String userRef) {
-            this(qrPayload, amount,
-                    "KRW".equals(currency) ? amount : null,   // amountKrw only meaningful for domestic
-                    currency, partner, userRef);
+            // The hub's WalletPaymentRequest reads the amount from `amountKrw` for EVERY
+            // corridor — the field name is legacy wire-compat and means "amount in
+            // `currency`" (see payment-executor WalletPaymentRequest javadoc). Sending it
+            // only for KRW made every cross-border pay fail hub validation with
+            // "Required field missing or blank: amountKrw".
+            this(qrPayload, amount, amount, currency, partner, userRef);
         }
     }
 
