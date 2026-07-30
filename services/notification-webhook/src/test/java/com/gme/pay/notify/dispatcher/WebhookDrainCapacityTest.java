@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -278,12 +279,18 @@ class WebhookDrainCapacityTest {
             row.setWebhookId("evt_" + i);
             row.setEventType("payment.approved");
             row.setPayload("{\"partnerId\":7}");
+            row.setPartnerId(7L);
             row.setStatus("PENDING");
             row.setAttempt(0);
             row.setCreatedAt(NOW.minusSeconds(60));
             rows.add(row);
         }
         when(repo.findByStatusOrderByCreatedAtAsc(anyString(), any())).thenReturn(rows);
+        // Per-endpoint fair selection is now the default path: every row above belongs to partner 7,
+        // so the fair share IS the whole batch and this test's arithmetic is unchanged.
+        when(repo.findDistinctPartnerIdsByStatus(anyString())).thenReturn(List.of(7L));
+        when(repo.findByStatusAndPartnerIdOrderByCreatedAtAsc(anyString(), eq(7L), any()))
+                .thenReturn(rows);
         when(repo.countByStatus(anyString())).thenReturn((long) n);
         when(resolver.resolve(any())).thenReturn(
                 Optional.of(new ResolvedTarget("https://partner.example/hook", "secret", null)));

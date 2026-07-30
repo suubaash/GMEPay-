@@ -3,6 +3,8 @@ package com.gme.pay.payment.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.gme.pay.payment.dayclose.FxExposureScheduler;
+import com.gme.pay.payment.opsrun.LedgerOpsRunRetentionSweeper;
+import com.gme.pay.payment.opsrun.MissedLedgerOpsRunMonitor;
 import com.gme.pay.payment.replay.RevenuePostingReplayScheduler;
 import com.gme.pay.payment.sweeper.AuthorizationExpirySweeper;
 import com.gme.pay.payment.sweeper.OpsAlertRetentionSweeper;
@@ -82,7 +84,12 @@ class ShedLockTest {
                 AuthorizationExpirySweeper.class,
                 OpsAlertRetentionSweeper.class,
                 RevenuePostingReplayScheduler.class,
-                FxExposureScheduler.class)) {
+                FxExposureScheduler.class,
+                // T2-5 caveat (e): the two ledger-ops observability jobs. Both are locked for the same
+                // reason the retention sweeper is — a missed-run alert raised once per replica is one
+                // nobody can threshold, and N bulk DELETEs against one table is contention for nothing.
+                MissedLedgerOpsRunMonitor.class,
+                LedgerOpsRunRetentionSweeper.class)) {
             for (Method method : type.getDeclaredMethods()) {
                 if (method.getAnnotation(Scheduled.class) == null) {
                     continue;
@@ -98,7 +105,7 @@ class ShedLockTest {
             }
         }
 
-        assertThat(scheduled).isEqualTo(4);
+        assertThat(scheduled).isEqualTo(6);
         assertThat(unlocked).isEmpty();
     }
 
@@ -109,10 +116,12 @@ class ShedLockTest {
                 new ClassPathResource("application.properties"));
         String configured = shipped.getProperty("spring.task.scheduling.pool.size");
         assertThat(configured)
-                .as("unset means Spring's default of ONE thread for all four jobs")
+                .as("unset means Spring's default of ONE thread for every job in this service")
                 .isNotNull();
         assertThat(Integer.parseInt(configured.trim()))
-                .as("four jobs plus the lib-errors lag heartbeat share this pool")
-                .isGreaterThanOrEqualTo(4);
+                .as("five always-on fixed-delay jobs plus the lib-errors lag heartbeat share this "
+                        + "pool; the missed-run monitor is the one that must never be starved, since "
+                        + "it is the job whose purpose is to notice that another job stopped")
+                .isGreaterThanOrEqualTo(6);
     }
 }

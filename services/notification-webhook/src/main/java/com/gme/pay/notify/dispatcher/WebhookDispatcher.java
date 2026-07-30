@@ -16,12 +16,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -56,14 +58,43 @@ import java.util.Optional;
  * ({@code gmepay.webhook.dispatcher.concurrency}, default 8) and the cycle is 5 s, which raises the
  * ceiling by roughly the concurrency factor.
  *
- * <p><b>What that does not fix, stated plainly.</b> Rows are still selected in one global
- * {@code ORDER BY created_at} across all partners. One partner whose endpoint times out on every
- * delivery still consumes workers that other partners' rows are waiting for — concurrency raises the
- * number of slow deliveries it takes to stall everyone from 1 to 8, which is a mitigation, not a
- * cure. Closing it properly needs per-endpoint fairness: a per-endpoint circuit breaker that stops
- * selecting rows for an endpoint that is failing, or per-endpoint queues so one partner's backlog
- * cannot occupy another's capacity. That is a design change to the selection query and the retry
- * model, not a parameter, and it is deliberately not attempted here.
+ * <h2>Per-endpoint fairness — the design defect T3-11 left open</h2>
+ *
+ * <p>Raising concurrency to 8 raised the number of simultaneously-stalled deliveries needed to stall
+ * everyone from 1 to 8. It did not decouple partners, because one partner's dead endpoint could still
+ * (a) fill the batch, since selection was a single global {@code ORDER BY created_at}, and (b) occupy
+ * the shared workers, since every row competed for the same eight permits. Both halves are now closed,
+ * and they need separate mechanisms because they are separate failures:
+ *
+ * <ol>
+ *   <li><b>Fair selection</b> ({@link #selectFairly()}). Flyway V009 put the partner on the delivery
+ *       row, so the drain asks each endpoint that has work for its own share of {@code batch-size}
+ *       instead of taking the globally-oldest rows. A partner with a 10 000-row backlog can no longer
+ *       leave a healthy partner's three rows unselected. Shares are interleaved round-robin, so the
+ *       <em>order</em> is fair too and a healthy partner is not queued behind a full share of stalled
+ *       deliveries.</li>
+ *   <li><b>A per-endpoint in-flight cap.</b> Each endpoint may hold at most its fair share of the
+ *       workers ({@code ceil(concurrency / endpoints-with-work)}, or an explicit
+ *       {@code max-in-flight-per-endpoint}). This is what bounds a <em>slow but succeeding</em>
+ *       endpoint, which no failure-counting breaker can catch: with one endpoint it is the whole pool
+ *       (so nothing regresses for a single-partner deployment), with two it is half each.</li>
+ *   <li><b>A per-endpoint circuit breaker</b> ({@link WebhookEndpointCircuitBreaker}). After N
+ *       consecutive failures an endpoint's rows are skipped entirely for a cooldown, so a
+ *       <em>failing</em> endpoint spends no worker time at all, and a half-open probe re-tests it. A
+ *       skipped row is not a failed attempt, so an outage does not burn the retry budget.</li>
+ * </ol>
+ *
+ * <p><b>Nothing parallel to the existing pipeline was added.</b> Terminal failure is still
+ * {@code webhook_dlq} via {@link RetryPolicy}; endpoint identity is still the {@code (partnerId,
+ * environment)} key T5-4's per-endpoint signing established; the alerts are still
+ * {@code WebhookAlertService}'s {@code alert_event} rows. The one new alert type,
+ * {@code WEBHOOK_ENDPOINT_CIRCUIT_OPEN}, exists because suppressing deliveries silently would trade
+ * one invisible failure for another.
+ *
+ * <p><b>What this still does not do:</b> ordering across a partner's own rows is preserved only as
+ * "attempts started oldest-first", exactly as before; and fairness is per partner, not per event type,
+ * so one partner's slow endpoint still delays that partner's other events. Both are properties of the
+ * previous design that this change deliberately did not alter.
  */
 @Service
 @ConditionalOnProperty(name = "gmepay.webhook.dispatcher.enabled", havingValue = "true")
@@ -101,6 +132,32 @@ public class WebhookDispatcher {
      */
     private final WebhookAlertService alertService;
 
+    /**
+     * Explicit per-endpoint in-flight cap, or {@code 0} to derive the fair share
+     * {@code ceil(concurrency / endpoints-with-work)}.
+     *
+     * <p>Derived is the default and is the better answer for the same reason a fixed number is
+     * tempting: a constant of, say, 2 would throttle a single-partner deployment from 8 workers to 2 —
+     * a fairness mechanism causing a throughput regression in the case where there is nobody to be fair
+     * to. The derived share is the whole pool when one endpoint has work and shrinks only as other
+     * endpoints actually need it.
+     */
+    private final int maxInFlightPerEndpoint;
+
+    /**
+     * Per-endpoint fair selection. Configurable so the previous global-FIFO behaviour is still
+     * reachable ({@code gmepay.webhook.dispatcher.fair-selection=false}) — an escape hatch, not a
+     * recommendation, kept because a selection change is the kind of thing an operator may need to
+     * revert at 3am without a deploy.
+     */
+    private final boolean fairSelection;
+
+    /**
+     * Per-endpoint circuit breaker; {@code null} in the legacy constructors used by tests that predate
+     * it, in which case every attempt is allowed and behaviour is exactly as before.
+     */
+    private final WebhookEndpointCircuitBreaker breaker;
+
     /** Backwards-compatible constructor — no queue-depth alerting, sequential delivery. */
     public WebhookDispatcher(WebhookSender sender,
                              WebhookDeliveryRepository deliveryRepository,
@@ -125,6 +182,23 @@ public class WebhookDispatcher {
                 batchSize, 1, alertService);
     }
 
+    /** Backwards-compatible constructor — concurrency, no per-endpoint fairness. */
+    public WebhookDispatcher(WebhookSender sender,
+                             WebhookDeliveryRepository deliveryRepository,
+                             WebhookPersistenceService persistence,
+                             WebhookTargetResolver targetResolver,
+                             RetryPolicy retryPolicy,
+                             Clock clock,
+                             int batchSize,
+                             int concurrency,
+                             WebhookAlertService alertService) {
+        // fair-selection OFF and no breaker: these constructors exist for callers written against the
+        // pre-fairness behaviour, and a constructor kept for backwards compatibility that quietly
+        // changed selection would not be backwards compatible.
+        this(sender, deliveryRepository, persistence, targetResolver, retryPolicy, clock, batchSize,
+                concurrency, 0, false, alertService, null);
+    }
+
     @Autowired
     public WebhookDispatcher(WebhookSender sender,
                              WebhookDeliveryRepository deliveryRepository,
@@ -134,7 +208,12 @@ public class WebhookDispatcher {
                              Clock clock,
                              @Value("${gmepay.webhook.dispatcher.batch-size:200}") int batchSize,
                              @Value("${gmepay.webhook.dispatcher.concurrency:8}") int concurrency,
-                             WebhookAlertService alertService) {
+                             @Value("${gmepay.webhook.dispatcher.max-in-flight-per-endpoint:0}")
+                             int maxInFlightPerEndpoint,
+                             @Value("${gmepay.webhook.dispatcher.fair-selection:true}")
+                             boolean fairSelection,
+                             WebhookAlertService alertService,
+                             WebhookEndpointCircuitBreaker breaker) {
         this.sender = Objects.requireNonNull(sender);
         this.deliveryRepository = Objects.requireNonNull(deliveryRepository);
         this.persistence = Objects.requireNonNull(persistence);
@@ -143,7 +222,10 @@ public class WebhookDispatcher {
         this.clock = Objects.requireNonNull(clock);
         this.batchSize = batchSize > 0 ? batchSize : 200;
         this.concurrency = concurrency > 0 ? concurrency : 1;
+        this.maxInFlightPerEndpoint = Math.max(0, maxInFlightPerEndpoint);
+        this.fairSelection = fairSelection;
         this.alertService = alertService; // optional: may be null
+        this.breaker = breaker;           // optional: may be null (legacy constructors)
     }
 
     /**
@@ -179,8 +261,7 @@ public class WebhookDispatcher {
             alertService.fireQueueDepthAlert(null, pendingTotal);
         }
 
-        List<WebhookDeliveryEntity> pending = deliveryRepository.findByStatusOrderByCreatedAtAsc(
-                WebhookPersistenceService.STATUS_PENDING, PageRequest.of(0, batchSize));
+        List<WebhookDeliveryEntity> pending = selectFairly();
         if (pending.isEmpty()) {
             return;
         }
@@ -191,6 +272,91 @@ public class WebhookDispatcher {
         if (dispatched > 0) {
             log.info("webhook dispatcher: attempted {} of {} PENDING rows", dispatched, pending.size());
         }
+    }
+
+    /**
+     * Selects the batch <b>per endpoint</b> instead of taking the globally-oldest PENDING rows.
+     *
+     * <p>The old query was {@code WHERE status='PENDING' ORDER BY created_at LIMIT batch-size}. Its
+     * defect was not throughput, it was <em>composition</em>: a partner with 10 000 queued rows filled
+     * every page, so a healthy partner's three rows were not merely delivered late, they were never
+     * selected. No amount of concurrency fixes that, because the rows are not in the batch to begin
+     * with.
+     *
+     * <p>Instead: ask which endpoints have work (bounded by the number of registered partners, not by
+     * the backlog — one indexed DISTINCT), give each an equal share of {@code batch-size}, and
+     * interleave the shares round-robin. The interleave matters as much as the share does: appending
+     * one partner's whole share before another's would put a healthy partner's rows behind a full share
+     * of stalled deliveries, which is the same stall with extra steps.
+     *
+     * <p>Costs one query per endpoint-with-work rather than one overall. That is the price of fairness
+     * and it is bounded by the partner count; every one of them is an indexed, paged read on
+     * {@code (status, partner_id, created_at)}.
+     *
+     * <p>A single endpoint with work degenerates to exactly the old behaviour (one query, its whole
+     * share = {@code batch-size}), so nothing changes for a single-partner deployment.
+     *
+     * <p>{@code null} is a real key here: rows written before V009 carry no {@code partner_id} and are
+     * treated as one unattributed group rather than dropped from selection — invisible rows would be a
+     * far worse failure than unfair ones.
+     */
+    List<WebhookDeliveryEntity> selectFairly() {
+        String pendingStatus = WebhookPersistenceService.STATUS_PENDING;
+        if (!fairSelection) {
+            return deliveryRepository.findByStatusOrderByCreatedAtAsc(
+                    pendingStatus, PageRequest.of(0, batchSize));
+        }
+
+        List<Long> endpoints = deliveryRepository.findDistinctPartnerIdsByStatus(pendingStatus);
+        if (endpoints == null || endpoints.isEmpty()) {
+            return List.of();
+        }
+
+        int share = Math.max(1, (int) Math.ceil((double) batchSize / endpoints.size()));
+        Pageable page = PageRequest.of(0, Math.min(share, batchSize));
+        List<List<WebhookDeliveryEntity>> shares = new ArrayList<>(endpoints.size());
+        for (Long partnerId : endpoints) {
+            List<WebhookDeliveryEntity> rows = partnerId == null
+                    ? deliveryRepository.findByStatusAndPartnerIdIsNullOrderByCreatedAtAsc(
+                            pendingStatus, page)
+                    : deliveryRepository.findByStatusAndPartnerIdOrderByCreatedAtAsc(
+                            pendingStatus, partnerId, page);
+            if (rows != null && !rows.isEmpty()) {
+                shares.add(rows);
+            }
+        }
+        return interleave(shares, batchSize);
+    }
+
+    /** Round-robin merge of per-endpoint shares, capped at {@code limit}. */
+    private static List<WebhookDeliveryEntity> interleave(List<List<WebhookDeliveryEntity>> shares,
+                                                          int limit) {
+        List<WebhookDeliveryEntity> merged = new ArrayList<>();
+        int deepest = shares.stream().mapToInt(List::size).max().orElse(0);
+        for (int index = 0; index < deepest && merged.size() < limit; index++) {
+            for (List<WebhookDeliveryEntity> share : shares) {
+                if (index < share.size() && merged.size() < limit) {
+                    merged.add(share.get(index));
+                }
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * The per-endpoint in-flight cap for this batch.
+     *
+     * <p>Derived by default as {@code ceil(concurrency / endpoints-with-work)}: one endpoint gets the
+     * whole pool, two get half each, eight get one each. That is what makes this a fairness cap rather
+     * than a throughput cut — a constant would throttle a single-partner deployment for the benefit of
+     * partners that do not exist.
+     */
+    private int perEndpointCap(int endpointsWithWork) {
+        if (maxInFlightPerEndpoint > 0) {
+            return Math.min(maxInFlightPerEndpoint, concurrency);
+        }
+        int endpoints = Math.max(1, endpointsWithWork);
+        return Math.max(1, (int) Math.ceil((double) concurrency / endpoints));
     }
 
     private int dispatchSequentially(List<WebhookDeliveryEntity> pending, Instant now) {
@@ -225,21 +391,62 @@ public class WebhookDispatcher {
     private int dispatchConcurrently(List<WebhookDeliveryEntity> pending, Instant now) {
         java.util.concurrent.Semaphore permits = new java.util.concurrent.Semaphore(concurrency);
         java.util.concurrent.atomic.AtomicInteger dispatched = new java.util.concurrent.atomic.AtomicInteger();
+
+        // Per-endpoint permits: this is what stops a SLOW-but-succeeding endpoint from occupying the
+        // whole pool. A failure-counting breaker cannot catch that case — every delivery eventually
+        // succeeds, it just takes 4.9 s each — so the cap has to exist independently of it.
+        java.util.Map<Long, java.util.concurrent.Semaphore> endpointPermits =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        long distinctEndpoints = pending.stream().map(WebhookDispatcher::endpointKey).distinct().count();
+        int cap = perEndpointCap((int) distinctEndpoints);
+
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             for (WebhookDeliveryEntity row : pending) {
+                java.util.concurrent.Semaphore endpoint = endpointPermits.computeIfAbsent(
+                        endpointKey(row), key -> new java.util.concurrent.Semaphore(cap));
                 executor.submit(() -> {
-                    permits.acquireUninterruptibly();
+                    // Endpoint permit FIRST, then the global one. Always this order, so there is no
+                    // cycle: a task can hold an endpoint permit while waiting for the global one, and
+                    // that is precisely the queueing we want — the wait happens on the endpoint's own
+                    // share, not on capacity another partner could be using.
+                    endpoint.acquireUninterruptibly();
                     try {
-                        if (dispatchGuarded(row, now)) {
-                            dispatched.incrementAndGet();
+                        permits.acquireUninterruptibly();
+                        try {
+                            if (dispatchGuarded(row, now)) {
+                                dispatched.incrementAndGet();
+                            }
+                        } finally {
+                            permits.release();
                         }
                     } finally {
-                        permits.release();
+                        endpoint.release();
                     }
                 });
             }
         }
         return dispatched.get();
+    }
+
+    /**
+     * The fairness key for one row: its partner, falling back to the payload for pre-V009 rows and to a
+     * single sentinel for rows with no partner at all.
+     *
+     * <p>Same key the circuit breaker, the target resolver and the DLQ alert use, deliberately — an
+     * endpoint that is fair-shared under one identity and short-circuited under another is two half
+     * mechanisms.
+     */
+    private static Long endpointKey(WebhookDeliveryEntity row) {
+        Long fromPayload = com.gme.pay.notify.domain.WebhookPayloads.partnerId(row.getPayload());
+        if (fromPayload != null) {
+            return fromPayload;
+        }
+        // V009's column is the fallback, not the primary: it exists so SQL can page fairly, while the
+        // event itself stays the authority on whose endpoint this is — the same order the resolver uses,
+        // so a row can never be capped and short-circuited under one identity and delivered under
+        // another.
+        Long fromColumn = row.getPartnerId();
+        return fromColumn != null ? fromColumn : WebhookEndpointCircuitBreaker.UNATTRIBUTED;
     }
 
     /** One row, with the "never let a bad row stall the drain" guarantee the loop always had. */
@@ -266,6 +473,22 @@ public class WebhookDispatcher {
             if (now.isBefore(nextAttemptAt)) {
                 return false;
             }
+        }
+
+        // Per-endpoint circuit breaker, checked AFTER the backoff gate so an open breaker never
+        // consumes the half-open probe on a row that was not due anyway.
+        //
+        // A skipped row is NOT a failed attempt: its attempt counter and last_attempted_at are
+        // untouched, so a partner outage does not burn the retry budget that exists to absorb
+        // transient failures. The consequence is stated rather than hidden — DLQ promotion for a dead
+        // endpoint becomes slower, driven by the half-open probes, not impossible. The growing PENDING
+        // backlog remains visible through the existing queue-depth / backlog alerts, and opening the
+        // breaker raises its own alert.
+        Long endpoint = endpointKey(row);
+        if (breaker != null && !breaker.allowAttempt(endpoint)) {
+            log.debug("webhook delivery skipped: endpoint circuit open for partnerId={} (webhookId={})",
+                    endpoint, row.getWebhookId());
+            return false;
         }
 
         Optional<ResolvedTarget> target = targetResolver.resolve(row);
@@ -295,20 +518,52 @@ public class WebhookDispatcher {
                     target.get().secondarySecret(),
                     attempt);
         } catch (WebhookUrlNotHttpsException e) {
-            // A non-HTTPS endpoint is a hard config error, not a transient failure.
+            // A non-HTTPS endpoint is a hard config error, not a transient failure — and deliberately
+            // NOT a circuit-breaker failure: no socket was opened, so it costs no worker time, and
+            // tripping a breaker on it would short-circuit an endpoint whose problem is its
+            // registration rather than its availability.
             persistence.markAttemptFailedOrDlq(row, attempt, "non-HTTPS endpoint: " + e.getMessage());
             return true;
         }
 
         if (result.success()) {
+            recordEndpointSuccess(endpoint);
             persistence.markDelivered(row, attempt);
             log.debug("webhook delivered: webhookId={} attempt={} status={}",
                     row.getWebhookId(), attempt, result.httpStatus());
         } else {
+            recordEndpointFailure(endpoint, "HTTP " + result.httpStatus());
             persistence.markAttemptFailedOrDlq(row, attempt, result.responseBody());
             log.debug("webhook attempt failed: webhookId={} attempt={} status={}",
                     row.getWebhookId(), attempt, result.httpStatus());
         }
         return true;
+    }
+
+    private void recordEndpointSuccess(Long endpoint) {
+        if (breaker != null) {
+            breaker.recordSuccess(endpoint);
+        }
+    }
+
+    /**
+     * Feeds one failed delivery to the breaker and raises the alert on the OPEN transition only.
+     *
+     * <p>Once per transition, not once per failure: a 200-row batch against a dead endpoint would
+     * otherwise write 200 alert rows for one incident, which is the alert-storm the queue-depth alert
+     * already has a dedup window for. The alert service dedups per partner as well, so the two guards
+     * are belt and braces.
+     */
+    private void recordEndpointFailure(Long endpoint, String reason) {
+        if (breaker == null) {
+            return;
+        }
+        boolean opened = breaker.recordFailure(endpoint, reason);
+        if (opened && alertService != null) {
+            Long partnerId = (endpoint != null && endpoint == WebhookEndpointCircuitBreaker.UNATTRIBUTED)
+                    ? null : endpoint;
+            alertService.fireEndpointCircuitOpenAlert(
+                    partnerId, breaker.failureThreshold(), breaker.openDuration());
+        }
     }
 }

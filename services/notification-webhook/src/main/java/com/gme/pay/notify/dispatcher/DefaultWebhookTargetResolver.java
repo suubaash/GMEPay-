@@ -1,7 +1,6 @@
 package com.gme.pay.notify.dispatcher;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gme.pay.notify.domain.WebhookPayloads;
 import com.gme.pay.notify.persistence.WebhookDeliveryEntity;
 import com.gme.pay.notify.persistence.WebhookEndpointEntity;
 import com.gme.pay.notify.persistence.WebhookEndpointRepository;
@@ -60,7 +59,6 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
     private final String environment;
     private final WebhookSecretDeriver deriver;
     private final Clock clock;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public DefaultWebhookTargetResolver(
             WebhookEndpointRepository endpoints,
@@ -75,7 +73,7 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
 
     @Override
     public Optional<ResolvedTarget> resolve(WebhookDeliveryEntity row) {
-        Long partnerId = extractPartnerId(row.getPayload());
+        Long partnerId = partnerIdOf(row);
         if (partnerId == null) {
             log.warn("webhook target unresolved: no numeric partnerId in payload for webhookId={}",
                     row.getWebhookId());
@@ -152,35 +150,18 @@ public class DefaultWebhookTargetResolver implements WebhookTargetResolver {
     }
 
     /**
-     * Reads a numeric {@code partnerId} from the event payload; null if absent/non-numeric.
+     * The partner this delivery belongs to, read from the payload.
      *
-     * <p>Accepts both shapes the platform emits: a flat top-level {@code partnerId} (direct
-     * KafkaEventPublisher publish), and the canonical outbox envelope where the event's own fields
-     * are nested under {@code payload} ({@code {eventType,aggregateId,occurredAt,payload:{partnerId}}}).
+     * <p>Deliberately the <b>payload</b> and not V009's {@code partner_id} column, even though the
+     * column exists and is stamped from this same parse at enqueue time. The column's job is to let SQL
+     * page fairly; deciding which endpoint a webhook is signed for and POSTed to is a different
+     * question, and it should keep answering it from the event itself. If the two ever disagreed the
+     * consequence would then be a row selected under the wrong partner's fair share — harmless — rather
+     * than a webhook delivered to the wrong partner's endpoint.
+     *
+     * <p>One rule, in {@link WebhookPayloads}, shared with the drain and the DLQ alert.
      */
-    private Long extractPartnerId(String payload) {
-        if (payload == null || payload.isBlank()) {
-            return null;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(payload);
-            JsonNode node = root.get("partnerId");
-            if (node == null || node.isNull()) {
-                node = root.path("payload").get("partnerId"); // outbox envelope nests event fields
-            }
-            if (node == null || node.isNull()) {
-                return null;
-            }
-            if (node.isNumber()) {
-                return node.asLong();
-            }
-            String text = node.asText();
-            return (text == null || text.isBlank()) ? null : Long.parseLong(text.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        } catch (Exception e) {
-            log.debug("could not parse webhook payload for partnerId: {}", e.getMessage());
-            return null;
-        }
+    private Long partnerIdOf(WebhookDeliveryEntity row) {
+        return WebhookPayloads.partnerId(row.getPayload());
     }
 }

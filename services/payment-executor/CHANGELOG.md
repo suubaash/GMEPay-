@@ -2,6 +2,67 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (ledger_ops_runs observability: missed-run detection + retention, T2-5 caveat (e))
+
+No Flyway migration: the monitor writes no run row (there was no run) and the pruner only deletes.
+
+### Added - `MissedLedgerOpsRunMonitor`
+Every signal `ledger_ops_runs` could produce was produced **by a run that started**. A run that never
+starts writes no row, throws nothing and alerts nobody — the table just stops growing, which from
+inside the service is indistinguishable from a quiet night. For a scheduled financial job that silent
+absence is the failure mode that matters, and the POISON requeue had just added a fourth writer to the
+table without adding a reader.
+
+The monitor checks, per job, how long since **any** run was recorded and raises
+`LEDGER_OPS_RUN_MISSED` (CRITICAL) through the **existing T3-3 `OpsAlertPipeline`** (persist to
+`ops_alerts`, publish, notify) — not a second alerting path. Outcome is deliberately ignored: a FAILED
+run *happened* and already has its own alert; only silence is detected.
+
+Deliberate exclusions, each stated rather than omitted:
+- `REVENUE_POSTING_REQUEUE` is never expected — it is an operator act, so "nobody requeued anything
+  today" is the normal state, and alerting on it would train people to ignore the alert type.
+- A job whose own `enabled` flag is false is not monitored; the monitor reads the same three flags the
+  schedulers are gated on, so the two cannot disagree.
+- "Never ran" is measured from **process start**, not the epoch, so a cold start does not page about a
+  day-close that was simply not due yet.
+
+A reflection test fails if a new `LedgerOpsJob` constant is added to neither the monitored map nor the
+explicit `NOT_SCHEDULED` list.
+
+### Added - `LedgerOpsRunRetentionSweeper`
+Mirrors `OpsAlertRetentionSweeper` exactly (same shape, same default-on convention, same never-throw).
+The table gained a row every five minutes from the replay sweeper and nothing ever removed one:
+~105k rows a year from that job alone, each up to 4 KB of stack excerpt on failure.
+
+`deleteOlderThanKeepingLatestPerJob` always keeps **the newest run of each job**, whatever its age.
+Without that exception the two features here would cancel out — a job silent for longer than the
+retention window would have its last trace deleted, and "silent for 400 days" would become
+indistinguishable from "no history".
+
+### Configuration - engineering defaults, NOT commitments; an owner must confirm them
+- `gmepay.ledger-ops.missed-run.max-silence.revenue-posting-replay=PT30M` (six missed 5-minute cycles)
+- `gmepay.ledger-ops.missed-run.max-silence.day-close=PT26H` / `.fx-exposure=PT26H` (a day + 2 h slack)
+- `gmepay.ledger-ops.missed-run.cooldown=PT6H` (repeat suppression; per-JVM, like `DeclineSpikeMonitor`)
+- `gmepay.ledger-ops.runs.retention-days=365` — longer than `ops_alerts`' 90 because an auditor can
+  fairly ask whether the close ran every night last year; **not** a statutory multi-year horizon,
+  because this table holds no amounts, counterparties or postings, only whether a job ran.
+
+### Changed
+- `spring.task.scheduling.pool.size` 4 → 6. Sized so the job whose entire purpose is to notice that
+  another job stopped cannot itself be starved behind a slow sibling — otherwise the result is silence
+  about silence.
+- Both new jobs carry a uniquely-named `@SchedulerLock`: an alert raised once per replica is one nobody
+  can threshold, and N replicas issuing the same bulk DELETE is contention for nothing.
+
+### Tests
+`MissedLedgerOpsRunMonitorTest` (a stopped job alerts through the real pipeline with the right type,
+severity and subject; a healthy fleet and a single missed cycle stay silent; a never-run job reads
+differently from a long-silent one; a cold start does not alert; the cooldown suppresses and then
+releases; a disabled job is not monitored; every job constant is classified) and
+`LedgerOpsRunRetentionTest` (real H2 + full Flyway: only rows past the window are deleted, the newest
+run of every job survives independently, nothing expired means zero deleted, the shipped default is
+pinned).
+
 ## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (the POISON trap in the revenue-posting replay: T2-5 follow-up / T3-12)
 
 Flyway **V012** (widens `ck_ledger_ops_runs_job` — additive, cannot fail on existing data).

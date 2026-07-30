@@ -2,6 +2,29 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (Kafka listener concurrency is actually readable: T3-11 defect 4 follow-up)
+
+### Fixed - `spring.kafka.listener.concurrency` was UNREADABLE on this service's consumer factory
+`RevenueLedgerKafkaConsumerConfig` hand-builds its `ConcurrentKafkaListenerContainerFactory` (to pin
+MANUAL ack mode and the DLT error handler) and never called `setConcurrency(..)`. Spring Boot binds
+that property only onto its **auto-configured** factory, so the value here was not merely unset — an
+operator could set it, watch it resolve in `/actuator/env`, and change nothing at all. That is worse
+than a bad default, because it looks like a lever, and the Helm ABI advertises
+`SPRING_KAFKA_LISTENER_CONCURRENCY` as one.
+
+The factory now reads it (default **3**, matching `KAFKA_NUM_PARTITIONS` in `docker-compose.yml` and
+the Helm ABI ConfigMap), clamped at 1 so a `0` from a config typo cannot silently stop revenue capture.
+Concurrency is still capped by partitions, not by this number — three threads against a 1-partition
+topic leaves two idle, which is the same reason extra replicas gained nothing. Ordering is unaffected:
+the producer keys by aggregate id, so every event for one payment lands on one partition and is still
+handled in order by one thread.
+
+### Tests
+`RevenueLedgerKafkaConcurrencyTest` reads the concurrency back **off the built factory**, which is the
+only way to tell "unset" and "unreadable" apart. A fleet-wide source-scan guard in
+`libs/lib-events-kafka` (`KafkaListenerConcurrencyWiringGuardTest`) fails if any service's hand-built
+factory omits the call, so a fifth one cannot silently appear.
+
 ## 2026-07-28 — ShedLock on the outbox publisher: the last unlocked scheduler in the fleet (T3-11 defect 3, feat/exec-gap-closure-2026-07-28)
 
 Flyway **V007** (additive `CREATE TABLE IF NOT EXISTS shedlock`). No behaviour change on a single
