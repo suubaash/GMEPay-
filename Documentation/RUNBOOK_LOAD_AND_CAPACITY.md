@@ -407,9 +407,11 @@ production commitment.** See §7.
 
 This section is deliberately blunt. Everything here is real; none of it is implemented.
 
-1. **The harness has never been run.** It ships unexecuted — the fleet was not started as part of this
+1. **This harness has never been run.** It ships unexecuted — the fleet was not started as part of this
    work. There is no baseline, no 10x run, and no published result. §4 is analysis; there are no
-   measurements yet.
+   latency or saturation measurements yet. *(Not to be confused with the separate T3-5 **footprint**
+   harness, which HAS been run — 200 payments on 2026-07-30 — but measures storage per transaction,
+   not latency or throughput. See `Documentation/CAPACITY_AND_SLA.md`.)*
 2. **A local run is not a production forecast.** The fleet, the simulators *and* the harness share one
    Windows host's CPU, disk and page cache, with `-Xmx256m`/`-Xmx320m` JVMs and (under
    `run-fleet.ps1`) Tomcat capped at 20 threads and Hikari at 5. Absolute numbers from such a run are
@@ -425,12 +427,22 @@ This section is deliberately blunt. Everything here is real; none of it is imple
    measurement, no error-budget burn, no dashboard panel, and no partner-facing report.
    `RUNBOOK_MONITORING.md` §1.5 gives the Prometheus rules an SLO *could* be computed from — but
    nothing deploys Prometheus (§6.2 there), so today there is nowhere for a continuous SLI to live.
-6. **No business metrics to measure against.** Per `RUNBOOK_MONITORING.md` §6.6 there are no custom
-   counters: no `gmepay_authorizations_total`, no approval/decline-rate metric, no per-scheme latency
-   timer, no outbox-lag gauge. This harness computes approval and decline rates **client-side**, which
-   is fine for a load run and useless for production monitoring.
-7. **No scheduler-lag metric.** Ceiling #5 in §4.1 degrades silently: nothing measures how late a
-   `@Scheduled` job ran, so the starvation it predicts would be invisible even with Prometheus.
+6. **~~No business metrics to measure against.~~ PARTLY CLOSED 2026-07-30 (T3-5, see
+   `Documentation/CAPACITY_AND_SLA.md` §7).** The payment path now emits
+   `gmepay_payment_duration_seconds` (a percentile **histogram**) and `gmepay_payment_outcome_total`,
+   tagged `entry` (`wallet_pay`/`authorize`/`confirm`) × `outcome` (`approved`/`declined`/`error`) ×
+   `reason`, using the same decline≠error split §2.2 defines — so approval and decline rates are now
+   *server-side* series a dashboard and this harness can agree on. Also added:
+   `gmepay_outbox_pending` and `gmepay_outbox_oldest_pending_age_seconds`, registered automatically by
+   `lib-errors` on every service with an `outbox` table. **Still missing:** a per-scheme latency timer,
+   any per-partner dimension, and instrumentation of cancel/refund. This harness still computes its own
+   rates client-side, which remains correct for a load run.
+7. **No scheduler-lag metric — except for outbox drains.** Ceiling #5 in §4.1 degrades silently:
+   nothing measures how late a `@Scheduled` job ran. As of 2026-07-30 the **outbox publishers** are the
+   exception — `gmepay_outbox_oldest_pending_age_seconds` is exactly the lag of that job, on all four
+   outbox-bearing services (T3-5). Every other scheduled job — the expiry sweeper, the stuck-transaction
+   alerter, the batch and settlement schedulers — is still unmeasured, which is most of the starvation
+   #5 predicts.
 8. **The 10x runs themselves are not scripted.** There is no "baseline then 10x then diff" wrapper and
    no committed baseline `result.json`. Run the harness twice with different `--rate` and diff the two
    JSONs by hand.
@@ -461,3 +473,5 @@ This section is deliberately blunt. Everything here is real; none of it is imple
 | The fleet it expects | `run-fleet.ps1`, `docker-compose.yml` |
 | The two-phase money model the `authorize-confirm` scenario drives | `Documentation/SETTLEMENT_FLOW_SPEC.md` §4, §7.1 |
 | The functional E2E harness this reuses conventions from | `e2e-tests/README.md`, `e2e-tests/src/test/java/com/gme/pay/e2e/SchemeFleet.java` |
+| **Measured per-transaction storage footprint** (rows, bytes, WAL, logs) and the SLO fill-in template | `Documentation/CAPACITY_AND_SLA.md` |
+| The footprint harness (storage per txn — the other half of T3-5) | `e2e-tests/src/test/java/com/gme/pay/e2e/footprint/` |

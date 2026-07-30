@@ -109,6 +109,13 @@ class PerTxnFootprintE2ETest {
      */
     private static final int PORT_SCHEME_ADAPTER_MGMT = 19191;
 
+    /**
+     * Tables that exist only to record that something went wrong. Growth here during a
+     * supposedly-happy-path run is a finding, not a footprint.
+     */
+    private static final java.util.Set<String> FAILURE_SINK_TABLES = java.util.Set.of(
+            "revenue_posting_failures", "webhook_dlq", "recon_exceptions", "unscreened_payments");
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static SchemeFleet fleet;
@@ -228,7 +235,11 @@ class PerTxnFootprintE2ETest {
         }
 
         FootprintReport report = new FootprintReport(PAYMENTS, tables, logDelta);
-        addCaveats(report, elapsedMs);
+        addCaveats(report, elapsedMs, tables);
+
+        // SLI proof BEFORE rendering: this appends its own notes to the report, and a note added
+        // after render()/writeTo() would be silently absent from the file on disk.
+        assertPaymentSlisExposed(report);
 
         String rendered = report.render();
         System.out.println("\n" + rendered);
@@ -248,8 +259,101 @@ class PerTxnFootprintE2ETest {
                         + "real payment cascade — the log capture is broken");
     }
 
+    /**
+     * Scrapes the fleet's own {@code /actuator/prometheus} and asserts the payment-path SLIs
+     * added for T3-5 are really being emitted.
+     *
+     * <p>Worth doing here rather than only in a unit test: a Micrometer meter can be perfectly
+     * constructed and still never reach a scrape — the registry may be absent, the actuator
+     * endpoint unexposed, or the optional SLI bean simply not injected. This run has just driven
+     * {@code PAYMENTS} real payments through the real controllers, so if the series are present
+     * now, the instrumentation genuinely works end to end.
+     *
+     * <p>The outbox lag gauge is checked on transaction-mgmt, the one service in this fleet that
+     * owns an outbox table.
+     */
+    private static void assertPaymentSlisExposed(FootprintReport report) throws Exception {
+        String executorScrape = scrape(PORT_PAYMENT_EXECUTOR);
+        assertTrue(executorScrape.contains("gmepay_payment_duration_seconds_bucket"),
+                "payment-executor must expose the payment latency HISTOGRAM (T3-5) after "
+                        + PAYMENTS + " payments — an SLO cannot be computed without buckets. "
+                        + "Scrape head: " + head(executorScrape));
+        assertTrue(executorScrape.contains("gmepay_payment_outcome_total"),
+                "payment-executor must expose the payment outcome counter (T3-5). Scrape head: "
+                        + head(executorScrape));
+        assertTrue(executorScrape.contains("entry=\"wallet_pay\""),
+                "the wallet-pay entry point must be tagged as such. Scrape head: "
+                        + head(executorScrape));
+        report.note("VERIFIED on the live fleet: payment-executor exposes "
+                + "gmepay_payment_duration_seconds (histogram) and gmepay_payment_outcome_total "
+                + "tagged entry/outcome/reason, after " + PAYMENTS + " real payments.");
+
+        String txnScrape = scrape(PORT_TXN_MGMT);
+        if (txnScrape.contains("gmepay_outbox_pending")) {
+            report.note("VERIFIED on the live fleet: transaction-mgmt exposes "
+                    + "gmepay_outbox_pending and gmepay_outbox_oldest_pending_age_seconds "
+                    + "(the queue/lag SLI, registered automatically by lib-errors).");
+        } else {
+            report.note("NOT VERIFIED: the outbox lag gauge did not appear in transaction-mgmt's "
+                    + "scrape. It registers only when an 'outbox' table is present on the "
+                    + "datasource; check whether the actuator endpoint is exposed on this fleet.");
+        }
+    }
+
+    /**
+     * Scrapes {@code /actuator/prometheus}, with its own generous timeout and a retry.
+     *
+     * <p>The fleet is launched with {@code spring.main.lazy-initialization=true}, so the FIRST
+     * touch of the actuator endpoint builds the endpoint infrastructure and renders several
+     * hundred series — comfortably slower than the 10-second timeout the shared helper uses for
+     * ordinary API calls, and a timeout here would read as "the SLI is missing" when it is merely
+     * cold. Two attempts, 30 seconds each.
+     */
+    private static String scrape(int port) {
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        String lastFailure = "no attempt made";
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                HttpResponse<String> response = client.send(
+                        java.net.http.HttpRequest
+                                .newBuilder(java.net.URI.create(
+                                        "http://localhost:" + port + "/actuator/prometheus"))
+                                .timeout(Duration.ofSeconds(30))
+                                .header(SchemeFleet.INTERNAL_HEADER, SchemeFleet.INTERNAL_SECRET)
+                                .GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() == 200) {
+                    return response.body();
+                }
+                lastFailure = "HTTP " + response.statusCode() + " " + response.body();
+            } catch (Exception e) {
+                lastFailure = "scrape failed: " + e;
+            }
+        }
+        return lastFailure;
+    }
+
+    private static String head(String scrapeBody) {
+        return scrapeBody.length() <= 400 ? scrapeBody : scrapeBody.substring(0, 400) + "...";
+    }
+
     /** Records what this configuration could NOT measure, so the report never over-claims. */
-    private static void addCaveats(FootprintReport report, long elapsedMs) {
+    private static void addCaveats(FootprintReport report, long elapsedMs, List<TableFootprint> tables) {
+        // A footprint run is also a functional observation: if a durable FAILURE sink grew once
+        // per payment, the measured footprint contains error-path rows that a healthy deployment
+        // would not write, and the reader must be told before they size anything on it.
+        for (TableFootprint table : tables) {
+            if (FAILURE_SINK_TABLES.contains(table.table()) && table.rowsAdded() > 0) {
+                report.note("FINDING — `" + table.database() + "." + table.table() + "` grew by "
+                        + String.format("%.2f", table.rowsAdded() / (double) PAYMENTS)
+                        + " rows per payment. That is a durable FAILURE sink: something on the "
+                        + "money path failed and was persisted for replay on every transaction. "
+                        + "The footprint below therefore includes error-path rows. See the "
+                        + "fleet logs in " + fleet.logDir() + " for the cause.");
+            }
+        }
         report.note("MEASURED: row counts, column payload widths and index definitions, read from "
                 + "the services' own databases before and after " + PAYMENTS + " real payments "
                 + "(wall clock " + elapsedMs + " ms).");

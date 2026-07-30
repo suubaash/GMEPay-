@@ -39,6 +39,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import com.gme.pay.payment.metrics.PaymentSliMetrics;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -111,6 +112,23 @@ public class PaymentController {
     }
 
     /**
+     * Payment-path SLIs (T3-5). Injected by SETTER and optional, so the many unit slices that
+     * construct this controller directly keep compiling and a missing registry simply means
+     * "not measured" — a measurement concern must never be able to fail a payment.
+     */
+    @org.springframework.lang.Nullable private PaymentSliMetrics paymentSli;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPaymentSli(PaymentSliMetrics paymentSli) {
+        this.paymentSli = paymentSli;
+    }
+
+    /** Times {@code call} as {@code entry} when the SLI bean is present; otherwise just runs it. */
+    private <R extends ResponseEntity<?>> R sli(String entry, java.util.function.Supplier<R> call) {
+        return paymentSli == null ? call.get() : paymentSli.record(entry, call);
+    }
+
+    /**
      * POST /v1/payments/authorize — Phase 1 of the two-phase MPM flow (SETTLEMENT_FLOW_SPEC §4/§7.1).
      *
      * <p>Validates + agreement-checks the quote, resolves the merchant, creates the PENDING txn, and
@@ -126,6 +144,18 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Code", required = false) String partnerCode,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader) {
+        // Thin measured wrapper (T3-5). The implementation is untouched below; splitting it this
+        // way keeps the SLI out of the money-path logic and leaves every existing direct-call
+        // unit test working against the same public signature.
+        return sli(PaymentSliMetrics.ENTRY_AUTHORIZE,
+                () -> doAuthorizePayment(req, partnerId, partnerCode, partnerTypeHeader));
+    }
+
+    private ResponseEntity<AuthorizeResponse> doAuthorizePayment(
+            MpmPaymentRequest req,
+            long partnerId,
+            String partnerCode,
+            String partnerTypeHeader) {
 
         req.validate();
 
@@ -188,6 +218,13 @@ public class PaymentController {
     public ResponseEntity<MpmPaymentResponse> confirmPayment(
             @PathVariable("authId") String authId,
             @RequestBody(required = false) ConfirmPaymentRequest req) {
+        // See authorizePayment: thin measured wrapper, implementation unchanged.
+        return sli(PaymentSliMetrics.ENTRY_CONFIRM, () -> doConfirmPayment(authId, req));
+    }
+
+    private ResponseEntity<MpmPaymentResponse> doConfirmPayment(
+            String authId,
+            ConfirmPaymentRequest req) {
 
         PaymentAuthorizationEntity auth = authorizationRepository.findById(authId)
                 .orElseThrow(() -> new IllegalArgumentException("unknown authorization: " + authId));

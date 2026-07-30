@@ -40,6 +40,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import com.gme.pay.payment.metrics.PaymentSliMetrics;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -158,6 +159,27 @@ public class WalletPayController {
         this.objectMapper = objectMapper;
     }
 
+
+    /**
+     * Payment-path SLIs (T3-5). Injected by SETTER rather than through the constructor, and
+     * optional: every existing unit slice builds this controller directly, and widening a
+     * constructor that many tests call — on the payment path — to add a measurement concern is a
+     * worse trade than a nullable field. Absent registry or absent bean simply means the entry
+     * point is not measured; it can never change what the endpoint returns.
+     */
+    @Nullable private PaymentSliMetrics paymentSli;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPaymentSli(PaymentSliMetrics paymentSli) {
+        this.paymentSli = paymentSli;
+    }
+
+    /** Times {@code call} as {@code entry} when the SLI bean is present; otherwise just runs it. */
+    private <R extends org.springframework.http.ResponseEntity<?>> R sli(
+            String entry, java.util.function.Supplier<R> call) {
+        return paymentSli == null ? call.get() : paymentSli.record(entry, call);
+    }
+
     /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
@@ -198,14 +220,19 @@ public class WalletPayController {
             @RequestBody WalletPaymentRequest req,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(name = "X-Idempotency-Key", required = false) String idempotencyKeyAlt) {
-        req.validate();
+        // Measured OUTSIDE validation and the idempotency claim on purpose: the SLI must describe
+        // what the caller actually waited for, which includes a replayed response and a rejected
+        // payload. Timing only the happy inner path would report a latency no client experienced.
+        return sli(PaymentSliMetrics.ENTRY_WALLET_PAY, () -> {
+            req.validate();
 
-        String key = firstNonBlank(idempotencyKey, idempotencyKeyAlt);
-        // No key (or store unavailable) → unchanged legacy path, full back-compat.
-        if (key == null || idempotencyRepository == null || objectMapper == null) {
-            return execute(req);
-        }
-        return payIdempotent(req, key.trim());
+            String key = firstNonBlank(idempotencyKey, idempotencyKeyAlt);
+            // No key (or store unavailable) → unchanged legacy path, full back-compat.
+            if (key == null || idempotencyRepository == null || objectMapper == null) {
+                return execute(req);
+            }
+            return payIdempotent(req, key.trim());
+        });
     }
 
     /**

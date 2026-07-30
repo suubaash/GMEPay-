@@ -67,13 +67,25 @@ class PostgresSizeModelTest {
         }
 
         @Test
-        @DisplayName("heap pages are whole pages — the last page is not prorated")
-        void heapRoundsUpToWholePages() {
-            // One 200-byte tuple still costs a full 8 KB page.
-            assertEquals(PostgresSizeModel.PAGE_SIZE, PostgresSizeModel.heapBytes(1, 200));
-            // 40 tuples of 200 bytes fit in one page (8168 usable / 200 = 40).
-            assertEquals(PostgresSizeModel.PAGE_SIZE, PostgresSizeModel.heapBytes(40, 200));
-            assertEquals(2L * PostgresSizeModel.PAGE_SIZE, PostgresSizeModel.heapBytes(41, 200));
+        @DisplayName("page overhead is AMORTISED per row, not charged whole to the sample")
+        void heapAmortisesPageOverhead() {
+            // 40 tuples of 200 bytes fit in one 8 KB page (8168 usable / 200 = 40), so each row
+            // costs 8192/40 = 204.8 bytes: its 200 plus a ~5-byte share of the page header and
+            // the unusable tail.
+            assertEquals(205, PostgresSizeModel.heapBytes(1, 200));
+            assertEquals(8192, PostgresSizeModel.heapBytes(40, 200));
+        }
+
+        @Test
+        @DisplayName("the per-row cost does not depend on the sample size — the projection bug")
+        void perRowCostIsSampleSizeInvariant() {
+            // This is the property that matters. Rounding up to whole pages made a 5-row sample
+            // report ~30x the per-row cost of a 5000-row sample, and the projection multiplies
+            // that figure by 365 000.
+            double perRowSmall = PostgresSizeModel.heapBytes(5, 200) / 5.0;
+            double perRowLarge = PostgresSizeModel.heapBytes(5_000, 200) / 5_000.0;
+            assertEquals(perRowLarge, perRowSmall, 0.5,
+                    "per-row heap cost must be independent of how many rows were sampled");
         }
 
         @Test
@@ -92,10 +104,18 @@ class PostgresSizeModelTest {
         @DisplayName("index volume accounts for page fill, not just key bytes")
         void indexAccountsForFill() {
             long bytes = PostgresSizeModel.indexBytes(10_000, 16);
-            // 10k entries x MAXALIGN(8+16)=24 +4 pointer = 280 000 bytes of keys; at 70 % fill
+            // 10k entries x (MAXALIGN(8+16)=24 + 4 pointer) = 280 000 bytes of keys; at 70 % fill
             // that is ~400 KB, i.e. materially more than a naive key-bytes-only estimate.
             assertTrue(bytes > 380_000 && bytes < 460_000,
                     "expected ~400 KB for 10k 16-byte keys at 70% fill, got " + bytes);
+        }
+
+        @Test
+        @DisplayName("index cost per row is also sample-size invariant")
+        void indexPerRowIsSampleSizeInvariant() {
+            double small = PostgresSizeModel.indexBytes(5, 16) / 5.0;
+            double large = PostgresSizeModel.indexBytes(50_000, 16) / 50_000.0;
+            assertEquals(large, small, 0.5);
         }
 
         @Test

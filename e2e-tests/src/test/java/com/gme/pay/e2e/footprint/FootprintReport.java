@@ -206,6 +206,9 @@ final class FootprintReport {
     }
 
     static String bytes(double b) {
+        if (b >= 1024L * 1024 * 1024 * 1024) {
+            return String.format("%.2f TB", b / (1024d * 1024 * 1024 * 1024));
+        }
         if (b >= 1024L * 1024 * 1024) {
             return String.format("%.2f GB", b / (1024d * 1024 * 1024));
         }

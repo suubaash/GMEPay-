@@ -4,3 +4,4 @@ com.gme.pay.internalauth.InternalAuthAutoConfiguration
 com.gme.pay.correlation.CorrelationIdAutoConfiguration
 com.gme.pay.correlation.CorrelationIdServletAutoConfiguration
 com.gme.pay.correlation.CorrelationIdReactiveAutoConfiguration
+com.gme.pay.metrics.OutboxLagAutoConfiguration
