@@ -43,10 +43,10 @@ const svc = [
   ["Merchant & QR Data", "Holds the mirror of merchant/QR data and validates a scanned QR against a real, active merchant."],
   ["Revenue Ledger", "Books the accounting: double-entry journal entries for FX margin, service fee, fee-share split and rounding."],
   ["Settlement & Reconciliation", "Calculates what is owed (net/gross), matches GME's records against the scheme's settlement files, flags exceptions, and books the residual."],
-  ["Reporting & Compliance", "Produces regulatory outputs: BOK FX reports, KoFIU AML (CTR/STR), and Hometax tax invoices."],
+  ["Reporting & Compliance", "Produces the CONTENT of regulatory outputs: BOK FX reports, KoFIU AML (CTR/STR) and Hometax tax invoices. It does not file them — no submission channel is live."],
   ["Config Registry", "The source of truth for partners, schemes, pricing rules, corridors and credentials, with maker-checker (4-eyes) approval and a tamper-evident audit trail."],
   ["Auth-Identity", "Issues and verifies machine credentials (partner API keys, service tokens) and rotates them."],
-  ["KYB Adapter", "Runs Know-Your-Business screening and business-registration verification during onboarding."],
+  ["KYB Adapter", "The integration point for Know-Your-Business screening and business-registration verification at onboarding. The vendor is not yet connected, so no real screening runs and activation refuses rather than passing an unscreened partner."],
   ["Notification / Webhook", "Delivers payment and settlement results to partners over signed webhooks, with retries and a dead-letter queue."],
   ["Ops/Partner BFF", "The backend that aggregates data from the services for the Admin and Partner web portals."],
   ["Admin & Partner Portals", "The web UIs: operations dashboards, onboarding, settlement/revenue views, a sandbox console, and partner self-service."],
@@ -198,7 +198,7 @@ children.push(bulletB("Configurable split", " — the fee-share (e.g. with the s
 // F9 onboarding
 children.push(H2("4.9  Onboard & configure a partner"));
 children.push(step("n9", "Draft the partner", "An operator fills the multi-step onboarding wizard in Config Registry (identity, contacts, banking, pricing, schemes/corridors, credentials)."));
-children.push(step("n9", "Verify (KYB)", "Config Registry calls the KYB Adapter to screen the business and verify its registration; the verdict (pass / fail / manual-review) is stored."));
+children.push(step("n9", "Verify (KYB)", "Config Registry calls the KYB Adapter to screen the business and verify its registration; the verdict (pass / fail / manual-review) is stored with its provenance. Until a real screening provider is connected, the verdict is recorded as NOT SCREENED and activation is refused — an unscreened partner cannot be made live."));
 children.push(step("n9", "Approve (4-eyes)", "A second operator approves the change; every change is maker-checker controlled and written to a tamper-evident audit trail."));
 children.push(step("n9", "Issue credentials & wire up", "On activation, Config Registry issues partner API credentials (via Auth-Identity), registers the partner's webhook (via Notification), and pushes the credit limit to Prefunding."));
 children.push(step("n9", "Set pricing rules", "Per partner × scheme × direction pricing (margins, rate source) is stored, enforcing the cross-border minimum-margin rule."));
@@ -223,9 +223,9 @@ children.push(step("n12", "Retry & DLQ", "On failure it retries with increasing 
 // F13 reporting
 children.push(H2("4.13  Regulatory reporting"));
 children.push(bulletB("Bank of Korea (FX)", " — every cross-border commit produces an FX report record (FX1014/1015), including the rate-locked “offer rate” field; domestic is exempt."));
-children.push(bulletB("KoFIU (AML)", " — large/suspicious transactions are detected and filed (CTR/STR)."));
+children.push(bulletB("KoFIU (AML)", " — CTR/STR report content can be produced from transaction data. Suspicious-transaction DETECTION is not implemented: there is no transaction screening or AML monitoring in the payment path today, so nothing is auto-flagged, and no report has ever been filed."));
 children.push(bulletB("Hometax (tax)", " — monthly overseas merchant-fee tax invoices are generated."));
-children.push(note("The report content is produced by the platform; the live government submission channels (mTLS/SFTP) are provided by the regulators and are integrated when available."));
+children.push(note("IMPORTANT — nothing has been filed with any regulator. The platform produces report CONTENT; every live government submission channel (mTLS/SFTP) is still unconfigured, and the system now refuses to represent an unfiled report as accepted. Suspicious-transaction detection is a separate gap: the payment path carries no payer identity (only an opaque handle), so screening coverage requires a partner-integration change before any vendor can help."));
 
 // F14 security
 children.push(H2("4.14  Security & access control"));
