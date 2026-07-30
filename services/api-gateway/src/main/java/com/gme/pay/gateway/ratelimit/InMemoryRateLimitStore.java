@@ -1,8 +1,5 @@
 package com.gme.pay.gateway.ratelimit;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -12,20 +9,30 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * In-memory fixed-window {@link RateLimitStore} — the default/fallback when no Redis is
- * configured (matches the gateway's other Redis-optional features). Single-instance only:
- * the limit is enforced per-JVM, so a multi-pod deployment should bind a Redis-backed store
- * ({@code gateway.rate-limit.store=redis}); this bean is {@code @Primary} only when no such
- * store is selected.
+ * In-memory fixed-window {@link RateLimitStore} — <b>single-instance only</b>. The limit is
+ * enforced per-JVM, so N replicas enforce N x the configured cap.
+ *
+ * <p>Two distinct roles, both wired in one place
+ * ({@link com.gme.pay.gateway.sharedstate.GatewaySharedStateConfig}):
+ * <ol>
+ *   <li>the selected store when {@code gateway.shared-state.store} resolves to {@code memory}
+ *       (local dev / tests / a deliberately single-replica deployment) — the config logs the
+ *       resulting N=1 ceiling at startup rather than leaving it implicit; and</li>
+ *   <li>the degraded fallback used by {@code on-store-error=LOCAL}, where the choice is not
+ *       "shared or per-JVM" but "per-JVM or nothing".</li>
+ * </ol>
+ *
+ * <p>This class carries no stereotype annotation on purpose. It used to be
+ * {@code @Component @Primary @ConditionalOnProperty("gateway.rate-limit.store")} while nothing
+ * ever set that property and no other implementation existed — a switch that looked like a
+ * choice. Wiring now lives in exactly one class (the same correction T0-7 applied to
+ * {@code ConfigPartnerCredentialService}).
  *
  * <p>Algorithm: each key maps to a {@link Window} holding the window-start epoch-millis and a
  * hit counter. A hit landing in a new window resets the counter; otherwise it increments.
  * The decision compares the post-increment count against the limit. Concurrency is handled
  * by computing atomically inside a single {@link ConcurrentHashMap#compute} mapping function.
  */
-@Component
-@Primary
-@ConditionalOnProperty(name = "gateway.rate-limit.store", havingValue = "memory", matchIfMissing = true)
 public class InMemoryRateLimitStore implements RateLimitStore {
 
     /** Sweep expired windows opportunistically once the map grows past this size. */
@@ -38,8 +45,8 @@ public class InMemoryRateLimitStore implements RateLimitStore {
         this(Clock.systemUTC());
     }
 
-    /** Package-private constructor so tests can pin the clock. */
-    InMemoryRateLimitStore(Clock clock) {
+    /** Visible for tests and for the shared-state config, which pins the fleet clock. */
+    public InMemoryRateLimitStore(Clock clock) {
         this.clock = clock;
     }
 

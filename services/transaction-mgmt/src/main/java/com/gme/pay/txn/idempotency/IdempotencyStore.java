@@ -16,10 +16,15 @@ import java.util.Optional;
  *       the next day.</li>
  * </ul>
  *
- * <p>Implementations: {@link RedisIdempotencyStore} (Redis SETNX, production — activated
- * when {@code spring.data.redis.host} is set) and {@link InMemoryIdempotencyStore}
- * (single-node fallback / local default). The DB unique constraint on the transaction key
- * remains the last-resort backstop.
+ * <p>Implementations: {@link JdbcIdempotencyStore} (the {@code idempotency_keys} table, V013 —
+ * the production store, shared across replicas and durable) and {@link InMemoryIdempotencyStore}
+ * (per-JVM; unit slices only, and it caps the service at one replica).
+ *
+ * <p><b>There is no other backstop.</b> This interface's javadoc used to claim "the DB unique
+ * constraint on the transaction key remains the last-resort backstop". No such constraint exists —
+ * {@code transactions} has no unique index on {@code partner_txn_ref} or on anything else a
+ * duplicate would collide with (verified across V001-V012). This store is the only duplicate
+ * suppression on the create path, which is why it is now durable and shared rather than a cache.
  */
 public interface IdempotencyStore {
 

@@ -30,6 +30,15 @@ dependencies {
     // verify the OIDC access token itself. Same starter + same issuer property style as api-gateway
     // (ADR-011) — see config/BffSecurityConfig.java.
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    // Replica ceiling: the ops paging dedupe cooldown must be SHARED, or the escalation sweep --
+    // which runs on every replica by design, because each holds a different slice of the alert
+    // buffer -- pages a human once per replica. Redis is the only shared store this BFF can use: it
+    // owns no database (see the comment at the top of this file). Activated only when
+    // spring.data.redis.host is set; the per-JVM cooldown is the local default and the failover.
+    //
+    // NOT the reactive starter: this is a spring-boot-starter-web (servlet) service, and one
+    // SET NX EX per page is not work that wants a reactive client.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.kafka:spring-kafka-test'

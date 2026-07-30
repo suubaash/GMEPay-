@@ -22,6 +22,12 @@ global:
 
 abi:
   # Azure Cache for Redis (SSL on 6380 in prod; 6379 shown for non-TLS test caches).
+  #
+  # REPLICA CEILING (2026-07-30): api-gateway's rate-limit window and replay nonce set live here,
+  # and the replay posture is fail-CLOSED, so Redis is a hard dependency of the partner edge. Use a
+  # Standard/Premium tier with replication -- Basic is a single node with no SLA, which would make
+  # every gateway replica 503 on a maintenance restart. ops-partner-bff also uses it for paging
+  # dedupe only and degrades to per-JVM if it is unreachable.
   SPRING_DATA_REDIS_HOST: gmepay.redis.cache.windows.net
   SPRING_DATA_REDIS_PORT: "6380"
   # Event Hubs Kafka endpoint (namespace.servicebus.windows.net:9093, SASL/SSL).

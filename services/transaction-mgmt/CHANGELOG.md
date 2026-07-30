@@ -1,5 +1,55 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-30 — Idempotency keys move to a durable table: transaction-mgmt can run N>1
+
+The `Idempotency-Key` window is the only thing between a partner retry and a **second money
+transaction**. It was per-JVM (or, under Helm, a cache) — the last thing holding this service at one
+replica.
+
+### Added
+- **Flyway `V013__create_idempotency_keys.sql`** — `idempotency_keys (idempotency_key PK,
+  response_snapshot, created_at, expires_at)` plus an index for the retention sweep. Engine-neutral
+  (PostgreSQL + H2 in PostgreSQL mode), additive.
+- **`idempotency/JdbcIdempotencyStore`** — the claim **is the primary key**: `putIfAbsent` attempts
+  the `INSERT` rather than reading first, so concurrent duplicates on the same JVM *or on different
+  replicas* resolve to exactly one winner with no application-level locking. Expiry is enforced on
+  read as well as swept, because a retention job must never be what decides when a key stops being
+  replayable.
+- **`idempotency/IdempotencyRetentionSweeper`** — hourly, `@SchedulerLock`ed. A table has no TTL, and
+  "we will add a sweeper later" is how a money-path table reaches a hundred million rows.
+- **`gmepay.idempotency.store`** = `db` (default) | `memory`; anything else **refuses to start**.
+
+### Changed
+- **`IdempotencyConfig` rewritten.** It used to mark a Redis store `@Primary` whenever
+  `spring.data.redis.host` was set — and the Helm ABI ConfigMap exports that to **every** pod for
+  api-gateway's benefit, so this service silently used Redis under Helm and a `ConcurrentHashMap`
+  under compose, and nobody chose either. Selection is now explicit, logged, and states the replica
+  ceiling it implies.
+- `spring.task.scheduling.pool.size` **4 → 5** for the fourth scheduled job. `SchedulerPoolSizeTest`
+  pins pool size > job count, so this could not be forgotten.
+- **`IdempotencyStore` javadoc corrected.** It claimed "the DB unique constraint on the transaction
+  key remains the last-resort backstop". **No such constraint exists** anywhere in V001–V012 — this
+  store is the *only* duplicate suppression on the create path, which is precisely why it is now
+  durable and shared rather than a cache.
+
+### Removed
+- **`RedisIdempotencyStore` and `IdempotencyRedisStoreIT` — DELETED**, and
+  `spring-boot-starter-data-redis` removed from `build.gradle`. Redis here was shared but **not
+  durable** (`redis:7-alpine`, no AOF, no replication): a restart emptied the 24 h window and a retry
+  after it created the duplicate anyway — the same failure, just rarer and harder to reproduce. It
+  also made the control able to be *unavailable while the money path was available*, forcing a
+  fail-open/fail-closed choice on duplicate suppression where neither answer is good. A row in the
+  same database as the transaction it protects cannot be, so the question disappears rather than
+  being answered. `redis` is no longer a selectable value, so it cannot return by accident.
+
+### Tests
+15 new (176 total, 0 failures). `JdbcIdempotencyStoreTest` runs against a real H2 with the **full
+Flyway set** (so V013 is proved to apply on top of V001–V012): a key honoured on replica A is
+replayed on B, the same scenario on two per-JVM stores re-executes it and mints a second txnRef,
+8 concurrent claimants yield exactly one winner, expiry is enforced on read, a lapsed key is
+reclaimable, and the sweep deletes only lapsed rows. `IdempotencyConfigTest` pins the decision table
+and the shipped properties.
+
 ## 2026-07-03 — Scheme filter on the transaction list/search (feat/scheme-statement-be)
 
 Additive, read-only. Adds an optional `schemeId` filter (maps to the `scheme_id` column, the QR

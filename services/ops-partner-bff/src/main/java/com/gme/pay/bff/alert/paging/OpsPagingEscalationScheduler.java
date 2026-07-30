@@ -20,13 +20,24 @@ import java.util.List;
  * <b>default OFF</b> ({@code gmepay.ops.paging.escalation.enabled}); the scheduler bean is
  * created only when explicitly enabled.
  *
- * <p><b>Replica safety.</b> ops-partner-bff has NO DataSource (it is a stateless REST
- * aggregation BFF that owns no database), so there is no ShedLock table to guard this. The
- * escalation sweep is therefore <b>single-replica-only</b>: run it on exactly one replica
- * (e.g. a dedicated instance with the flag set, or a single-replica deployment). If the BFF
- * is ever given a DataSource, this should be ShedLock-guarded (shedlock + a migration)
- * before enabling on more than one replica. The re-page still honours the dispatcher's
- * cooldown, which bounds duplicate pages even if two replicas ran.
+ * <h2>Replica safety — and why this sweep must NOT be locked to one replica</h2>
+ * This class used to be marked "single-replica-only", with a note to ShedLock-guard it if the BFF
+ * ever gained a DataSource. <b>That would be the wrong fix, and shipping it would create a worse
+ * bug than the one it closed.</b>
+ *
+ * <p>{@link OpsAlertStore} is a per-JVM rolling buffer, so each replica holds a <em>different</em>
+ * set of alerts — whichever ones its own Kafka consumer received. A distributed lock lets exactly
+ * one replica sweep, which means the alerts held by every <em>other</em> replica would never be
+ * escalated at all. Un-acked CRITICAL alerts silently stop escalating: a missed page, which is the
+ * failure this whole mechanism exists to prevent.
+ *
+ * <p>So the sweep runs on <b>every</b> replica, over its own buffer, and duplicate paging is
+ * prevented where it should be — at the pager, by the shared {@link PagingCooldown} the dispatcher
+ * claims atomically before each page. Every replica may decide to escalate; at most one succeeds
+ * per dedupe window.
+ *
+ * <p>The remaining honest limitation is not in this class: the alert buffer itself is per-replica,
+ * so the alerts <em>list</em> and its ack state differ between replicas. See {@link OpsAlertStore}.
  */
 @Component
 @ConditionalOnProperty(name = "gmepay.ops.paging.escalation.enabled", havingValue = "true")
@@ -46,7 +57,10 @@ public class OpsPagingEscalationScheduler {
         this.dispatcher = dispatcher;
         this.escalateAfter = escalateAfter == null || escalateAfter.isNegative()
                 ? Duration.ofMinutes(10) : escalateAfter;
-        log.info("ops paging escalation ENABLED (after={}, single-replica-only — no DataSource/ShedLock)",
+        log.info("ops paging escalation ENABLED (after={}). Runs on EVERY replica by design — the "
+                        + "alert buffer is per-replica, so locking the sweep would stop escalating "
+                        + "the alerts held elsewhere. Duplicate pages are prevented by the shared "
+                        + "PagingCooldown, not by pinning the sweep.",
                 this.escalateAfter);
     }
 

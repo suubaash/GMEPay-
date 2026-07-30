@@ -1164,12 +1164,22 @@ services:
       # Do NOT set GMEPAY_OPS_RBAC_ENFORCE=false — the default is enforce.
       OIDC_ISSUER_URI: ${KC_PUBLIC_URL:-http://localhost:8097}/realms/gmepay
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
+      # ---- Shared ops-paging dedupe cooldown (replica ceiling) ---------------------
+      # The (alertType|subjectRef) page cooldown was a per-JVM map, so at N>1 replicas the
+      # escalation sweep -- which runs on EVERY replica by design, because each holds a different
+      # slice of the alert buffer -- paged a human once per replica. gmepay.ops.paging.
+      # cooldown-store=auto picks Redis up from this host. An unreachable Redis degrades dedupe to
+      # per-replica; it never suppresses a page (FailoverPagingCooldown), and the Redis health
+      # indicator is off for this service so a Redis outage cannot make the BFF unready.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
     depends_on:
       config-registry: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
       prefunding: { condition: service_healthy }
       revenue-ledger: { condition: service_healthy }
       settlement-reconciliation: { condition: service_healthy }
+      redis: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["core", "full"]
@@ -1181,8 +1191,11 @@ services:
     environment:
       SERVER_PORT: 8080
       JAVA_TOOL_OPTIONS: "-Xmx320m -XX:+ExitOnOutOfMemoryError"
-      # The gateway's application.yml enables the redis health indicator; without
-      # this host override the indicator probes localhost and health goes DOWN.
+      # Redis is now LOAD-BEARING for this service, not just a health indicator. It backs the
+      # per-partner rate-limit window and the replay-protection nonce set (gateway.shared-state.
+      # store=auto detects this host). Without it both controls fall back to per-JVM state, which
+      # caps api-gateway at ONE replica: N replicas would enforce N x the configured rate limit and
+      # a captured signed request would be replayable once per replica.
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       # RBAC claim stamping + provenance signing (#90). The gateway is the SOLE holder of the

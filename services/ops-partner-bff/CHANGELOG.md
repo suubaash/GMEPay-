@@ -2,6 +2,59 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-30 — Paging dedupe is shared: the BFF no longer pages a human once per replica
+
+### Added
+- **`alert/paging/PagingCooldown`** plus `InMemoryPagingCooldown`, `RedisPagingCooldown`
+  (`SET NX EX`), `FailoverPagingCooldown` and `PagingCooldownConfig`
+  (`gmepay.ops.paging.cooldown-store` = `auto` | `redis` | `memory`; `redis` without a host, or any
+  unrecognised value, **refuses to start**).
+- `spring-boot-starter-data-redis` — the only shared store this BFF can use, since it owns no
+  database. Servlet, not reactive: one `SET NX EX` per page is not work that wants a reactive client.
+
+### Changed
+- **`OpsPagingDispatcher` claims the cooldown atomically before paging**, instead of checking a
+  per-JVM map and then setting it. A failed delivery — or a throwing paging port — **releases** the
+  claim, so the pre-existing rule that only a *delivered* page opens the cooldown survives the change
+  to an atomic claim.
+- **The old "naturally single-fire across replicas" argument was incomplete.** It was true of the
+  consume path (one Kafka consumer per record) and missed the two cases that actually double-page: the
+  escalation sweep runs on *every* replica, and a re-fired alert consumed by a *different* replica
+  than last time finds an empty cooldown map well inside the 15-minute window.
+- **`OpsPagingEscalationScheduler` is deliberately NOT locked to one replica — reversing this class's
+  own earlier note** ("single-replica-only; ShedLock it if the BFF gains a DataSource"). The alert
+  buffer is per-replica, so a lock would let one replica sweep and leave every *other* replica's
+  un-acked CRITICAL alerts never escalated: a missed page, which is worse than the duplicate it
+  prevents. The sweep runs everywhere; duplicates are stopped at the pager.
+- **This control's failure posture is the deliberate inverse of api-gateway's.** An unreachable Redis
+  degrades dedupe to per-JVM and **never suppresses a page** — failing closed would silence the pager
+  during an incident, the one moment it exists for. Not configurable, because there is no operational
+  position from which "silence the pager when its dedupe cache is unreachable" is the right answer. A
+  missed page is not recoverable; a duplicate page is an annoyance.
+- `management.health.redis.enabled=false` — a Redis outage must not mark every BFF replica unready
+  (taking the admin UI and the partner portal down) over a noise-reduction feature.
+
+### Known limitation, recorded rather than papered over
+**`OpsAlertStore` was NOT moved to shared state.** At N>1 the alerts list differs per replica, an ack
+recorded on A is invisible on B (so B keeps escalating an acknowledged alert, bounded to one page per
+dedupe window), and the control tower's counts are a fraction of the fleet's. Redis is the wrong
+*shape* for it: `update(seq, mutator)` is a read-modify-write over a record whose paging stamp and ack
+are written by different threads, which on a Redis hash needs `WATCH`/Lua or an ack silently
+overwrites a concurrent paging stamp — and once `seq` allocation, capacity eviction and filtered
+newest-first queries are added, the thing being described is a **table**: exactly the durable JPA
+store already recorded as the follow-up, which would also fix restart durability and give ack an
+audit trail. Building the Redis version first means building it twice and shipping the weaker one.
+**So run this service at 1 replica** until it has that store, or accept a divergent alerts view
+knowingly. It is an operator-surface correctness defect, not a money one, and it constrains no other
+service.
+
+### Tests
+11 new (487 total, 0 failures). `PagingCooldownAcrossReplicasTest`: two replicas escalating the same
+alert page **once** while two per-JVM cooldowns page **twice**; a re-fired alert on another replica is
+recorded `SUPPRESSED`; a failed or throwing delivery releases the claim so another replica may retry;
+an unavailable Redis still pages **and** still dedupes locally; an absent Redis reply reads as "page
+it"; and Redis is never wired without the failover decorator.
+
 ## 2026-07-03 — Platform-settings pass-through (feat/platform-settings-be)
 
 Additive. Thin proxy so the admin UI (which only talks to this BFF) can reach config-registry's

@@ -17,6 +17,10 @@ global:
   imagePullPolicy: IfNotPresent
 
 abi:
+  # REPLICA CEILING (2026-07-30): api-gateway's rate-limit window and replay nonce set live here.
+  # A single self-hosted Redis pod is a single point of failure for the partner edge under the
+  # default fail-closed replay posture; run Sentinel/HA, or accept the coupling knowingly, or set
+  # gateway.rate-limit.on-store-error=local. ops-partner-bff uses it for paging dedupe only.
   SPRING_DATA_REDIS_HOST: redis
   SPRING_DATA_REDIS_PORT: "6379"
   SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092

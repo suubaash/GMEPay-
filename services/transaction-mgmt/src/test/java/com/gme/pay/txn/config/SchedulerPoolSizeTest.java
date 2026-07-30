@@ -2,6 +2,7 @@ package com.gme.pay.txn.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.gme.pay.txn.idempotency.IdempotencyRetentionSweeper;
 import com.gme.pay.txn.outbox.OutboxPublisher;
 import com.gme.pay.txn.service.ExpirySweeperService;
 import com.gme.pay.txn.service.StuckTransactionAlertSweeper;
@@ -61,7 +62,8 @@ class SchedulerPoolSizeTest {
     private static int scheduledMethodCount() {
         List<Method> scheduled = new ArrayList<>();
         for (Class<?> type : List.of(
-                OutboxPublisher.class, ExpirySweeperService.class, StuckTransactionAlertSweeper.class)) {
+                OutboxPublisher.class, ExpirySweeperService.class, StuckTransactionAlertSweeper.class,
+                IdempotencyRetentionSweeper.class)) {
             for (Method method : type.getDeclaredMethods()) {
                 if (method.getAnnotation(Scheduled.class) != null) {
                     scheduled.add(method);

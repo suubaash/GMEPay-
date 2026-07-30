@@ -130,7 +130,18 @@ global:
 # Defaults below are in-cluster on-prem (self-hosted) service DNS names.
 # ---------------------------------------------------------------------------
 abi:
-  # Redis (api-gateway reads SPRING_DATA_REDIS_*).
+  # Redis. Two services read SPRING_DATA_REDIS_*, and for BOTH of them it is what lifts the
+  # replica ceiling rather than an optional cache:
+  #   * api-gateway     — the per-partner rate-limit window and the replay-protection nonce set.
+  #                       Without it N replicas enforce N x the configured cap and a captured
+  #                       signed request is replayable once per replica. Its replay posture is
+  #                       fail-CLOSED, so Redis is a hard dependency of the partner edge; size and
+  #                       operate it accordingly (managed/HA, not a single pod).
+  #   * ops-partner-bff — the ops-paging dedupe cooldown. Degrades to per-JVM if unreachable
+  #                       (it never suppresses a page), so it is not a hard dependency there.
+  # transaction-mgmt deliberately does NOT read these any more: its idempotency store is its own
+  # durable idempotency_keys table (V013). It previously picked Redis up FROM THIS ConfigMap by
+  # accident, putting a duplicate-money-transaction control in a cache with no AOF.
   SPRING_DATA_REDIS_HOST: redis
   SPRING_DATA_REDIS_PORT: "6379"
   # Kafka (transaction-mgmt, revenue-ledger, notification-webhook).
@@ -752,7 +763,12 @@ services:
     probe: { type: tcp }
     envSecretKeys: [
                     # T0-5: the gated prefunding balance/alerts reads (RestPrefundingClient).
-                    GMEPAY_INTERNAL_AUTH_SECRET]
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    # Replica ceiling: the shared ops-paging dedupe cooldown. SPRING_DATA_REDIS_HOST
+                    # arrives from the ABI ConfigMap; the password is a secret and must be here too,
+                    # or on a Redis with auth the cooldown silently degrades to per-JVM and the
+                    # escalation sweep pages a human once per replica.
+                    SPRING_DATA_REDIS_PASSWORD]
     envSecretAliases:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
@@ -767,10 +783,18 @@ services:
       #
       # STILL OPEN (not fixable from a values file): the BFF's OpsAlertStore is an in-memory
       # ArrayDeque capped at gmepay.ops.alerts.capacity, so the aggregate view is still lost on
-      # restart. payment-executor now persists what IT raises (ops_alerts, Flyway V006); giving the
-      # BFF a durable store is the remaining half of T3-3. Escalation
-      # (GMEPAY_OPS_PAGING_ESCALATION_ENABLED) stays off: it is documented single-replica-only, with
-      # no ShedLock, so arming it under >1 replica would double-page.
+      # restart -- and at >1 replica it also DIVERGES per replica (different alert lists, and an ack
+      # on one replica is invisible on another). payment-executor now persists what IT raises
+      # (ops_alerts, Flyway V006); giving the BFF a durable store is the remaining half of T3-3 and
+      # is what keeps THIS SERVICE at 1 replica. See services/ops-partner-bff/.../OpsAlertStore.java.
+      #
+      # Escalation (GMEPAY_OPS_PAGING_ESCALATION_ENABLED) stays off by operator choice, but the
+      # reason recorded here until 2026-07-30 -- "single-replica-only, no ShedLock, arming it under
+      # >1 replica would double-page" -- is NO LONGER TRUE and its remedy would have been wrong.
+      # Duplicate paging is now prevented at the pager by a shared PagingCooldown (Redis SET NX EX,
+      # claimed atomically before each page). The sweep runs on EVERY replica deliberately: the
+      # alert buffer is per-replica, so pinning the sweep to one would leave every other replica's
+      # un-acked CRITICAL alerts never escalated -- a missed page, which is worse than a duplicate.
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
       # Live partner transactions: activate the real REST transaction-mgmt client

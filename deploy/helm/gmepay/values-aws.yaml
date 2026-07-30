@@ -21,6 +21,13 @@ global:
 
 abi:
   # ElastiCache for Redis (primary endpoint).
+  #
+  # REPLICA CEILING (2026-07-30): this is no longer an optional cache. api-gateway keeps its
+  # per-partner rate-limit window and its replay-protection nonce set here, and its replay posture
+  # is fail-CLOSED -- so an unavailable Redis answers partner traffic 503 rather than admitting
+  # replays. Provision it as MULTI-AZ with automatic failover (and consider
+  # gateway.rate-limit.on-store-error=local so a Redis blip degrades the cap to N x instead of
+  # stopping traffic). ops-partner-bff also uses it, for paging dedupe only, and degrades safely.
   SPRING_DATA_REDIS_HOST: gmepay.xxxxxx.ng.0001.apn2.cache.amazonaws.com
   SPRING_DATA_REDIS_PORT: "6379"
   # MSK bootstrap brokers (TLS — services must use SSL security protocol).

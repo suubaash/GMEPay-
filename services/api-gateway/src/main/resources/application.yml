@@ -87,27 +87,55 @@ gmepay:
     base-url: ${GMEPAY_AUTH_IDENTITY_BASE_URL:http://auth-identity:8080}
 
 gateway:
-  # Replay protection (ReplayProtectionFilter, order 5). It is UNCONDITIONAL and already
-  # fail-closed: an HMAC-authenticated request without X-Nonce is 400 MISSING_NONCE, and a
-  # nonce seen twice inside the retention window is 401 REPLAY_DETECTED.
+  # ─────────── SHARED EDGE STATE (replica ceiling) ───────────
+  # The per-partner rate-limit window and the replay-protection nonce set are the two pieces of
+  # cross-request state at the edge. While both lived in a ConcurrentHashMap the gateway could
+  # only run ONE replica, and not for a performance reason: N replicas meant N x the configured
+  # rate limit, and a captured signed request replayable once per replica. Both controls were
+  # wrong above one instance, not merely un-scaled.
   #
-  # T0-7: two keys used to sit here — `fail-open: true` and `store: memory` — and the CISO audit
-  # read them as "replay protection is fail-open". They were DEAD CONFIG: nothing in the repo has
-  # ever read either key. They are removed rather than left to imply a control that does not exist.
-  # The real limitation is that InMemoryNonceStore is the only NonceStore implementation, so the
-  # nonce window is PER GATEWAY INSTANCE: with N replicas a captured request can be replayed once
-  # per replica inside the 5-minute clock-skew window. A shared Redis nonce store is genuinely
-  # missing — recorded as a T0-7 residual, not configured away.
+  # ONE switch governs BOTH, deliberately — the half-shared configuration (global nonces, per-pod
+  # rate limit) is a state nobody intends and anybody could produce with two keys.
+  #   auto   (default) → redis when spring.data.redis.host is set, memory otherwise; logs which.
+  #   redis            → redis, and REFUSE TO START if no host is configured.
+  #   memory           → per-JVM; legal, logged WARN, replica ceiling 1.
+  #   anything else    → REFUSE TO START (a typo must not pick a different store).
+  # docker-compose and all four Helm values already export SPRING_DATA_REDIS_HOST for this
+  # service, so `auto` resolves to redis in every deployed environment and to memory on a laptop.
+  shared-state:
+    store: auto
+
+  # Replay protection (ReplayProtectionFilter, order 5). UNCONDITIONAL and fail-closed: an
+  # HMAC-authenticated request without X-Nonce is 400 MISSING_NONCE, one over max-nonce-length is
+  # 400 INVALID_NONCE, and a nonce seen twice inside the retention window is 401 REPLAY_DETECTED.
+  #
+  # on-store-error: what happens when the nonce store cannot answer. There is NO 'allow' value —
+  # a replay check an attacker can disable by making one Redis unreachable is not a replay check.
+  #   reject (default) → 503 REPLAY_STORE_UNAVAILABLE; the request is not forwarded. This makes
+  #                      Redis a HARD DEPENDENCY of the partner edge. Stated, not discovered.
+  #   local            → degrade to the per-JVM nonce set: one replay per replica inside the skew
+  #                      window (the pre-Redis posture) instead of the edge going down.
+  # An unrecognised value fails property binding and the service refuses to start.
   replay-protection:
     nonce-ttl-seconds: 300
+    max-nonce-length: 256
+    on-store-error: reject
 
   # Per-partner rate limiting (API-05 §3.5). T0-7: was `enabled: false` + `fail-open: true`.
-  # Now on, and a store error DENIES. Same per-instance caveat as the nonce store above: the only
-  # RateLimitStore implementation is in-memory, so with N replicas the effective cap is N x these
-  # values. (A `store:` key used to be here naming 'redis'; nothing read it, so it is gone.)
+  # Now on; the counter is shared across replicas so these numbers are the numbers enforced.
+  #
+  # on-store-error: T0-7's fail-closed default is UNCHANGED (deny). The Redis move added a third
+  # honest option that a boolean could not express:
+  #   deny  (default) → 429. An outage in the control that bounds enumeration must not hand an
+  #                     attacker unlimited attempts. Cost: a Redis outage stops partner traffic.
+  #   local           → degrade to the per-JVM window (cap becomes replicas x the value below).
+  #                     RECOMMENDED for a multi-replica deployment that judges a Redis outage
+  #                     worse than an N x cap. Still a cap; not an absence of one.
+  #   allow           → no rate limiting during the outage. `fail-open: true` still means this.
   rate-limit:
     enabled: true
     fail-open: false
+    on-store-error: deny
     global-per-second: 100
     rates-per-second: 20
     payments-per-second: 50
