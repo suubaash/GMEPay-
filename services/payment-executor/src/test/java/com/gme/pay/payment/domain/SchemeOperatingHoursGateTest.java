@@ -291,18 +291,26 @@ class SchemeOperatingHoursGateTest {
     @DisplayName("refund/cancel/confirm are not gated: no gate method exists that they could call")
     void nothingGatesRefundsOrConfirms() {
         // The property is structural, not behavioural: OperationalGate's ONLY public entry points are
-        // the two checkNewAuthorization overloads, and the window check lives inside them. There is no
+        // the checkNewAuthorization overloads, and the window check lives inside them. There is no
         // checkRefund / checkConfirm / checkCancel to call, so a refund cannot be blocked by a closed
         // window even by accident. (The wallet + orchestrated controller-level proof that a refund and a
         // confirm still succeed while closed lives in WalletPayControllerTest / PaymentControllerTest.)
+        //
+        // T5-3 added a THIRD overload (the one carrying the screening subjects) — deliberately still
+        // named checkNewAuthorization, so this guard keeps its meaning: the assertion is that every
+        // public entry point on this gate is a NEW-authorization entry point. A method by any other name
+        // appearing here is the thing that must be reviewed against the carve-out.
         List<String> gateEntryPoints = new ArrayList<>();
         for (var method : OperationalGate.class.getDeclaredMethods()) {
             if (java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
                 gateEntryPoints.add(method.getName());
             }
         }
-        assertEquals(List.of("checkNewAuthorization", "checkNewAuthorization"),
-                gateEntryPoints.stream().sorted().toList(),
+        assertEquals(List.of("checkNewAuthorization"),
+                gateEntryPoints.stream().distinct().sorted().toList(),
                 "a new public gate entry point must be reviewed against the refund/confirm carve-out");
+        assertEquals(3, gateEntryPoints.size(),
+                "three checkNewAuthorization overloads: (partner), (partner,scheme,route),"
+                        + " (partner,scheme,route,paymentRef,subjects)");
     }
 }

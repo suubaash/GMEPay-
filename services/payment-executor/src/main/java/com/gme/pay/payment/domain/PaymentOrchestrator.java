@@ -32,6 +32,21 @@ import java.time.ZoneId;
  *
  * <p>The legacy single-shot deduct-before-submit MPM path was retired (Step 4); CPM still uses the
  * single-shot {@link #executeCpm} until its two-phase rebuild.
+ *
+ * <h2>The "AML gates" in this class are LIMITS, not AML screening (gap T5-3)</h2>
+ * <p>Authorize gate 0 and gate 0b are named after the {@code partner_limits} (V020) and
+ * {@code aml_velocity_*} (V034) columns they read, and that naming has repeatedly been read as evidence
+ * that this platform performs AML checks on a transaction. It does not. Both gates are numeric
+ * comparisons against operator-entered ceilings — per-transaction USD, daily/monthly/annual USD, and a
+ * daily transaction count — enforcing the statutory 소액해외송금업 limits. <b>They screen nobody, consult
+ * no list, and detect no pattern.</b>
+ *
+ * <p>The counterparty sanctions/PEP question is asked separately and earlier, by
+ * {@link PaymentScreeningGate} via {@code OperationalGate}, and today its honest answer is that
+ * <b>nothing is screened</b> — there is no provider configured, and neither payment contract carries an
+ * originator name for one to match on. That absence is counted, alerted and queryable rather than
+ * implied away; see {@link PaymentScreeningGate} and
+ * {@code outputs/agent/fix_t5-aml-seam_2026-07-28.md}.
  */
 public class PaymentOrchestrator {
 
@@ -221,7 +236,8 @@ public class PaymentOrchestrator {
         RateClient.RateQuoteView quote = rateClient.loadQuote(cmd.quoteId(), cmd.partnerId());
         assertQuoteAgreement(cmd.collectionAmount(), cmd.collectionCurrency(), quote);
 
-        // Step 1c (authorize gate 0 — AML/regulatory): resolve the partner's limits ONCE (keyed by partner
+        // Step 1c (authorize gate 0 — regulatory transaction LIMITS, not AML screening; see the T5-3
+        // section of this class's javadoc): resolve the partner's limits ONCE (keyed by partner
         // CODE, like commission-split), then enforce the per-transaction USD cap (the statutory 소액해외송금업
         // ceiling among them) on the USD value of the agreed collection amount, BEFORE any side effect. The
         // CUMULATIVE daily/monthly/annual + velocity caps are charged after the float hold (Step 4) so they
@@ -274,7 +290,8 @@ public class PaymentOrchestrator {
             }
         }
 
-        // Authorize gate 0b (AML cumulative): charge the partner's daily/monthly/annual usage + the
+        // Authorize gate 0b (CUMULATIVE limits — historically mislabelled "AML"): charge the partner's
+        // daily/monthly/annual usage + the
         // daily velocity count, race-free under prefunding's per-partner lock. On breach — or any
         // error — void the authorization (release any hold + fail the orphan txn) and propagate.
         //

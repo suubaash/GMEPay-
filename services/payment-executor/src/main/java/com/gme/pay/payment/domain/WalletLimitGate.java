@@ -18,7 +18,8 @@ import java.math.BigDecimal;
  * ({@code PaymentOrchestrator} Step 1c + Step 4). Every wallet corridor — GMEREMIT domestic, SENDMN
  * KRW→MNT, and the Nepal/cross-border pass-through through {@code FailoverPaymentRouter} — went
  * straight to the scheme, so the DB-hard-capped 소액해외송금업 ceilings (5,000 USD per transaction /
- * 50,000 USD annual, V020) and the AML velocity cap (V034) were unenforced on the busiest entry point.
+ * 50,000 USD annual, V020) and the per-partner velocity cap (V034, the column named `aml_velocity_*` --
+ * a transaction-count ceiling, NOT AML screening; see T5-3) were unenforced on the busiest entry point.
  *
  * <p><b>What it enforces</b>, in one place so every corridor gets the same rule:
  * <ol>

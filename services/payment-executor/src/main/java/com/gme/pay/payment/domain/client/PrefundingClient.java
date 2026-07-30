@@ -63,7 +63,8 @@ public interface PrefundingClient {
     }
 
     /**
-     * AML cumulative cap (authorize phase): charge {@code amountUsd} toward the partner's daily/monthly/
+     * Cumulative cap (authorize phase; the prefunding column names say "AML" but this is a monetary/count
+     * ceiling, not screening -- see T5-3): charge {@code amountUsd} toward the partner's daily/monthly/
      * annual usage, throwing {@link com.gme.pay.payment.domain.CumulativeLimitExceededException} if any
      * non-null cap would be breached. Race-free on the prefunding side (per-partner row lock). Only invoked
      * when a cap is actually configured; default throws so real impls must override.

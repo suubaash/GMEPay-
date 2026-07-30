@@ -677,7 +677,7 @@ class WalletPayControllerTest {
     void walletPay_systemPaused_rejected() throws Exception {
         doThrow(new OperationalGateException(OperationalGateException.SYSTEM_PAUSED,
                 "platform is paused — new payments are not being accepted"))
-                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any(), any(), any());
 
         String body = """
                 {
@@ -704,7 +704,7 @@ class WalletPayControllerTest {
     void walletPay_partnerSuspended_rejected() throws Exception {
         doThrow(new OperationalGateException(OperationalGateException.PARTNER_SUSPENDED,
                 "partner 'GMEREMIT' is currently suspended"))
-                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any(), any(), any());
 
         String body = """
                 {
@@ -730,7 +730,7 @@ class WalletPayControllerTest {
         // Even if the gate WOULD pause a new payment, a refund of an in-flight txn must proceed:
         // the refund path never calls the gate, so a stubbed pause has no effect here.
         doThrow(new OperationalGateException(OperationalGateException.SYSTEM_PAUSED, "paused"))
-                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any(), any(), any());
         doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-CPM-001"));
 
         String body = """
@@ -763,7 +763,7 @@ class WalletPayControllerTest {
                         "ZEROPAY", 1, java.time.LocalTime.of(18, 0), java.time.LocalTime.of(22, 0),
                         java.time.LocalTime.of(16, 30), "Asia/Seoul")),
                 java.time.Instant.parse("2026-07-28T03:00:00Z"))))
-                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any(), any(), any());
 
         String body = """
                 {
@@ -799,7 +799,7 @@ class WalletPayControllerTest {
 
         // GMEREMIT is the ZeroPay domestic corridor — the gate must receive a scheme reference, or the
         // seeded V024 window could never be evaluated on this entry point at all (the T3-6 defect).
-        verify(operationalGate).checkNewAuthorization(eq("GMEREMIT"), eq("ZEROPAY"), any());
+        verify(operationalGate).checkNewAuthorization(eq("GMEREMIT"), eq("ZEROPAY"), any(), any(), any());
     }
 
     @Test
@@ -809,7 +809,7 @@ class WalletPayControllerTest {
         // a gate stubbed to reject every new payment has no effect here.
         doThrow(new SchemeClosedException(com.gme.pay.contracts.SchemeAvailability.evaluate(
                 "ZEROPAY", java.util.List.of(), java.time.Instant.now())))
-                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any(), any(), any());
         doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-CPM-001"));
 
         String body = """
