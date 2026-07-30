@@ -132,10 +132,22 @@ spec:
                   name: {{ include "gmepay.secretName" $root }}
                   key: {{ $secretKey }}
             {{- end }}
-            {{- /* Per-service literal env (base URLs, feature flags, datasource URL). */}}
+            {{- /* ---------------------------------------------------------------
+                 Per-service literal env (base URLs, feature flags, datasource URL).
+
+                 Rendered through `tpl` (gap T3-10) so a value may reference the release
+                 context — in practice `{{ .Release.Name }}`. This is not cosmetic: the
+                 Service object above is named `{{ .Release.Name }}-{{ $key }}`, so the
+                 in-cluster DNS name of every service carries the release prefix. Values
+                 used to hard-code bare hostnames (`http://config-registry:8080`), which
+                 resolve to NOTHING in any real release — every cross-service call in a
+                 Helm deployment failed DNS. Base URLs are now written
+                 `http://{{ .Release.Name }}-config-registry:8080` and this is what makes
+                 that work. Plain values are unaffected (tpl is a no-op without braces).
+                 ------------------------------------------------------------- */}}
             {{- range $k, $v := $svc.env }}
             - name: {{ $k }}
-              value: {{ $v | quote }}
+              value: {{ tpl (printf "%v" $v) $root | quote }}
             {{- end }}
           {{- if $svc.resources }}
           resources:

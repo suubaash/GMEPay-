@@ -78,7 +78,7 @@ class PartnerRegulatoryConfigControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new PartnerRegulatoryConfigController(regulatoryService))
+        mvc = com.gme.pay.registry.actor.TestActors.withActorResolution(standaloneSetup(new PartnerRegulatoryConfigController(regulatoryService)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
@@ -115,6 +115,8 @@ class PartnerRegulatoryConfigControllerTest {
         mvc.perform(patch("/v1/admin/partners/draft/{code}/step-8/regulatory", "reg_ctrl_001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .content(STEP8_BODY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.partnerId").isNumber())

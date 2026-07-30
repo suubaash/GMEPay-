@@ -70,6 +70,20 @@ public interface AuditLogRepository extends JpaRepository<AuditLogEntity, Long> 
             @Param("aggregateId") String aggregateId);
 
     /**
+     * Every distinct {@code (aggregate_type, aggregate_id)} pair in the table — the set of
+     * chains a full integrity sweep must walk ({@link AuditIntegrityService#verifyAll}).
+     *
+     * <p>Returns {@code Object[]{aggregateType, aggregateId}} rather than a projection
+     * interface because the pair is consumed immediately as loop keys; a DTO would add a type
+     * whose only method is "give me the two strings back".
+     */
+    @Query("""
+            select distinct a.aggregateType, a.aggregateId from AuditLogEntity a
+            order by a.aggregateType asc, a.aggregateId asc
+            """)
+    List<Object[]> findDistinctAggregates();
+
+    /**
      * Paginated read for the audit read endpoint, ordered {@code recorded_at DESC}
      * (newest first). The count query is a separate {@code countQuery} to avoid a
      * subselect scan on the JSONB/BLOB columns which are not needed for counting.

@@ -23,6 +23,12 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // AssertJ for the T5-1 actor-vocabulary + chain-version tests. Version comes from the
+    // spring-boot-dependencies platform already imported above (the same version every
+    // service gets via spring-boot-starter-test), so the assertion library does not drift
+    // between a lib test and a service test asserting the same behaviour.
+    testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    testImplementation 'org.assertj:assertj-core'
     // H2 in-memory DB for DbAuditPublisher slice tests (no Docker needed)
     testImplementation 'com.h2database:h2'
     // Spring JDBC needed at test compile time for JdbcTemplate usage

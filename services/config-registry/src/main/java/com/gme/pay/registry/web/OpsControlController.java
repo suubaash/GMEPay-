@@ -1,12 +1,12 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorIp;
 import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.OperationalStatusView;
 import com.gme.pay.registry.ops.OpsControlService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -35,7 +35,8 @@ import org.springframework.web.bind.annotation.RestController;
  * edge (config-registry itself carries no in-process RBAC — none exists in this
  * service). The operator identity arrives as the {@code X-Actor} header (same
  * convention as {@link PartnerLifecycleController}) and is recorded on every audit
- * row; {@code X-Forwarded-For} carries the client IP for the same row.
+ * row; the client IP on the same row is the transport peer address (see {@link AuditActorIp}) —
+ * NOT the client-supplied {@code X-Forwarded-For} it used to be.
  */
 @RestController
 @RequestMapping("/v1/ops")
@@ -56,14 +57,14 @@ public class OpsControlController {
     public OperationalStatusView pause(
             @RequestBody(required = false) PauseRequest body,
             @AuditActorHeader String actor,
-            @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
+            @AuditActorIp String ip) {
         return service.pause(body == null ? null : body.reason(), actor, ip);
     }
 
     @PostMapping("/resume")
     public OperationalStatusView resume(
             @AuditActorHeader String actor,
-            @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
+            @AuditActorIp String ip) {
         return service.resume(actor, ip);
     }
 
@@ -71,7 +72,7 @@ public class OpsControlController {
     public OperationalStatusView maintenance(
             @RequestBody MaintenanceRequest body,
             @AuditActorHeader String actor,
-            @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
+            @AuditActorIp String ip) {
         boolean on = body != null && body.on();
         String reason = body == null ? null : body.reason();
         return service.maintenance(on, reason, actor, ip);
@@ -81,7 +82,7 @@ public class OpsControlController {
     public OperationalStatusView suspend(
             @RequestBody SuspendRequest body,
             @AuditActorHeader String actor,
-            @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
+            @AuditActorIp String ip) {
         String type = body == null ? null : body.entityType();
         String id = body == null ? null : body.entityId();
         String reason = body == null ? null : body.reason();
@@ -92,7 +93,7 @@ public class OpsControlController {
     public OperationalStatusView unsuspend(
             @RequestBody SuspendRequest body,
             @AuditActorHeader String actor,
-            @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
+            @AuditActorIp String ip) {
         String type = body == null ? null : body.entityType();
         String id = body == null ? null : body.entityId();
         return service.unsuspend(type, id, actor, ip);

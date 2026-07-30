@@ -32,7 +32,8 @@ public class AuditActorArgumentResolver implements HandlerMethodArgumentResolver
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
-        return parameter.hasParameterAnnotation(AuditActorHeader.class);
+        return parameter.hasParameterAnnotation(AuditActorHeader.class)
+                || parameter.hasParameterAnnotation(AuditActorIp.class);
     }
 
     @Override
@@ -40,13 +41,15 @@ public class AuditActorArgumentResolver implements HandlerMethodArgumentResolver
                                   ModelAndViewContainer mavContainer,
                                   NativeWebRequest webRequest,
                                   WebDataBinderFactory binderFactory) {
+        boolean wantsIp = parameter.hasParameterAnnotation(AuditActorIp.class);
         if (!String.class.equals(parameter.getParameterType())) {
             throw new IllegalStateException(
-                    "@AuditActorHeader may only annotate a String parameter, found "
+                    "@" + (wantsIp ? "AuditActorIp" : "AuditActorHeader")
+                            + " may only annotate a String parameter, found "
                             + parameter.getParameterType() + " on "
                             + parameter.getMethod());
         }
         HttpServletRequest request = webRequest.getNativeRequest(HttpServletRequest.class);
-        return resolver.resolve(request);
+        return wantsIp ? resolver.resolveIp(request) : resolver.resolve(request);
     }
 }

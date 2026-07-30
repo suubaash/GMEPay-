@@ -53,6 +53,10 @@ secrets:
     # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
     # on a placeholder — generate with `openssl rand -hex 32` and inject it here.
     GME_AUTH_JWT_SIGNING_SECRET: REPLACE_WITH_AUTH_JWT_SIGNING_SECRET
+    GMEPAY_SCHEME_NEPAL_TOKEN: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NEPAL_KEY: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM: REPLACE_FROM_SECRET_STORE
 
 ingress:
   enabled: true

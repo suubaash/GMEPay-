@@ -42,11 +42,20 @@ import org.springframework.web.server.ResponseStatusException;
 @org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase(
         replace = org.springframework.boot.test.autoconfigure.jdbc
                 .AutoConfigureTestDatabase.Replace.NONE)
-@Import(ApiKeyIssuanceService.class)
+@Import({ApiKeyIssuanceService.class, com.gme.pay.auth.testsupport.RecordingAuditTrail.class})
 class ApiKeyIssuanceServiceTest {
 
     @Autowired
     private ApiKeyIssuanceService service;
+
+    /**
+     * T5-1: issue/rotate/revoke now write audit rows. Imported as a recording fake so this slice
+     * still needs nothing but the JPA layer; the emitted-event contract is asserted in the
+     * "credential lifecycle is audited" tests at the bottom of this class, and the DB-backed
+     * hash-chained path in {@code AuthAuditTrailDbTest}.
+     */
+    @Autowired
+    private com.gme.pay.auth.testsupport.RecordingAuditTrail audit;
 
     @Autowired
     private ApiKeyRepository apiKeyRepository;
@@ -293,6 +302,93 @@ class ApiKeyIssuanceServiceTest {
         assertThatThrownBy(() -> service.listByPartnerAndEnvironment(42L, "STAGING"))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // ── T5-1: credential lifecycle is audited, and the audit never carries the secret ──────
+
+    @Test
+    void issue_writesAuditRow_keyedByPublicKeyId_withoutAnyTraceOfTheSecret() {
+        IssueKeyResponse response = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+
+        var entry = audit.only(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_ISSUED);
+        assertThat(entry.aggregateType())
+                .isEqualTo(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY);
+        // Chain key = the PUBLIC key id, so this credential's whole lifecycle is one chain.
+        assertThat(entry.aggregateId()).isEqualTo(response.keyId());
+        assertThat(entry.aggregateId().length())
+                .isLessThanOrEqualTo(com.gme.pay.auth.audit.AuthAuditEvents.MAX_AGGREGATE_ID_LEN);
+        // Issuance is a creation: no prior state, and it rides the caller's transaction.
+        assertThat(entry.beforeJson()).isNull();
+        assertThat(entry.rejection()).isFalse();
+        assertThat(entry.afterJson())
+                .contains("\"partnerCode\":\"GMEREMIT\"")
+                .contains("\"environment\":\"SANDBOX\"")
+                .contains("\"status\":\"ACTIVE\"");
+
+        // The one assertion this test exists for: the plaintext secret was in scope at the call
+        // site and reached no audit payload — not raw, not prefixed, not fingerprinted.
+        audit.assertNeverRecorded(response.secretPlaintext());
+        assertThat(entry.mentions("sk_test_" + response.secretPlaintext().substring(8, 20)))
+                .isFalse();
+    }
+
+    @Test
+    void revoke_writesAuditRow_withBeforeAndAfterStatus() {
+        IssueKeyResponse response = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        service.revoke(response.keyId());
+
+        var entry = audit.only(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_REVOKED);
+        assertThat(entry.aggregateId()).isEqualTo(response.keyId());
+        assertThat(entry.beforeJson()).contains("\"status\":\"ACTIVE\"");
+        assertThat(entry.afterJson())
+                .contains("\"status\":\"REVOKED\"")
+                .contains("\"reason\":\"OPERATOR_REQUEST\"");
+        audit.assertNeverRecorded(response.secretPlaintext());
+    }
+
+    @Test
+    void revoke_idempotentNoOp_writesNoSecondAuditRow() {
+        IssueKeyResponse response = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        service.revoke(response.keyId());
+        // Re-revoking, and revoking a key that never existed, are not state changes — the chain
+        // must not accumulate rows for events that did not happen.
+        service.revoke(response.keyId());
+        service.revoke("pk_test_doesNotExist");
+
+        assertThat(audit.ofType(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_REVOKED))
+                .hasSize(1);
+    }
+
+    @Test
+    void rotate_auditsBothKeyLifecyclesPlusTheRotationItself() {
+        IssueKeyResponse first = service.issue(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+        audit.clear();
+
+        IssueKeyResponse rotated = service.rotate(
+                request("GMEREMIT", "SANDBOX", "API", "pk_test_", "sk_test_", null));
+
+        // The old key died...
+        var revoked = audit.only(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_REVOKED);
+        assertThat(revoked.aggregateId()).isEqualTo(first.keyId());
+        assertThat(revoked.afterJson()).contains("\"reason\":\"ROTATION\"");
+        // ...the new key was born...
+        assertThat(audit.only(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_ISSUED).aggregateId())
+                .isEqualTo(rotated.keyId());
+        // ...and one row on the PRINCIPAL's chain says the two were the same act.
+        var rotation = audit.only(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_ROTATED);
+        assertThat(rotation.aggregateType())
+                .isEqualTo(com.gme.pay.auth.audit.AuthAuditEvents.API_KEY_PRINCIPAL);
+        assertThat(rotation.aggregateId()).isEqualTo("partner:GMEREMIT:SANDBOX");
+        assertThat(rotation.afterJson())
+                .contains("\"revokedCount\":1")
+                .contains(first.keyId())
+                .contains(rotated.keyId());
+
+        audit.assertNeverRecorded(first.secretPlaintext(), rotated.secretPlaintext());
     }
 
     private void assertBadRequest(IssueKeyRequest request) {

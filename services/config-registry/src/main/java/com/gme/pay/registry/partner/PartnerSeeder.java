@@ -26,6 +26,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class PartnerSeeder implements CommandLineRunner {
 
+    /**
+     * Audit principal for the seeded partners (gap T5-1). A seeder has no HTTP request and no
+     * human operator, so it names itself: the audit row says which part of the platform created
+     * the row, instead of the bare {@code "system"} literal that used to mean both "the platform"
+     * and "nobody told me".
+     */
+    private static final String SEED_ACTOR = com.gme.pay.audit.AuditActors.system("partner-seeder");
+
     private final PartnerRepository repository;
     private final PartnerStore store;
 
@@ -39,7 +47,7 @@ public class PartnerSeeder implements CommandLineRunner {
         if (repository.count() > 0) {
             return;
         }
-        store.save(Partner.of("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP));
-        store.save(Partner.of("SENDMN", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN));
+        store.save(Partner.of("GMEREMIT", PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP), SEED_ACTOR);
+        store.save(Partner.of("SENDMN", PartnerType.OVERSEAS, "USD", RoundingMode.DOWN), SEED_ACTOR);
     }
 }

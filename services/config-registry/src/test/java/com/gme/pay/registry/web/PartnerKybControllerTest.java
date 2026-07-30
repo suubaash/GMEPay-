@@ -80,7 +80,7 @@ class PartnerKybControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new PartnerKybController(kybService))
+        mvc = com.gme.pay.registry.actor.TestActors.withActorResolution(standaloneSetup(new PartnerKybController(kybService)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
     }
@@ -153,7 +153,9 @@ class PartnerKybControllerTest {
                 .andExpect(status().isOk());
 
         mvc.perform(post("/v1/partners/{code}/kyb/screen", "kyb_ctrl_003")
-                        .header("X-Actor", "checker_lee"))
+                        .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.screeningStatus").value("HIT"))
                 .andExpect(jsonPath("$.screeningProviderRef")

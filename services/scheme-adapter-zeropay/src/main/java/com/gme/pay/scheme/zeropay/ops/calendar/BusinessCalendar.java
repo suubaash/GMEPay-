@@ -72,6 +72,13 @@ public class BusinessCalendar {
     private final LocalDate verifiedThrough;
     private final boolean failClosed;
 
+    /**
+     * Spring-injected constructor. {@code @Autowired} is REQUIRED here: this class has two constructors, and
+     * a {@code @Component} with more than one gives Spring no way to choose — it falls back to looking for a
+     * no-arg constructor and fails the whole context with "No default constructor found". Same convention as
+     * the repo's other two-constructor components (see the Rest*Client adapters).
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public BusinessCalendar(
             @Value("${gmepay.calendar.non-business-dates:}") List<String> nonBusinessDates,
             @Value("${gmepay.calendar.non-business-days-of-week:}") List<String> nonBusinessDaysOfWeek,

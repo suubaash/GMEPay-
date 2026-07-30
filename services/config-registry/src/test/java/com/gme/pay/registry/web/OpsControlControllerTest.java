@@ -50,7 +50,8 @@ class OpsControlControllerTest {
     }
 
     private MockMvc mvc() {
-        return standaloneSetup(new OpsControlController(service)).build();
+        return com.gme.pay.registry.actor.TestActors.withActorResolution(
+                standaloneSetup(new OpsControlController(service))).build();
     }
 
     @Test
@@ -69,6 +70,8 @@ class OpsControlControllerTest {
         MockMvc mvc = mvc();
         mvc.perform(post("/v1/ops/pause")
                         .header("X-Actor", "bob")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"incident\"}"))
                 .andExpect(status().isOk())
@@ -84,6 +87,8 @@ class OpsControlControllerTest {
     void suspendBucket() throws Exception {
         mvc().perform(post("/v1/ops/suspend")
                         .header("X-Actor", "bob")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"entityType\":\"PARTNER\",\"entityId\":\"ACME\",\"reason\":\"fraud\"}"))
                 .andExpect(status().isOk())

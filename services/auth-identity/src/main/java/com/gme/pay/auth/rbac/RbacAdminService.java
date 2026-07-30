@@ -1,5 +1,8 @@
 package com.gme.pay.auth.rbac;
 
+import com.gme.pay.auth.audit.AuditPayload;
+import com.gme.pay.auth.audit.AuthAuditEvents;
+import com.gme.pay.auth.audit.AuthAuditTrail;
 import com.gme.pay.auth.persistence.PermissionConstraintEntity;
 import com.gme.pay.auth.persistence.PermissionConstraintRepository;
 import com.gme.pay.auth.persistence.PermissionEntity;
@@ -44,6 +47,42 @@ import org.springframework.web.server.ResponseStatusException;
  * {@link RbacResolutionService} cache so the next token mint sees it immediately (zero-downtime).
  * A grant/revoke for one principal evicts just them; role-graph or constraint edits affect many
  * principals, so they evict all.
+ *
+ * <h2>Audit (gap T5-1 / CISO §9)</h2>
+ *
+ * <p>This class edits the platform's authority matrix, and until now it did so <b>silently</b>.
+ * Granting the {@code "*"} super-permission — the same grant that lets its holder break-glass
+ * past every approval step in {@code ApprovalWorkflowService} — produced no audit row, no event,
+ * not a log line. "Who gave whom what authority, and when" was simply not answerable, which is
+ * the single finding in the CISO audit with the widest blast radius: every other control in the
+ * platform is enforced against permissions granted here.
+ *
+ * <p>Every mutating method now writes one hash-chained {@code audit_log} row with a
+ * before/after snapshot, on the same transaction as the change. The chain keys are chosen so the
+ * two questions an investigator actually asks are each one chain read:
+ *
+ * <ul>
+ *   <li><b>"What authority does this role carry, and who put it there?"</b> →
+ *       {@link AuthAuditEvents#ROLE}, keyed by role code. Creation and every subsequent
+ *       grant/revoke on that role are one ordered chain, and each grant row's before/after
+ *       carries the role's full permission-code set, so the diff is visible without replaying
+ *       the whole history.</li>
+ *   <li><b>"What authority has this operator ever held?"</b> →
+ *       {@link AuthAuditEvents#PRINCIPAL}, keyed by {@code principal:<id>}. Assignments and
+ *       revocations, including the validity window of a time-boxed grant.</li>
+ * </ul>
+ *
+ * <h2>{@code granted_by} is no longer taken from the request body</h2>
+ *
+ * <p>{@link #assignRole} used to store {@code AssignRoleRequest.grantedBy()} — a caller-supplied
+ * string — into {@code user_roles.granted_by}, defaulting to the literal {@code "system"} when
+ * absent. Both halves of that were wrong in the same way as the {@code X-Actor} header T5-1 is
+ * about: the value was unauthenticated input, so any caller could name any granter, and the
+ * default named a platform actor for what was really "nobody told us". It now stores the
+ * <i>resolved</i> actor ({@link AuthAuditTrail#currentActor()}), which is an attested principal
+ * only when the caller proved itself, and is otherwise an explicit {@code unverified:…} /
+ * {@code unattributed} value. The body's claim is not discarded — it is recorded in the audit
+ * payload as {@code grantedByClaim}, where it is visibly a claim.
  */
 @Service
 public class RbacAdminService {
@@ -55,11 +94,12 @@ public class RbacAdminService {
     private final PermissionConstraintRepository constraints;
     private final PrincipalRepository principals;
     private final RbacResolutionService resolution;
+    private final AuthAuditTrail audit;
 
     public RbacAdminService(PermissionRepository permissions, RoleRepository roles,
                             RolePermissionRepository rolePermissions, UserRoleRepository userRoles,
                             PermissionConstraintRepository constraints, PrincipalRepository principals,
-                            RbacResolutionService resolution) {
+                            RbacResolutionService resolution, AuthAuditTrail audit) {
         this.permissions = permissions;
         this.roles = roles;
         this.rolePermissions = rolePermissions;
@@ -67,6 +107,7 @@ public class RbacAdminService {
         this.constraints = constraints;
         this.principals = principals;
         this.resolution = resolution;
+        this.audit = audit;
     }
 
     // ------------------------------------------------------------------ permissions
@@ -87,6 +128,15 @@ public class RbacAdminService {
         PermissionEntity saved = permissions.save(new PermissionEntity(
                 code, req.resource().trim(), req.action().trim(), req.description(),
                 req.tenantId(), Instant.now()));
+        audit.record(AuthAuditEvents.PERMISSION, code, AuthAuditEvents.PERMISSION_CREATED, null,
+                AuditPayload.of()
+                        .put("permissionId", saved.getId())
+                        .put("code", code)
+                        .put("resource", saved.getResource())
+                        .put("action", saved.getAction())
+                        .put("description", saved.getDescription())
+                        .put("tenantId", saved.getTenantId())
+                        .json());
         return toView(saved);
     }
 
@@ -125,6 +175,7 @@ public class RbacAdminService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "role already exists: " + code);
         });
         RoleEntity role = roles.save(new RoleEntity(code, req.description(), Instant.now()));
+        Set<String> granted = new TreeSet<>();
         if (req.permissionCodes() != null) {
             for (String permCode : req.permissionCodes()) {
                 if (permCode == null || permCode.isBlank()) {
@@ -134,9 +185,20 @@ public class RbacAdminService {
                         new ResponseStatusException(HttpStatus.BAD_REQUEST, "permission not found: " + permCode))
                         .getId();
                 rolePermissions.save(new RolePermissionEntity(role.getId(), permId, null));
+                granted.add(permCode.trim());
             }
         }
         resolution.evictAll();
+        // The initial permission set is part of THIS row rather than a series of separate grant
+        // rows: a role created already holding "*" is one act by one actor, and splitting it
+        // would let the creation and the grant be attributed differently.
+        audit.record(AuthAuditEvents.ROLE, code, AuthAuditEvents.ROLE_CREATED, null,
+                AuditPayload.of()
+                        .put("roleId", role.getId())
+                        .put("code", code)
+                        .put("description", role.getDescription())
+                        .putAll("permissions", granted)
+                        .json());
         return roleView(role);
     }
 
@@ -157,8 +219,22 @@ public class RbacAdminService {
                 () -> new ResponseStatusException(HttpStatus.NOT_FOUND, "role not found: " + roleId));
         Long permId = resolvePermissionId(req.permissionId(), req.permissionCode());
         if (rolePermissions.findById(new RolePermissionId(roleId, permId)).isEmpty()) {
+            Set<String> before = permissionCodesOf(roleId);
             rolePermissions.save(new RolePermissionEntity(roleId, permId, req.tenantId()));
             resolution.evictAll(); // role-graph edit affects every holder of this role
+            // THE row this gap was about: "who granted `*` to whom, when". The permission code is
+            // resolved (not just its surrogate id) so the row is readable without a join against a
+            // catalogue that may itself have changed since.
+            audit.record(AuthAuditEvents.ROLE, role.getCode(), AuthAuditEvents.PERMISSION_GRANTED,
+                    AuditPayload.of().putAll("permissions", before).json(),
+                    AuditPayload.of()
+                            .put("roleId", roleId)
+                            .put("roleCode", role.getCode())
+                            .put("permissionId", permId)
+                            .put("permissionCode", permissionCode(permId))
+                            .put("tenantId", req.tenantId())
+                            .putAll("permissions", permissionCodesOf(roleId))
+                            .json());
         }
         return roleView(role);
     }
@@ -167,8 +243,20 @@ public class RbacAdminService {
     public void revokePermission(Long roleId, Long permissionId) {
         RolePermissionId id = new RolePermissionId(roleId, permissionId);
         if (rolePermissions.findById(id).isPresent()) {
+            Set<String> before = permissionCodesOf(roleId);
+            String roleCode = roles.findById(roleId).map(RoleEntity::getCode)
+                    .orElse("#" + roleId);
             rolePermissions.deleteById(id);
             resolution.evictAll();
+            audit.record(AuthAuditEvents.ROLE, roleCode, AuthAuditEvents.PERMISSION_REVOKED,
+                    AuditPayload.of().putAll("permissions", before).json(),
+                    AuditPayload.of()
+                            .put("roleId", roleId)
+                            .put("roleCode", roleCode)
+                            .put("permissionId", permissionId)
+                            .put("permissionCode", permissionCode(permissionId))
+                            .putAll("permissions", permissionCodesOf(roleId))
+                            .json());
         }
     }
 
@@ -193,12 +281,34 @@ public class RbacAdminService {
         if (req.validTo() != null && !req.validTo().isAfter(validFrom)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "validTo must be after validFrom");
         }
-        String grantedBy = req.grantedBy() != null && !req.grantedBy().isBlank()
-                ? req.grantedBy().trim() : "system";
+        // T5-1: granted_by is the RESOLVED actor, never the request body's claim. See the class
+        // javadoc — the body field was unauthenticated input and its absence produced the literal
+        // "system", so the column could name any granter or a platform actor that did not act.
+        // AuditActors guarantees this value is non-blank and is never the bare "system" literal.
+        String grantedBy = audit.currentActor();
+        String claimedGrantedBy = req.grantedBy() != null && !req.grantedBy().isBlank()
+                ? req.grantedBy().trim() : null;
         UserRoleEntity saved = userRoles.save(new UserRoleEntity(
                 principalId, roleId, req.tenantId(), validFrom, req.validTo(), grantedBy, Instant.now()));
         resolution.evict(principalId);
         String roleCode = roles.findById(roleId).map(RoleEntity::getCode).orElse(null);
+        audit.record(AuthAuditEvents.PRINCIPAL, AuthAuditEvents.principalAggregate(principalId),
+                AuthAuditEvents.ROLE_ASSIGNED, null,
+                AuditPayload.of()
+                        .put("userRoleId", saved.getId())
+                        .put("principalId", principalId)
+                        .put("roleId", roleId)
+                        .put("roleCode", roleCode)
+                        .put("tenantId", req.tenantId())
+                        .put("validFrom", validFrom)
+                        .put("validTo", req.validTo())
+                        // Time-boxed vs permanent is the least-privilege question about a grant,
+                        // so it is stated rather than left to be inferred from validTo.
+                        .put("temporary", req.validTo() != null)
+                        .put("grantedBy", grantedBy)
+                        // Kept for forensics, named so it reads as a claim and not as a granter.
+                        .put("grantedByClaim", claimedGrantedBy)
+                        .json());
         return toView(saved, roleCode, Instant.now());
     }
 
@@ -211,9 +321,27 @@ public class RbacAdminService {
                     "assignment " + userRoleId + " does not belong to principal " + principalId);
         }
         if (ur.getRevokedAt() == null) {
+            String roleCode = roles.findById(ur.getRoleId()).map(RoleEntity::getCode).orElse(null);
+            String before = AuditPayload.of()
+                    .put("userRoleId", userRoleId)
+                    .put("roleId", ur.getRoleId())
+                    .put("roleCode", roleCode)
+                    .put("validFrom", ur.getValidFrom())
+                    .put("validTo", ur.getValidTo())
+                    .put("grantedBy", ur.getGrantedBy())
+                    .json();
             ur.revoke(Instant.now());
             userRoles.save(ur);
             resolution.evict(principalId);
+            audit.record(AuthAuditEvents.PRINCIPAL, AuthAuditEvents.principalAggregate(principalId),
+                    AuthAuditEvents.ROLE_UNASSIGNED, before,
+                    AuditPayload.of()
+                            .put("userRoleId", userRoleId)
+                            .put("principalId", principalId)
+                            .put("roleId", ur.getRoleId())
+                            .put("roleCode", roleCode)
+                            .put("revokedAt", ur.getRevokedAt())
+                            .json());
         }
     }
 
@@ -236,6 +364,22 @@ public class RbacAdminService {
         PermissionConstraintEntity saved = constraints.save(new PermissionConstraintEntity(
                 scope, req.scopeId(), type.name(), config, req.tenantId(), true, Instant.now()));
         resolution.evictAll(); // a new constraint narrows access for everyone in scope
+        // configJson IS recorded: a constraint's config is the control itself (the amount ceiling,
+        // the permitted hours, the allowed countries), so a row without it would say a constraint
+        // was attached without saying what it permits. It is operator-authored policy, not
+        // credential material.
+        audit.record(AuthAuditEvents.CONSTRAINT,
+                AuthAuditEvents.scopeAggregate(scope.name(), req.scopeId()),
+                AuthAuditEvents.CONSTRAINT_CREATED, null,
+                AuditPayload.of()
+                        .put("constraintId", saved.getId())
+                        .put("scopeType", scope.name())
+                        .put("scopeId", req.scopeId())
+                        .put("constraintType", type.name())
+                        .put("configJson", config)
+                        .put("tenantId", req.tenantId())
+                        .put("active", true)
+                        .json());
         return toView(saved);
     }
 
@@ -247,6 +391,25 @@ public class RbacAdminService {
             c.deactivate();
             constraints.save(c);
             resolution.evictAll();
+            // Deactivating a constraint WIDENS access for everyone in scope, so it is as much a
+            // privilege change as a grant is — and it is a soft delete, so without this row the
+            // only trace is a flag whose flip has no timestamp and no actor.
+            audit.record(AuthAuditEvents.CONSTRAINT,
+                    AuthAuditEvents.scopeAggregate(c.getScopeType(), c.getScopeId()),
+                    AuthAuditEvents.CONSTRAINT_DEACTIVATED,
+                    AuditPayload.of()
+                            .put("constraintId", id)
+                            .put("constraintType", c.getConstraintType())
+                            .put("configJson", c.getConfigJson())
+                            .put("active", true)
+                            .json(),
+                    AuditPayload.of()
+                            .put("constraintId", id)
+                            .put("scopeType", c.getScopeType())
+                            .put("scopeId", c.getScopeId())
+                            .put("constraintType", c.getConstraintType())
+                            .put("active", false)
+                            .json());
         }
     }
 
@@ -276,6 +439,31 @@ public class RbacAdminService {
                     new ResponseStatusException(HttpStatus.NOT_FOUND, "role not found: " + code)).getId();
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "roleId or roleCode required");
+    }
+
+    /**
+     * The role's current permission CODES, sorted. Used for the before/after snapshot on a
+     * grant/revoke row: codes rather than surrogate ids so the row stays readable after a
+     * catalogue change, sorted so two logically identical states produce identical payload bytes
+     * (which matter — they are inside the chain digest).
+     */
+    private Set<String> permissionCodesOf(Long roleId) {
+        Map<Long, String> permCodeById = new HashMap<>();
+        permissions.findAll().forEach(p -> permCodeById.put(p.getId(), p.getCode()));
+        Set<String> codes = new TreeSet<>();
+        for (RolePermissionEntity rp : rolePermissions.findByRoleId(roleId)) {
+            codes.add(permCodeById.getOrDefault(rp.getPermissionId(), "#" + rp.getPermissionId()));
+        }
+        return codes;
+    }
+
+    /** A permission's code by surrogate id, or {@code #id} when the catalogue row is gone. */
+    private String permissionCode(Long permissionId) {
+        if (permissionId == null) {
+            return null;
+        }
+        return permissions.findById(permissionId).map(PermissionEntity::getCode)
+                .orElse("#" + permissionId);
     }
 
     private RoleView roleView(RoleEntity role) {

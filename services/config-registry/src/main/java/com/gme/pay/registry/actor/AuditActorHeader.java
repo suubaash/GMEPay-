@@ -1,6 +1,5 @@
 package com.gme.pay.registry.actor;
 
-import com.gme.pay.audit.AuditActors;
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

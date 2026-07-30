@@ -50,7 +50,9 @@ class PlatformSettingControllerTest {
     }
 
     private MockMvc mvc() {
-        return standaloneSetup(new PlatformSettingController(service)).build();
+        return com.gme.pay.registry.actor.TestActors
+                .withActorResolution(standaloneSetup(new PlatformSettingController(service)))
+                .build();
     }
 
     @Test
@@ -85,6 +87,8 @@ class PlatformSettingControllerTest {
     void putUpsert() throws Exception {
         mvc().perform(put("/v1/admin/settings/prefunding.alert.tier1.pct")
                         .header("X-Actor", "alice")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"value\":\"90\"}"))
                 .andExpect(status().isOk())

@@ -1,5 +1,8 @@
 package com.gme.pay.auth.service;
 
+import com.gme.pay.auth.audit.AuditPayload;
+import com.gme.pay.auth.audit.AuthAuditEvents;
+import com.gme.pay.auth.audit.AuthAuditTrail;
 import com.gme.pay.auth.dto.CredentialLookupResponse;
 import com.gme.pay.auth.dto.IssueKeyRequest;
 import com.gme.pay.auth.dto.IssueKeyResponse;
@@ -11,6 +14,7 @@ import com.gme.pay.auth.persistence.PrincipalRepository;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -49,6 +53,26 @@ import org.springframework.web.server.ResponseStatusException;
  * {@code partner:{code}:{environment}} — so sandbox and production material
  * live under distinct principals and a production lock-out never strands the
  * sandbox integration.
+ *
+ * <h2>Audit (gap T5-1 / CISO §9)</h2>
+ *
+ * <p>Every credential-lifecycle transition now writes an {@code audit_log} row on the ADR-007
+ * hash chain: {@link AuthAuditEvents#API_KEY_ISSUED},
+ * {@link AuthAuditEvents#API_KEY_REVOKED} and {@link AuthAuditEvents#API_KEY_ROTATED}. Before
+ * this, partner machine credentials appeared and disappeared with no record of who minted or
+ * killed them — a self-issued production key was indistinguishable from a legitimate one, after
+ * the fact.
+ *
+ * <p>The rows go through {@link AuthAuditTrail#record}, i.e. on the SAME transaction as the
+ * {@code api_keys} write. That is the correct coupling here (and the opposite of the rejection
+ * path elsewhere): an {@code API_KEY_ISSUED} row that committed while the key insert rolled back
+ * would assert that a credential exists which does not, and the reverse would hide a live one.
+ *
+ * <p><b>The secret is never recorded.</b> Each row carries the key's PUBLIC identifier
+ * ({@code api_keys.api_key}, which is also the chain key), its display prefix, and the requested
+ * prefixes — deliberately not the one-time plaintext, and not a hash of it either. The whole
+ * design of this class is that the plaintext exists in memory once and is then unrecoverable;
+ * writing any function of it into an append-only, exported table would undo that.
  */
 @Service
 public class ApiKeyIssuanceService {
@@ -73,11 +97,14 @@ public class ApiKeyIssuanceService {
 
     private final ApiKeyRepository apiKeyRepository;
     private final PrincipalRepository principalRepository;
+    private final AuthAuditTrail audit;
 
     public ApiKeyIssuanceService(ApiKeyRepository apiKeyRepository,
-                                 PrincipalRepository principalRepository) {
+                                 PrincipalRepository principalRepository,
+                                 AuthAuditTrail audit) {
         this.apiKeyRepository = apiKeyRepository;
         this.principalRepository = principalRepository;
+        this.audit = audit;
     }
 
     /**
@@ -104,6 +131,27 @@ public class ApiKeyIssuanceService {
         // here rather than at commit.
         apiKeyRepository.saveAndFlush(
                 ApiKeyEntity.issue(principal, keyId, secret, now, expiresAt));
+
+        // Same transaction as the api_keys row: an audit row claiming a credential exists must
+        // not be able to commit without the credential (nor the credential without the row).
+        // Note what is absent — `secret` is in scope here and is deliberately not recorded in
+        // any form, not even fingerprinted.
+        audit.record(AuthAuditEvents.API_KEY, keyId, AuthAuditEvents.API_KEY_ISSUED, null,
+                AuditPayload.of()
+                        .put("keyId", keyId)
+                        .put("keyDisplayPrefix", displayPrefix(keyId))
+                        .put("partnerId", request.partnerId())
+                        .put("partnerCode", request.partnerCode())
+                        .put("environment", request.environment())
+                        .put("purpose", request.purpose())
+                        .put("keyPrefix", request.keyPrefix())
+                        .put("secretPrefix", request.secretPrefix())
+                        .put("principalUsername", principal.getUsername())
+                        .put("principalId", principal.getId())
+                        .put("status", ApiKeyEntity.Status.ACTIVE.name())
+                        .put("createdAt", now)
+                        .put("expiresAt", expiresAt)
+                        .json());
 
         return new IssueKeyResponse(
                 keyId, secret, displayPrefix(keyId), request.environment(), now, expiresAt);
@@ -163,6 +211,12 @@ public class ApiKeyIssuanceService {
      * Revoke a credential by its public key identifier. Idempotent: unknown
      * or already-revoked keys are a no-op (the registry-side rotation flow
      * may retry).
+     *
+     * <p>The no-op cases write no audit row, by design: an idempotent retry of a revocation is
+     * not a state change, and emitting a row per retry would inflate the chain with events that
+     * did not happen. The consequence — a revoke call naming a key that does not exist leaves no
+     * trace — is accepted here because this surface is already behind the internal-auth gate and
+     * a probe of it changes nothing.
      */
     @Transactional
     public void revoke(String keyId) {
@@ -171,8 +225,7 @@ public class ApiKeyIssuanceService {
             return;
         }
         ApiKeyEntity entity = key.get();
-        entity.revoke(Instant.now().truncatedTo(ChronoUnit.MICROS));
-        apiKeyRepository.saveAndFlush(entity);
+        revokeAndAudit(entity, Instant.now().truncatedTo(ChronoUnit.MICROS), "OPERATOR_REQUEST");
     }
 
     /**
@@ -190,17 +243,61 @@ public class ApiKeyIssuanceService {
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
         String username = "partner:" + request.partnerCode() + ":" + request.environment();
+        List<String> revoked = new ArrayList<>();
         principalRepository.findByUsername(username).ifPresent(principal -> {
             List<ApiKeyEntity> existing = apiKeyRepository.findByPrincipalId(principal.getId());
             for (ApiKeyEntity key : existing) {
                 if (key.getStatus() == ApiKeyEntity.Status.ACTIVE) {
-                    key.revoke(now);
-                    apiKeyRepository.saveAndFlush(key);
+                    revokeAndAudit(key, now, "ROTATION");
+                    revoked.add(key.getApiKey());
                 }
             }
         });
 
-        return issue(request);
+        IssueKeyResponse issued = issue(request);
+
+        // A third row, on the PRINCIPAL's chain rather than on either key's. The per-key rows
+        // above already say "this key died" and "that key was born"; only this one says they were
+        // the same act, which is the question asked after an incident ("was the compromised key
+        // rotated, and what replaced it?").
+        audit.record(AuthAuditEvents.API_KEY_PRINCIPAL, username,
+                AuthAuditEvents.API_KEY_ROTATED, null,
+                AuditPayload.of()
+                        .put("partnerId", request.partnerId())
+                        .put("partnerCode", request.partnerCode())
+                        .put("environment", request.environment())
+                        .put("purpose", request.purpose())
+                        .put("principalUsername", username)
+                        .putAll("revokedKeyIds", revoked)
+                        .put("revokedCount", revoked.size())
+                        .put("newKeyId", issued.keyId())
+                        .put("rotatedBy", audit.currentActor())
+                        .put("rotatedAt", now)
+                        .json());
+        return issued;
+    }
+
+    /**
+     * Flip a key to REVOKED and record it, in one place so the state change and its audit row
+     * cannot drift apart (the rotation path and the operator path previously duplicated the
+     * revoke and would have duplicated the auditing too).
+     */
+    private void revokeAndAudit(ApiKeyEntity entity, Instant when, String reason) {
+        String before = AuditPayload.of()
+                .put("keyId", entity.getApiKey())
+                .put("status", entity.getStatus() == null ? null : entity.getStatus().name())
+                .put("expiresAt", entity.getExpiresAt())
+                .json();
+        entity.revoke(when);
+        apiKeyRepository.saveAndFlush(entity);
+        audit.record(AuthAuditEvents.API_KEY, entity.getApiKey(),
+                AuthAuditEvents.API_KEY_REVOKED, before,
+                AuditPayload.of()
+                        .put("keyId", entity.getApiKey())
+                        .put("status", ApiKeyEntity.Status.REVOKED.name())
+                        .put("revokedAt", entity.getRevokedAt())
+                        .put("reason", reason)
+                        .json());
     }
 
     /**

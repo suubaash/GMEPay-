@@ -94,6 +94,9 @@ public class AuditActorResolver {
      */
     static final String ATTRIBUTE = AuditActorResolver.class.getName() + ".actor";
 
+    /** Companion attribute for the resolved client IP. */
+    static final String IP_ATTRIBUTE = AuditActorResolver.class.getName() + ".actorIp";
+
     /**
      * Actor recorded when a trusted service authenticated but forwarded no human principal.
      * Named for the role, not for a specific service, because the shared internal secret
@@ -188,6 +191,18 @@ public class AuditActorResolver {
         if (request == null) {
             return null;
         }
+        Object cached = request.getAttribute(IP_ATTRIBUTE);
+        if (cached instanceof String s) {
+            return s;
+        }
+        String ip = computeIp(request);
+        if (ip != null) {
+            request.setAttribute(IP_ATTRIBUTE, ip);
+        }
+        return ip;
+    }
+
+    private String computeIp(HttpServletRequest request) {
         if (trustForwardedIp && callerIsTrustedService(request)) {
             String forwarded = trimToNull(request.getHeader("X-Forwarded-For"));
             if (forwarded != null) {
@@ -199,6 +214,49 @@ public class AuditActorResolver {
             }
         }
         return clampIp(request.getRemoteAddr());
+    }
+
+    /**
+     * The actor resolved for the request currently being served, for write paths that are too
+     * deep to thread a parameter through — {@code PartnerStore.save} is the motivating case: it
+     * takes no actor argument and used to hard-code {@code return "system";} in a method whose
+     * own javadoc admitted it was a placeholder for "Slice 1B.4 wires Keycloak".
+     *
+     * <p>Reads the attribute that {@link ActorAttestationFilter} sets once per request, so the
+     * answer here is byte-identical to what an {@link AuditActorHeader} parameter on the same
+     * request would receive — there is exactly one resolution per request and no second opinion.
+     *
+     * <p>Returns {@code AuditActors.UNATTRIBUTED} when there is no request in scope (a scheduler,
+     * a seeder, a startup runner). Such callers should pass their own
+     * {@code AuditActors.system("<component>")} instead of relying on this — a background job
+     * recorded as {@code unattributed} is accurate but useless, and naming the component is one
+     * line of work.
+     */
+    public static String currentRequestActor() {
+        HttpServletRequest request = currentRequest();
+        if (request == null) {
+            return AuditActors.UNATTRIBUTED;
+        }
+        Object actor = request.getAttribute(ATTRIBUTE);
+        return actor instanceof String s ? s : AuditActors.UNATTRIBUTED;
+    }
+
+    /** Companion to {@link #currentRequestActor()} for the client IP; {@code null} off-request. */
+    public static String currentRequestIp() {
+        HttpServletRequest request = currentRequest();
+        if (request == null) {
+            return null;
+        }
+        Object ip = request.getAttribute(IP_ATTRIBUTE);
+        return ip instanceof String s ? s : null;
+    }
+
+    private static HttpServletRequest currentRequest() {
+        var attrs = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof org.springframework.web.context.request.ServletRequestAttributes sra) {
+            return sra.getRequest();
+        }
+        return null;
     }
 
     /** Constant-time comparison of the presented internal token against the configured secret. */

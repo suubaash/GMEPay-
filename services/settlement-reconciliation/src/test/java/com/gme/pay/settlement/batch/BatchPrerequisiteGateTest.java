@@ -39,7 +39,8 @@ class BatchPrerequisiteGateTest {
 
     private SettlementBatchJobService job() {
         return new SettlementBatchJobService(txnPort, partnerPort, booking, factory, batchRepo,
-                lineRepo, outbox, new FixtureRefundedTransactionAdapter(), registrationPort, "", "");
+                lineRepo, outbox, new FixtureRefundedTransactionAdapter(), registrationPort,
+                com.gme.pay.settlement.calendar.BusinessCalendar.empty(), "", "");
     }
 
     @Test
