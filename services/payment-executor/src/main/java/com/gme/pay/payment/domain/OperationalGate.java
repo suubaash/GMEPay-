@@ -1,6 +1,7 @@
 package com.gme.pay.payment.domain;
 
 import com.gme.pay.contracts.OperationalStatusView;
+import com.gme.pay.kyb.PaymentScreeningSubject;
 import com.gme.pay.payment.domain.client.OperationalStatusClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +39,14 @@ import java.util.Locale;
  *
  * <p>Order is deliberate: the operator's kill switch is evaluated FIRST. A paused platform should say
  * "paused", not "that rail is closed", and an operator hold outranks a schedule.
+ *
+ * <h2>T5-3: sanctions/PEP screening joins the same method, for the same reason</h2>
+ * A third kind of "may this payment proceed" now composes in here: the counterparty screening seam
+ * ({@link PaymentScreeningGate}). It is placed LAST of the three because the other two are cheap local
+ * decisions about the platform's own state, while screening is the one that may call a vendor — there
+ * is no point paying for a provider round-trip on a payment a pause was going to refuse anyway. As with
+ * T3-6, composing it into {@link #checkNewAuthorization} rather than into each controller is what makes
+ * <b>both</b> new-payment entry points covered by construction, so gap T4-2 cannot recur.
  */
 @Component
 public class OperationalGate {
@@ -50,12 +59,29 @@ public class OperationalGate {
      * with only a status supplier keep compiling and keep their exact behaviour (no schedule check).
      */
     @Nullable private final SchemeOperatingHoursGate hoursGate;
+    /**
+     * T5-3 counterparty screening seam. {@code @Nullable} for the same reason as {@link #hoursGate}:
+     * the existing unit slices that construct this gate with only a status supplier must keep their
+     * exact behaviour. Production wiring always supplies it.
+     */
+    @Nullable private final PaymentScreeningGate screeningGate;
 
     @Autowired
     public OperationalGate(OperationalStatusClient statusClient,
-                           @Nullable SchemeOperatingHoursGate hoursGate) {
+                           @Nullable SchemeOperatingHoursGate hoursGate,
+                           @Nullable PaymentScreeningGate screeningGate) {
         this.statusClient = statusClient;
         this.hoursGate = hoursGate;
+        this.screeningGate = screeningGate;
+    }
+
+    /**
+     * Status + operating-hours gate with no screening seam — retained for the slices written against
+     * T3-6's two-argument shape.
+     */
+    public OperationalGate(OperationalStatusClient statusClient,
+                           @Nullable SchemeOperatingHoursGate hoursGate) {
+        this(statusClient, hoursGate, null);
     }
 
     /**
@@ -63,7 +89,7 @@ public class OperationalGate {
      * behaviour. Production wiring always supplies the {@link SchemeOperatingHoursGate}.
      */
     public OperationalGate(OperationalStatusClient statusClient) {
-        this(statusClient, null);
+        this(statusClient, null, null);
     }
 
     /**
@@ -80,11 +106,37 @@ public class OperationalGate {
      *                                  side effect.
      */
     public void checkNewAuthorization(String partnerRef, String schemeRef, String routeRef) {
+        checkNewAuthorization(partnerRef, schemeRef, routeRef, null, null);
+    }
+
+    /**
+     * As {@link #checkNewAuthorization(String, String, String)} plus the <b>T5-3</b> counterparty
+     * screening of this payment's parties.
+     *
+     * <p><b>Passing no subjects is not a bypass.</b> A {@code null}/empty {@code subjects} list is
+     * recorded by the screening gate as {@link com.gme.pay.kyb.UnscreenedReason#NO_SUBJECT_IDENTITY}
+     * against the payer — "we were handed nobody to screen" is the finding, not an exemption. This is
+     * deliberately the opposite convention to {@code schemeRef}, where {@code null} means "not resolved
+     * yet, so assert nothing": an unresolved scheme is a routing fact that a later per-candidate check
+     * covers, whereas an absent counterparty identity is the gap itself.
+     *
+     * @param paymentRef opaque reference for the coverage record's evidence anchor (a partner txn ref
+     *                   where the entry point has one); may be {@code null}
+     * @param subjects   the parties on this payment; may be {@code null}
+     * @throws PaymentScreeningRefusedException on an authoritative adverse verdict (always), or on an
+     *                                          unscreened party when {@code gmepay.screening.fail-closed}
+     *                                          is on. Raised after the suspension and window checks and
+     *                                          still before any side effect.
+     */
+    public void checkNewAuthorization(String partnerRef, String schemeRef, String routeRef,
+                                      @Nullable String paymentRef,
+                                      @Nullable List<PaymentScreeningSubject> subjects) {
         OperationalStatusView status = statusClient.currentStatus();
         if (status == null) {
             // Defensive: a null status is treated as all-clear (the client is contracted to apply the
             // fail-open / fail-closed policy and never return null, but we never NPE the pay path).
             checkOperatingWindow(schemeRef);
+            checkScreening(paymentRef, partnerRef, subjects);
             return;
         }
 
@@ -112,6 +164,10 @@ public class OperationalGate {
 
         // T3-6: nothing operator-driven objects. Now ask the scheme's own published schedule.
         checkOperatingWindow(schemeRef);
+
+        // T5-3: the platform is willing and the rail is open. Last question: were the counterparties
+        // screened? (Last of the three so no vendor round-trip is paid for a payment already refused.)
+        checkScreening(paymentRef, partnerRef, subjects);
     }
 
     /** Convenience overload for the wallet path, which gates by partner alias only. */
@@ -126,6 +182,18 @@ public class OperationalGate {
     private void checkOperatingWindow(@Nullable String schemeRef) {
         if (hoursGate != null) {
             hoursGate.checkNewPayment(schemeRef);
+        }
+    }
+
+    /**
+     * T5-3 counterparty screening. A null gate (unit slices) asserts nothing; a null subject list does
+     * NOT — see {@link #checkNewAuthorization(String, String, String, String, List)}.
+     */
+    private void checkScreening(@Nullable String paymentRef,
+                                @Nullable String partnerRef,
+                                @Nullable List<PaymentScreeningSubject> subjects) {
+        if (screeningGate != null) {
+            screeningGate.checkNewPayment(paymentRef, partnerRef, subjects);
         }
     }
 

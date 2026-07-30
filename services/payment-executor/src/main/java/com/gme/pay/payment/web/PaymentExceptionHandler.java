@@ -11,6 +11,7 @@ import com.gme.pay.payment.domain.MerchantNotFoundException;
 import com.gme.pay.payment.domain.OperationalGateException;
 import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.PaymentNotFoundException;
+import com.gme.pay.payment.domain.PaymentScreeningRefusedException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.RefundAmountInvalidException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
@@ -113,6 +114,30 @@ public class PaymentExceptionHandler {
     public ResponseEntity<ApiError> handleSchemeClosed(SchemeClosedException ex) {
         return ResponseEntity.status(ErrorCode.SCHEME_CLOSED.httpStatus())
                 .body(ApiError.of(ErrorCode.SCHEME_CLOSED, ex.getMessage(), newRequestId()));
+    }
+
+    /**
+     * T5-3: a sanctions/PEP screening refusal. 422 with {@code retryable=false} and the stable code
+     * carried on the exception — {@code SANCTIONS_SCREENING_UNAVAILABLE} (nothing screened the parties
+     * and {@code gmepay.screening.fail-closed} is armed) or {@code SANCTIONS_SCREENING_HIT} (an
+     * authoritative provider returned an adverse verdict).
+     *
+     * <p><b>422, not 503.</b> Neither cause is a transient fault: a missing vendor needs a procurement
+     * decision and a sanctions match needs a human disposition, so a caller must stop retrying — the
+     * same reasoning as {@code SCHEME_OPERATION_UNSUPPORTED}. A 503 with {@code retryable=true} would
+     * turn a compliance refusal into a retry storm against the same refusal.
+     *
+     * <p>Nothing was mutated: the gate runs at the start of a new authorization, so no float was
+     * reserved or deducted, no transaction row was created, no scheme was called, no ledger posting and
+     * no event. Confirm/cancel/refund never reach the gate. Emitted via the {@link ApiError} string ctor
+     * because lib-errors was outside this change's ownership (same pattern as
+     * {@code LimitCheckUnavailableException}); promoting both codes to {@link ErrorCode} members is a
+     * listed follow-up.
+     */
+    @ExceptionHandler(PaymentScreeningRefusedException.class)
+    public ResponseEntity<ApiError> handlePaymentScreeningRefused(PaymentScreeningRefusedException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(new ApiError(ex.code(), ex.getMessage(), ex.retryable(), newRequestId()));
     }
 
     @ExceptionHandler(SchemeDeclinedException.class)

@@ -20,6 +20,12 @@ dependencies {
     // Phase 2 cross-service contracts: canonical PaymentApprovedPayload (event wire form) +
     // Prefunding reserve/release/deduction-history DTOs bound by the REST clients.
     implementation project(':libs:lib-api-contracts')
+    // T5-3: the sanctions/PEP screening PORT + provenance vocabulary (ScreeningResult /
+    // ScreeningProvenance / NOT_SCREENED_NO_PROVIDER). Reused rather than re-declared so the T1-4
+    // guarantee -- a non-authoritative CLEAR is structurally impossible -- holds on the payment path
+    // too. lib-kyb is deliberately dependency-light (spring-context + jackson-annotations + slf4j)
+    // precisely so a service can bind to the port, per its own build file's note.
+    implementation project(':libs:lib-kyb')
 
     runtimeOnly 'org.postgresql:postgresql'
     // Flyway 10 ships PostgreSQL support as a separate artifact; required when the

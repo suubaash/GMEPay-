@@ -1,5 +1,7 @@
 package com.gme.pay.payment.web;
 
+import com.gme.pay.kyb.PaymentParty;
+import com.gme.pay.kyb.PaymentScreeningSubject;
 import com.gme.pay.payment.alert.DeclineSpikeMonitor;
 import com.gme.pay.payment.domain.CorridorPricingUnavailableException;
 import com.gme.pay.payment.domain.CumulativeLimitExceededException;
@@ -47,6 +49,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -337,11 +340,24 @@ public class WalletPayController {
         // never guessed from the QR's network: the two direct corridors are known statically, and the
         // failover branch is gated per RESOLVED candidate inside FailoverPaymentRouter (which knows the
         // real scheme ids and can skip a closed candidate rather than failing the whole payment).
+        //
+        // T5-3: the same call also runs the counterparty sanctions/PEP screening seam. The payer
+        // subject is `userRef` — a wallet account id / user UUID, i.e. an OPAQUE handle. No name, date
+        // of birth or nationality is transmitted on POST /v1/pay, so the subject is not screenable and
+        // the gate records NO_SUBJECT_IDENTITY. That is deliberate and is the actual finding: on the
+        // busiest entry point the platform has, the originator's identity never reaches this service, so
+        // wiring a name-matching vendor would still screen nobody here until the wallet contract carries
+        // it. The merchant/beneficiary is resolved further down (inside the corridor services, after
+        // this gate), so it is not offered here either rather than being guessed from the QR.
+        // No payment reference exists at this point either — the wallet supplies none — so the coverage
+        // row's evidence anchor is null for this path; also recorded in the fix report.
         if (operationalGate != null) {
             operationalGate.checkNewAuthorization(
                     req.partner(),
                     routeViaFailover ? null : directCorridorSchemeRef(req.partner()),
-                    gateQr.isKnown() ? gateQr.networkIdentifier() : null);
+                    gateQr.isKnown() ? gateQr.networkIdentifier() : null,
+                    null,
+                    List.of(PaymentScreeningSubject.byReferenceOnly(PaymentParty.PAYER, req.userRef())));
         }
 
         // T4-2: the regulatory limit subject is the WALLET partner (the issuer charging the customer),

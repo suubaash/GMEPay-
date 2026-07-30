@@ -40,3 +40,43 @@ tasks.named('e2eTest') {
               ':services:scheme-adapter-sendmn:bootJar',
               ':services:scheme-adapter-ninepay:bootJar'
 }
+
+// ---------------------------------------------------------------------------
+// Load / soak harness (gap register T3-5) — com.gme.pay.e2e.load.LoadHarness.
+//
+// Deliberately a JavaExec `main`, NOT a JUnit test, for three reasons:
+//
+//   1. It must never run in CI. There is no tag to include and no test class to
+//      discover, so `gradlew build`, `integrationTest` and `:e2e-tests:e2eTest`
+//      (the three things .github/workflows/ci.yml runs) cannot reach it. Only an
+//      explicit `:e2e-tests:loadTest` invocation does.
+//   2. It takes real arguments (--rate, --concurrency, --duration, the target
+//      URLs). Threading those through a Test task means system properties and a
+//      second layer of parsing.
+//   3. It has an exit code that means something (5 = a declared SLO was missed),
+//      which a wrapper script can gate on.
+//
+// It does NOT depend on any bootJar: the harness never starts the fleet. Start
+// the fleet yourself (run-fleet.ps1) — the harness preflights it and refuses with
+// that instruction if it is not up.
+//
+// The guard logic IS unit-tested in the ordinary `test` task
+// (LoadTargetGuardTest, SloTargetsTest, LoadMetricsTest are untagged), so every
+// `gradlew build` re-proves that the harness refuses a non-local target.
+//
+// See Documentation/RUNBOOK_LOAD_AND_CAPACITY.md.
+tasks.register('loadTest', JavaExec) {
+    description = 'Load/soak harness for the money path (T3-5). Requires an ALREADY-RUNNING local fleet ' +
+            'and --i-know-this-is-not-prod. Never runs in CI.'
+    group = 'verification'
+    mainClass = 'com.gme.pay.e2e.load.LoadHarness'
+    classpath = sourceSets.test.runtimeClasspath
+    // Relative defaults (Documentation/SLO_TARGETS.properties, e2e-tests/build/load-results)
+    // resolve from the repo root regardless of where gradle was invoked.
+    workingDir = rootProject.projectDir
+    // With no --args the task prints usage and exits 0, rather than firing a default-shaped run
+    // at whatever happens to be listening. Gradle applies the CLI `--args` option AFTER this
+    // configuration block, so a real invocation overrides it.
+    args = ['--help']
+    // Deliberately NOT wired into `check` or `build`.
+}

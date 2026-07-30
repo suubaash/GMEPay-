@@ -1,6 +1,8 @@
 package com.gme.pay.payment.web;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gme.pay.kyb.PaymentParty;
+import com.gme.pay.kyb.PaymentScreeningSubject;
 import com.gme.pay.payment.domain.PartnerType;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.CancelResult;
@@ -45,6 +47,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -139,7 +142,18 @@ public class PaymentController {
         // maintenance, or when the resolved partner / scheme is suspended. Runs before any side effect
         // (quote agreement-check, merchant resolve, float reserve). Confirm/cancel/refund of an
         // existing authorization never reaches here.
-        operationalGate.checkNewAuthorization(partnerCode, req.schemeId(), req.direction());
+        //
+        // T5-3: the same call now also runs the counterparty sanctions/PEP screening seam. The subject
+        // we can offer is the honest one and it is DELIBERATELY thin: `customer_ref` is an opaque
+        // partner-side handle, so this subject is NOT screenable (no name, no DOB, no nationality) and
+        // the gate records it as NO_SUBJECT_IDENTITY rather than pretending a reference was screened.
+        // That is the finding, not a workaround — API-05's authorize contract carries no originator
+        // identity at all, so no vendor purchase alone can produce screening coverage on this path.
+        // The beneficiary is likewise unavailable HERE: the merchant is resolved inside the
+        // orchestrator's step 2, after this gate. Both are recorded in the fix report as required work.
+        operationalGate.checkNewAuthorization(partnerCode, req.schemeId(), req.direction(),
+                req.partnerTxnRef(),
+                List.of(PaymentScreeningSubject.byReferenceOnly(PaymentParty.PAYER, req.customerRef())));
 
         PartnerType partnerType = resolvePartnerType(partnerCode, partnerTypeHeader);
         MpmPaymentCommand cmd = new MpmPaymentCommand(

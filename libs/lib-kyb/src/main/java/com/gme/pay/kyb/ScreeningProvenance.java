@@ -44,6 +44,13 @@ public record ScreeningProvenance(
     /** Producer id used when a result arrived without declaring its producer. */
     public static final String UNKNOWN_PROVIDER_ID = "unknown";
 
+    /**
+     * Producer id meaning <b>no screening provider is wired at all</b> — nothing ran, not even the
+     * stub (gap T5-3, the transaction path). Distinct from {@link #UNKNOWN_PROVIDER_ID}, which means
+     * something ran but did not say what it was.
+     */
+    public static final String NO_PROVIDER_ID = "none";
+
     /** The stub's standing caveat — the exact sentence that must reach the operator. */
     public static final String STUB_CAVEAT =
             "NOT A SANCTIONS SCREENING: produced in-process by StubKybAdapter, which keyword-matches"
@@ -59,11 +66,11 @@ public record ScreeningProvenance(
         if (providerId == null || providerId.isBlank()) {
             throw new IllegalArgumentException("providerId is required on screening provenance");
         }
-        if (STUB_PROVIDER_ID.equals(providerId) && authoritative) {
-            // Structural, not stylistic: the one thing nobody may ever construct
-            // is a stub result that claims authority.
+        if (authoritative && (STUB_PROVIDER_ID.equals(providerId) || NO_PROVIDER_ID.equals(providerId))) {
+            // Structural, not stylistic: the one thing nobody may ever construct is a stub — or an
+            // absent-provider — result that claims authority.
             throw new IllegalArgumentException(
-                    "the '" + STUB_PROVIDER_ID + "' provider can never be authoritative");
+                    "the '" + providerId + "' provider can never be authoritative");
         }
         if (authoritative && caveat != null && !caveat.isBlank()) {
             throw new IllegalArgumentException(
@@ -89,12 +96,24 @@ public record ScreeningProvenance(
     }
 
     /**
+     * Provenance for "no provider is configured, so nothing was screened" (gap T5-3) — never
+     * authoritative. The caveat must state which subject/party was not screened, so it is supplied by
+     * the caller rather than being a constant here.
+     *
+     * @param caveat why nothing was screened; must be non-blank
+     */
+    public static ScreeningProvenance noProvider(String caveat) {
+        return new ScreeningProvenance(NO_PROVIDER_ID, false, caveat);
+    }
+
+    /**
      * Provenance of a real vendor screening. Reachable only from a vendor
      * adapter that actually called the vendor; there is deliberately no way to
      * mint this for the stub (the compact constructor rejects it).
      */
     public static ScreeningProvenance vendor(String providerId) {
-        if (STUB_PROVIDER_ID.equals(providerId) || UNKNOWN_PROVIDER_ID.equals(providerId)) {
+        if (STUB_PROVIDER_ID.equals(providerId) || UNKNOWN_PROVIDER_ID.equals(providerId)
+                || NO_PROVIDER_ID.equals(providerId)) {
             throw new IllegalArgumentException(
                     "'" + providerId + "' is a reserved non-authoritative provider id");
         }
