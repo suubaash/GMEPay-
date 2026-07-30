@@ -51,7 +51,10 @@ import org.springframework.test.web.servlet.MockMvc;
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(ApiKeyIssuanceService.class)
+// RecordingAuditTrail: T5-1 gave ApiKeyIssuanceService an audit dependency. This slice is about
+// the wire contract, not the trail, so it takes the recording fake — the real hash-chained path is
+// AuthAuditTrailDbTest's job.
+@Import({ApiKeyIssuanceService.class, com.gme.pay.auth.testsupport.RecordingAuditTrail.class})
 @DisplayName("T1-1: activation-issued credentials are verifiable by auth-identity")
 class PartnerCredentialIssuanceContractTest {
 

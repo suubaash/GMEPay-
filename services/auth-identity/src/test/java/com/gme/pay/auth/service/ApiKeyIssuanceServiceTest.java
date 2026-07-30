@@ -63,6 +63,17 @@ class ApiKeyIssuanceServiceTest {
     @Autowired
     private PrincipalRepository principalRepository;
 
+    /**
+     * The recording fake is a context-scoped SINGLETON and the Spring context is cached across test
+     * methods, so without this the captured entries accumulate across the whole class and the
+     * "exactly one row" assertions become order-dependent. (The database is rolled back per test;
+     * the bean is not.)
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void resetAuditTrail() {
+        audit.clear();
+    }
+
     private static IssueKeyRequest request(String code, String env, String purpose,
                                            String keyPrefix, String secretPrefix,
                                            Instant expiresAt) {

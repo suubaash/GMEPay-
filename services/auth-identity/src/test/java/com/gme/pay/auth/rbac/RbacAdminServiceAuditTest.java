@@ -269,6 +269,6 @@ class RbacAdminServiceAuditTest {
 
     private Long newPrincipal(String username) {
         return principals.saveAndFlush(new PrincipalEntity(
-                PrincipalEntity.Type.HUB_USER, username, username, null, Instant.now())).getId();
+                PrincipalEntity.Type.OPERATOR, username, username, null, Instant.now())).getId();
     }
 }

@@ -1,5 +1,6 @@
 package com.gme.pay.ratefx.xe;
 
+import com.gme.pay.ratefx.audit.RateAuditor;
 import com.gme.pay.ratefx.persistence.RateSnapshotEntity;
 import com.gme.pay.ratefx.persistence.RateSnapshotRepository;
 import org.slf4j.Logger;
@@ -21,6 +22,16 @@ import java.util.UUID;
  * <p>Active only when {@code gmepay.rate-fx.xe.enabled=true}.
  * {@link org.springframework.scheduling.annotation.EnableScheduling} is declared
  * on {@link XeSchedulingConfig} so it is also conditional on that property.
+ *
+ * <h2>Audit (gap T5-1 / CISO §9)</h2>
+ *
+ * <p>Each upserted snapshot writes one {@code audit_log} row attributed to
+ * {@link RateAuditor#SYSTEM_XE_FETCH_SCHEDULER} ({@code system:xe-rate-fetch-scheduler}) with
+ * {@code event_type = RATE_SNAPSHOT_LIVE_FETCHED}. Auditing the automated poll is not busywork: it is
+ * what makes the MANUAL rows meaningful. If only manual overrides were audited, a reader could not
+ * tell an un-audited feed write from a gap in the trail, and the chain for a currency would have holes
+ * wherever the scheduler ran. With both audited, a manual rate stands out against its own history by
+ * actor and by verb, at a glance.
  */
 @Component
 @ConditionalOnProperty(name = "gmepay.rate-fx.xe.enabled", havingValue = "true")
@@ -31,10 +42,13 @@ public class XeRateFetchScheduler {
 
     private final XeRateClient client;
     private final RateSnapshotRepository repository;
+    private final RateAuditor audit;
 
-    public XeRateFetchScheduler(XeRateClient client, RateSnapshotRepository repository) {
+    public XeRateFetchScheduler(XeRateClient client, RateSnapshotRepository repository,
+                                RateAuditor audit) {
         this.client = client;
         this.repository = repository;
+        this.audit = audit;
     }
 
     /**
@@ -54,9 +68,23 @@ public class XeRateFetchScheduler {
                 String ccy = entry.getKey();
                 BigDecimal rate = new BigDecimal(entry.getValue());
                 String snapshotId = "xe-" + ccy + "-" + UUID.randomUUID();
+                // The rate this poll displaces, read before the save, so the audit row shows the move.
+                RateAuditor.RateState before = repository
+                        .findFirstByCurrencyCodeAndEffectiveAtLessThanEqualOrderByEffectiveAtDescCapturedAtDesc(
+                                ccy, now)
+                        .map(e -> new RateAuditor.RateState(e.getUsdRate(), e.getSource(),
+                                e.getSnapshotId(), e.getEffectiveAt()))
+                        .orElseGet(RateAuditor.RateState::none);
                 RateSnapshotEntity entity = new RateSnapshotEntity(
                         snapshotId, ccy, rate, SOURCE, now, now);
-                repository.save(entity);
+                RateSnapshotEntity saved = repository.save(entity);
+                // A named system principal, never the bare "system" literal — which used to mean both
+                // "the platform did this" and "nobody told me who did this".
+                audit.rateWritten(ccy, before,
+                        new RateAuditor.RateState(saved.getUsdRate(), saved.getSource(),
+                                saved.getSnapshotId(), saved.getEffectiveAt()),
+                        "scheduled provider poll (" + resp.source() + ")",
+                        RateAuditor.SYSTEM_XE_FETCH_SCHEDULER);
             }
             log.info("XeRateFetchScheduler: upserted {} LIVE snapshots at {}",
                     resp.quotes().size(), now);

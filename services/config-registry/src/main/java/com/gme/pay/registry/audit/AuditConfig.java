@@ -26,15 +26,31 @@ import org.springframework.context.annotation.Primary;
  * {@code @ConditionalOnBean(DataSource.class)}, and this service has a DataSource). Two
  * {@code AuditPublisher} beans existed and the {@code @Primary} one won the injection point.
  *
- * <p>The consequence was not a harmless duplicate log line. {@code DbAuditPublisher.publish}
- * <b>INSERTs into {@code audit_log}</b>. So every audited write produced <i>two</i> rows
+ * <p>The consequence would not have been a harmless duplicate log line. {@code DbAuditPublisher.publish}
+ * <b>INSERTs into {@code audit_log}</b>. So every audited write would produce <i>two</i> rows
  * carrying the <i>same</i> {@code prev_hash} and {@code row_hash} — and a chain with two
  * siblings at the same link cannot verify: the second row's {@code prev_hash} does not equal
- * its predecessor's {@code row_hash}. The tamper-evidence mechanism would have reported the
+ * its predecessor's {@code row_hash}. The tamper-evidence mechanism would report the
  * platform's own audit log as tampered, on every aggregate, for reasons no investigator
  * could distinguish from an attack. It escaped the tests because {@code AuditLogTest} is a
  * {@code @DataJpaTest} slice that installs a {@code @Primary RecordingAuditPublisher} and
  * does not load auto-configurations at all.
+ *
+ * <h2>Why it had not actually fired yet — and why that is not reassuring</h2>
+ *
+ * <p>It was <b>latent</b>, for a second bug rather than for a good reason:
+ * {@code AuditPublisherAutoConfiguration} had no {@code @AutoConfigureAfter}, so its
+ * {@code @ConditionalOnBean(DataSource.class)} was evaluated before
+ * {@code DataSourceAutoConfiguration} had contributed one (auto-configurations order by class
+ * name, and {@code com.gme.pay.audit…} sorts before {@code org.springframework…}). The DB publisher
+ * was therefore never created in any real application, so the primary-bean collision never
+ * happened here.
+ *
+ * <p>That ordering bug is fixed in the same change as this one — it had to be, because
+ * auth-identity and prefunding need a durable publisher rather than a log line. Fixing it is
+ * exactly what would have <b>activated</b> the double-write in config-registry. So this
+ * configuration is not defensive tidying: without it, the ordering fix turns a silent no-op into
+ * two rows per write and an unverifiable chain across every aggregate in this service.
  *
  * <p>The fix is to stop leaving the choice to condition-evaluation order and state it: the
  * fan-out publisher declared here is {@code @Primary}, and it is <b>never</b> a

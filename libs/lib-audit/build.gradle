@@ -29,6 +29,12 @@ dependencies {
     // between a lib test and a service test asserting the same behaviour.
     testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     testImplementation 'org.assertj:assertj-core'
+    // ApplicationContextRunner, for DbAuditPublisherAutoConfigOrderingTest. That test needs the
+    // REAL DataSourceAutoConfiguration to reproduce the ordering bug it guards (a test that
+    // declares its own DataSource @Bean registers it as user config and proves the opposite of
+    // production) — hence spring-boot-test rather than a hand-rolled context.
+    testImplementation 'org.springframework.boot:spring-boot-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-jdbc'
     // H2 in-memory DB for DbAuditPublisher slice tests (no Docker needed)
     testImplementation 'com.h2database:h2'
     // Spring JDBC needed at test compile time for JdbcTemplate usage

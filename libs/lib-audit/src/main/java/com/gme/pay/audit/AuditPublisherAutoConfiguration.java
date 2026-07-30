@@ -42,7 +42,29 @@ import org.springframework.kafka.core.KafkaTemplate;
  * {@code META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports}
  * so Boot picks it up automatically.
  */
-@AutoConfiguration
+/*
+ * ORDERING IS LOAD-BEARING (gap T5-1).
+ *
+ * `@ConditionalOnBean(DataSource.class)` on `dbAuditPublisher` is evaluated when THIS
+ * auto-configuration is processed. Auto-configurations are ordered by class name unless told
+ * otherwise, and `com.gme.pay.audit.AuditPublisherAutoConfiguration` sorts BEFORE
+ * `org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration`. So in a real
+ * application — where the DataSource comes from auto-configuration rather than from user config —
+ * the condition was evaluated before any DataSource bean definition existed, found none, and
+ * `DbAuditPublisher` was NEVER CREATED. `LogAuditPublisher` silently took over as the fallback.
+ *
+ * The effect was a service that looked audited while writing log lines instead of hash-chained
+ * rows: durable-looking wiring, no durable rows, no error, nothing in `audit_log`. It only worked
+ * in tests, because a test that declares its own `DataSource` @Bean registers it as user config,
+ * i.e. before auto-configuration runs — so every test of this class passed while production did
+ * the opposite.
+ *
+ * `@AutoConfigureAfter(DataSourceAutoConfiguration.class)` is the fix. Do not remove it, and do not
+ * assume a test that supplies its own DataSource bean proves this path works — see
+ * `DbAuditPublisherAutoConfigOrderingTest`, which drives it through the real
+ * `DataSourceAutoConfiguration` for exactly that reason.
+ */
+@AutoConfiguration(after = org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration.class)
 @EnableConfigurationProperties(KafkaProperties.class)
 public class AuditPublisherAutoConfiguration {
 
