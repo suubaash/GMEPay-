@@ -1,5 +1,6 @@
-import { UseCase, uniq, today, ensureSchemeMerchant, gatewayHeaders, rbacHeaders } from '../engine/testkit';
-import { FIXTURES } from '../config';
+import { UseCase, uniq, today, ensureSchemeMerchant, gatewayHeaders } from '../engine/testkit';
+import type { CredentialKind } from '../engine/credentials';
+import { FIXTURES, PORTAL_PARTNER_CODE } from '../config';
 
 /**
  * Feature tests — endpoint-level coverage of everything actually BUILT in the
@@ -30,60 +31,76 @@ export const FEATURE_TESTS: UseCase[] = [
     }),
 
   // ============================================================ prefunding
+  // T0-5: prefunding's ENTIRE /v1/prefunding/** API is internal-gated (its
+  // application.properties path-patterns are `/internal/**,/v1/prefunding/**`), so every
+  // one of these calls must carry X-Gme-Internal or answer 401 UNAUTHORIZED.
   feat('F-PREFUND-01', 'prefunding', 'Provision → deduct → credit → reverse lifecycle', ['prefunding'],
     'Full balance lifecycle with atomic mutations and idempotent reversal.',
     async ({ client, check }) => {
       const code = uniq('PF');
       const prov = await client.call('prefunding', 'POST', '/v1/prefunding/provision',
-        { partnerCode: code, openingBalanceUsd: '50000', lowBalanceThresholdUsd: '10000' });
+        { partnerCode: code, openingBalanceUsd: '50000', lowBalanceThresholdUsd: '10000' }, { as: 'internal' });
       check.equal(prov.status, 201, 'provisioned (201)');
       check.closeTo(Number(prov.json?.balance), 50000, 0.001, 'opening balance = 50000');
 
       const txnRef = uniq('TX');
       const ded = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/deduct`,
-        { txnRef, amount: '125.50' });
+        { txnRef, amount: '125.50' }, { as: 'internal' });
       check.equal(ded.status, 200, 'deduct accepted');
       check.closeTo(Number(ded.json?.balance), 49874.5, 0.001, 'balance after deduct');
 
-      const cr = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/credit`, { amount: '25.50' });
+      const cr = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/credit`, { amount: '25.50' }, { as: 'internal' });
       check.closeTo(Number(cr.json?.balance), 49900, 0.001, 'balance after credit');
 
-      const rev = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/reverse`, { txnRef });
+      const rev = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/reverse`, { txnRef }, { as: 'internal' });
       check.equal(rev.status, 200, 'reverse accepted');
       check.closeTo(Number(rev.json?.reversedUsd), 125.5, 0.001, 'reversed the original deduct');
-    }),
+    }, ['internal']),
   feat('F-PREFUND-02', 'prefunding', 'Overdraw rejected, balance untouched', ['prefunding'],
     'Deducting more than the balance is rejected and leaves the balance intact.',
     async ({ client, check, rec }) => {
       const code = uniq('PF');
       await client.call('prefunding', 'POST', '/v1/prefunding/provision',
-        { partnerCode: code, openingBalanceUsd: '100', lowBalanceThresholdUsd: '10' });
+        { partnerCode: code, openingBalanceUsd: '100', lowBalanceThresholdUsd: '10' }, { as: 'internal' });
       const ded = await client.call('prefunding', 'POST', `/v1/prefunding/${code}/deduct`,
-        { txnRef: uniq('TX'), amount: '150' });
+        { txnRef: uniq('TX'), amount: '150' }, { as: 'internal' });
       check.ok(ded.status >= 400, 'overdraw rejected (not accepted)', ded.status);
       if (ded.status >= 500)
         rec.warn('NOTE: insufficient funds returns HTTP 500 — should be a 4xx (e.g. 422). Contract gap in prefunding deduct.');
-      const bal = await client.call('prefunding', 'GET', `/v1/prefunding/${code}/balance`);
+      const bal = await client.call('prefunding', 'GET', `/v1/prefunding/${code}/balance`, undefined, { as: 'internal' });
       check.closeTo(Number(bal.json?.balance), 100, 0.001, 'balance untouched after rejected overdraw (no money lost)');
-    }),
+    }, ['internal']),
   feat('F-PREFUND-03', 'prefunding', 'Low-balance alert raised below threshold', ['prefunding'],
     'Deducting below the configured threshold raises a tier alert.',
     async ({ client, check }) => {
       const code = uniq('PF');
       await client.call('prefunding', 'POST', '/v1/prefunding/provision',
-        { partnerCode: code, openingBalanceUsd: '12000', lowBalanceThresholdUsd: '10000' });
-      await client.call('prefunding', 'POST', `/v1/prefunding/${code}/deduct`, { txnRef: uniq('TX'), amount: '3000' });
-      const alerts = await client.call('prefunding', 'GET', `/v1/prefunding/${code}/alerts`);
+        { partnerCode: code, openingBalanceUsd: '12000', lowBalanceThresholdUsd: '10000' }, { as: 'internal' });
+      await client.call('prefunding', 'POST', `/v1/prefunding/${code}/deduct`, { txnRef: uniq('TX'), amount: '3000' }, { as: 'internal' });
+      const alerts = await client.call('prefunding', 'GET', `/v1/prefunding/${code}/alerts`, undefined, { as: 'internal' });
       check.equal(alerts.status, 200, 'alerts readable');
       check.ok(Array.isArray(alerts.json) && alerts.json.length > 0, 'a low-balance alert was raised', alerts.json);
-    }),
+    }, ['internal']),
   feat('F-PREFUND-04', 'prefunding', 'Duplicate provision → 409', ['prefunding'],
     'Provisioning the same partner twice is rejected (idempotency guard).',
     async ({ client, check }) => {
       const code = uniq('PF');
       const body = { partnerCode: code, openingBalanceUsd: '1000', lowBalanceThresholdUsd: '100' };
-      check.equal((await client.call('prefunding', 'POST', '/v1/prefunding/provision', body)).status, 201, 'first provision OK');
-      check.equal((await client.call('prefunding', 'POST', '/v1/prefunding/provision', body)).status, 409, 'duplicate rejected (409)');
+      check.equal((await client.call('prefunding', 'POST', '/v1/prefunding/provision', body, { as: 'internal' })).status, 201, 'first provision OK');
+      check.equal((await client.call('prefunding', 'POST', '/v1/prefunding/provision', body, { as: 'internal' })).status, 409, 'duplicate rejected (409)');
+    }, ['internal']),
+  feat('F-PREFUND-05', 'prefunding', 'Ungated call is refused (internal gate is ON)', ['prefunding'],
+    'T0-5 boundary: /v1/prefunding/** without X-Gme-Internal must be 401 with the UNAUTHORIZED envelope. ' +
+    'This asserts the gate exists — a 200 here would mean the money API is open to anyone on the network.',
+    async ({ client, check }) => {
+      const res = await client.call('prefunding', 'GET', '/v1/prefunding/SENDMN/balance', undefined,
+        { expectAuthFailure: true });
+      check.equal(res.status, 401, 'unauthenticated balance read refused (401)');
+      check.equal(res.json?.code, 'UNAUTHORIZED', 'internal-auth filter envelope returned');
+      check.ok(
+        String(res.json?.message ?? '').includes('internal service authentication required'),
+        'filter message identifies the internal-auth gate', res.json?.message,
+      );
     }),
 
   // ============================================================ config-registry
@@ -171,6 +188,7 @@ export const FEATURE_TESTS: UseCase[] = [
     }),
 
   // ============================================================ scheme-adapter-zeropay
+  // T0-2: the whole /internal/scheme/** surface (and /__data/**) is internal-gated.
   feat('F-SCHEME-01', 'scheme-adapter-zeropay', 'Real-time MPM authorize+commit via sim', ['scheme-adapter-zeropay', 'sim-scheme'],
     'POST /internal/scheme/zeropay/submit authorizes & commits against sim-scheme.',
     async ({ client, check }) => {
@@ -178,19 +196,21 @@ export const FEATURE_TESTS: UseCase[] = [
       const res = await client.call('scheme-adapter-zeropay', 'POST', '/internal/scheme/zeropay/submit', {
         merchantId: FIXTURES.merchantId, amountKrw: 10000, currency: 'KRW',
         partnerTxnRef: uniq('STX'), idempotencyKey: uniq('idem-'), paymentMode: 'MPM', qrPayload: FIXTURES.qrPayload,
-      });
+      }, { as: 'internal' });
       check.blockedIf(res.status >= 500, 'scheme adapter 500 on submit — sim-scheme/merchant interaction unavailable in this env');
       check.equal(res.status, 200, 'scheme submit OK (200)');
       check.equal(res.json?.success, true, 'scheme authorized + committed');
       check.ok(!!res.json?.schemeTxnRef, 'scheme txn reference returned', res.json?.schemeTxnRef);
-    }),
+    }, ['internal']),
   feat('F-SCHEME-02', 'scheme-adapter-zeropay', 'Adapter health endpoint', ['scheme-adapter-zeropay'],
-    'GET /internal/scheme/zeropay/health responds (SFTP/batch may report degraded).',
+    'GET /internal/scheme/zeropay/health responds (SFTP/batch may report degraded). Note this is the ' +
+    'ADAPTER health under /internal/**, so it is internal-gated — unlike /actuator/health, which stays anonymous.',
     async ({ client, check }) => {
-      const res = await client.call('scheme-adapter-zeropay', 'GET', '/internal/scheme/zeropay/health');
+      const res = await client.call('scheme-adapter-zeropay', 'GET', '/internal/scheme/zeropay/health',
+        undefined, { as: 'internal' });
       check.equal(res.status, 200, 'health responds (200)');
       check.ok(!!res.json?.status, 'status field present', res.json?.status);
-    }),
+    }, ['internal']),
 
   // ============================================================ qr-service
   feat('F-QR-01', 'qr-service', 'Parse ZeroPay QR payload', ['qr-service'],
@@ -302,16 +322,33 @@ export const FEATURE_TESTS: UseCase[] = [
     }),
 
   // ============================================================ auth-identity
-  feat('F-AUTH-01', 'auth-identity', 'HMAC verify rejects bad signature', ['auth-identity'],
-    'POST /internal/auth/verify returns valid=false + errorCode for an invalid signature.',
-    async ({ client, check }) => {
+  // T0-2: auth-identity has NO public surface. Its path-patterns are
+  // /internal/**,/v1/rbac/**,/v1/approvals/** — everything it ships is internal-gated,
+  // and it REFUSES TO START without GMEPAY_INTERNAL_AUTH_SECRET.
+  feat('F-AUTH-01', 'auth-identity', 'HMAC verify rejects an unusable credential', ['auth-identity'],
+    'POST /internal/auth/verify returns valid=false + errorCode. The presented apiKey is deliberately the ' +
+    'retired stub `pk_test_abc`: since StubPartnerCredentialService was deleted it resolves to nothing, so the ' +
+    'rejection now comes from an unknown key rather than a signature mismatch — either way valid=false with a code.',
+    async ({ client, check, rec }) => {
       const res = await client.call('auth-identity', 'POST', '/internal/auth/verify', {
         apiKey: 'pk_test_abc', httpMethod: 'GET', pathWithQuery: '/v1/ping',
         timestamp: new Date().toISOString(), nonce: uniq('n-'), signature: 'deadbeef', bodyHash: '',
-      });
+      }, { as: 'internal' });
       check.equal(res.status, 200, 'verify endpoint responds (200)');
-      check.equal(res.json?.valid, false, 'bad signature is not valid');
+      check.equal(res.json?.valid, false, 'unusable credential is not valid');
       check.ok(!!res.json?.errorCode, 'an errorCode is returned', res.json?.errorCode);
+      rec.info(`rejection reason reported by auth-identity: ${res.json?.errorCode}`);
+    }, ['internal']),
+  feat('F-AUTH-02', 'auth-identity', 'Ungated internal call is refused', ['auth-identity'],
+    'T0-2 boundary: /internal/auth/verify without X-Gme-Internal must be 401. auth-identity mints JWTs and ' +
+    'issues partner keys, so an open surface here would let anyone forge any identity.',
+    async ({ client, check }) => {
+      const res = await client.call('auth-identity', 'POST', '/internal/auth/verify', {
+        apiKey: 'x', httpMethod: 'GET', pathWithQuery: '/v1/ping',
+        timestamp: new Date().toISOString(), nonce: uniq('n-'), signature: 'x', bodyHash: '',
+      }, { expectAuthFailure: true });
+      check.equal(res.status, 401, 'unauthenticated internal call refused (401)');
+      check.equal(res.json?.code, 'UNAUTHORIZED', 'internal-auth filter envelope returned');
     }),
 
   // ============================================================ notification-webhook
@@ -337,76 +374,166 @@ export const FEATURE_TESTS: UseCase[] = [
     }),
 
   // ============================================================ kyb-adapter
-  feat('F-KYB-01', 'kyb-adapter', 'Screen a KYB subject', ['kyb-adapter'],
-    'POST /v1/kyb/screen returns a screening verdict (stub provider by default).',
-    async ({ client, check }) => {
-      const res = await client.call('kyb-adapter', 'POST', '/v1/kyb/screen', { partnerCode: uniq('K'), entityName: 'Test Co Ltd', ubos: [] });
+  // kyb-adapter gates /v1/kyb/screen, /v1/kyb/verify, /v1/kyb/result/** and
+  // /v1/screening/** behind X-Gme-Internal (its own application.properties sets
+  // gmepay.internal-auth.enabled=true with those path-patterns). /v1/kyb/health is NOT
+  // in the pattern list and stays anonymous.
+  feat('F-KYB-01', 'kyb-adapter', 'Screen a KYB subject (no authoritative provider)', ['kyb-adapter'],
+    'POST /v1/kyb/screen returns a screening verdict. EXPECTATION CHANGED: with no KYB vendor contracted the ' +
+    'stub can only ever answer MANUAL_REVIEW / NOT_SCREENED_NO_PROVIDER — it must NOT report CLEAR, because a ' +
+    'fabricated clear verdict is what would let an unscreened partner go live.',
+    async ({ client, check, rec }) => {
+      const res = await client.call('kyb-adapter', 'POST', '/v1/kyb/screen',
+        { partnerCode: uniq('K'), entityName: 'Test Co Ltd', ubos: [] }, { as: 'internal' });
       check.equal(res.status, 200, 'screen responds (200)');
-      check.ok(typeof res.json?.status === 'string', 'screening verdict returned (e.g. CLEAR/HIT)', res.json);
-    }),
+      const status = String(res.json?.status ?? '');
+      check.ok(status.length > 0, 'screening verdict returned', res.json);
+      check.ok(
+        status !== 'CLEAR',
+        'verdict is NOT a fabricated CLEAR — an uncontracted provider must not clear anyone',
+        status,
+      );
+      rec.info(`verdict: ${status} (expected MANUAL_REVIEW or NOT_SCREENED_NO_PROVIDER while no vendor is live)`);
+    }, ['internal']),
   feat('F-KYB-02', 'kyb-adapter', 'KYB health + active provider', ['kyb-adapter'],
-    'GET /v1/kyb/health reports UP and the active provider.',
+    'GET /v1/kyb/health reports UP and the active provider. Deliberately NOT internal-gated.',
     async ({ client, check }) => {
       const res = await client.call('kyb-adapter', 'GET', '/v1/kyb/health');
       check.equal(res.status, 200, 'health OK (200)');
       check.equal(res.json?.status, 'UP', 'provider is up');
     }),
+  feat('F-KYB-03', 'config-registry', 'Partner activation REFUSES without authoritative screening', ['config-registry'],
+    'EXPECTATION CHANGED (T1-2): POST /v1/admin/partners/{code}/lifecycle/activate now answers 422 with ' +
+    '`SANCTIONS_NOT_SCREENED` in unmet[] whenever KybEntity.hasAuthoritativeScreening() is false — and the stub ' +
+    'provider can never satisfy it. Refusing is the CORRECT behaviour: activating an unscreened partner is the bug. ' +
+    'The change request stays PROPOSED so it can be re-approved once a real provider is wired.',
+    async ({ client, check, rec }) => {
+      const code = uniq('A').toUpperCase();
+      const draft = await client.call('config-registry', 'POST', '/v1/partners/draft',
+        { partnerCode: code, type: 'OVERSEAS', settlementCurrency: 'USD', settlementRoundingMode: 'HALF_UP' });
+      check.equal(draft.status, 201, 'draft partner created for the activation attempt');
+
+      // The non-mutating precheck is always 200, even when the gate fails.
+      const pre = await client.call('config-registry', 'GET', `/v1/admin/partners/${code}/lifecycle/preconditions`);
+      check.equal(pre.status, 200, 'preconditions precheck is readable (200) even when unmet');
+      rec.info('activation preconditions', pre.json);
+
+      const act = await client.call('config-registry', 'POST', `/v1/admin/partners/${code}/lifecycle/activate`, {});
+      check.equal(act.status, 422, 'activation refused (422) — not silently allowed');
+      const body = JSON.stringify(act.json ?? act.text ?? '');
+      check.ok(
+        body.includes('SANCTIONS_NOT_SCREENED'),
+        'refusal names SANCTIONS_NOT_SCREENED — no authoritative screening exists',
+        act.json,
+      );
+    }),
 
   // ============================================================ ops-partner-bff
-  feat('F-BFF-01', 'ops-partner-bff', 'Login (demo) issues a token; bad password 401', ['ops-partner-bff'],
-    'POST /v1/auth/login accepts password=demo (Phase-1 mock) and rejects anything else.',
+  // T0-1: the BFF is now an OAuth2/JWT resource server, default-deny. Only
+  // /actuator/health** is anonymous. Permissions and partner scope come from the token's
+  // `permissions` and `partner_id` claims; X-Gme-Permissions / X-Partner-Id are ignored.
+  feat('F-BFF-01', 'ops-partner-bff', 'Dev login endpoint is GONE (401 unauth / 404 authenticated)', ['ops-partner-bff'],
+    'EXPECTATION CHANGED (T0-1): POST /v1/auth/login and password=demo were DELETED, not merely disabled. ' +
+    'The two-status assertion is deliberate and is the strongest available proof: 401 unauthenticated (the ' +
+    'default-deny chain answers before routing) and 404 WITH a valid token (there is no handler behind the wall). ' +
+    'A 200 here would mean a password bypass came back.',
     async ({ client, check }) => {
-      const ok = await client.call('ops-partner-bff', 'POST', '/v1/auth/login', { username: 'ops1', password: 'demo' });
-      check.equal(ok.status, 200, 'demo login succeeds (200)');
-      check.ok(!!ok.json?.token, 'token returned', ok.json?.role);
-      const bad = await client.call('ops-partner-bff', 'POST', '/v1/auth/login', { username: 'ops1', password: 'wrong' });
-      check.equal(bad.status, 401, 'wrong password rejected (401)');
+      const anon = await client.call('ops-partner-bff', 'POST', '/v1/auth/login',
+        { username: 'ops1', password: 'demo' }, { expectAuthFailure: true });
+      check.equal(anon.status, 401, 'unauthenticated login attempt refused (401)');
+      check.ok(!anon.json?.token, 'no token was issued', anon.json ?? anon.text);
+
+      const authed = await client.call('ops-partner-bff', 'POST', '/v1/auth/login',
+        { username: 'ops1', password: 'demo' }, { as: 'oidc-admin' });
+      check.equal(authed.status, 404, 'with a valid token the path 404s — the handler is deleted, not gated');
+    }, ['oidc-admin']),
+  feat('F-BFF-05', 'ops-partner-bff', 'Forged permission headers grant nothing', ['ops-partner-bff'],
+    'T0-1 boundary: X-Gme-Permissions + X-Gme-Principal-Id with NO bearer token must be 401. Those headers used ' +
+    'to be the authorization input; a 200 here would mean anyone on the network can self-declare ops:operate.',
+    async ({ client, check }) => {
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/partners', undefined, {
+        expectAuthFailure: true,
+        headers: { 'X-Gme-Permissions': 'ops:operate,rbac.manage', 'X-Gme-Principal-Id': '1' },
+      });
+      check.equal(res.status, 401, 'forged permission headers rejected (401)');
+      check.ok(!res.text, 'empty body — HttpStatusEntryPoint, no login redirect and no error envelope', res.text);
     }),
   feat('F-BFF-02', 'ops-partner-bff', 'Admin partner list', ['ops-partner-bff', 'config-registry'],
-    'GET /v1/admin/partners orchestrates config-registry and returns partners.',
+    'GET /v1/admin/partners orchestrates config-registry and returns partners. Needs a token whose `permissions` ' +
+    'claim carries a platform-operator permission (safe methods → requireAdminRead()).',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/partners');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/partners', undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'partner list OK (200)');
       check.ok(Array.isArray(res.json), 'returns an array', res.json?.length);
-    }),
+    }, ['oidc-admin']),
   feat('F-BFF-03', 'ops-partner-bff', 'Admin dashboard aggregates', ['ops-partner-bff'],
     'GET /v1/admin/dashboard returns aggregate counts.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/dashboard');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/dashboard', undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'dashboard OK (200)');
       check.ok(res.json && typeof res.json === 'object', 'dashboard payload present', res.json);
-    }),
+    }, ['oidc-admin']),
   feat('F-BFF-04', 'ops-partner-bff', 'System health snapshot', ['ops-partner-bff'],
     'GET /v1/admin/system/health aggregates downstream service health.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/system/health');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/system/health', undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'system health OK (200)');
       check.ok(!!res.json?.services || !!res.json?.overallStatus, 'health snapshot present', res.json?.overallStatus);
-    }),
+    }, ['oidc-admin']),
 
   // ============================================================ api-gateway
+  // T1-1: the partner edge authenticates against the REAL credential store. A key must
+  // exist in BOTH halves — auth-identity (identity/lifecycle) AND the operator config
+  // `gateway.partner-credentials.partners[]` (HMAC material) — or it 401s. The published
+  // stub pair pk_test_abc / sk_test_xyz was deleted from src/main and now correctly fails.
   feat('F-GW-01', 'api-gateway', 'Unsigned request rejected at the edge', ['api-gateway'],
-    'POST /v1/rates without HMAC headers is rejected by the gateway (401/403).',
+    'POST /v1/rates without HMAC headers is rejected by the gateway (401/403). Needs no credential — ' +
+    'this is the negative case, and it is the one edge assertion that was already correct before the hardening.',
     async ({ client, check }) => {
-      const res = await client.call('api-gateway', 'POST', '/v1/rates', crossBorderRate());
+      const res = await client.call('api-gateway', 'POST', '/v1/rates', crossBorderRate(),
+        { expectAuthFailure: true });
       check.ok(res.status === 401 || res.status === 403, 'unsigned request rejected at edge', res.status);
     }),
   feat('F-GW-02', 'api-gateway', 'Correctly-signed request passes the edge', ['api-gateway'],
-    'A valid HMAC-SHA256 signed GET is accepted by the gateway (not 401/403) and routed downstream.',
+    'A valid HMAC-SHA256 signed GET is accepted by the gateway (not 401/403) and routed downstream. Now requires ' +
+    'REAL partner credentials plus the X-Nonce and X-Partner-Id the replay/identity filters made mandatory.',
     async ({ client, check }) => {
       const path = '/v1/route?country=KR';
-      const res = await client.call('api-gateway', 'GET', path, undefined, gatewayHeaders('GET', path));
-      check.ok(res.status !== 401 && res.status !== 403, 'valid signature accepted at edge (auth passed)', res.status);
-    }),
+      const res = await client.call('api-gateway', 'GET', path, undefined,
+        { headers: gatewayHeaders('GET', path), expectAuthFailure: true });
+      check.blockedIf(res.status === 503,
+        'gateway answered 503 CREDENTIAL_SERVICE_UNAVAILABLE — it cannot reach auth-identity, so no partner ' +
+        'credential can be resolved (check GMEPAY_AUTH_IDENTITY_BASE_URL / GMEPAY_INTERNAL_AUTH_SECRET on the gateway)');
+      check.blockedIf(res.status === 429, 'gateway rate limit tripped (now enabled and fail-closed)');
+      check.ok(res.status !== 401 && res.status !== 403,
+        'valid signature accepted at edge (auth passed) — a 401 means the key is not in BOTH the auth-identity ' +
+        'store and gateway.partner-credentials.partners[]; a 403 means IP_NOT_ALLOWED or PARTNER_ID_MISMATCH',
+        res.status);
+    }, ['partner-key']),
   feat('F-GW-03', 'api-gateway', 'Tampered signature rejected', ['api-gateway'],
-    'Valid headers but a wrong X-Signature is rejected (401/403).',
+    'Valid headers but a wrong X-Signature is rejected (401/403). This case is only meaningful with REAL ' +
+    'credentials: with a dead key the edge rejects everything, so a "pass" would prove nothing. It therefore ' +
+    'requires the partner key too, and F-GW-02 must pass for this result to carry weight.',
     async ({ client, check }) => {
       const path = '/v1/route?country=KR';
       const h = gatewayHeaders('GET', path);
       h['X-Signature'] = 'deadbeefdeadbeef';
-      const res = await client.call('api-gateway', 'GET', path, undefined, h);
+      const res = await client.call('api-gateway', 'GET', path, undefined,
+        { headers: h, expectAuthFailure: true });
       check.ok(res.status === 401 || res.status === 403, 'tampered signature rejected', res.status);
-    }),
+    }, ['partner-key']),
+  feat('F-GW-04', 'api-gateway', 'Missing X-Nonce rejected (replay protection is fail-closed)', ['api-gateway'],
+    'T1-1: X-Nonce is now unconditional. A signed request without it is a 400 — replay protection no longer ' +
+    'fails open, so an omitted nonce cannot slip through.',
+    async ({ client, check }) => {
+      const path = '/v1/route?country=KR';
+      const h = gatewayHeaders('GET', path);
+      delete h['X-Nonce'];
+      const res = await client.call('api-gateway', 'GET', path, undefined,
+        { headers: h, expectAuthFailure: true });
+      check.ok(res.status === 400 || res.status === 401,
+        'nonce-less request refused (400 missing nonce, or 401 if key resolution fails first)', res.status);
+    }, ['partner-key']),
 
   // ============================================================ transaction-mgmt (state machine)
   feat('F-TXN-04', 'transaction-mgmt', 'Legal transition CREATED→APPROVED', ['transaction-mgmt'],
@@ -429,46 +556,61 @@ export const FEATURE_TESTS: UseCase[] = [
     }),
 
   // ============================================================ auth-identity (RBAC / approvals / keys)
-  feat('F-RBAC-01', 'auth-identity', 'RBAC permission catalogue (authorized)', ['auth-identity'],
-    'GET /v1/rbac/permissions returns the catalogue when the caller carries rbac.manage.',
+  // The old header-identity helper (X-Gme-Principal-Id + X-Gme-Permissions) is deleted:
+  // those headers are no longer an authorization input anywhere. /v1/rbac/** and
+  // /v1/approvals/** sit behind auth-identity's internal-auth gate, which asserts "a
+  // trusted internal service is calling" — so X-Gme-Internal is the correct credential
+  // and these cases can now genuinely pass instead of self-reporting BLOCKED.
+  feat('F-RBAC-01', 'auth-identity', 'RBAC permission catalogue', ['auth-identity'],
+    'GET /v1/rbac/permissions returns the catalogue to an internally-authenticated caller.',
     async ({ client, check }) => {
-      const res = await client.call('auth-identity', 'GET', '/v1/rbac/permissions', undefined, rbacHeaders('rbac.manage'));
-      check.blockedIf(res.status === 401 || res.status === 403,
-        'RBAC enforcement requires gateway-stamped identity that a direct call cannot supply in this env');
+      const res = await client.call('auth-identity', 'GET', '/v1/rbac/permissions', undefined, { as: 'internal' });
       check.equal(res.status, 200, 'catalogue readable (200)');
       check.ok(Array.isArray(res.json), 'returns a permission list', res.json?.length);
-    }),
-  feat('F-RBAC-02', 'auth-identity', 'Create RBAC role (authorized)', ['auth-identity'],
-    'POST /v1/rbac/roles creates a role when the caller carries rbac.manage.',
+    }, ['internal']),
+  feat('F-RBAC-02', 'auth-identity', 'Create RBAC role', ['auth-identity'],
+    'POST /v1/rbac/roles creates a role for an internally-authenticated caller.',
     async ({ client, check }) => {
       const res = await client.call('auth-identity', 'POST', '/v1/rbac/roles',
-        { code: uniq('ROLE_').toUpperCase(), description: 'platform test role' }, rbacHeaders('rbac.manage'));
-      check.blockedIf(res.status === 401 || res.status === 403, 'RBAC enforcement needs gateway-stamped identity in this env');
+        { code: uniq('ROLE_').toUpperCase(), description: 'platform test role' }, { as: 'internal' });
       check.ok(res.status === 201 || res.status === 200, 'role created', res.status);
+    }, ['internal']),
+  feat('F-RBAC-03', 'auth-identity', 'RBAC surface refuses an unauthenticated caller', ['auth-identity'],
+    'T0-2 boundary: /v1/rbac/** without X-Gme-Internal is 401. Previously a caller could simply assert ' +
+    '`X-Gme-Permissions: rbac.manage` and manage roles; that path is closed.',
+    async ({ client, check }) => {
+      const res = await client.call('auth-identity', 'GET', '/v1/rbac/permissions', undefined, {
+        expectAuthFailure: true,
+        headers: { 'X-Gme-Principal-Id': '1', 'X-Gme-Permissions': 'rbac.manage' },
+      });
+      check.equal(res.status, 401, 'self-asserted rbac.manage header grants nothing (401)');
+      check.equal(res.json?.code, 'UNAUTHORIZED', 'internal-auth filter envelope returned');
     }),
   feat('F-APPROVAL-01', 'auth-identity', 'Approval request workflow', ['auth-identity'],
     'POST /v1/approvals opens a tiered approval request (small amounts auto-approve).',
     async ({ client, check }) => {
       const res = await client.call('auth-identity', 'POST', '/v1/approvals',
         { requestType: 'REFUND', subjectRef: uniq('txn-'), amount: 100, currency: 'USD', tenantId: 1 },
-        { 'X-Gme-Principal-Id': '1' });
-      check.blockedIf(res.status === 401 || res.status === 403, 'approvals API needs a gateway-stamped principal in this env');
+        { as: 'internal', headers: { 'X-Gme-Principal-Id': '1' } });
       check.ok(res.status === 201 || res.status === 200, 'approval request created', res.status);
       check.ok(typeof res.json?.status === 'string', 'request carries a workflow status', res.json?.status);
-    }),
+    }, ['internal']),
   feat('F-KEY-01', 'auth-identity', 'Issue + revoke API key', ['auth-identity'],
-    'POST /internal/auth/keys mints a one-time key+secret; revoke returns 204.',
+    'POST /internal/auth/keys mints a one-time key+secret; revoke returns 204. This is also how a real partner-edge ' +
+    'credential is provisioned — but note the minted key only authenticates at the gateway once an operator also ' +
+    'adds its HMAC secret to gateway.partner-credentials.partners[]; auth-identity keeps only a PBKDF2 digest.',
     async ({ client, check }) => {
       const issue = await client.call('auth-identity', 'POST', '/internal/auth/keys', {
         partnerId: 42, partnerCode: uniq('pc_'), environment: 'SANDBOX', purpose: 'API',
         keyPrefix: 'pk_test_', secretPrefix: 'sk_test_', expiresAt: '2027-12-31T23:59:59Z',
-      });
+      }, { as: 'internal' });
       check.ok(issue.status === 200 || issue.status === 201, 'key issued', issue.status);
       const keyId = issue.json?.keyId;
       check.ok(!!keyId && !!issue.json?.secretPlaintext, 'one-time keyId + plaintext secret returned', keyId);
-      const revoke = await client.call('auth-identity', 'POST', `/internal/auth/keys/${encodeURIComponent(keyId)}/revoke`);
+      const revoke = await client.call('auth-identity', 'POST',
+        `/internal/auth/keys/${encodeURIComponent(keyId)}/revoke`, undefined, { as: 'internal' });
       check.equal(revoke.status, 204, 'key revoked (204)');
-    }),
+    }, ['internal']),
 
   // ============================================================ scheme-adapter (CPM / cancel)
   feat('F-SCHEME-03', 'scheme-adapter-zeropay', 'Real-time CPM authorize via sim', ['scheme-adapter-zeropay', 'sim-scheme'],
@@ -476,66 +618,104 @@ export const FEATURE_TESTS: UseCase[] = [
     async ({ client, check }) => {
       await ensureSchemeMerchant(client);
       const res = await client.call('scheme-adapter-zeropay', 'POST', '/internal/scheme/zeropay/cpm',
-        { txnRef: uniq('CPM'), qrToken: 'TOK' + uniq(), payoutAmount: 10000, payoutCurrency: 'KRW', schemeId: 'zeropay' });
+        { txnRef: uniq('CPM'), qrToken: 'TOK' + uniq(), payoutAmount: 10000, payoutCurrency: 'KRW', schemeId: 'zeropay' },
+        { as: 'internal' });
       check.blockedIf(res.status >= 500, 'scheme CPM 500 — sim-scheme CPM interaction unavailable in this env');
       check.equal(res.status, 200, 'CPM authorized (200)');
-    }),
+    }, ['internal']),
   feat('F-SCHEME-04', 'scheme-adapter-zeropay', 'Submit then cancel (refund leg)', ['scheme-adapter-zeropay', 'sim-scheme'],
     'A committed MPM payment can be cancelled via /internal/scheme/zeropay/cancel.',
     async ({ client, check }) => {
       await ensureSchemeMerchant(client);
       const sub = await client.call('scheme-adapter-zeropay', 'POST', '/internal/scheme/zeropay/submit',
-        { merchantId: FIXTURES.merchantId, amountKrw: 10000, currency: 'KRW', partnerTxnRef: uniq('STX'), idempotencyKey: uniq('idem-'), paymentMode: 'MPM', qrPayload: FIXTURES.qrPayload });
+        { merchantId: FIXTURES.merchantId, amountKrw: 10000, currency: 'KRW', partnerTxnRef: uniq('STX'), idempotencyKey: uniq('idem-'), paymentMode: 'MPM', qrPayload: FIXTURES.qrPayload },
+        { as: 'internal' });
       check.blockedIf(sub.status >= 500, 'scheme submit unavailable in this env');
       check.equal(sub.status, 200, 'submit OK (200)');
       const cancel = await client.call('scheme-adapter-zeropay', 'POST', '/internal/scheme/zeropay/cancel',
-        { schemeTxnRef: sub.json?.schemeApprovalCode ?? sub.json?.schemeTxnRef, reason: 'TEST_CANCEL' });
+        { schemeTxnRef: sub.json?.schemeApprovalCode ?? sub.json?.schemeTxnRef, reason: 'TEST_CANCEL' },
+        { as: 'internal' });
       check.blockedIf(cancel.status >= 500, 'scheme cancel 500 in this env');
       check.ok(cancel.status === 204 || cancel.status === 200, 'cancel accepted', cancel.status);
-    }),
+      // NOTE: this is the ADAPTER-level cancel, which carries {schemeTxnRef, reason} and no
+      // amount. That contract is exactly why payment-executor now refuses a PARTIAL refund
+      // with 422 PARTIAL_REFUND_UNSUPPORTED rather than sending a full cancel — see F-REFUND-01.
+    }, ['internal']),
 
   // ============================================================ ops-partner-bff (portal + admin)
+  // T1-3: portal reads are REAL now (RestApiKeyClient / RestStatementClient /
+  // RestPortalWebhookClient), and the path carries the partner BUSINESS CODE which
+  // PartnerDirectory resolves to config-registry's numeric surrogate. The path must match
+  // the token's `partner_id` claim — the old literal `partner_test_001` was never a real
+  // partner code, so it now fails closed with no upstream call at all.
   feat('F-PORTAL-01', 'ops-partner-bff', 'Partner portal overview', ['ops-partner-bff'],
-    'GET /v1/portal/{partnerId}/overview orchestrates balance + recent txns + last settlement.',
+    'GET /v1/portal/{partnerCode}/overview orchestrates balance + recent txns + last settlement.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/portal/partner_test_001/overview');
+      const res = await client.call('ops-partner-bff', 'GET', `/v1/portal/${PORTAL_PARTNER_CODE}/overview`,
+        undefined, { as: 'oidc-partner' });
       check.equal(res.status, 200, 'overview OK (200)');
       check.ok(res.json && typeof res.json === 'object', 'overview payload present', res.json?.partnerId);
-    }),
+    }, ['oidc-partner']),
   feat('F-PORTAL-02', 'ops-partner-bff', 'Partner portal profile', ['ops-partner-bff', 'config-registry'],
-    'GET /v1/portal/{partnerId}/profile returns the partner profile.',
+    'GET /v1/portal/{partnerCode}/profile returns the partner profile. `onboardedAt` is now partners.go_live_at ' +
+    'and is legitimately null before first activation — absent-by-design, not zero-filled.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/portal/partner_test_001/profile');
+      const res = await client.call('ops-partner-bff', 'GET', `/v1/portal/${PORTAL_PARTNER_CODE}/profile`,
+        undefined, { as: 'oidc-partner' });
       check.equal(res.status, 200, 'profile OK (200)');
       check.ok(!!res.json?.partnerId || !!res.json?.type, 'profile fields present', res.json);
-    }),
+    }, ['oidc-partner']),
   feat('F-PORTAL-03', 'ops-partner-bff', 'Partner portal transactions', ['ops-partner-bff'],
-    'GET /v1/portal/{partnerId}/transactions returns the partner transaction list.',
+    'GET /v1/portal/{partnerCode}/transactions returns the partner transaction list.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/portal/partner_test_001/transactions');
+      const res = await client.call('ops-partner-bff', 'GET', `/v1/portal/${PORTAL_PARTNER_CODE}/transactions`,
+        undefined, { as: 'oidc-partner' });
       check.equal(res.status, 200, 'transactions OK (200)');
-      check.ok(Array.isArray(res.json), 'returns a list', res.json?.length);
-    }),
+      check.ok(Array.isArray(res.json) || Array.isArray(res.json?.content), 'returns a list', res.json?.length);
+    }, ['oidc-partner']),
+  feat('F-PORTAL-04', 'ops-partner-bff', 'Cross-partner read is refused', ['ops-partner-bff'],
+    'T0-1 boundary: a partner-scoped token must not read another partner`s portal. Scoping comes from the ' +
+    '`partner_id` claim via rbac.requirePartnerScope(), so forging X-Partner-Id changes nothing → 403.',
+    async ({ client, check }) => {
+      const other = PORTAL_PARTNER_CODE === 'SENDMN' ? 'GMEREMIT' : 'SENDMN';
+      const res = await client.call('ops-partner-bff', 'GET', `/v1/portal/${other}/overview`, undefined, {
+        as: 'oidc-partner',
+        expectAuthFailure: true,
+        headers: { 'X-Partner-Id': other, 'X-Gme-Permissions': 'ops:operate' },
+      });
+      check.equal(res.status, 403, `token scoped to ${PORTAL_PARTNER_CODE} cannot read ${other} (403)`);
+    }, ['oidc-partner']),
   feat('F-ADMIN-01', 'ops-partner-bff', 'Admin transactions (paged + filtered)', ['ops-partner-bff'],
     'GET /v1/admin/transactions returns a paged envelope.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/transactions?page=0&size=5');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/transactions?page=0&size=5',
+        undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'admin txns OK (200)');
       check.ok(res.json?.content !== undefined || Array.isArray(res.json), 'paged content present', res.json?.total);
-    }),
+    }, ['oidc-admin']),
   feat('F-ADMIN-02', 'ops-partner-bff', 'Admin settlement recent', ['ops-partner-bff'],
     'GET /v1/admin/settlement/recent returns recent settlement batches.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/settlement/recent');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/settlement/recent',
+        undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'settlement recent OK (200)');
       check.ok(Array.isArray(res.json), 'returns a list', res.json?.length);
-    }),
+    }, ['oidc-admin']),
   feat('F-ADMIN-03', 'ops-partner-bff', 'Admin revenue summary', ['ops-partner-bff'],
     'GET /v1/admin/revenue/summary returns aggregate revenue figures.',
     async ({ client, check }) => {
-      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/revenue/summary');
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/revenue/summary',
+        undefined, { as: 'oidc-admin' });
       check.equal(res.status, 200, 'revenue summary OK (200)');
-    }),
+    }, ['oidc-admin']),
+  feat('F-ADMIN-04', 'ops-partner-bff', 'Partner token cannot reach the admin surface', ['ops-partner-bff'],
+    'T0-1 boundary: a partner-scoped token anywhere under /v1/admin/** is 403 (AdminSurfaceRbacInterceptor). ' +
+    'This is the separation that makes the portal safe to expose to partners.',
+    async ({ client, check }) => {
+      const res = await client.call('ops-partner-bff', 'GET', '/v1/admin/partners', undefined,
+        { as: 'oidc-partner', expectAuthFailure: true });
+      check.equal(res.status, 403, 'partner token refused on the admin surface (403)');
+    }, ['oidc-partner']),
 
   // ============================================================ notification-webhook (lifecycle)
   feat('F-WEBHOOK-03', 'notification-webhook', 'Config get-by-id + soft delete', ['notification-webhook'],
@@ -579,6 +759,61 @@ export const FEATURE_TESTS: UseCase[] = [
       check.equal(approve.json?.state, 'APPLIED', 'change request reaches APPLIED');
     }),
 
+  // ============================================================ refund / cancel contract (T2-6 / T2-7)
+  feat('F-REFUND-01', 'payment-executor', 'Partial refund is REFUSED (422 PARTIAL_REFUND_UNSUPPORTED)', ['payment-executor'],
+    'EXPECTATION CHANGED (T2-6): a partial refund now returns 422 `PARTIAL_REFUND_UNSUPPORTED` and mutates NOTHING. ' +
+    'The ZeroPay adapter`s cancel contract is {schemeTxnRef, reason} with no amount, so the only instruction the ' +
+    'platform could send is a FULL cancel — which would refund the customer more at the scheme than the books ' +
+    'recorded. Refusing is correct; accepting would be a silent over-refund. A FULL refund is unaffected.',
+    async ({ client, check }) => {
+      await ensureSchemeMerchant(client);
+      const paid = await client.pay({
+        qrPayload: FIXTURES.qrPayload, amountKrw: '50000',
+        partner: 'GMEREMIT', userRef: FIXTURES.gmeremitUser,
+      });
+      check.blockedIf(paid.status !== 201,
+        `cannot test the refund contract without a completed payment — /v1/pay returned ${paid.status} ` +
+        `(see UC-01-01 for the wallet-path precondition)`);
+      const ref = paid.json?.schemeTxnRef;
+      check.ok(!!ref, 'original payment reference captured', ref);
+
+      const res = await client.refund(String(ref), {
+        authId: paid.json?.schemeApprovalCode ?? ref,
+        reason: 'PARTIAL_REFUND_CONTRACT_TEST',
+        schemeId: 'ZEROPAY',
+        amount: '100',
+        currency: 'KRW',
+      });
+      check.equal(res.status, 422, 'partial refund refused (422), not silently accepted');
+      const code = res.json?.code ?? res.json?.errorCode;
+      check.equal(code, 'PARTIAL_REFUND_UNSUPPORTED', 'stable refusal code returned');
+      check.equal(res.json?.retryable ?? false, false, 'refusal is a contract fact, not a transient fault');
+    }),
+  feat('F-REFUND-02', 'payment-executor', 'Cross-border refund → 422 SCHEME_OPERATION_UNSUPPORTED', ['payment-executor'],
+    'EXPECTATION CHANGED (T2-7): a cancel/refund routed to a single-shot corridor (SENDMN / NEPAL) returns 422 ' +
+    '`SCHEME_OPERATION_UNSUPPORTED` — those adapters have no refund round-trip, so the reversal must go through ' +
+    'the manual/ops process. Nothing is mutated: the scheme call is the first step, so no float moves and no ' +
+    'status is written. NOTE the trap this test exists to catch — OMITTING schemeId falls back to legacy ZeroPay ' +
+    'routing and yields a foreign ZeroPay decline instead, so the scheme is always sent explicitly.',
+    async ({ client, check }) => {
+      const res = await client.refund(uniq('SENDMN-TX-'), {
+        authId: uniq('auth-'),
+        reason: 'CROSS_BORDER_CONTRACT_TEST',
+        schemeId: 'SENDMN',
+      });
+      check.ok(res.status === 422 || res.status === 404,
+        'cross-border refund refused (422 unsupported, or 404 if the reference does not exist)', res.status);
+      if (res.status === 422) {
+        const code = res.json?.code ?? res.json?.errorCode;
+        check.equal(code, 'SCHEME_OPERATION_UNSUPPORTED', 'stable refusal code returned');
+        check.equal(res.json?.retryable ?? false, false, 'not retryable — the corridor has no refund path at all');
+      } else {
+        check.blockedIf(true,
+          'payment-executor validated the reference before resolving the scheme, so the contract could not be ' +
+          'reached with a synthetic ref — needs a real completed SENDMN payment to assert end-to-end');
+      }
+    }),
+
   // ============================================================ negative / validation paths
   feat('F-VAL-01', 'rate-fx', 'Malformed rate request rejected', ['rate-fx'],
     'POST /v1/rates with an empty body is rejected with a 4xx (not a 500).',
@@ -610,6 +845,7 @@ function feat(
   services: string[],
   intent: string,
   run: UseCase['run'],
+  credentials: CredentialKind[] = [],
 ): UseCase {
   return {
     id,
@@ -621,6 +857,7 @@ function feat(
     services,
     intent,
     automated: true,
+    credentials,
     run,
   };
 }
