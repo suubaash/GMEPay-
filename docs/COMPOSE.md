@@ -195,7 +195,7 @@ precedence). Host ports fan out as follows:
 | 8089 | merchant-qr-data | core+full | boots on in-memory repo (Mongo autoconfig excluded in module) |
 | 8090 | scheme-adapter-zeropay | core+full | |
 | 8091 | notification-webhook | core+full | |
-| 8092 | settlement-reconciliation | core+full | |
+| 8100 | settlement-reconciliation | core+full | |
 | 8093 | revenue-ledger | core+full | |
 | 8094 | reporting-compliance | full | |
 | 8095 | ops-partner-bff | core+full | |
