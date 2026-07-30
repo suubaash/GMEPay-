@@ -160,6 +160,16 @@ Two deliberate asymmetries:
   could not take the offered load, which is precisely what a capacity run is looking for. See §4
   ceiling #4 — the gateway's limit is 50 payments/s **per partner per replica**.
 
+The classifier keys on the *shape* of the envelope, not on an enumerated list of codes, so a code added
+to `libs/lib-errors` `ErrorCode` after this was written is tallied correctly with **no harness change** —
+it simply appears as its own row in the outcome-code table. That includes the AML-screening codes being
+built under register item **T5-3** (a `*_NOT_SCREENED`-class outcome), which are **not** in `ErrorCode`
+at the time of writing. Two cautions for whoever finishes T5-3 and then runs this: if the seam defaults
+to *not* blocking unscreened payments (as its design intends), those payments arrive here as **OK** and
+are invisible in this report — the unscreened count has to be read from T5-3's own counter, not from
+this tally; and if a later profile *does* block, the harness will report it as a decline, which is
+correct but will move the success rate without any capacity change.
+
 ### 2.3 Latency
 
 - **Nearest-rank percentiles, no interpolation.** A reported p99 is a latency some request really had.
