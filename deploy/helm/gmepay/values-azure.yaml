@@ -25,6 +25,10 @@ abi:
   SPRING_DATA_REDIS_HOST: gmepay.redis.cache.windows.net
   SPRING_DATA_REDIS_PORT: "6380"
   # Event Hubs Kafka endpoint (namespace.servicebus.windows.net:9093, SASL/SSL).
+  # T3-11: SPRING_KAFKA_LISTENER_CONCURRENCY (base values.yaml, default 3) is capped by the Event
+  # Hub's partition count, which is fixed AT CREATION on Standard tier and cannot be raised in place
+  # — an under-partitioned hub has to be recreated and cut over. Create each gmepay.* hub with at
+  # least 3 partitions.
   SPRING_KAFKA_BOOTSTRAP_SERVERS: gmepay-eventhub.servicebus.windows.net:9093
   GMEPAY_SCHEMA_REGISTRY_URL: https://gmepay-eventhub.servicebus.windows.net/$schemagroups
   # Cosmos DB for MongoDB (vCore) connection string placeholder.

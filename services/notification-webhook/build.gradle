@@ -24,6 +24,13 @@ dependencies {
     // Kafka EventPublisher impl + topic naming convention (gmepay.<eventType>).
     implementation project(':libs:lib-events-kafka')
 
+    // T3-11: distributed scheduler locking. WebhookDispatcher's drain and the backlog monitor both
+    // run on every instance; without a shared lock a second replica re-reads the same PENDING rows
+    // and the partner receives the same webhook twice. Version matches prefunding (5.16.0), the
+    // service that already had this working -- see com.gme.pay.notify.config.ShedLockConfig.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+
     // Flyway 10.x ships PostgreSQL support as a separate module (needed by the
     // postgres:16 Testcontainers ITs and production); H2 support stays in flyway-core.
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'

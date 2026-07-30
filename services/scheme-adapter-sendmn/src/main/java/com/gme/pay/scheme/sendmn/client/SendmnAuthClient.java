@@ -47,8 +47,18 @@ public class SendmnAuthClient {
             @Value("${sendmn.agent-code:sendmn-agentcode-placeholder}") String agentCode,
             @Value("${sendmn.auth-key:sendmn-authkey-placeholder}") String authKey,
             @Value("${sendmn.token.refresh-after-minutes:80}") long refreshAfterMinutes) {
-        this(builder.baseUrl(baseUrl).build(), username, agentCode, authKey,
-                refreshAfterMinutes, Clock.systemUTC());
+        // T3-11: the outbound read timeout is deliberately NOT installed here. It comes from the
+        // shared RestClient.Builder, which com.gme.pay.http.HttpClientTimeoutAutoConfiguration bounds
+        // fleet-wide and which this adapter tightens to 4s via gmepay.http.client.read-timeout in its
+        // own config file, where the number and its nesting inside payment-executor's 5s hub->adapter
+        // budget are explained.
+        //
+        // Setting it on this builder instead would be actively harmful in one specific way worth
+        // recording: MockRestServiceServer.bindTo(builder) works by INSTALLING A REQUEST FACTORY, so a
+        // client that overwrites the factory after binding silently detaches from the mock and starts
+        // opening real sockets. Configuration bounds the socket without disturbing that seam.
+        this(builder.baseUrl(baseUrl).build(),
+                username, agentCode, authKey, refreshAfterMinutes, Clock.systemUTC());
     }
 
     /** Package-private test constructor — accepts a pre-built RestClient + clock. */

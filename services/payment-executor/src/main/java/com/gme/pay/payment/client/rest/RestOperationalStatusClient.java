@@ -1,5 +1,6 @@
 package com.gme.pay.payment.client.rest;
 
+import com.gme.pay.http.HttpClientTimeouts;
 import com.gme.pay.contracts.OperationalStatusView;
 import com.gme.pay.payment.domain.client.OperationalStatusClient;
 import org.slf4j.Logger;
@@ -8,12 +9,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
-import org.springframework.boot.web.client.ClientHttpRequestFactories;
-import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -83,11 +81,17 @@ public class RestOperationalStatusClient implements OperationalStatusClient {
             @Value("${gmepay.ops.status.read-timeout-millis:500}") long readTimeoutMillis) {
         // Hard connect + read timeout so a HUNG config-registry cannot stall the pay path: a timeout
         // surfaces as ResourceAccessException → treated as unreachable → fail-closed-security applies.
-        ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
-                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
+        // T3-11: HttpClientTimeouts, not ClientHttpRequestFactories.get(..). The Boot 3.3 helper
+        // picks a transport by CLASSPATH SCAN and, with no Apache/Jetty/Reactor client present, falls
+        // back to SimpleClientHttpRequestFactory (HttpURLConnection) -- under which a read timeout was
+        // observed to surface as a RestClientException from BODY EXTRACTION rather than the
+        // ResourceAccessException the catch blocks below expect. That difference is not cosmetic: it
+        // meant a hung scheme produced a PaymentException, which PaymentOrchestrator does not catch,
+        // so no UNCERTAIN row was written and the payment simply vanished from ops' view. Naming the
+        // JDK transport explicitly makes the timeout's exception type deterministic (and keeps PATCH
+        // working, which HttpURLConnection rejects outright). Pinned by InternalHttpTimeoutTest.
         this.restClient = RestClientSupport.withJavaTime(builder.baseUrl(baseUrl))
-                .requestFactory(ClientHttpRequestFactories.get(timeouts))
+                .requestFactory(HttpClientTimeouts.requestFactory(connectTimeoutMillis, readTimeoutMillis))
                 .build();
         this.cacheTtlMillis = cacheTtlMillis;
         this.failOpen = failOpen;

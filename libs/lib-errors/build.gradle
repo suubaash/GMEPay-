@@ -34,6 +34,11 @@ dependencies {
 
     testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // T3-11: the scheduler-lag gauges are asserted against a real SimpleMeterRegistry, so the
+    // Micrometer surface that is compileOnly above has to be on the TEST classpath too. Test-scoped
+    // only — nothing leaks to consumers, which still bring their own registry via the root
+    // build.gradle Boot block.
+    testImplementation 'io.micrometer:micrometer-core'
     testImplementation 'org.springframework.boot:spring-boot-starter-web'
     // Reactive twin of the correlation filter (CorrelationIdWebFilter) — api-gateway's stack.
     testImplementation 'org.springframework.boot:spring-boot-starter-webflux'

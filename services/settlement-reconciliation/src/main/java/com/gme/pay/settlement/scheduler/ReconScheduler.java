@@ -9,6 +9,7 @@ import com.gme.pay.settlement.recon.ReconDiffEngine;
 import com.gme.pay.settlement.runlog.BatchRunExecutor;
 import com.gme.pay.settlement.runlog.BatchRunRecorder;
 import com.gme.pay.settlement.runlog.BatchRunTrigger;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -94,7 +95,14 @@ public class ReconScheduler {
      * <p>Cron is expressed in UTC because Spring's {@code @Scheduled} uses the JVM default
      * timezone unless overridden. The UTC offset accounts for KST = UTC+9.
      */
+    // T3-11: one recon run per window across the whole cluster. Two replicas would each parse the
+    // same ZP0062 file and each write its own recon exceptions and batch state, so the exception
+    // count an operator reconciles against would be doubled. lockAtMostFor bounds a crashed holder,
+    // and is set well above a file parse because the cost of expiring EARLY is a concurrent second
+    // run -- exactly what the lock exists to prevent.
     @Scheduled(cron = "${gmepay.settlement.recon.morning-cron:5 5 1 * * *}")
+    @SchedulerLock(name = "ReconScheduler_morningRecon",
+            lockAtMostFor = "PT30M", lockAtLeastFor = "PT0S")
     public void morningRecon() {
         LocalDate today = LocalDate.now(KST);
         if (disabled("ZP0062", "MORNING", today)) {
@@ -113,6 +121,8 @@ public class ReconScheduler {
      * Processes ZP0064 afternoon settlement result files.
      */
     @Scheduled(cron = "${gmepay.settlement.recon.afternoon-cron:5 5 10 * * *}")
+    @SchedulerLock(name = "ReconScheduler_afternoonRecon",
+            lockAtMostFor = "PT30M", lockAtLeastFor = "PT0S")
     public void afternoonRecon() {
         LocalDate today = LocalDate.now(KST);
         if (disabled("ZP0064", "AFTERNOON", today)) {

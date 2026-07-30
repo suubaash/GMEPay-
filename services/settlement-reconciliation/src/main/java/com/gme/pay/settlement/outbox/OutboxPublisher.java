@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.gme.pay.events.DomainEvent;
 import com.gme.pay.events.EventPublisher;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -40,7 +41,24 @@ public class OutboxPublisher {
         this.transport = Objects.requireNonNull(transport, "transport");
     }
 
+    /**
+     * T3-11: {@code @SchedulerLock} makes this drain safe on more than one replica.
+     *
+     * <p>Without it, two instances read the same unpublished rows in the same tick and both publish
+     * them — {@code publishedAt} is only stamped after a successful publish, so the read-to-stamp
+     * window is wide open. The result is duplicated {@code settlement.completed} events. Consumers
+     * are required to be idempotent (the class contract above says at-least-once), but "the consumer
+     * will cope" is not a reason to emit a duplicate that this lock costs one row to prevent.
+     *
+     * <p>{@code lockAtMostFor} is the crash safety net, not a runtime budget: a holder that dies
+     * mid-tick releases nothing, so this is how long the outbox stalls in the worst case. 5 minutes
+     * is far above a 100-row publish and still short enough that a crashed pod does not hold the
+     * queue for a shift. {@code lockAtLeastFor} is zero because a 1-second poll must be free to run
+     * again on the next tick.
+     */
     @Scheduled(fixedDelayString = "${gmepay.outbox.poll-ms:1000}")
+    @SchedulerLock(name = "SettlementOutboxPublisher_publishPending",
+            lockAtMostFor = "PT5M", lockAtLeastFor = "PT0S")
     @Transactional
     public void publishPending() {
         List<OutboxEntity> batch = repository.findUnpublished(PageRequest.of(0, BATCH_SIZE));

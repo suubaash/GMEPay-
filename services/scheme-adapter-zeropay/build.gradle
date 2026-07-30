@@ -24,6 +24,12 @@ dependencies {
     // enrichment consumer binds the producer's real field names instead of ad-hoc names → null.
     implementation project(':libs:lib-api-contracts')
 
+    // T3-11: distributed scheduler locking. The six ZP00xx batch windows each GENERATE AND TRANSFER a
+    // file to ZeroPay; on a second replica the scheme receives every file twice. Version matches
+    // prefunding (5.16.0) -- see com.gme.pay.scheme.zeropay.config.ShedLockConfig.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+
     // Flyway 10.x ships PostgreSQL support as a separate module (needed by the
     // postgres:16 Testcontainers ITs and production); H2 support stays in flyway-core.
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'

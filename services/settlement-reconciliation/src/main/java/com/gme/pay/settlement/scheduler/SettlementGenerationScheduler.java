@@ -5,6 +5,7 @@ import com.gme.pay.settlement.persistence.SettlementBatchEntity;
 import com.gme.pay.settlement.runlog.BatchRunExecutor;
 import com.gme.pay.settlement.runlog.BatchRunRecorder;
 import com.gme.pay.settlement.runlog.BatchRunTrigger;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,20 +77,38 @@ public class SettlementGenerationScheduler {
         this.runs = runs;
     }
 
-    /** ZP0061 morning request file — ~05:00 KST. */
+    /**
+     * ZP0061 morning request file — ~05:00 KST.
+     *
+     * <p>T3-11: this is the sharpest case for the lock in the whole fleet. The window does not just
+     * write a row — it GENERATES a settlement request file and TRANSMITS it to the scheme. Two
+     * replicas ticking at 05:00 send the scheme two settlement instructions for the same day, and
+     * unlike a duplicated log line or a duplicated event, the scheme acts on it. lockAtMostFor is a
+     * crash safety net sized well above a real generation run: expiring EARLY would admit exactly the
+     * concurrent second run this prevents, so it errs long. A genuinely crashed 05:00 window is
+     * recovered by the T3-4 rerun tooling, not by the lock lapsing.
+     */
     @Scheduled(cron = "${gmepay.settlement.generation.morning-cron:0 0 5 * * *}", zone = KST)
+    @SchedulerLock(name = "SettlementGeneration_morningRequest",
+            lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateMorningRequest() {
         runWindowSafely("ZP0061", "MORNING");
     }
 
     /** ZP0063 afternoon request file — ~14:00 KST. */
     @Scheduled(cron = "${gmepay.settlement.generation.afternoon-cron:0 0 14 * * *}", zone = KST)
+    @SchedulerLock(name = "SettlementGeneration_afternoonRequest",
+            lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateAfternoonRequest() {
         runWindowSafely("ZP0063", "AFTERNOON");
     }
 
     /** ZP0065 payment-detail + ZP0066 refund-detail files — ~22:00 KST (after both request windows). */
     @Scheduled(cron = "${gmepay.settlement.generation.detail-cron:0 0 22 * * *}", zone = KST)
+    // One lock over BOTH detail files, not one per file: they are a single window and a partial
+    // duplicate (ZP0065 sent twice, ZP0066 once) is harder to reconcile than either extreme.
+    @SchedulerLock(name = "SettlementGeneration_detailFiles",
+            lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateDetailFiles() {
         if (disabled("ZP0065", "DETAIL") | disabled("ZP0066", "DETAIL")) {
             return;   // non-short-circuiting so BOTH disabled runs are recorded, not just the first

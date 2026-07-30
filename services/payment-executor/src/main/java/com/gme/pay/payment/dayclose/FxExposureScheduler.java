@@ -4,6 +4,7 @@ import com.gme.pay.payment.opsrun.LedgerOpsRunTrigger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -47,8 +48,13 @@ public class FxExposureScheduler {
      * Default 03:00 in the close timezone — after {@link DayCloseScheduler}, so the two never compete for the
      * same transaction reads.
      */
+    // T3-11: one measurement per night across the cluster. Two replicas would each write an
+    // exposure row for the same window, and the CFO-facing figure would then depend on which row a
+    // reader happened to pick up.
     @Scheduled(cron = "${gmepay.fx-exposure.cron:0 0 3 * * *}",
             zone = "${gmepay.day-close.zone:Asia/Seoul}")
+    @SchedulerLock(name = "FxExposureScheduler_measureRollingWindow",
+            lockAtMostFor = "PT30M", lockAtLeastFor = "PT0S")
     public void measureRollingWindow() {
         LocalDate end = dayCloseService.defaultCloseDate();
         LocalDate start = end.minusDays(fxExposureService.windowDays() - 1L);

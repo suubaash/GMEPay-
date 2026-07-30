@@ -36,8 +36,11 @@ class NepalSchemeAdapterTest {
         ObjectMapper mapper = new ObjectMapper();
         RestClient.Builder builder = RestClient.builder().baseUrl(BASE);
         server = MockRestServiceServer.bindTo(builder).build();
+        // Pass the BUILT client, not the builder: the production constructor installs its own
+        // request factory (T3-11 outbound timeouts), which would replace the one
+        // MockRestServiceServer.bindTo(builder) just installed and send this test at a real socket.
         NepalSchemeApiClient client = new NepalSchemeApiClient(
-                builder, devSigner(mapper), mapper, BASE, "t", "k");
+                builder.build(), devSigner(mapper), mapper, "t", "k");
         adapter = new NepalSchemeAdapter(client);
     }
 

@@ -4,6 +4,7 @@ import com.gme.pay.payment.persistence.OpsAlertArchive;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -34,8 +35,14 @@ public class OpsAlertRetentionSweeper {
         this.archive = archive;
     }
 
+    // T3-11: a delete is idempotent, so a duplicate prune is harmless in outcome — it is locked
+    // anyway because N replicas each issuing the same bulk DELETE is N times the contention on the
+    // ops_alerts table for zero benefit, and because "which jobs are locked" should not be a per-job
+    // judgement call someone has to re-make whenever a job's body changes.
     @Scheduled(fixedDelayString = "${gmepay.ops.alerts.prune-interval-ms:21600000}",
             initialDelayString = "${gmepay.ops.alerts.prune-initial-delay-ms:300000}")
+    @SchedulerLock(name = "OpsAlertRetentionSweeper_prune",
+            lockAtMostFor = "PT30M", lockAtLeastFor = "PT0S")
     public void prune() {
         try {
             archive.prune();

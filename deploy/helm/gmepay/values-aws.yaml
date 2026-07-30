@@ -24,6 +24,10 @@ abi:
   SPRING_DATA_REDIS_HOST: gmepay.xxxxxx.ng.0001.apn2.cache.amazonaws.com
   SPRING_DATA_REDIS_PORT: "6379"
   # MSK bootstrap brokers (TLS — services must use SSL security protocol).
+  # T3-11: SPRING_KAFKA_LISTENER_CONCURRENCY (base values.yaml, default 3) is capped by the topic's
+  # partition count, which MSK owns, not this chart. Set MSK's `num.partitions` in the cluster
+  # configuration BEFORE the gmepay.* topics are auto-created, or create them explicitly with
+  # `--partitions 3`. Raising partitions afterwards re-maps keys to partitions and is a migration.
   SPRING_KAFKA_BOOTSTRAP_SERVERS: b-1.gmepay.xxxxx.kafka.ap-northeast-2.amazonaws.com:9094,b-2.gmepay.xxxxx.kafka.ap-northeast-2.amazonaws.com:9094
   GMEPAY_SCHEMA_REGISTRY_URL: https://schema-registry.gmepay.internal:8081
   # DocumentDB / self-managed Mongo (S3 is not Mongo). Placeholder cluster.

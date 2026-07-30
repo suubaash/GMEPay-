@@ -27,6 +27,13 @@ dependencies {
     // precisely so a service can bind to the port, per its own build file's note.
     implementation project(':libs:lib-kyb')
 
+    // T3-11: distributed scheduler locking. Five @Scheduled jobs run on every instance, including the
+    // authorization-expiry sweeper (which RELEASES prefunding holds) and the revenue-posting replay
+    // (which spends a bounded retry budget). Version matches prefunding (5.16.0), the service that
+    // already had this working -- see com.gme.pay.payment.config.ShedLockConfig.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+
     runtimeOnly 'org.postgresql:postgresql'
     // Flyway 10 ships PostgreSQL support as a separate artifact; required when the
     // migrations run against real PostgreSQL (docker-tagged ITs / production).

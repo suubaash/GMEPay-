@@ -14,6 +14,30 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
   flyway:
     enabled: true
+  # ---- T3-11: @Scheduled thread pool -------------------------------------------------------------
+  # `spring.task.scheduling.pool.size` was set in NO file anywhere in this repo, so Spring's default
+  # of ONE thread applied to every service. settlement-reconciliation stacks SEVEN jobs on it: the
+  # outbox publisher (1s), the morning and afternoon recon runs, the corridor recon, and the three
+  # settlement-generation windows (05:00 / 14:00 / 22:00 KST).
+  #
+  # One thread means these do not merely run late under load — they run in strict sequence, so a slow
+  # job blocks its siblings entirely. The 22:00 window generates two files back to back; on one thread
+  # that delays the 1-second outbox drain for its whole duration, so the settlement.completed events
+  # for the day queue behind the very file generation that produced them.
+  #
+  # Sized to 4 rather than 7: the three generation windows are hours apart and cannot contend, so the
+  # real concurrency demand is the always-on outbox drain plus at most one cron plus the lag
+  # heartbeat, with one spare. These are latency-insensitive background jobs; the cost of a thread is
+  # a rounding error against the heap, and the point is correctness (no job starved by a sibling),
+  # not throughput.
+  #
+  # The starvation was also SILENT: no scheduler-lag metric existed. lib-errors now registers one
+  # automatically (gmepay.scheduler.lag / .lag.max / .pool.size / .active / .queued) on every service
+  # with @EnableScheduling — see com.gme.pay.metrics.SchedulerLagProbe.
+  task:
+    scheduling:
+      pool:
+        size: 4
 
 server:
   port: 8085

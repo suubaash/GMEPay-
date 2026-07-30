@@ -135,6 +135,22 @@ abi:
   SPRING_DATA_REDIS_PORT: "6379"
   # Kafka (transaction-mgmt, revenue-ledger, notification-webhook).
   SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  # T3-11: consumer threads per listener container. Was Spring's default of 1 in every service, and
+  # the property could not even be read -- the consumer factories are hand-built, so Boot's
+  # auto-configured binding never applied. They now read this value explicitly.
+  #
+  # This number is capped by the TOPIC'S PARTITION COUNT, which this chart does not control: Kafka
+  # assigns whole partitions, so N threads against a 1-partition topic leaves N-1 idle, and so does
+  # an extra replica. 3 assumes the gmepay.* topics have >= 3 partitions.
+  #
+  # OPERATOR ACTION REQUIRED, and it is not a values-file change. This chart does not deploy Kafka --
+  # SPRING_KAFKA_BOOTSTRAP_SERVERS points at an external/managed broker (MSK, Event Hubs, or a
+  # self-hosted cluster). Whoever owns that broker must ensure the gmepay.* topics are created with
+  # at least this many partitions. INCREASING PARTITIONS ON AN EXISTING TOPIC IS A MIGRATION, not a
+  # config edit: it changes the key -> partition mapping, so ordering guarantees for a given key do
+  # not hold across the change. Do it while producers are quiesced, or create new topics and cut
+  # over. Until it is done, this value is simply an upper bound nothing reaches.
+  SPRING_KAFKA_LISTENER_CONCURRENCY: "3"
   GMEPAY_SCHEMA_REGISTRY_URL: http://schema-registry:8081
   # Mongo (merchant-qr-data).
   SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/merchant

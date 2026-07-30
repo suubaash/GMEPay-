@@ -1,6 +1,7 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.http.HttpClientTimeouts;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
@@ -8,8 +9,6 @@ import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.ClientHttpRequestFactories;
-import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -19,7 +18,6 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -95,11 +93,17 @@ public class SendmnRestSchemeClient implements SchemeClient {
             @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis) {
         // Hard connect + read timeout (see RestSchemeClient): a hung SendMN adapter socket
         // aborts fast as ResourceAccessException → SchemeTimeoutException.
-        ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
-                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
+        // T3-11: HttpClientTimeouts, not ClientHttpRequestFactories.get(..). The Boot 3.3 helper
+        // picks a transport by CLASSPATH SCAN and, with no Apache/Jetty/Reactor client present, falls
+        // back to SimpleClientHttpRequestFactory (HttpURLConnection) -- under which a read timeout was
+        // observed to surface as a RestClientException from BODY EXTRACTION rather than the
+        // ResourceAccessException the catch blocks below expect. That difference is not cosmetic: it
+        // meant a hung scheme produced a PaymentException, which PaymentOrchestrator does not catch,
+        // so no UNCERTAIN row was written and the payment simply vanished from ops' view. Naming the
+        // JDK transport explicitly makes the timeout's exception type deterministic (and keeps PATCH
+        // working, which HttpURLConnection rejects outright). Pinned by InternalHttpTimeoutTest.
         this.restClient = builder.baseUrl(baseUrl)
-                .requestFactory(ClientHttpRequestFactories.get(timeouts))
+                .requestFactory(HttpClientTimeouts.requestFactory(connectTimeoutMillis, readTimeoutMillis))
                 .build();
     }
 

@@ -100,6 +100,35 @@ gmepay:
         # when nothing trusted rewrites it. Set to 1 behind a single ingress controller.
         trusted-proxy-count: ${GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT:0}
 
+  # T3-11: outbound HTTP budget (9Pay leg).
+  # Until T3-11 this adapter's outbound leg had NO read timeout: it took Boot's shared
+  # RestClient.Builder, which carries none, so a 9Pay endpoint that accepted the connection and
+  # then stopped answering held this adapter's request thread until the OS closed the socket
+  # (RUNBOOK_LOAD_AND_CAPACITY.md section 4.1 #7).
+  #
+  # lib-errors (com.gme.pay.http.HttpClientTimeoutAutoConfiguration) now puts a 2s/10s floor on every
+  # service in the fleet. This adapter tightens the READ half to 4s, and the number is chosen for its
+  # NESTING, not for speed:
+  #
+  #     scheme adapter -> 9Pay     4s   (this value)
+  #     payment-executor -> adapter    5s   (gmepay.scheme.read-timeout-millis in payment-executor)
+  #
+  # Strictly inside its caller's budget. If this leg were the looser of the two, payment-executor
+  # would abandon the hub->adapter call first and infer "unknown" from its own socket timeout --
+  # which is exactly how load turns into UNCERTAIN payments an operator resolves by hand. At 4s the
+  # adapter gives up first and answers with a definite SCHEME_UNAVAILABLE that carries a reason.
+  #
+  # What a timeout must NOT do here: resolve the ambiguity. A submit that times out may still have
+  # moved money. ResourceAccessException is already mapped to the technical/ambiguous outcome in this
+  # adapter's client, which payment-executor routes to the ADR-016 section 4 idempotent status probe.
+  # Nothing re-submits.
+  #
+  # Engineering parameter, not an SLO -- no partner is promised either number. If 9Pay's real API
+  # SLA turns out to exceed 4s, BOTH this and payment-executor's 5s must be raised, in that order.
+  http:
+    client:
+      connect-timeout: 2s
+      read-timeout: 4s
 springdoc:
   api-docs:
     path: /v3/api-docs

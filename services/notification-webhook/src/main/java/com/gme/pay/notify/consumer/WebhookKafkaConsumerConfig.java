@@ -95,15 +95,43 @@ public class WebhookKafkaConsumerConfig {
         return new DefaultErrorHandler(recoverer, new FixedBackOff(0L, MAX_DELIVERY_ATTEMPTS - 1L));
     }
 
+    /**
+     * T3-11: {@code concurrency} is now read from configuration instead of being left at Spring's
+     * default of 1.
+     *
+     * <p>The factory was built bare, so despite the class name it ran exactly one consumer thread —
+     * and because {@code spring.kafka.listener.concurrency} is only applied by Boot's
+     * <em>auto-configured</em> factory, setting that property had no effect on this hand-built one.
+     * The property was therefore not merely unset, it was unreadable: an operator could set it, see
+     * it in {@code /actuator/env}, and change nothing.
+     *
+     * <p>One thread per group means each record's full database work must finish before the next
+     * poll, and a failing record burns three synchronous attempts first. Every webhook the platform
+     * emits passes through here.
+     *
+     * <p><b>Concurrency is capped by partitions, not by this number.</b> Kafka assigns whole
+     * partitions to consumers, so N threads against a 1-partition topic leaves N-1 idle — which is
+     * also why adding replicas did nothing. The default of 3 matches the 3 partitions now set in
+     * {@code docker-compose.yml} ({@code KAFKA_NUM_PARTITIONS}) and declared in the Helm ABI.
+     * Raising one without the other buys nothing; see the T3-11 report on why changing partitions on
+     * an existing topic is an operational migration rather than a config change.
+     *
+     * <p>Ordering: Kafka guarantees order per partition, and the producer keys by aggregate id, so
+     * all events for one payment land on one partition and are still processed in order by one
+     * thread. Concurrency reorders across payments only, which nothing here depends on.
+     */
     @Bean(name = LISTENER_CONTAINER_FACTORY)
     public ConcurrentKafkaListenerContainerFactory<String, String> webhookKafkaListenerContainerFactory(
             ConsumerFactory<String, String> webhookConsumerFactory,
-            DefaultErrorHandler webhookKafkaErrorHandler) {
+            DefaultErrorHandler webhookKafkaErrorHandler,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${spring.kafka.listener.concurrency:3}") int concurrency) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(webhookConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
         factory.setCommonErrorHandler(webhookKafkaErrorHandler);
+        factory.setConcurrency(Math.max(1, concurrency));
         return factory;
     }
 

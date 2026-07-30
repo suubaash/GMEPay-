@@ -4,6 +4,7 @@ import com.gme.pay.payment.opsrun.LedgerOpsRunTrigger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -45,8 +46,15 @@ public class RevenuePostingReplayScheduler {
         this.service = service;
     }
 
+    // T3-11: the replay drains revenue_posting_failures by re-posting stored payloads to
+    // revenue-ledger. Its "exactly one attempt per row per sweep" property is enforced per JVM, so a
+    // second replica would spend the shared `attempts` budget twice as fast and could burn a row to
+    // POISON on transient failures that were really one outage. The 201-vs-200 check keeps the money
+    // itself from being double-booked; this lock keeps the retry budget honest.
     @Scheduled(fixedDelayString = "${gmepay.revenue-posting-replay.interval-ms:300000}",
             initialDelayString = "${gmepay.revenue-posting-replay.initial-delay-ms:60000}")
+    @SchedulerLock(name = "RevenuePostingReplay_replayDuePostings",
+            lockAtMostFor = "PT15M", lockAtLeastFor = "PT0S")
     public void replayDuePostings() {
         try {
             service.run(LedgerOpsRunTrigger.SCHEDULER, null);

@@ -8,10 +8,8 @@ import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
 import com.gme.pay.payment.domain.settlement.SettlementBookingService;
-import org.springframework.boot.web.client.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 
 /**
  * Wires the {@link PaymentOrchestrator} together with the REST client adapters.
@@ -28,22 +26,35 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 @Configuration
 public class ClientBeans {
 
-    /**
-     * Switches the autoconfigured {@link org.springframework.web.client.RestClient.Builder} from the
-     * default {@code SimpleClientHttpRequestFactory} (JDK {@code HttpURLConnection}) to
-     * {@link JdkClientHttpRequestFactory} (backed by {@code java.net.http.HttpClient}).
+    /*
+     * There used to be a `patchCapableRequestFactoryCustomizer` bean here:
      *
-     * <p>Rationale: {@code HttpURLConnection} rejects the {@code PATCH} verb with
-     * {@code ProtocolException: Invalid HTTP method: PATCH}, which broke
-     * {@code RestTransactionClient.commitStatus} ({@code PATCH /v1/transactions/{ref}/status}) on the
-     * live orchestration path — the scheme would capture but the local status commit would fail. The
-     * JDK {@code HttpClient} supports arbitrary methods including PATCH. Applies to every adapter that
-     * autowires the shared builder (transaction/rate/qr/scheme clients).
+     *     return builder -> builder.requestFactory(new JdkClientHttpRequestFactory());
+     *
+     * It existed because HttpURLConnection (Boot's default SimpleClientHttpRequestFactory) rejects
+     * the PATCH verb with `ProtocolException: Invalid HTTP method: PATCH`, which broke
+     * RestTransactionClient.commitStatus (PATCH /v1/transactions/{ref}/status) on the live
+     * orchestration path — the scheme would capture but the local status commit would fail.
+     *
+     * T3-11 DELETED it, and the deletion is the fix, not a cleanup. That factory carried NO
+     * timeouts, so every client fed by the shared builder — transaction, rate, qr, prefunding,
+     * revenue-ledger, partner-config, smart-router — was unbounded on read: a peer that accepted the
+     * connection and then went quiet held a Tomcat worker until the OS closed the socket. That is
+     * the mechanism `RUNBOOK_LOAD_AND_CAPACITY.md` §4.1 #7 identified as the manufacturer of
+     * UNCERTAIN payments under load.
+     *
+     * Both concerns are now met by ONE mechanism instead of two competing ones:
+     * com.gme.pay.http.HttpClientTimeoutAutoConfiguration (lib-errors) installs a
+     * JdkClientHttpRequestFactory — still PATCH-capable, that property is preserved — carrying a
+     * connect and a read timeout, on every service in the fleet.
+     *
+     * Two customizers both calling `builder.requestFactory(...)` is a race decided by bean ordering,
+     * where the loser is silently discarded; the failure mode of getting it wrong is not an error but
+     * an unbounded money-path client that looks configured. So payment-executor no longer registers
+     * a competing customizer. It tightens the platform floor by PROPERTY instead — see
+     * `gmepay.http.client.*` in application.properties, where the 5 s read budget and the reasoning
+     * for it are stated. Pinned by InternalHttpTimeoutTest.
      */
-    @Bean
-    public RestClientCustomizer patchCapableRequestFactoryCustomizer() {
-        return builder -> builder.requestFactory(new JdkClientHttpRequestFactory());
-    }
 
     /**
      * Constructs the {@link PaymentOrchestrator} using the {@code @Primary} REST adapters

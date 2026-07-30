@@ -72,6 +72,13 @@ public class WebhookBacklogMonitor {
     @Scheduled(
             fixedDelayString = "${gmepay.webhook.backlog-monitor.interval-ms:60000}",
             initialDelayString = "${gmepay.webhook.backlog-monitor.initial-delay-ms:10000}")
+    // T3-11: without the lock, N replicas each evaluate the same backlog and each publish the same
+    // ops.alert — so a single incident pages N times. That is not merely noisy: alert fatigue is how
+    // a real page gets ignored, and the dedup/suppression this alert relies on is per-JVM, so it
+    // cannot collapse them. lockAtMostFor comfortably exceeds the two indexed COUNTs this does.
+    @net.javacrumbs.shedlock.spring.annotation.SchedulerLock(
+            name = "WebhookBacklogMonitor_checkBacklog",
+            lockAtMostFor = "PT2M", lockAtLeastFor = "PT0S")
     public void checkBacklog() {
         evaluate();
     }

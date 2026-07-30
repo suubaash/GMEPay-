@@ -2,6 +2,7 @@ package com.gme.pay.settlement.scheduler;
 
 import com.gme.pay.settlement.corridor.CorridorReconResult;
 import com.gme.pay.settlement.corridor.CorridorThreeWayReconciler;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,7 +48,12 @@ public class CorridorReconScheduler {
      * the KST business day has closed and after the ZeroPay morning recon window, so a shared
      * transaction-mgmt read is not competing with it.
      */
+    // T3-11: one corridor recon per night across the cluster. Two replicas would each write a
+    // corridor_recon_summary row for the same date, so the three-way tie-out an operator reads would
+    // show two conflicting answers for one day with no way to tell which run produced which.
     @Scheduled(cron = "${gmepay.settlement.corridor-recon.cron:0 30 2 * * *}")
+    @SchedulerLock(name = "CorridorReconScheduler_reconcileYesterday",
+            lockAtMostFor = "PT30M", lockAtLeastFor = "PT0S")
     public void reconcileYesterday() {
         if (!enabled) {
             log.debug("CorridorReconScheduler: disabled (gmepay.settlement.corridor-recon.enabled=false)");

@@ -7,6 +7,7 @@ import com.gme.pay.scheme.zeropay.adapter.model.BatchType;
 import com.gme.pay.scheme.zeropay.adapter.model.TransferResult;
 import com.gme.pay.scheme.zeropay.ops.ZpBatchRunExecutor;
 import com.gme.pay.scheme.zeropay.ops.ZpBatchRunTrigger;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -134,14 +135,39 @@ public class ZeroPayBatchScheduler {
     // ~02:00 KST — ZP0011 + ZP0021 (payment/refund result registration)
     // -----------------------------------------------------------------------
 
+    /*
+     * T3-11 — @SchedulerLock on all six windows.
+     *
+     * Every one of these generates a ZP00xx file AND TRANSFERS it to ZeroPay. On two replicas both
+     * pods fire the same cron in the same second and ZeroPay receives the file twice: a duplicated
+     * payment-result registration, a duplicated settlement request. Nothing downstream of the
+     * transfer can undo that, and the zp_batch_files registry would record two GENERATED rows for one
+     * business day, so even the audit trail would be ambiguous about what the scheme was actually
+     * sent. This lock — not throughput — is what pinned this adapter to a single replica.
+     *
+     * One lock name per window rather than one shared name, because the windows are independent: a
+     * long-running 05:00 run must not block the 14:00 one, and a shared name would make that the
+     * normal case rather than the exception.
+     *
+     * lockAtMostFor is a crash safety net, not a runtime budget. It is set to an hour — far above any
+     * real generate+transfer — deliberately: expiring EARLY lets a second pod start while the first
+     * is mid-transfer, which is the exact duplicate this exists to stop. A window that genuinely
+     * crashed is recovered by the T3-4 re-run controller (which shares runWindow below), not by
+     * waiting for a lock to lapse. lockAtLeastFor is zero: nothing here is fast enough for the
+     * fire-twice-in-one-second problem lockAtLeastFor guards against, and the ZP0011/ZP0021 and
+     * ZP0065/ZP0066 pairs are only two minutes apart under DIFFERENT names anyway.
+     */
+
     /** Generates and transfers ZP0011 (payment result) at ~02:00 KST. */
     @Scheduled(cron = "0 0 2 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0011", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generatePaymentResult() {
         runWindow(BatchType.ZP0011, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }
 
     /** Generates and transfers ZP0021 (refund result) at ~02:02 KST (2 minutes after ZP0011). */
     @Scheduled(cron = "0 2 2 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0021", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateRefundResult() {
         runWindow(BatchType.ZP0021, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }
@@ -152,12 +178,14 @@ public class ZeroPayBatchScheduler {
 
     /** Generates and transfers ZP0061 (morning settlement request) at ~05:00 KST. */
     @Scheduled(cron = "0 0 5 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0061", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateMorningSettlementRequest() {
         runWindow(BatchType.ZP0061, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }
 
     /** Generates and transfers ZP0063 (afternoon settlement request) at ~14:00 KST. */
     @Scheduled(cron = "0 0 14 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0063", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateAfternoonSettlementRequest() {
         runWindow(BatchType.ZP0063, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }
@@ -168,12 +196,14 @@ public class ZeroPayBatchScheduler {
 
     /** Generates and transfers ZP0065 (payment detail) at ~22:00 KST. */
     @Scheduled(cron = "0 0 22 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0065", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generatePaymentDetailFile() {
         runWindow(BatchType.ZP0065, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }
 
     /** Generates and transfers ZP0066 (refund detail) at ~22:02 KST (2 minutes after ZP0065). */
     @Scheduled(cron = "0 2 22 * * *", zone = "Asia/Seoul")
+    @SchedulerLock(name = "ZeroPayBatch_ZP0066", lockAtMostFor = "PT1H", lockAtLeastFor = "PT0S")
     public void generateRefundDetailFile() {
         runWindow(BatchType.ZP0066, ZpBatchRunTrigger.SCHEDULER, null, null, null);
     }

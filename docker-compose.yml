@@ -330,6 +330,21 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # T3-11: partition count for auto-created topics. This was NEVER set, so the broker default of
+      # 1 applied to every gmepay.* topic. Kafka assigns whole partitions to consumers, so a
+      # 1-partition topic can only ever be read by ONE consumer in a group: raising listener
+      # concurrency did nothing, and adding a replica added an IDLE consumer. Three partitions match
+      # the consumer concurrency the services now default to.
+      #
+      # This only governs topics created FROM NOW ON. Repartitioning a topic that already exists is
+      # an operational migration, not a config change -- see the T3-11 report. On this compose stack
+      # the practical route is to drop the kafka-data volume, because the outbox tables in each
+      # service's database (not the broker) are the durable record of intent.
+      KAFKA_NUM_PARTITIONS: "3"
+      # Single-broker dev stack: a replication factor above 1 would leave every partition
+      # under-replicated and the topic unavailable. Stated explicitly so the 1 is a decision about
+      # this compose file rather than an unnoticed default that gets copied to a real cluster.
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
       KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
     healthcheck: { test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1"], interval: 10s, timeout: 10s, retries: 18, start_period: 20s }
     # T3-7: topic logs + __consumer_offsets. Note the DB outbox tables remain the

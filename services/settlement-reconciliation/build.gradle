@@ -26,6 +26,13 @@ dependencies {
     // PartnerView DTO for the config-registry partner-config client (per-partner rounding mode).
     implementation project(':libs:lib-api-contracts')
 
+    // T3-11: distributed scheduler locking. Seven @Scheduled jobs run on every instance, and three of
+    // them GENERATE AND TRANSMIT SETTLEMENT FILES to a scheme. A second replica means the scheme
+    // receives the same settlement instruction twice. Version matches prefunding (5.16.0), the
+    // service that already had this working -- see com.gme.pay.settlement.config.ShedLockConfig.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 
     // 17.2-G07: Docker-backed PostgreSQL 16 ITs (@Tag("docker")). Excluded from the
