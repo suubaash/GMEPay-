@@ -21,6 +21,10 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     implementation project(':libs:lib-kyb')
     implementation project(':libs:lib-errors')
+    // T5-3: transaction_screening (V004) is EVIDENCE, and evidence with no tamper-evidence is a
+    // claim. lib-audit gives this service the hash-chained, actor-attributed audit_log (V003) that
+    // T5-1 built and explicitly listed kyb-adapter as still lacking.
+    implementation project(':libs:lib-audit')
     implementation project(':libs:lib-events')
     implementation project(':libs:lib-events-kafka')
 

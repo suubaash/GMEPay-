@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * and then <b>verifies the ports actually closed</b> — a zombie JVM fails the run loudly
  * instead of poisoning the next one.</p>
  */
-final class SchemeFleet {
+public final class SchemeFleet {
 
     static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3))
@@ -52,13 +52,13 @@ final class SchemeFleet {
      * never packaged, and is deliberately self-describing so it cannot be mistaken for a deployment
      * value. Sims get it too; they ignore it.
      */
-    static final String INTERNAL_SECRET = "e2e-fixture-internal-token-not-a-deployment-secret";
+    public static final String INTERNAL_SECRET = "e2e-fixture-internal-token-not-a-deployment-secret";
 
     /** The header name the {@code com.gme.pay.internalauth} gate reads (kept literal: e2e-tests does not depend on lib-errors). */
-    static final String INTERNAL_HEADER = "X-Gme-Internal";
+    public static final String INTERNAL_HEADER = "X-Gme-Internal";
 
     /** Env every launched component receives, so a gated service boots and its callers can reach it. */
-    static final Map<String, String> INTERNAL_AUTH_ENV =
+    public static final Map<String, String> INTERNAL_AUTH_ENV =
             Map.of("GMEPAY_INTERNAL_AUTH_SECRET", INTERNAL_SECRET);
 
     private final Path repoRoot;
@@ -67,7 +67,7 @@ final class SchemeFleet {
 
     private record Service(String name, Process process, int port) {}
 
-    SchemeFleet(String logSubdir) {
+    public SchemeFleet(String logSubdir) {
         this.repoRoot = findRepoRoot();
         this.logDir = repoRoot.resolve("e2e-tests/build/" + logSubdir);
         try {
@@ -77,8 +77,24 @@ final class SchemeFleet {
         }
     }
 
-    Path repoRoot() {
+    public Path repoRoot() {
         return repoRoot;
+    }
+
+    /**
+     * Directory holding one {@code <service>.log} per launched process.
+     *
+     * <p>Exposed for {@code footprint.PerTxnFootprintE2ETest}, which measures the bytes of log a
+     * payment actually emits — every process is launched with {@code redirectErrorStream(true)}
+     * into this directory, so the file size IS the service's emitted stdout+stderr volume.
+     */
+    public Path logDir() {
+        return logDir;
+    }
+
+    /** Names of the launched components, in launch order. */
+    public List<String> serviceNames() {
+        return fleet.stream().map(Service::name).toList();
     }
 
     // -------------------------------------------------------------------------
@@ -86,7 +102,7 @@ final class SchemeFleet {
     // -------------------------------------------------------------------------
 
     /** Fails fast when a port is already bound (a zombie from a previous run would corrupt the test). */
-    void assertPortsFree(int... ports) {
+    public void assertPortsFree(int... ports) {
         for (int port : ports) {
             if (portListening(port)) {
                 fail("Port " + port + " is already in use before fleet boot — kill the stale "
@@ -95,13 +111,13 @@ final class SchemeFleet {
         }
     }
 
-    void launchService(String name, int port, Map<String, String> env, String... extraArgs) throws IOException {
+    public void launchService(String name, int port, Map<String, String> env, String... extraArgs) throws IOException {
         Path jar = resolveJar(repoRoot.resolve("services").resolve(name).resolve("build/libs"), name);
         launch(name, jar, port, false, env, extraArgs);
     }
 
     /** Sims live in standalone Gradle builds; their boot jar is built on demand via the wrapper. */
-    void launchSim(String name, int port, Map<String, String> env, String... extraArgs) throws Exception {
+    public void launchSim(String name, int port, Map<String, String> env, String... extraArgs) throws Exception {
         ensureSimJar(name);
         Path jar = resolveJar(repoRoot.resolve("simulators").resolve(name).resolve("build/libs"), name);
         launch(name, jar, port, true, env, extraArgs);
@@ -131,7 +147,7 @@ final class SchemeFleet {
         fleet.add(new Service(name, pb.start(), port));
     }
 
-    void awaitUp(Duration timeout) {
+    public void awaitUp(Duration timeout) {
         Instant deadline = Instant.now().plus(timeout);
         List<Service> pending = new ArrayList<>(fleet);
         while (!pending.isEmpty() && Instant.now().isBefore(deadline)) {
@@ -158,7 +174,7 @@ final class SchemeFleet {
     // Teardown — kill + PROVE the ports closed (no zombie JVMs)
     // -------------------------------------------------------------------------
 
-    void shutdown() {
+    public void shutdown() {
         for (Service s : fleet) {
             if (s.process() != null && s.process().isAlive()) {
                 s.process().descendants().forEach(ProcessHandle::destroyForcibly);
@@ -194,7 +210,7 @@ final class SchemeFleet {
     // -------------------------------------------------------------------------
 
     /** "Up" = the port answers HTTP with any status (same heuristic as run-fleet.ps1). */
-    static boolean isUp(int port) {
+    public static boolean isUp(int port) {
         try {
             HttpResponse<Void> r = HTTP.send(
                     HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/_probe"))
@@ -207,7 +223,7 @@ final class SchemeFleet {
     }
 
     /** Raw TCP-level check — true when something is listening on the port. */
-    static boolean portListening(int port) {
+    public static boolean portListening(int port) {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress("127.0.0.1", port), 500);
             return true;
@@ -283,7 +299,7 @@ final class SchemeFleet {
     // are gated (/internal/scheme/**, /v1/prefunding/**) and would answer 401 without it; on an
     // ungated route the extra header is simply ignored, so it is safe to send unconditionally rather
     // than asking each call site to decide.
-    static HttpResponse<String> get(String url) throws Exception {
+    public static HttpResponse<String> get(String url) throws Exception {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(10))
                         .header(INTERNAL_HEADER, INTERNAL_SECRET)
@@ -291,7 +307,7 @@ final class SchemeFleet {
                 HttpResponse.BodyHandlers.ofString());
     }
 
-    static HttpResponse<String> post(String url, String json) throws Exception {
+    public static HttpResponse<String> post(String url, String json) throws Exception {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofSeconds(20))
                         .header("Content-Type", "application/json")
@@ -300,7 +316,7 @@ final class SchemeFleet {
                 HttpResponse.BodyHandlers.ofString());
     }
 
-    void dumpLogs() {
+    public void dumpLogs() {
         for (Service s : fleet) {
             Path log = logDir.resolve(s.name() + ".log");
             if (!Files.exists(log)) continue;
@@ -315,7 +331,7 @@ final class SchemeFleet {
         }
     }
 
-    static void sleep(long ms) {
+    public static void sleep(long ms) {
         try {
             Thread.sleep(ms);
         } catch (InterruptedException e) {

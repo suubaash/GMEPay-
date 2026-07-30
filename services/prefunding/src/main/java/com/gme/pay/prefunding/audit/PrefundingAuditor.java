@@ -101,6 +101,12 @@ public class PrefundingAuditor {
     public static final String CUMULATIVE_USAGE_CHARGED = "CUMULATIVE_USAGE_CHARGED";
     /** Cumulative AML usage returned to the period (void / decline / expiry). */
     public static final String CUMULATIVE_USAGE_REVERSED = "CUMULATIVE_USAGE_REVERSED";
+    /**
+     * An operator-configured AML monitoring rule tripped on a partner's window evidence (gap T5-3).
+     * Recorded on {@link #AGG_AML_USAGE} beside the charges and reverses it was computed from, so the
+     * alert and the ledger movements that produced it read as one chain rather than two systems.
+     */
+    public static final String AML_MONITORING_RULE_FIRED = "AML_MONITORING_RULE_FIRED";
 
     // ---- named system principals ----
 
@@ -114,6 +120,15 @@ public class PrefundingAuditor {
     /** The breach hook that proposes a partner suspension when the float goes negative. */
     public static final String SYSTEM_BREACH_AUTO_SUSPEND =
             AuditActors.system("prefunding-breach-auto-suspend");
+
+    /**
+     * The AML monitoring evaluator (gap T5-3). A rule firing is a platform decision taken against a
+     * partner by a configured threshold, not an action by whoever happened to read the evidence
+     * endpoint that triggered the evaluation — attributing it to that reader would put a human's name
+     * on a machine's determination. It is also reachable off-request entirely, so it names its
+     * component.
+     */
+    public static final String SYSTEM_AML_MONITORING = AuditActors.system("prefunding-aml-monitoring");
 
     /**
      * The local-dev demo seed runner ({@code PrefundingSeedRunner}). It creates a partner with USD
@@ -248,6 +263,48 @@ public class PrefundingAuditor {
                 .money("amountUsd", amountUsd)
                 .bytes();
         append(AGG_AML_USAGE, partnerCode, eventType, beforeJson, afterJson, actorId);
+    }
+
+    /**
+     * Audit an AML monitoring rule firing on {@link #AGG_AML_USAGE} (gap T5-3).
+     *
+     * <p>The row records the rule that fired, what it measured, the value observed, the threshold it
+     * exceeded and the exact window — everything needed to reproduce the determination from the
+     * append-only ledger without the alert message beside it. The {@code before} position is the same
+     * rule with {@code fired:false}, so a reader sees the rule's definition and its outcome in one row
+     * rather than having to fetch the configuration that was live at the time.
+     *
+     * <p>Attributed to {@link #SYSTEM_AML_MONITORING}: a threshold comparison is a platform
+     * determination with no human in the loop, and the operator who happened to request the evidence
+     * read did not make it.
+     *
+     * <p>This row is evidence that a CONFIGURED rule tripped. It is not, on its own, a suspicious
+     * activity determination — that judgement belongs to compliance, downstream of this alert.
+     *
+     * @param observed  the measured value (USD for the amount metrics, a plain count otherwise)
+     * @param threshold the configured value it was strictly greater than
+     */
+    public void amlMonitoringRuleFired(String partnerCode, String rule, String metric,
+                                       BigDecimal observed, BigDecimal threshold,
+                                       String windowFrom, String windowTo, Integer windowDays) {
+        byte[] beforeJson = CanonicalJson.object()
+                .str("rule", rule)
+                .str("metric", metric)
+                .money("threshold", threshold)
+                .bool("fired", false)
+                .bytes();
+        byte[] afterJson = CanonicalJson.object()
+                .str("rule", rule)
+                .str("metric", metric)
+                .money("threshold", threshold)
+                .bool("fired", true)
+                .money("observed", observed)
+                .str("windowFrom", windowFrom)
+                .str("windowTo", windowTo)
+                .num("windowDays", windowDays)
+                .bytes();
+        append(AGG_AML_USAGE, partnerCode, AML_MONITORING_RULE_FIRED, beforeJson, afterJson,
+                SYSTEM_AML_MONITORING);
     }
 
     /**
