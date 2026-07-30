@@ -439,12 +439,45 @@ export const adminApi = {
   // ---------- Settlement ----------
   /**
    * GET /v1/admin/settlement/recent -> SettlementBatchSummary[]
-   * { batchId, partnerId, settlementDate (LocalDate), currency, amount, status }
+   * { batchId, partnerId, settlementDate (LocalDate), currency, amount, status,
+   *   transmissionState, transmissionReason, transmittedAt }
+   *
+   * GAP T4-5: `status` is the LIFECYCLE axis (PENDING|GENERATED|TRANSMITTED|RECEIVED|
+   * RECONCILED|ERROR|UNKNOWN) and answers how far reconciliation got. It does NOT answer
+   * "did the file leave?" — `transmissionState` (NOT_TRANSMITTED|
+   * NOT_TRANSMITTED_CHANNEL_UNAVAILABLE|TRANSMISSION_FAILED|TRANSMITTED|UNKNOWN) is the
+   * only field that does. Render both through `@/api/settlementStatus`; never colour a
+   * lifecycle value as success. `transmittedAt` is null for every batch today.
    */
   listSettlements: () => request('/v1/admin/settlement/recent'),
   /**
+   * GET /v1/admin/settlement/batches?partnerId&from&to&limit -> SettlementBatchSummary[]
+   *
+   * Date-RANGED persisted batches, newest first (T4-5). `/settlement/recent` covers only
+   * the newest batches with no window at all; this is the endpoint to use whenever the
+   * operator picks a period. `limit=0` means every batch in the window. Either bound may
+   * be omitted — upstream anchors the window (neither bound = last 30 days) and rejects a
+   * window wider than 400 days or an inverted one with a 400.
+   */
+  listSettlementBatches: (filters) =>
+    request(`/v1/admin/settlement/batches${qs(filters)}`),
+  /**
+   * GET /v1/admin/settlement/transmission-channel -> TransmissionChannel
+   * { live: boolean, reachableState: string, reason: string|null }
+   *
+   * Whether settlement-reconciliation can transmit a settlement file to a scheme at all
+   * (T4-5) — the settlement counterpart of the regulatory filing-channel board. `live` is
+   * false in every environment today (the only transport writes to a local directory, and
+   * a local directory is explicitly not a channel). Read it rather than hardcoding the
+   * gap, so the UI's "nothing has been sent" banner disappears by itself if a real channel
+   * is ever configured.
+   */
+  getSettlementTransmissionChannel: () =>
+    request('/v1/admin/settlement/transmission-channel'),
+  /**
    * GET /v1/admin/settlement/{batchId} -> SettlementBatchDetail
-   * { batch: SettlementBatchSummary, lines: [{ txnRef, amount, currency, matched }] }
+   * { batch: SettlementBatchSummary, lines: [{ txnRef, amount, currency, matched }],
+   *   matchedCount, openCount }
    */
   getSettlement: (batchId) =>
     request(`/v1/admin/settlement/${encodeURIComponent(batchId)}`),

@@ -100,9 +100,19 @@ function exceptionStatusColor(status) {
   }
 }
 
+/**
+ * Resolution actions. These are **labels recorded on the exception row** —
+ * `resolutionAction` is free text on `ReconExceptionEntity`, and nothing downstream acts on
+ * the value.
+ *
+ * GAP T4-5: `RESUBMIT` was labelled "Resubmit to ZeroPay", which reads as an action that
+ * sends something to the scheme. Nothing is sent: this deployment has no transmission
+ * channel (a local directory is not a channel), and picking this option only annotates the
+ * exception for whoever handles the scheme contact out of band. The label now says so.
+ */
 const RESOLUTION_ACTIONS = [
   { value: 'MANUAL_OVERRIDE', label: 'Manual override' },
-  { value: 'RESUBMIT', label: 'Resubmit to ZeroPay' },
+  { value: 'RESUBMIT', label: 'Flag for resubmission (not sent by this platform)' },
   { value: 'WAIVED', label: 'Waived' },
 ];
 
@@ -459,6 +469,17 @@ export default function SettlementExceptionsPage() {
                   A resolution action is required.
                 </Typography>
               )}
+              {/* T4-5: resolving records an operator decision on this row. It transmits
+                  nothing to the scheme — no settlement channel is configured. */}
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 0.5, ml: 1.5 }}
+                data-testid="resolve-no-transmission-note"
+              >
+                Resolving records your decision against this exception only. It does not send
+                anything to the scheme — this platform has no settlement transmission channel.
+              </Typography>
             </FormControl>
 
             <TextField

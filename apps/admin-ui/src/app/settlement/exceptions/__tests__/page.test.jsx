@@ -211,6 +211,31 @@ describe('ExceptionsPage', () => {
     });
   }, 20000);
 
+  // GAP T4-5: resolving an exception records an operator decision. It sends nothing to the
+  // scheme, and the "Resubmit to ZeroPay" label used to imply that it did.
+  it('says resolving transmits nothing, and no option claims a send to the scheme', async () => {
+    listReconExceptions.mockResolvedValue([OPEN_ROW]);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /resolve exception 1/i }));
+    const dialog = screen.getByRole('dialog');
+
+    expect(screen.getByTestId('resolve-no-transmission-note')).toHaveTextContent(
+      /does not send anything to the scheme/i,
+    );
+    expect(screen.getByTestId('resolve-no-transmission-note')).toHaveTextContent(
+      /no settlement transmission channel/i,
+    );
+    expect(dialog).not.toHaveTextContent(/Resubmit to ZeroPay/i);
+
+    await user.click(screen.getByRole('combobox'));
+    const options = await screen.findAllByRole('option');
+    const labels = options.map((o) => o.textContent);
+    expect(labels).toContain('Flag for resubmission (not sent by this platform)');
+    expect(labels.some((l) => /resubmit to zeropay/i.test(l ?? ''))).toBe(false);
+  }, 20000);
+
   it('Re-run button dispatches reRunException thunk', async () => {
     listReconExceptions.mockResolvedValue([OPEN_ROW]);
     const reRunRow = { ...OPEN_ROW, exceptionStatus: 'RE_RUN' };
