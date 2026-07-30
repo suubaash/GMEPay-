@@ -1,0 +1,111 @@
+{{/*
+============================================================================
+9Pay IPN edge — a SEPARATE Ingress, source-IP restricted.   Gap T5-7.
+============================================================================
+WHY THIS IS ITS OWN OBJECT AND NOT A PATH ON THE MAIN INGRESS
+
+  1. It is the only inbound path in the platform whose caller is a partner's
+     server rather than a partner's client, so it is the only one that can be
+     restricted by source address at all. Mixing it into the main Ingress would
+     apply 9Pay's ranges to api-gateway too (locking every partner out) or, more
+     likely, apply nothing to either.
+  2. It must expose EXACTLY /scheme/ipn (pathType: Exact). scheme-adapter-ninepay
+     also serves /scheme/payout, /scheme/balance and /scheme/decode-qr — internal
+     hub endpoints that MOVE MONEY. A `/` Prefix rule to this Service would put a
+     payout-submission endpoint on the public internet.
+
+WHY IT IS DISABLED BY DEFAULT (`ipnIngress.enabled: false`)
+
+  Before this template the chart had NO route to scheme-adapter-ninepay at all
+  (the main Ingress fronts api-gateway + the two UIs only), so in a Helm install
+  9Pay could not reach /scheme/ipn and every VND payout would have sat waiting
+  for a status push that could never arrive. Enabling the route and restricting
+  it are therefore the same task, and this template refuses to do the first
+  without the second: with `enabled: true` and an empty `sourceRanges`, `helm
+  install`/`template` FAILS. There is no way to open this edge to everyone by
+  forgetting a value.
+
+WHY THE RANGES ARE NOT IN THIS REPO
+
+  They are 9Pay's, and only 9Pay can say what they are today. Get them IN WRITING
+  from 9Pay and set `ipnIngress.sourceRanges` per environment (they differ between
+  9Pay's test and production estates). Documentation/schemes/
+  digest_9pay-payout-api_2026-07-27.md records the addresses 9Pay's API document
+  listed at digest time — a reference to CONFIRM, never a default to ship. A stale
+  hardcoded range fails closed against real traffic, which is a production
+  incident, not a safe default.
+
+DEFENCE IN DEPTH
+  The service itself also enforces the same list
+  (NinepayIpnSourceFilter / gmepay.scheme.ninepay.ipn.allowed-source-ranges) for
+  the case where the Service is reachable without passing this Ingress —
+  in-cluster callers, a port-forward, a NodePort. Set BOTH; see
+  Documentation/RUNBOOK_BACKUP_DR.md's sibling note in
+  outputs/agent/fix_t3-rpo-and-ipn-allowlist_2026-07-28.md §B.
+
+NOT COVERED HERE
+  Egress. 9Pay whitelists OUR source addresses too, which means a stable egress
+  IP (NAT gateway / SNAT pool) registered with 9Pay — infrastructure, not a chart
+  value. And an in-cluster NetworkPolicy limiting who may call
+  scheme-adapter-ninepay is a different control from this one (external source
+  IPs are SNAT'd by the time a NetworkPolicy sees them, so 9Pay's CIDRs would be
+  meaningless there); it is not shipped and is recorded as still-open.
+*/}}
+{{- if (.Values.ipnIngress).enabled }}
+{{- $ranges := .Values.ipnIngress.sourceRanges | default (list) }}
+{{- if eq (len $ranges) 0 }}
+{{- fail "ipnIngress.enabled=true but ipnIngress.sourceRanges is EMPTY. This edge is the only compensating control for gap T5-6 (9Pay does not sign the IPN 'code' field, so a captured success IPN can be replayed as a reversal and still verify), so it is not allowed to be open to the internet. Set ipnIngress.sourceRanges to the IPN egress ranges 9Pay supplied IN WRITING (they are not shipped in this repo - see Documentation/schemes/digest_9pay-payout-api_2026-07-27.md), or leave ipnIngress.enabled=false." }}
+{{- end }}
+{{- if not .Values.ipnIngress.host }}
+{{- fail "ipnIngress.enabled=true but ipnIngress.host is empty. Set the hostname you registered with 9Pay as the IPN callback URL." }}
+{{- end }}
+{{- $cidrs := join "," $ranges }}
+{{- $controller := .Values.ipnIngress.controller | default "nginx" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ipn-ingress
+  labels:
+    {{- include "gmepay.commonLabels" . | nindent 4 }}
+    gmepay.io/edge: ninepay-ipn
+  annotations:
+    # The allowlist annotation is CHOSEN BY THE TEMPLATE from ipnIngress.controller,
+    # not hand-written per environment. Putting the ranges on the wrong controller's
+    # annotation key is a silent no-op: the Ingress admits everything and looks
+    # configured. That failure mode is removed here.
+    {{- if eq $controller "nginx" }}
+    nginx.ingress.kubernetes.io/whitelist-source-range: {{ $cidrs | quote }}
+    # A 403 from the controller must not be swallowed by a custom error page that
+    # returns 200 to 9Pay's retry machinery.
+    nginx.ingress.kubernetes.io/custom-http-errors: ""
+    {{- else if eq $controller "alb" }}
+    alb.ingress.kubernetes.io/inbound-cidrs: {{ $cidrs | quote }}
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    {{- else }}
+    {{- fail (printf "ipnIngress.controller=%q has no source-IP allowlist annotation this chart can render. Supported: nginx (whitelist-source-range), alb (inbound-cidrs). Azure Application Gateway does NOT support a per-Ingress source allowlist via AGIC: enforce the ranges on the Application Gateway WAF custom rule or the subnet NSG, keep ipnIngress.enabled=false, and set gmepay.scheme.ninepay.ipn.allowed-source-ranges on the service as the in-cluster layer. Do not silently render an Ingress that filters nothing." $controller) }}
+    {{- end }}
+    {{- with .Values.ipnIngress.extraAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ipnIngress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ipnIngress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ipnIngress.host | quote }}
+      http:
+        paths:
+          # Exact, NOT Prefix: /scheme/payout must never be publicly routable.
+          - path: {{ .Values.ipnIngress.path | default "/scheme/ipn" }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-{{ .Values.ipnIngress.service | default "scheme-adapter-ninepay" }}
+                port:
+                  number: {{ .Values.ipnIngress.port | default 8080 }}
+{{- end }}

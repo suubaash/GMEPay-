@@ -71,6 +71,27 @@ ingress:
     - host: partner.gmepay.local
       paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
 
+# 9Pay IPN edge (gap T5-7). OFF until 9Pay's IPN egress ranges are in hand — with
+# enabled=true and an empty sourceRanges the template FAILS by design, because this
+# allowlist is the only compensating control for T5-6 (9Pay does not sign the IPN
+# `code` field, so a captured success IPN replays as a reversal and still verifies).
+# sourceRanges is PARTNER DATA: get it from 9Pay in writing.
+#
+# On-prem there is usually a perimeter firewall in front of ingress-nginx as well.
+# Restrict there TOO — nginx's whitelist-source-range is evaluated after the
+# connection is accepted, and it reads the real client only if the controller sees it
+# (use-forwarded-headers / a preserving L4 path). If the controller sits behind an
+# L7 proxy that rewrites the peer, set
+# services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT
+# to the number of appending hops, or the service-level layer will compare the wrong
+# address and deny everything.
+ipnIngress:
+  enabled: false
+  controller: nginx
+  className: nginx
+  host: ipn.gmepay.local
+  sourceRanges: []
+
 # Per-service datasource URLs keep the in-cluster Postgres-per-service defaults
 # from base values.yaml — nothing to override on-prem. Point them at external
 # on-prem Postgres hosts here only if you do NOT run Postgres in-cluster, e.g.:

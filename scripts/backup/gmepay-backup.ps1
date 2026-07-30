@@ -13,7 +13,14 @@
   (run-fleet.ps1, demo.ps1) over bash internals (.smoke/*.sh).
 
 .PARAMETER Action
-  backup (default) | restore | list | verify | check-inventory
+  backup (default) | restore | list | verify | check-inventory | check | pitr
+
+  check  — gap T3-8: is the schedule installed, how old is the newest GOOD artifact, is the
+           off-host copy happening, is WAL streaming up? Exit 0 ok / 1 degraded / 2 the RPO
+           is not what the runbook claims.
+  pitr   — WAL streaming for the money-critical clusters. Reports status by default; pass
+           the action via -ExtraArgs (--init / --basebackup / --start / --stop).
+           Installing the SCHEDULE is a separate script: gmepay-schedule-install.ps1.
 
 .PARAMETER Target
   Backup target directory, as a LINUX path inside the distro.
@@ -44,7 +51,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('backup', 'restore', 'list', 'verify', 'check-inventory')]
+    [ValidateSet('backup', 'restore', 'list', 'verify', 'check-inventory', 'check', 'pitr')]
     [string]$Action = 'backup',
 
     [string]$Target = '/var/backups/gmepay',
@@ -74,6 +81,12 @@ switch ($Action) {
     'backup'          { $script = 'gmepay-backup.sh';  $argv = @('--target', $Target) }
     'list'            { $script = 'gmepay-restore.sh'; $argv = @('--target', $Target, '--list') }
     'check-inventory' { $script = 'check-inventory.sh'; $argv = @() }
+    # T3-8. `check` answers "is the backup capability actually running, and how old is the
+    # newest thing we could restore from" (exit 0 ok / 1 degraded / 2 the RPO is not what
+    # the runbook claims). `pitr` reports the WAL-streaming state for the money-critical
+    # clusters; pass the action through -ExtraArgs, e.g. -Action pitr -ExtraArgs --init.
+    'check'           { $script = 'gmepay-backup-check.sh'; $argv = @('--target', $Target) }
+    'pitr'            { $script = 'gmepay-pitr.sh'; $argv = @() }
     'verify' {
         if (-not $Set -or -not $Db) { Write-Error "-Set and -Db are required for verify"; exit 2 }
         $script = 'gmepay-restore.sh'

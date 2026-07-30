@@ -22,8 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
  * and {@code /scheme/decode-qr} are the hub-facing surface (internal-only, consumed by the
  * future payout orchestration — hub wiring is deliberately out of Phase-3 scope, decision
  * D4). {@code /scheme/ipn} is the INBOUND edge 9Pay pushes status notifications to; in
- * production it must be reachable from the whitelisted 9Pay IPs (test 35.221.251.138;
- * prod 35.240.219.196, 35.187.225.236) and from nothing else.</p>
+ * production it must be reachable from 9Pay's IPN egress addresses and from nothing else.
+ * That is now enforced rather than merely asserted — {@link NinepayIpnSourceFilter} (gap
+ * <b>T5-7</b>) rejects an unlisted source with 403 before the body is parsed, and the
+ * ingress ({@code deploy/helm/gmepay/templates/ingress-ipn.yaml}) drops it earlier still.
+ * <b>The addresses themselves are operator/partner-supplied</b> and default to empty; the
+ * unconfigured state is logged as a WARN on every boot because it leaves T5-6 uncompensated.
+ * ({@code Documentation/schemes/digest_9pay-payout-api_2026-07-27.md} records the addresses
+ * 9Pay's API doc listed — to be confirmed with 9Pay, not assumed.)</p>
  *
  * <p><b>Payout is one-shot and uncancellable</b>: there is no cancel endpoint by design —
  * 9Pay offers none. A payout that answered ambiguously reads back via

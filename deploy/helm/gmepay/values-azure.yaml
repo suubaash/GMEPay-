@@ -79,6 +79,30 @@ ingress:
     - host: partner.gmepay.example.com
       paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
 
+# 9Pay IPN edge (gap T5-7) — AZURE IS THE EXCEPTION AND IT IS DELIBERATE.
+#
+# The Application Gateway Ingress Controller has NO per-Ingress source-IP allowlist
+# annotation. Rendering an Ingress here would produce an object that looks configured
+# and filters NOTHING, which is worse than not having it: the template therefore
+# FAILS if controller=appgw, and this overlay leaves the edge off.
+#
+# On Azure the allowlist has to live where Azure actually enforces it, and it is the
+# operator's action, not a chart value:
+#   1. an Application Gateway WAF custom rule (MatchVariable RemoteAddr, IPMatch on
+#      9Pay's ranges, Action Block) or a listener-scoped rule set, AND
+#   2. an NSG rule on the Application Gateway subnet allowing 443 only from those
+#      ranges.
+# Then set the SERVICE-level list as the in-cluster layer:
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES
+#   (+ GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "1" behind the gateway).
+# The ranges are 9Pay-supplied and are not shipped in this repo.
+ipnIngress:
+  enabled: false
+  controller: appgw          # unsupported for allowlisting on purpose - see above
+  className: azure-application-gateway
+  host: ipn.gmepay.example.com
+  sourceRanges: []
+
 # DB-per-service -> Azure DB for PostgreSQL Flexible Server (placeholders).
 services:
   config-registry:

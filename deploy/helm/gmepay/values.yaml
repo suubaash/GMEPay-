@@ -256,6 +256,62 @@ ingress:
       paths:
         - { path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }
 
+# ---------------------------------------------------------------------------
+# 9Pay IPN edge — gap T5-7. Rendered by templates/ingress-ipn.yaml.
+#
+# THE ONLY compensating control for gap T5-6: 9Pay leaves the IPN `code` field
+# OUTSIDE its signed string, and a bank reversal (code 009) reuses the original
+# transfer's created_at, so a captured success IPN with `code` rewritten to 009
+# still verifies cryptographically and no local rule can tell it from a real
+# reversal. Restricting the edge to 9Pay's own network is what closes that.
+#
+# DISABLED BY DEFAULT, and that is not laziness:
+#   * `enabled: false` keeps the platform's behaviour unchanged — note the main
+#     ingress above never routed to scheme-adapter-ninepay at all, so a Helm
+#     install has never been able to receive a 9Pay IPN (every VND payout would
+#     wait forever for a status push). Opening that route and restricting it are
+#     the same job.
+#   * `enabled: true` with an EMPTY sourceRanges makes `helm template`/`install`
+#     FAIL (see the template). You cannot open this edge to the internet by
+#     forgetting a value; you can only open it deliberately.
+#
+# sourceRanges IS OPERATOR-SUPPLIED DATA AND IS NOT SHIPPED HERE. Ask 9Pay for
+# their current IPN egress addresses IN WRITING; they differ between 9Pay's test
+# and production estates. Documentation/schemes/digest_9pay-payout-api_2026-07-27.md
+# records what 9Pay's API document listed at digest time — a reference to CONFIRM
+# with the partner, never a default to trust. A stale hardcoded range fails closed
+# against live traffic, i.e. it is a production incident, not a safe default.
+#
+# ALSO SET THE SERVICE-LEVEL LIST (defence in depth, for direct reachability):
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "1"
+# The service ships the list EMPTY and logs a WARN naming T5-7/T5-6 on every boot
+# while it stays empty — an unprotected edge is loud, not silent.
+#
+# STILL NOT COVERED by this chart: our EGRESS addresses (9Pay whitelists us too,
+# which needs a stable NAT/SNAT address registered with them — infrastructure, not
+# a chart value), and an in-cluster NetworkPolicy for who may call the adapter
+# (a different control: external source IPs are SNAT'd before a NetworkPolicy
+# sees them, so 9Pay's CIDRs are meaningless there).
+# ---------------------------------------------------------------------------
+ipnIngress:
+  enabled: false
+  # nginx | alb. Chosen here so the template picks the right annotation key —
+  # putting CIDRs on the wrong controller's annotation is a silent no-op. Azure
+  # AGIC has no per-Ingress source allowlist: the template fails rather than
+  # render something that filters nothing (see values-azure.yaml).
+  controller: nginx
+  className: nginx
+  # The hostname registered with 9Pay as the IPN callback URL. Empty + enabled=true
+  # is a template failure.
+  host: ""
+  path: /scheme/ipn        # Exact match. NEVER widen to `/` — /scheme/payout is behind it.
+  service: scheme-adapter-ninepay
+  port: 8080
+  sourceRanges: []         # <-- 9Pay-supplied. See the block above. MUST stay empty in git.
+  tls: []
+  extraAnnotations: {}
+
 # ===========================================================================
 # SERVICES MAP — the single source of deployables. deployments.yaml ranges
 # over this and renders one Deployment + Service per entry via _deployment.tpl.
@@ -490,7 +546,9 @@ services:
                     GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/smnadapter
+      # postgres-sendmn, NOT postgres-scheme — same defect as the ninepay entry below:
+      # compose + scripts/backup/inventory.env give smnadapter its own cluster.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-sendmn:5432/smnadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       # REQUIRED override — the image default is the local simulator.
       GMEPAY_SCHEME_SENDMN_BASE_URL: https://REPLACE-with-sendmn-partner-endpoint
@@ -506,13 +564,28 @@ services:
                     GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM]
     env:
       SERVER_PORT: "8080"
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/npadapter
+      # postgres-ninepay, NOT postgres-scheme: docker-compose.yml and the backup
+      # inventory (scripts/backup/inventory.env) both give npadapter its own cluster.
+      # The chart used to name the zeropay cluster's host with the ninepay database,
+      # which is a host that has no such DB — found while closing T5-7.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ninepay:5432/npadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       # REQUIRED override — the image default is the local simulator.
       GMEPAY_SCHEME_NINEPAY_BASE_URL: https://REPLACE-with-9pay-partner-endpoint
       # Response-signature verification stays ON; turning it off accepts unsigned
       # partner responses on a payout path.
       GMEPAY_SCHEME_NINEPAY_VERIFY_RESPONSES: "true"
+      # ---- T5-7: IPN source allowlist (service-level layer) ---------------------
+      # Ships EMPTY on purpose. Empty = NOT enforcing: the adapter admits an IPN from
+      # any source and logs a WARN naming T5-7/T5-6 on every boot plus once on the
+      # first IPN it admits. Non-empty = fail closed (403 before the body is parsed).
+      # Fill both of these AND ipnIngress.sourceRanges above with the ranges 9Pay
+      # supplies in writing; they are partner data and are not shipped in this repo.
+      GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES: ""
+      # 0 = trust only the socket peer and IGNORE X-Forwarded-For (safe default).
+      # Set to "1" when traffic arrives through ipnIngress, or the peer this sees is
+      # the ingress controller pod and no external range can ever match.
+      GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "0"
 
   # Nepal corridor adapter (stateless). Ships to cloud; the sim-nepal-qr
   # simulator does NOT — override GMEPAY_SCHEME_NEPAL_BASE_URL per overlay to the

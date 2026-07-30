@@ -329,6 +329,79 @@ check(os.path.exists(os.path.join(ROOT, "Documentation", "RUNBOOK_BATCH_OPS.md")
       "Documentation/RUNBOOK_BATCH_OPS.md exists (operator contract for the calendar + re-runs)")
 
 # ---------------------------------------------------------------------------
+# 7. T5-7 - the 9Pay IPN edge is source-restricted, ships CLOSED, and ships EMPTY
+# ---------------------------------------------------------------------------
+# T5-6 cannot be fixed in code we own (9Pay leaves the IPN `code` field outside its signed
+# string, so a captured success IPN with `code` rewritten to a reversal still verifies).  This
+# allowlist is the only compensating control, which makes three properties load-bearing:
+#   (a) the edge exists as its own Ingress, restricted to EXACTLY /scheme/ipn -- the same
+#       Service also serves /scheme/payout, so a `/` Prefix rule would publish a payout
+#       submission endpoint;
+#   (b) enabling it with no ranges must FAIL, not open to 0.0.0.0/0;
+#   (c) NO 9Pay address may be committed anywhere in the chart or the service config -- the
+#       ranges are partner-supplied, differ per estate, and a stale hardcoded range would
+#       fail closed against real traffic.
+print("\n-- 7. T5-7: 9Pay IPN edge source allowlist --------------------------------")
+IPN_TPL = os.path.join(HELM, "templates", "ingress-ipn.yaml")
+check(os.path.exists(IPN_TPL),
+      "chart: templates/ingress-ipn.yaml exists (the IPN edge is its own restricted Ingress)")
+if os.path.exists(IPN_TPL):
+    ipn_tpl = read(IPN_TPL)
+    check("{{- fail " in ipn_tpl and "sourceRanges" in ipn_tpl,
+          "ingress-ipn.yaml: enabling the edge with an EMPTY sourceRanges FAILS the template",
+          "without the fail guard, a forgotten value silently publishes the IPN edge")
+    check("pathType: Exact" in ipn_tpl and "pathType: Prefix" not in ipn_tpl,
+          "ingress-ipn.yaml: routes EXACTLY /scheme/ipn (Prefix would publish /scheme/payout)")
+    check("whitelist-source-range" in ipn_tpl and "inbound-cidrs" in ipn_tpl,
+          "ingress-ipn.yaml: renders the controller-appropriate allowlist annotation",
+          "nginx and ALB use different keys; the wrong key is a silent no-op")
+
+for path in [os.path.join(HELM, "values.yaml")] + [os.path.join(HELM, o) for o in OVERLAYS]:
+    name = os.path.basename(path)
+    doc = yaml.safe_load(read(path)) or {}
+    ipn = doc.get("ipnIngress")
+    check(isinstance(ipn, dict), f"{name}: declares an ipnIngress block")
+    if not isinstance(ipn, dict):
+        continue
+    check(ipn.get("enabled") is False,
+          f"{name}: ipnIngress ships DISABLED (opening the edge is a deliberate act)",
+          f"got enabled={ipn.get('enabled')!r}")
+    check(not (ipn.get("sourceRanges") or []),
+          f"{name}: ipnIngress.sourceRanges is EMPTY in git (9Pay's ranges are partner data)",
+          f"got {ipn.get('sourceRanges')!r} - never commit a partner's IP ranges as a default")
+
+# The service-level layer exists, is wired, and also ships empty.
+NP = os.path.join(ROOT, "services", "scheme-adapter-ninepay")
+np_filter = os.path.join(NP, "src", "main", "java", "com", "gme", "pay", "scheme", "ninepay",
+                         "api", "NinepayIpnSourceFilter.java")
+check(os.path.exists(np_filter),
+      "scheme-adapter-ninepay: NinepayIpnSourceFilter exists (service-level layer for direct reach)")
+np_yaml = read(os.path.join(NP, "src", "main", "resources", "application.yml"))
+check("allowed-source-ranges: ${GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES:}" in np_yaml,
+      "scheme-adapter-ninepay: the shipped allowlist default is EMPTY (env-supplied, never baked in)")
+np_env = ((chart_services.get("scheme-adapter-ninepay") or {}).get("env") or {})
+for var in ("GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES",
+            "GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT"):
+    check(var in np_env, f"chart: scheme-adapter-ninepay declares {var}")
+check(str(np_env.get("GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES", "x")) == "",
+      "chart: scheme-adapter-ninepay ships the IPN allowlist EMPTY (operator/partner input)")
+
+# No 9Pay address anywhere in the chart or the adapter's shipped config. The addresses that
+# 9Pay's API document listed are recorded ONCE, in Documentation/schemes/ (a digest of the
+# partner doc), which is where a reference belongs; a deployable default is a different thing.
+IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+ALLOWED_LITERALS = {"0.0.0.0", "127.0.0.1", "255.255.255.255", "1.2.3.4"}
+for path in ([os.path.join(HELM, "values.yaml")] + [os.path.join(HELM, o) for o in OVERLAYS]
+             + [IPN_TPL, os.path.join(NP, "src", "main", "resources", "application.yml")]):
+    if not os.path.exists(path):
+        continue
+    found = sorted({ip for ip in IPV4.findall(strip_comments(read(path)))
+                    if ip not in ALLOWED_LITERALS})
+    check(not found,
+          f"{os.path.basename(path)}: carries NO hardcoded partner IP address",
+          ", ".join(found))
+
+# ---------------------------------------------------------------------------
 for ok, label, detail in checks:
     print(("ok   " if ok else "FAIL ") + label + ("" if ok or not detail else " - " + detail))
 

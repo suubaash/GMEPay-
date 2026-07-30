@@ -83,6 +83,24 @@ ingress:
     - host: partner.gmepay.example.com
       paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
 
+# 9Pay IPN edge (gap T5-7). OFF until 9Pay's IPN egress ranges are in hand: with
+# enabled=true and an empty sourceRanges the template FAILS by design, because this
+# allowlist is the only compensating control for T5-6 (9Pay does not sign the IPN
+# `code` field). sourceRanges is PARTNER DATA — ask 9Pay in writing; do not copy it
+# from a document. On ALB the ranges render as inbound-cidrs, and note the ALB itself
+# must also be reachable only on 443 from those CIDRs at the security-group level:
+# inbound-cidrs configures the SG the controller manages, so do not attach a second
+# SG that re-opens 0.0.0.0/0.
+ipnIngress:
+  enabled: false
+  controller: alb
+  className: alb
+  host: ipn.gmepay.example.com
+  sourceRanges: []
+  extraAnnotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:123456789012:certificate/REPLACE
+
 # DB-per-service -> point each at its RDS instance/database (placeholders).
 services:
   config-registry:
