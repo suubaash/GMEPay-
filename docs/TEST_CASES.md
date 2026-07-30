@@ -2,6 +2,12 @@
 
 _What the platform must accomplish, as testable behaviors. Grounded in the current build (ZeroPay inbound + Nepal outbound, MPM/CPM, FX, prefunding, settlement, ADR-016 failover routing). Legend: **[E]** externally/cert-gated (KFTC/BOK/Hometax/KoFIU/vendor) — behavior specifiable, live run blocked by a third party._
 
+> **Every case in this catalog runs against SIMULATORS.** Two of the capabilities named in the
+> grounding sentence are further limited than the `[E]` marker suggests: the Nepal corridor
+> **refuses every payment** until an owner supplies its FX margin and service fee (T4-1), and
+> settlement **generates files and never transmits them** — every batch is terminal at
+> `NOT_TRANSMITTED_CHANNEL_UNAVAILABLE` (T4-5). Authority: `Documentation/GAP_REGISTER.md`.
+
 ## 1. QR scan & decode
 - **TC-QR-01** Scan a static MPM merchant QR → decode returns merchant identity, **no amount** → customer must enter amount.
 - **TC-QR-02** Scan a dynamic MPM QR → decode returns the **amount embedded in the QR** (customer cannot override).
@@ -84,7 +90,7 @@ _What the platform must accomplish, as testable behaviors. Grounded in the curre
 ## 10. Events & webhooks
 - **TC-EVT-01** `payment.approved` / `transaction.committed` emitted on commit via the outbox (topic `gmepay.<eventType>`).
 - **TC-EVT-02** Producer and consumers agree on the canonical payload type (camelCase, money as decimal strings).
-- **TC-WH-01** Partner webhook: PENDING delivery row created, dispatched, signed (HMAC), retried with backoff, DLQ on exhaustion.
+- **TC-WH-01** Partner webhook: PENDING delivery row created, dispatched, signed (HMAC), retried with backoff, DLQ on exhaustion. Verifiable on our side only — **[E]** for the other half: no partner has ever successfully verified a GMEPay+ signature, and every pre-existing endpoint must be rotated and its new secret handed over before one could (T5-8, T5-9).
 - **TC-WH-02** Webhook delivery is idempotent; re-delivery does not duplicate.
 
 ## 11. Partner onboarding & config

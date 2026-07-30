@@ -130,8 +130,10 @@ idle fleet is.** This is the most important sentence in the document for an AWS 
 
 At **1 000 transactions/day the platform generates 3 GB of database per year.** That is a rounding
 error: it fits in the free tier of essentially any managed database, and a year of it costs single-digit
-dollars of storage. Meanwhile the platform runs, 24/7, regardless of whether a single payment
-happens:
+dollars of storage. Meanwhile the platform, **once it is deployed**, costs the same 24/7 regardless
+of whether a single payment happens. (Today it is deployed nowhere: one Windows laptop under Docker
+Compose, and the Helm chart has never been applied — T1-6, T3-9. The table below is therefore a
+*sizing model of the intended topology*, not a bill anyone is currently paying.)
 
 | Fixed cost item | Count | Source |
 |---|---:|---|
@@ -141,8 +143,8 @@ happens:
 | Redis, MinIO, Keycloak, MongoDB | 4 | `docker-compose.yml` |
 | Replicas per service | **1** | `values.yaml:59` `defaultReplicas: 1`, overridden nowhere |
 
-So the bill is **~20 always-on compute units plus ~15 always-on database instances**, and it is
-**identical at 10 transactions/day and 10 000**. Concretely:
+So the bill **would be** **~20 always-on compute units plus ~15 always-on database instances**, and
+it is **identical at 10 transactions/day and 10 000**. Concretely:
 
 - **Going from 1 000 to 10 000 txn/day adds ~27 GB of storage per year** — a few dollars a month.
   It does not, on these measurements, require a single additional instance.
@@ -288,8 +290,10 @@ business metric at all** — no approval/decline counter, no per-entry-point lat
   settlement-reconciliation, with no per-service change. Depth *and* age, because depth alone cannot
   distinguish a draining burst from a stalled publisher.
 
-All four were **verified on a live fleet** — scraped from `/actuator/prometheus` after 200 real
-payments, not merely unit-tested.
+All four were **verified against a running fleet** — scraped from `/actuator/prometheus` after 200
+real payments, not merely unit-tested. "Running fleet" means the local H2-backed fleet described in
+§6 on one Windows host; **nothing here has run in a deployed environment, because there isn't one**
+(T1-6). Do not quote this line as "verified in production".
 
 ### 7.2 The SLO template — deliberately blank
 

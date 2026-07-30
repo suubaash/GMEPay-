@@ -2,6 +2,17 @@
      Capability section (Section 1) manually authored from the 2026-06-16 PRD-vs-WBS audit. -->
 # GMEPay+ — WBS Status & Completion Audit
 
+> ### ⚠ STALE, AND NOT THE AUTHORITY ON WHAT WORKS
+> This audit is dated **2026-06-16** and has not been re-graded since. The authority on what is
+> built, gated or absent is **`Documentation/GAP_REGISTER.md`**, which is newer and adversarial.
+>
+> Read the percentages below as *build progress against a ticket plan*, never as readiness. In
+> particular, no percentage here accounts for the facts that **no regulatory filing has ever been
+> made, no settlement file has ever been transmitted, no transaction has ever been screened, no
+> partner has verified a webhook, no scheme has certified us, no restore drill or load test has
+> ever run, and there is no always-on environment**. A "~56% MVP complete" figure is compatible
+> with all of those being true, because they are.
+
 > **Refreshed 2026-06-16** with a capability-weighted completion audit (PRD + business
 > case vs WBS vs *current* code, 12 capability domains, every % adversarially re-graded).
 > The ticket-level burndown in **Section 2** is the earlier script-generated snapshot; it
@@ -41,7 +52,7 @@ concentrated in the money-path — sitting on ~10% of the total ticketed scope.*
 | Settlement, recon & revenue | ✅ | **44** | 41 | Calculators + recon API real; settlement booking + outbound ZP files + SFTP missing |
 | Notification & webhooks | ✅ | **44** | 46 | Signing/retry/DLQ/dispatcher built but no `payment.approved` is ever emitted (dark) |
 | Auth/identity & platform security | ⬜ | **35** | 44 | Good primitives (PBKDF2/OIDC/hash-chain); issuance↔verify unwired; RBAC fixture-only |
-| Compliance & regulatory reporting | ⬜ | **25** | 55 | BOK/Hometax/KoFIU coded but gated off; mostly post-go-live anyway |
+| Compliance & regulatory reporting | ⬜ | **25** | 55 | Report CONTENT is generated for BOK/Hometax/KoFIU; **no lane has a submission channel and nothing has ever been filed** (T5-2). Suspicious-transaction detection does not exist at all and is not merely gated: there is no screening in the payment path and no party identity to screen (T5-3, T5-11). The 55 is a code-completeness score, not a compliance posture |
 | Infra, observability & QA | ⬜ | **21** | 29 | Compose + Testcontainers exist; no k8s/IaC/Vault/OTel/alerting/E2E-gate/perf/UAT |
 
 **Overall: ~49% capability-weighted · ~56% MVP-critical.**
@@ -68,8 +79,16 @@ milestone, but not production-grade end-to-end. Critical-path blockers, in order
 
 **Deferred / calendar-bound** (not Oct-10 blockers if launch stays domestic GME-Remit on
 ZeroPay): BOK FX1014/1015 reporting (domestic same-ccy is exempt), Hometax tax-invoice,
-KoFIU CTR/STR, Travel-Rule, PIPA/AML enforcement, Partner-B authoritative quote, and
-operator-side scheme-profile config.
+Partner-B authoritative quote, and operator-side scheme-profile config.
+
+**NOT merely deferred — long-lead, and mis-classified above until 2026-07-28:** KoFIU CTR/STR,
+Travel Rule and AML enforcement are not calendar-bound items that can be switched on near launch.
+There is **no transaction screening and no AML monitoring in the payment path at all**, and the
+payment contracts carry **no party identity** — only an opaque payer handle — so a screening
+vendor purchase produces zero coverage on its own (T5-3, T5-11). The real sequence is: partner
+contract change to carry the originator's identity → vendor → compliance-owned rules and
+thresholds → an alert-triage function → a live KoFIU filing channel (T5-2). The first step is a
+partner-integration programme with external lead time, and it gates the rest.
 
 *Source: `prd-wbs-gap-completion-audit` workflow, 2026-06-16 — 12 domains assessed against
 PRD.txt + BusinessScenario.txt + WBS + current code, each completion % adversarially verified.*

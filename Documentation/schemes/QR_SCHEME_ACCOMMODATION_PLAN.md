@@ -53,9 +53,9 @@
 
 - [x] `sim-sendmn`: standalone sim (own settings.gradle, port 9106) implementing Authentication/VerifyQr/Confirm/PaymentStatus + accepts fx-rate registration; plain-JSON envelope mode for local dev
 - [x] `sim-ninepay`: sim (port 9107) implementing verify/transfer/transfer-info/balance + fires IPN callbacks (incl. delayed 009 reversal scenario toggle)
-- [x] E2E: wallet scans SendMN static QR → verify → confirm → approved, via sim — `e2e-tests` `SendmnAdapterSimE2ETest` (5 live scenarios incl. dup-replay / wire-304 / wire-307), green 2026-07-27
+- [x] E2E: wallet scans SendMN static QR → verify → confirm → approved, via sim — `e2e-tests` `SendmnAdapterSimE2ETest` (5 simulator scenarios incl. dup-replay / wire-304 / wire-307), green 2026-07-27
 - [x] Hub-through E2E: wallet→hub→SENDMN adapter→sim — `e2e-tests` `SendmnHubThroughE2ETest` (classify + KRW→MNT FX pay + settlement@registered-rate + USD prefund-once + insufficient-prefund negative + by-reference restart probe), green 2026-07-27; found+fixed 3 hub wiring bugs (QPay AID `A000000843...` unclassified; partner=SENDMN hijacked by failover router; prefunding deduct wire shape `amountUsd`/`deductedUsd` vs real `amount`/`balance`)
-- [x] E2E: 9Pay payout submit → IPN SUCCESS → (toggle) 009 reversal handled — `e2e-tests` `NinepayPayoutE2ETest` (4 live scenarios incl. wire-1062 + delayed 009, full mutual RSA + verify-responses=true), green 2026-07-27
+- [x] E2E: 9Pay payout submit → IPN SUCCESS → (toggle) 009 reversal handled — `e2e-tests` `NinepayPayoutE2ETest` (4 simulator scenarios incl. wire-1062 + delayed 009, full mutual RSA + verify-responses=true), green 2026-07-27
 
 ## Phase 5 — cross-cutting hardening (from arch gaps)
 

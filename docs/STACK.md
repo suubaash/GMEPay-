@@ -3,6 +3,14 @@
 This is the final, approved stack. When re-authoring tickets, replace generic phrasing with these
 CONCRETE technologies, file paths, and framework constructs so a developer builds the right thing.
 
+> **This file is the TARGET architecture, in the present tense.** It says what each component *is
+> for*, not what is deployed. Several entries below are not implemented anywhere in this repo —
+> notably the **Nginx WAF/TLS edge** (no Nginx config exists; still listed as a missing component
+> in `COMPLETION_PLAN_V3.md`), **Vault/KMS secrets and field-level encryption** (no secrets
+> backend, no rotation, no encrypted column anywhere — T0-6, T5-5), and **HA/multi-AZ PostgreSQL**
+> (the Helm chart declares no StatefulSet or volume claim, and the only environment is a laptop —
+> T3-9, T1-6). Authority on what actually exists: `Documentation/GAP_REGISTER.md`.
+
 ## Architecture decisions (ADRs — resolve all prior ambiguities)
 Five stack contradictions between the source images were decided 2026-06-10 (ticket 18.7-G01).
 A second batch of ADRs (006–014) was decided 2026-06-11 for the Partner Setup re-baseline.

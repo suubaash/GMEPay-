@@ -7,7 +7,14 @@
 ## Service contract (MSA: own DB, API-only communication)
 
 - **Datastore (owned by this service):** Object storage (reports/exports)
-- **APIs / events I EXPOSE:** /v1/reports, BOK FX1014/1015 export
+- **APIs / events I EXPOSE:** /v1/reports, BOK FX1014/1015 export, /v1/reports/filing-channels
+  - **GENERATION ONLY — this service files nothing.** No regulatory lane (BOK / KoFIU / Hometax) has
+    a transmission channel configured, so a filing's most advanced reachable status is
+    `NOT_FILED_CHANNEL_UNAVAILABLE` and **nothing has ever been submitted to any authority**
+    (T5-2). Separately, **suspicious-transaction DETECTION does not exist**: there is no screening
+    or AML monitoring in the payment path and no party identity in the payment contracts to screen
+    (T5-3, T5-11), so a KoFIU STR body can only ever be produced for a case a human identified by
+    other means.
 - **APIs / events I CONSUME:** revenue-ledger, transaction-mgmt (sync/event)
 - **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
 

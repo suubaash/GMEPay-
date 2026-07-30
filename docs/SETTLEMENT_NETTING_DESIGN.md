@@ -29,7 +29,7 @@ the **prefunding turn ratio** on the Flywheel dashboard (`GET /v1/admin/flywheel
 
 | Phase | Scope | Trigger |
 |---|---|---|
-| **N0 (now)** | Calculator + tests in `settlement-reconciliation` (`calculator/MultilateralNettingCalculator`); efficiency metric visible in reports as 0% while corridors are one-sided | done |
+| **N0 (now)** | Calculator + tests in `settlement-reconciliation` (`calculator/MultilateralNettingCalculator`); efficiency metric visible in reports as 0% while corridors are one-sided | calculator built + wired as a REPORT only (`applied=false`); nothing funds on a netted basis, and no settlement file has ever been transmitted (T4-5) |
 | **N1** | Batch job builds obligations from settled transactions per value date; net positions drive the settlement instruction file; recon asserts `net = Σ signed obligations` per counterparty | first two-sided corridor live (Nepal adapter, Turn 2) |
 | **N2** | Netting-aware prefund thresholds: partner low-balance tiers computed on *expected net* outflow, not gross; feeds loop C's prefunding-turn KPI directly | ≥ 2 two-sided corridors |
 
