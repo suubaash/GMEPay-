@@ -20,15 +20,18 @@ import java.util.List;
  *   <li><b>tie-out variance</b> — the recorded total for a revenue stream vs the total actually credited
  *       to its income account for the same references ({@code tieOuts}). A non-zero {@code variance} on
  *       any stream means the two books disagree on AMOUNT even where both have rows.</li>
- *   <li><b>unmapped component</b> — money the module <em>records</em> but cannot journal because no
- *       account code exists for it, so booking it would require inventing an accounting policy
- *       ({@code unmappedComponents}). This is a finance-owner decision, surfaced with the exact amount
- *       at stake instead of being dropped.</li>
+ *   <li><b>unmapped component</b> — money the module <em>records</em> that is not on the double-entry
+ *       books ({@code unmappedComponents}), reported with the exact amount at stake instead of being
+ *       dropped. Originally this meant "no account code exists for it, so booking it would require
+ *       inventing an accounting policy"; since <b>T2-10</b> the one entry
+ *       ({@code PARTNER_COMMISSION_SHARE}) has a decided treatment and reports only the residue that is
+ *       genuinely still unbooked — rows written before the decision and not yet replayed. A zero amount
+ *       therefore means the money IS booked, never that the question was dropped.</li>
  * </ol>
  *
  * <p>{@code clean} is true only when there are no missing journals, no tie-out variance AND no unmapped
  * amount. While an unmapped component carries money, {@code clean} stays false by design: the books are
- * genuinely incomplete until the missing account code is decided, and this report must not claim
+ * genuinely incomplete while recorded money is absent from them, and this report must not claim
  * otherwise.
  *
  * @param startDate          inclusive first revenue date in scope
@@ -73,8 +76,13 @@ public record RevenueJournalReconciliationView(
     /**
      * One revenue stream's recorded total vs what the journal actually credited for the same references.
      *
+     * <p>{@code PARTNER_COMMISSION_CARVE} (T2-10) is a stream in the same sense but the opposite
+     * direction: the account it credits is the {@code PAYABLE_PARTNER} liability rather than an income
+     * account, because the carve is commission GME pays away out of income it earned.
+     *
      * @param stream          revenue stream name (e.g. {@code FX_MARGIN})
-     * @param account         the income account the stream credits
+     * @param account         the account the stream credits (an income account, or {@code PAYABLE_PARTNER}
+     *                        for the partner commission carve)
      * @param currency        ISO-4217 currency of both amounts
      * @param recordedAmount  total per the record store (the subledger)
      * @param journalledAmount total CREDITs on {@code account} for those same references

@@ -2,6 +2,69 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-31 (T2-10 RESOLVED: the partner commission carve is on the books)
+
+### Added - the partner-side leg of the two-sided commission split is journalled
+The owner's ruling is a principle, not a preference: *"if it's our income then it should be booked as
+revenue; if this is payout cost of partner then it is payable expense."* The money flow decides which,
+and the code says the carve is a **cost**:
+
+- **GME collects the whole merchant fee.** GME bills the merchant directly and then shares a cut with the
+  scheme (`Documentation/SETTLEMENT_FLOW_SPEC.md` D11). Nobody else collects any part of it; the wallet
+  partner never bills the merchant.
+- **The carve is computed off GME's own cut** — `partner = gme × partner_share_pct` (V032 header;
+  `CommissionSplitCalculator` split 2). It only exists once GME's entitlement is established, and with no
+  partner row configured the default is "GME keeps 100% of its cut" (`EffectiveCommissionView`).
+- **The receivable is NOT net of it.** The `net` debited to `RECEIVABLE_PARTNER` is `netMerchantFeeKrw`
+  = gross − VAN, i.e. net of the *VAN intermediary fee only*; 1800 = gmeGross 1260 + scheme 540, and the
+  378 carve sits inside that 1260. GME's booked claim includes the carve, so GME does bill and collect it.
+  The VAN fee is what a genuinely netted-off deduction looks like here — subtracted before the split and
+  never journalled at all.
+- **Nothing nets or pays the carve anywhere else.** No commission logic exists in `prefunding` or
+  `settlement-reconciliation`; the only readers of `partner_share_krw` are the record, this
+  reconciliation report and the day-close quote.
+
+So it is **payable + expense**, not contra-revenue. Gross revenue is unchanged — it was always right —
+and retained commission now reads as `REVENUE_GME_FEE_SHARE − EXPENSE_PARTNER_COMMISSION` = `gmeNet`.
+
+- `LedgerPostingService.postPartnerCommissionCarveJournal(reference, partnerShareKrw)` posts
+  `DEBIT EXPENSE_PARTNER_COMMISSION / CREDIT PAYABLE_PARTNER` in KRW. Called by
+  `CommissionSplitRecordService` inside the SAME transaction as the `commission_splits` row.
+- **TWO new account codes** (`ChartOfAccounts`): `EXPENSE_PARTNER_COMMISSION` and `PAYABLE_PARTNER`.
+  `PAYABLE_SCHEME` could not be reused (different counterparty), and crediting the existing
+  `RECEIVABLE_PARTNER` was rejected because netting a liability into an asset contradicts the word
+  "payable" in the ruling and would understate both sides of the balance sheet. `PAYABLE_PARTNER` is the
+  exact mirror of `PAYABLE_SCHEME`. **No migration**: `ledger_entries.account` is a plain `VARCHAR(64)`
+  with no constraint, so next free Flyway version here remains **V008** and there are no vendor dirs.
+- **A separate journal, not extra lines on the scheme leg** — deliberately, so it back-fills
+  independently: a split journalled before this change already has the `REVENUE_GME_FEE_SHARE` credit that
+  satisfies the scheme leg's idempotency probe, so a shared probe would have left those rows permanently
+  unbooked. Idempotent on `txnRef` via a CREDIT to `PAYABLE_PARTNER` (only an original carve credits it; a
+  reversal mirrors the sides and debits it). A zero carve (`partner_share_pct = 0`) posts nothing.
+
+### Changed - the self-check now clears only for money actually booked
+- `unmappedComponents[PARTNER_COMMISSION_SHARE]` no longer reports the period's whole recorded carve; it
+  reports the carve that is **still unbooked** — splits with a carve and no `PAYABLE_PARTNER` credit
+  (pre-T2-10 rows not yet replayed), summed over the exception rows rather than derived as
+  recorded-minus-journalled, so a reversal's mirroring DEBIT can never make a booked carve look unbooked.
+  Zero therefore means booked, and `clean` reflects reality in both directions.
+- New tie-out stream `PARTNER_COMMISSION_CARVE` (`PAYABLE_PARTNER`, KRW): recorded `partner_share_krw` vs
+  what the journal credited. Only present when the period has a carve.
+- 21 new tests (141 total, 0 failures): the worked example's exact amounts (378 DR expense / 378 CR
+  payable, gross revenue still 1260, 1260 − 378 = 882 = `gmeNetShareKrw`), balanced KRW across both legs,
+  independent idempotency + back-fill for a scheme-leg-only row, zero carve posts nothing, a negative
+  carve is refused, the trial balance still sums to zero with the two new accounts, and a reversal unwinds
+  the carve to zero on both of them.
+
+### Interaction with T2-11 (still open, not touched here)
+`RevenueReversalService` mirrors every non-rounding line, so a reversal unwinds this journal automatically
+and neither new line is a `REVENUE_*` debit, so it neither trips nor is tripped by that service's
+already-reversed probe. But that mirror is **not pro-rated**, so a PARTIAL refund unwinds the whole carve
+exactly as it unwinds the whole revenue — the carve inherits T2-11's open question rather than adding a new
+one. Whatever pro-rating factor T2-11 chooses must be applied to this leg too; because the carve is a fixed
+fraction of `gmeGross`, the same factor preserves the split invariant. T2-11(b)'s `RECEIVABLE_PARTNER`
+double-relief is untouched — this change posts no `RECEIVABLE_PARTNER` line.
+
 ## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (Kafka listener concurrency is actually readable: T3-11 defect 4 follow-up)
 
 ### Fixed - `spring.kafka.listener.concurrency` was UNREADABLE on this service's consumer factory
@@ -164,7 +227,7 @@ Additive. **No schema change** — no new table or column was needed, so no Flyw
   imbalance reported with the exact difference, recorded-but-not-journalled rows surfacing in the
   self-check, and the HTTP contracts including the `strict` 409.
 
-### Known gap — awaiting a finance-owner decision (deliberately NOT invented)
+### Known gap — awaiting a finance-owner decision (deliberately NOT invented) — **RESOLVED 2026-07-31, see T2-10 above**
 - The **partner-side leg of the two-sided commission split** (`commission_splits.partner_share_krw`, the
   wallet partner's carve out of GME's gross commission) has **no account code in this module**, so it is
   not journalled. `REVENUE_GME_FEE_SHARE` therefore carries GME's **gross** commission and overstates

@@ -71,6 +71,8 @@ class TrialBalanceServiceTest {
         seedCapture("TB-TXN-1", new BigDecimal("1.5000"), new BigDecimal("500"), "KRW");
         seedCapture("TB-TXN-2", new BigDecimal("2.2500"), new BigDecimal("500"), "KRW");
         seedSplit("TB-TXN-1-SPLIT", 1800L, 1260L, 540L);
+        // T2-10: the partner commission carve on that same split (378 of the 1260 GME earned).
+        seedCarve("TB-TXN-1-SPLIT", 378L);
         seedTwoLine("TB-TXN-3", "RECEIVABLE_PARTNER", "REVENUE_ROUNDING", new BigDecimal("0.0070"), "USD");
         seedTwoLine("TB-TXN-4", "REVENUE_REVERSAL", "RECEIVABLE_PARTNER", new BigDecimal("125.50"), "USD");
 
@@ -91,6 +93,12 @@ class TrialBalanceServiceTest {
                 "1.5000 + 2.2500 credited to FX margin, got " + fxMargin.creditTotal());
         TrialBalanceView.Row gmeShare = row(view, "REVENUE_GME_FEE_SHARE", "KRW");
         assertEquals(0, gmeShare.creditTotal().compareTo(new BigDecimal("1260")));
+
+        // T2-10: the carve appears on its own two accounts and does NOT reduce the revenue row above.
+        assertEquals(0, row(view, "EXPENSE_PARTNER_COMMISSION", "KRW").debitTotal()
+                        .compareTo(new BigDecimal("378")));
+        assertEquals(0, row(view, "PAYABLE_PARTNER", "KRW").creditTotal()
+                        .compareTo(new BigDecimal("378")));
     }
 
     @Test
@@ -151,6 +159,12 @@ class TrialBalanceServiceTest {
 
     private void seedSplit(String ref, long net, long gmeGross, long scheme) {
         Optional<Journal> posted = posting.postCommissionSplitJournal(ref, net, gmeGross, scheme);
+        assertTrue(posted.isPresent());
+        restamp(posted.get());
+    }
+
+    private void seedCarve(String ref, long partnerShareKrw) {
+        Optional<Journal> posted = posting.postPartnerCommissionCarveJournal(ref, partnerShareKrw);
         assertTrue(posted.isPresent());
         restamp(posted.get());
     }

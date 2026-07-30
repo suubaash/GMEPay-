@@ -149,7 +149,9 @@ class TrialBalanceAndReconciliationApiTest {
                 new BigDecimal("12.50"), new BigDecimal("3.50"), new BigDecimal("9.00"), false);
         var unmapped = new RevenueJournalReconciliationView.UnmappedComponent(
                 "PARTNER_COMMISSION_SHARE", "commission_splits.partner_share_krw", "KRW",
-                new BigDecimal("378"), 1, "no account code", "finance owner must decide");
+                new BigDecimal("378"), 1,
+                "carve recorded with no PAYABLE_PARTNER credit (pre-T2-10 row, not back-filled)",
+                "re-post the affected splits");
         return new RevenueJournalReconciliationView(
                 START, END, records, splits, List.of(tieOut), List.of(unmapped), false);
     }

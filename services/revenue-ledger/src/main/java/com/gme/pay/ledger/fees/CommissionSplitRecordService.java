@@ -20,14 +20,20 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Idempotent by {@code txnRef} — a repeat returns the existing row without recomputing, so the
  * payment-executor's non-blocking post-at-confirm can safely retry.
  *
- * <p><b>Double-entry (T2-4).</b> In the SAME transaction as the record, the SCHEME-side leg of the
- * split is journalled via {@link LedgerPostingService#postCommissionSplitJournal}
- * ({@code DEBIT RECEIVABLE_PARTNER net / CREDIT REVENUE_GME_FEE_SHARE gmeGross / CREDIT PAYABLE_SCHEME
- * schemeShare}), from the amounts stored on the record so journal and record cannot drift. The
- * PARTNER-side leg ({@code partnerShareKrw}) is <b>not</b> journalled — this module has no account code
- * for the partner's commission carve and inventing one is a finance-owner decision; it is reported by
- * {@code GET /v1/revenue/journal-reconciliation} as an unmapped component instead of being dropped
- * silently.
+ * <p><b>Double-entry (T2-4 + T2-10).</b> In the SAME transaction as the record, BOTH legs of the split
+ * are journalled from the amounts stored on the record, so journal and record cannot drift:
+ * <ul>
+ *   <li>SCHEME side — {@link LedgerPostingService#postCommissionSplitJournal}:
+ *       {@code DEBIT RECEIVABLE_PARTNER net / CREDIT REVENUE_GME_FEE_SHARE gmeGross /
+ *       CREDIT PAYABLE_SCHEME schemeShare}.</li>
+ *   <li>PARTNER side (T2-10) — {@link LedgerPostingService#postPartnerCommissionCarveJournal}:
+ *       {@code DEBIT EXPENSE_PARTNER_COMMISSION partnerShare / CREDIT PAYABLE_PARTNER partnerShare}.
+ *       GME collects the whole merchant fee and the carve is a fraction of GME's own resulting
+ *       commission, so per the owner's rule it is a cost paid to the partner, not commission GME never
+ *       earned. See that method for the money-flow evidence.</li>
+ * </ul>
+ * Two separate journals, each balanced on its own lines and each independently idempotent, so a split
+ * journalled before T2-10 has its carve back-filled on replay.
  */
 @Service
 public class CommissionSplitRecordService {
@@ -74,8 +80,8 @@ public class CommissionSplitRecordService {
     }
 
     /**
-     * Journal the scheme-side leg of {@code record}'s split. Idempotent on {@code txnRef}; a zero net
-     * merchant fee posts nothing.
+     * Journal both legs of {@code record}'s split. Each leg is independently idempotent on {@code txnRef};
+     * a zero net merchant fee posts no scheme leg and a zero carve posts no partner leg.
      */
     private void journal(CommissionSplitRecordEntity record) {
         ledgerPostingService.postCommissionSplitJournal(
@@ -85,9 +91,17 @@ public class CommissionSplitRecordService {
                         record.getSchemeShareKrw())
                 .ifPresent(j -> log.info(
                         "commission split journalled (scheme leg): txnRef={} journalId={} net={} "
-                                + "gmeGross={} scheme={} partnerShareKrw={} NOT journalled (no account code)",
+                                + "gmeGross={} scheme={}",
                         record.getTxnRef(), j.journalId(), record.getNetMerchantFeeKrw(),
-                        record.getGmeGrossShareKrw(), record.getSchemeShareKrw(),
-                        record.getPartnerShareKrw()));
+                        record.getGmeGrossShareKrw(), record.getSchemeShareKrw()));
+        // T2-10: the partner carve is a cost GME pays out of commission it earned — posted as its own
+        // balanced journal so it back-fills for splits journalled before that decision was taken.
+        ledgerPostingService.postPartnerCommissionCarveJournal(
+                        record.getTxnRef(), record.getPartnerShareKrw())
+                .ifPresent(j -> log.info(
+                        "commission split journalled (partner leg): txnRef={} journalId={} "
+                                + "partnerShare={} gmeNetRetained={}",
+                        record.getTxnRef(), j.journalId(), record.getPartnerShareKrw(),
+                        record.getGmeNetShareKrw()));
     }
 }

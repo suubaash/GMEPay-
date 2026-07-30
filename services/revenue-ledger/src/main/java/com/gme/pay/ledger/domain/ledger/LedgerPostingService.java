@@ -24,6 +24,9 @@ import java.util.Set;
  *   <li>{@code REVENUE_GME_FEE_SHARE} — GME 70% scheme fee share (credited)</li>
  *   <li>{@code RECEIVABLE_PARTNER} — partner receivable (debited)</li>
  *   <li>{@code PAYABLE_SCHEME} — amount payable to scheme/ZeroPay (debited in fee-share posting)</li>
+ *   <li>{@code EXPENSE_PARTNER_COMMISSION} — commission paid to the wallet partner out of GME's own
+ *       earned commission (debited; <b>T2-10</b>, the two account codes added by that decision)</li>
+ *   <li>{@code PAYABLE_PARTNER} — amount payable to the wallet partner for that commission (credited)</li>
  * </ul>
  *
  * <h2>Which methods the money path actually calls (T2-4)</h2>
@@ -45,6 +48,19 @@ public class LedgerPostingService {
     private static final String ACC_PAYABLE_SCHEME   = "PAYABLE_SCHEME";
     private static final String ACC_ROUNDING         = "REVENUE_ROUNDING"; // rounding gain/loss vs partner booking
     private static final String ACC_REVERSAL         = "REVENUE_REVERSAL"; // contra-revenue for cancel/refund reversals
+
+    /**
+     * T2-10 — the two account codes the owner's ruling required. GME collects the WHOLE merchant fee
+     * (it bills the merchant directly, SETTLEMENT_FLOW_SPEC D11) and the partner's carve is a fraction
+     * of GME's <em>own</em> earned commission ({@code partner = gme × partner_share_pct}, V032 header),
+     * so the carve is a <b>cost GME pays the partner</b>, not commission GME never earned:
+     * "if it's our income then it should be booked as revenue; if this is payout cost of partner then it
+     * is payable expense."
+     */
+    private static final String ACC_PARTNER_COMMISSION_EXPENSE = "EXPENSE_PARTNER_COMMISSION";
+
+    /** Liability to the wallet partner for its commission carve — the mirror of {@code PAYABLE_SCHEME}. */
+    private static final String ACC_PAYABLE_PARTNER  = "PAYABLE_PARTNER";
 
     private static final String USD = "USD";
     private static final String KRW = "KRW";
@@ -216,15 +232,13 @@ public class LedgerPostingService {
      *   CREDIT PAYABLE_SCHEME         schemeShareKrw      KRW
      * </pre>
      *
-     * <p><b>Deliberately NOT journalled here: the partner-side leg.</b> The second split
-     * ({@code partnerShareKrw} — the wallet partner's carve out of GME's gross commission, plus the
-     * {@code gmeNetShareKrw} remainder) has <b>no account code in this module</b>. Booking it would
-     * require inventing a partner-commission payable/expense account, which is a finance-owner
-     * decision, so it is left unposted and surfaced explicitly by the reconciliation self-check
-     * ({@code GET /v1/revenue/journal-reconciliation} → {@code unmappedComponents}) instead of being
-     * silently dropped. Consequence while the decision is outstanding: {@code REVENUE_GME_FEE_SHARE}
-     * carries GME's GROSS commission, i.e. it overstates GME's retained commission by exactly
-     * {@code partnerShareKrw}.
+     * <p><b>The partner-side leg is NOT posted here</b> — it is a separate balanced journal, posted by
+     * {@link #postPartnerCommissionCarveJournal} in the same transaction (T2-10). Keeping it separate is
+     * deliberate: it back-fills independently, so a split journalled before T2-10 (whose
+     * {@code REVENUE_GME_FEE_SHARE} credit already satisfies this method's idempotency probe) still gets
+     * its carve booked on any replay. {@code REVENUE_GME_FEE_SHARE} legitimately carries GME's GROSS
+     * commission — the money GME earned — and the carve is booked as the cost of paying part of it away,
+     * NOT as a reduction of it.
      *
      * <p><b>Idempotent on {@code reference}</b> via a CREDIT to {@code REVENUE_GME_FEE_SHARE} (only an
      * original split posts one; a reversal mirrors it as a DEBIT). Backstopped by
@@ -275,15 +289,94 @@ public class LedgerPostingService {
     }
 
     /**
-     * True when {@code reference} already carries a CREDIT line to one of {@code incomeAccounts} — the
-     * idempotency probe shared by the two capture-side posts. Mirrors
-     * {@link RevenueReversalService}'s "a DEBIT to a REVENUE_* account marks a reversal" rule from the
-     * other side: only an ORIGINAL posting ever CREDITs an income account.
+     * Post the balanced double-entry journal for the <b>partner-side leg</b> of the two-sided commission
+     * split — the wallet partner's carve out of GME's own commission (T2-10).
+     *
+     * <h2>Why THIS treatment (the owner's rule applied to the established money flow)</h2>
+     * The owner's ruling is a principle, not a preference: <i>"if it's our income then it should be booked
+     * as revenue; if this is payout cost of partner then it is payable expense."</i> The flow says the
+     * carve is a cost:
+     * <ul>
+     *   <li><b>GME collects the whole merchant fee.</b> GME bills the merchant directly and then shares a
+     *       cut with the scheme (SETTLEMENT_FLOW_SPEC D11). No one else collects any part of it, and the
+     *       partner never bills the merchant.</li>
+     *   <li><b>The carve is computed off GME's own cut</b> — {@code partner = gme × partner_share_pct}
+     *       (V032 header; {@code CommissionSplitCalculator} split 2). The amount only exists once GME's
+     *       entitlement has been established, and the unconfigured default is "GME keeps 100% of its cut"
+     *       ({@code EffectiveCommissionView}). It is a distribution OUT of GME's income.</li>
+     *   <li><b>The receivable is not net of it.</b> The {@code net} debited to
+     *       {@code RECEIVABLE_PARTNER} by {@link #postCommissionSplitJournal} is
+     *       {@code netMerchantFeeKrw} = gross − VAN — net of the <em>VAN intermediary fee only</em>. GME's
+     *       booked claim (1800 in the worked example) fully contains the carve (378 ⊂ gmeGross 1260), so
+     *       GME does bill and collect it. The VAN fee is what a genuinely-netted deduction looks like in
+     *       this model: subtracted before the split and never journalled at all.</li>
+     * </ul>
+     * Hence: <b>payable + expense</b>, not contra-revenue. Gross revenue is unchanged — it was always
+     * right — and GME's retained commission now shows as {@code REVENUE_GME_FEE_SHARE − }this expense,
+     * which equals {@code gmeNetShareKrw}.
+     *
+     * <p>Journal layout (balanced in KRW, two lines):
+     * <pre>
+     *   DEBIT  EXPENSE_PARTNER_COMMISSION  partnerShareKrw  KRW
+     *   CREDIT PAYABLE_PARTNER             partnerShareKrw  KRW
+     * </pre>
+     * <b>Both codes are new</b> — see the field javadoc. {@code PAYABLE_SCHEME} could not be reused (a
+     * different counterparty, and reusing it would misstate who is owed), and crediting the existing
+     * {@code RECEIVABLE_PARTNER} was rejected because netting a liability into an asset contradicts the
+     * word "payable" in the ruling and would understate both sides of the balance sheet.
+     *
+     * <p><b>Idempotent on {@code reference}</b> via a CREDIT to {@code PAYABLE_PARTNER}: only an original
+     * carve ever credits that account (a reversal mirrors the sides and DEBITs it), the same rule the
+     * other two capture-side posts use. Posted inside the caller's transaction alongside the
+     * {@code commission_splits} row, so record and journal commit or roll back together. A zero carve
+     * ({@code partner_share_pct = 0}, i.e. GME keeps everything) posts nothing rather than a nominal zero
+     * journal, consistent with the other T2-4 posts.
+     *
+     * <p><b>Reversal.</b> {@link RevenueReversalService} mirrors every non-rounding line for the txnRef,
+     * so a reversal automatically unwinds this journal too ({@code DEBIT PAYABLE_PARTNER / CREDIT
+     * EXPENSE_PARTNER_COMMISSION}) and nets the carve to zero. Neither line is a {@code REVENUE_*} debit,
+     * so it neither trips nor is tripped by that service's reversal probe. <b>T2-11 interaction:</b> that
+     * mirror is not pro-rated, so a PARTIAL refund currently unwinds the whole carve exactly as it
+     * unwinds the whole revenue — the carve inherits T2-11's open question rather than adding a new one,
+     * and whatever pro-rating factor T2-11 chooses must be applied to this leg too (the carve is a fixed
+     * fraction of {@code gmeGross}, so the same factor preserves the split invariant).
+     *
+     * @param reference       transaction reference
+     * @param partnerShareKrw the partner's commission carve for the transaction (whole KRW, &gt;= 0)
+     * @return the newly posted journal, or {@link Optional#empty()} when already journalled / zero carve
+     * @throws IllegalArgumentException if {@code partnerShareKrw} is negative
      */
-    private boolean alreadyCreditedFor(String reference, Set<String> incomeAccounts) {
+    public Optional<Journal> postPartnerCommissionCarveJournal(String reference, long partnerShareKrw) {
+        Objects.requireNonNull(reference, "reference required");
+        if (partnerShareKrw < 0) {
+            throw new IllegalArgumentException(
+                    "partnerShareKrw must be >= 0, got: " + partnerShareKrw);
+        }
+        if (partnerShareKrw == 0) {
+            return Optional.empty();
+        }
+        if (alreadyCreditedFor(reference, Set.of(ACC_PAYABLE_PARTNER))) {
+            return Optional.empty();
+        }
+        BigDecimal amount = BigDecimal.valueOf(partnerShareKrw);
+        List<LedgerEntry> entries = List.of(
+                new LedgerEntry(ACC_PARTNER_COMMISSION_EXPENSE, amount, KRW, EntryType.DEBIT, reference),
+                new LedgerEntry(ACC_PAYABLE_PARTNER, amount, KRW, EntryType.CREDIT, reference));
+        return Optional.of(journalStore.save(Journal.post(entries)));
+    }
+
+    /**
+     * True when {@code reference} already carries a CREDIT line to one of {@code accounts} — the
+     * idempotency probe shared by the three capture-side posts. Mirrors
+     * {@link RevenueReversalService}'s "a DEBIT to a REVENUE_* account marks a reversal" rule from the
+     * other side: only an ORIGINAL posting ever CREDITs one of these accounts (income for the two revenue
+     * posts, {@code PAYABLE_PARTNER} for the commission carve — a reversal mirrors the sides and debits
+     * it), so the credit's presence is proof the original was posted and survives a later reversal.
+     */
+    private boolean alreadyCreditedFor(String reference, Set<String> accounts) {
         return journalStore.findByReference(reference).stream()
                 .flatMap(j -> j.entries().stream())
-                .anyMatch(e -> e.type() == EntryType.CREDIT && incomeAccounts.contains(e.account()));
+                .anyMatch(e -> e.type() == EntryType.CREDIT && accounts.contains(e.account()));
     }
 
     /**

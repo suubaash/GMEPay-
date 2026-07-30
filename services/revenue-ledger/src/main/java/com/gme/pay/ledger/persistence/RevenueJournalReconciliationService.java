@@ -155,11 +155,21 @@ public class RevenueJournalReconciliationService {
 
         long[] splits = splitTotals(start, end);
         long gmeGross = splits[1];
+        long partnerShare = splits[3];
         if (gmeGross != 0 || commissionSplits.countByRevenueDateBetween(start, end) > 0) {
             out.add(tieOut("GME_FEE_SHARE", ChartOfAccounts.REVENUE_GME_FEE_SHARE, KRW,
                     BigDecimal.valueOf(gmeGross),
                     commissionSplits.sumJournalledCreditForSplitsInRange(
                             ChartOfAccounts.REVENUE_GME_FEE_SHARE, KRW, start, end)));
+        }
+        // T2-10: the partner carve is now booked (DR EXPENSE_PARTNER_COMMISSION / CR PAYABLE_PARTNER), so
+        // it gets a tie-out like every other stream: recorded partner_share_krw vs what the journal
+        // actually credited to the payable. Only reported when the period has a carve to tie out.
+        if (partnerShare != 0) {
+            out.add(tieOut("PARTNER_COMMISSION_CARVE", ChartOfAccounts.PAYABLE_PARTNER, KRW,
+                    BigDecimal.valueOf(partnerShare),
+                    commissionSplits.sumJournalledCreditForSplitsInRange(
+                            ChartOfAccounts.PAYABLE_PARTNER, KRW, start, end)));
         }
         return List.copyOf(out);
     }
@@ -176,33 +186,45 @@ public class RevenueJournalReconciliationService {
     }
 
     /**
-     * Money recorded in the period that has NO account code in this module to be journalled against.
+     * Money recorded in the period that is NOT on the double-entry books.
      *
-     * <p>Currently one entry: the PARTNER-side leg of the commission split
-     * ({@code commission_splits.partner_share_krw}) — the wallet partner's carve out of GME's gross
-     * commission. Booking it needs an account this module does not define (a partner-commission payable
-     * or commission-expense account); which account, and therefore whether the carve is a cost of revenue
-     * or a reduction of it, is a finance-owner decision, so it is reported here rather than guessed. Note
-     * the direct consequence: while this is unmapped, {@code REVENUE_GME_FEE_SHARE} carries GME's GROSS
-     * commission and therefore overstates retained commission by exactly this amount.
+     * <p>One entry, {@code PARTNER_COMMISSION_SHARE} — the PARTNER-side leg of the commission split
+     * ({@code commission_splits.partner_share_krw}). <b>T2-10 decided its treatment</b>: GME collects the
+     * whole merchant fee and the carve is a fraction of GME's own resulting commission, so it is a cost
+     * GME pays the partner and is booked {@code DEBIT EXPENSE_PARTNER_COMMISSION / CREDIT
+     * PAYABLE_PARTNER}.
+     *
+     * <p>The entry therefore no longer reports the whole recorded carve — it reports only the carve that
+     * is <b>actually still unbooked</b>: splits carrying a carve with no {@code PAYABLE_PARTNER} credit
+     * (rows written before T2-10 and not yet replayed). That total is zero for any period whose splits
+     * were all journalled, which is what lets {@code clean} become true — and it is non-zero, with the
+     * offending count, whenever real money is genuinely missing from the books. The amount is summed over
+     * the exception rows rather than derived as recorded-minus-journalled, so a reversal's mirroring DEBIT
+     * of {@code PAYABLE_PARTNER} can never make a properly booked carve reappear here.
      */
     private List<UnmappedComponent> unmappedComponents(LocalDate start, LocalDate end) {
-        long[] splits = splitTotals(start, end);
-        long partnerShare = splits[3];
-        long splitCount = commissionSplits.countByRevenueDateBetween(start, end);
+        long unbooked = commissionSplits.sumUnjournalledPartnerCarveInRange(
+                start, end, ChartOfAccounts.PAYABLE_PARTNER);
+        long unbookedCount = commissionSplits.countSplitsMissingPartnerCarveJournal(
+                start, end, ChartOfAccounts.PAYABLE_PARTNER);
         return List.of(new UnmappedComponent(
                 "PARTNER_COMMISSION_SHARE",
                 "commission_splits.partner_share_krw",
                 KRW,
-                BigDecimal.valueOf(partnerShare),
-                splitCount,
-                "The partner-side leg of the two-sided commission split has no account code in this "
-                        + "module's chart of accounts, so no balanced journal can be posted for it without "
-                        + "inventing one. REVENUE_GME_FEE_SHARE therefore carries GME's GROSS commission "
-                        + "and overstates retained commission by this amount.",
-                "Finance owner must designate the account(s) the partner's commission carve debits and "
-                        + "credits (e.g. a partner-commission payable and its expense/contra-revenue "
-                        + "counterpart) before it can be journalled."));
+                BigDecimal.valueOf(unbooked),
+                unbookedCount,
+                unbooked == 0
+                        ? "Nothing outstanding: every commission split in this period that carries a "
+                                + "partner carve has been journalled as DEBIT EXPENSE_PARTNER_COMMISSION / "
+                                + "CREDIT PAYABLE_PARTNER (T2-10)."
+                        : "These splits carry a partner commission carve with no PAYABLE_PARTNER credit, "
+                                + "so that money is not on the double-entry books. The accounting "
+                                + "treatment is decided (T2-10: expense + payable); these rows predate it "
+                                + "and their journal has not been back-filled yet.",
+                unbooked == 0
+                        ? "None — T2-10 is resolved."
+                        : "No decision outstanding. Re-post the affected splits (recording a split is "
+                                + "idempotent and back-fills the missing carve journal on replay)."));
     }
 
     /** {@code [net, gmeGross, scheme, partner, gmeNet]} KRW totals for the period (zeros when no rows). */

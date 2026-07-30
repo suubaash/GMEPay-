@@ -32,6 +32,23 @@ public final class ChartOfAccounts {
     public static final String PAYABLE_SCHEME = "PAYABLE_SCHEME";
 
     /**
+     * <b>T2-10</b> — commission GME pays the wallet partner out of its OWN earned commission (debited on
+     * the partner-side leg of the two-sided split). An expense, not a reduction of revenue: GME bills the
+     * merchant for the whole merchant fee (SETTLEMENT_FLOW_SPEC D11) and the carve is a fraction of GME's
+     * resulting cut ({@code partner = gme × partner_share_pct}, V031/V032), so the money was GME's income
+     * before any of it was paid away. Per the owner's ruling — <i>"if it's our income then it should be
+     * booked as revenue; if this is payout cost of partner then it is payable expense."</i>
+     */
+    public static final String EXPENSE_PARTNER_COMMISSION = "EXPENSE_PARTNER_COMMISSION";
+
+    /**
+     * <b>T2-10</b> — liability to the wallet partner for that commission carve (credited). The exact
+     * mirror of {@link #PAYABLE_SCHEME} for the other counterparty; {@code PAYABLE_SCHEME} itself could
+     * not be reused because it is the scheme operator's liability.
+     */
+    public static final String PAYABLE_PARTNER = "PAYABLE_PARTNER";
+
+    /**
      * Rounding gain/loss account per {@code docs/MONEY_CONVENTION.md}.
      * Credited when {@code residual > 0} (rounding GAIN — partner booked less than precise),
      * debited when {@code residual < 0} (rounding LOSS — partner booked more than precise).

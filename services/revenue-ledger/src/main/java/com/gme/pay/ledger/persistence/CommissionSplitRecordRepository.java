@@ -68,6 +68,64 @@ public interface CommissionSplitRecordRepository
                                                    Pageable pageable);
 
     /**
+     * References of splits in range that carry a partner commission carve but have NO carve journal
+     * (T2-10) — detected by the absence of a CREDIT to {@code account} ({@code PAYABLE_PARTNER}), the same
+     * rule {@code LedgerPostingService.postPartnerCommissionCarveJournal}'s idempotency guard uses, so
+     * detection and posting can never disagree. A split whose {@code partner_share_pct} is zero carries no
+     * carve and is correctly not an exception.
+     */
+    @Query("""
+            SELECT c.txnRef FROM CommissionSplitRecordEntity c
+            WHERE c.revenueDate BETWEEN :start AND :end
+              AND c.partnerShareKrw > 0
+              AND NOT EXISTS (
+                  SELECT e.id FROM LedgerEntryEntity e
+                  WHERE e.reference = c.txnRef
+                    AND e.entryType = 'CREDIT'
+                    AND e.account = :account)
+            ORDER BY c.txnRef ASC
+            """)
+    List<String> findTxnRefsMissingPartnerCarveJournal(@Param("start") LocalDate start,
+                                                      @Param("end") LocalDate end,
+                                                      @Param("account") String account,
+                                                      Pageable pageable);
+
+    /** Exact count behind {@link #findTxnRefsMissingPartnerCarveJournal} (the list is capped; this is not). */
+    @Query("""
+            SELECT COUNT(c) FROM CommissionSplitRecordEntity c
+            WHERE c.revenueDate BETWEEN :start AND :end
+              AND c.partnerShareKrw > 0
+              AND NOT EXISTS (
+                  SELECT e.id FROM LedgerEntryEntity e
+                  WHERE e.reference = c.txnRef
+                    AND e.entryType = 'CREDIT'
+                    AND e.account = :account)
+            """)
+    long countSplitsMissingPartnerCarveJournal(@Param("start") LocalDate start,
+                                              @Param("end") LocalDate end,
+                                              @Param("account") String account);
+
+    /**
+     * Total {@code partner_share_krw} of splits in range that have NO carve journal — i.e. the carve money
+     * genuinely still off the double-entry books (T2-10). Summing the exceptions rather than subtracting
+     * two totals means a partial back-fill reports exactly what remains, and a reversal's mirroring DEBIT
+     * of {@code PAYABLE_PARTNER} cannot make a booked carve look unbooked.
+     */
+    @Query("""
+            SELECT COALESCE(SUM(c.partnerShareKrw), 0) FROM CommissionSplitRecordEntity c
+            WHERE c.revenueDate BETWEEN :start AND :end
+              AND c.partnerShareKrw > 0
+              AND NOT EXISTS (
+                  SELECT e.id FROM LedgerEntryEntity e
+                  WHERE e.reference = c.txnRef
+                    AND e.entryType = 'CREDIT'
+                    AND e.account = :account)
+            """)
+    long sumUnjournalledPartnerCarveInRange(@Param("start") LocalDate start,
+                                            @Param("end") LocalDate end,
+                                            @Param("account") String account);
+
+    /**
      * Total CREDITs posted to {@code account} in {@code currency} for the references of splits whose
      * revenue date falls in range. Scoped by reference set (not journal post date) so business-date vs
      * post-date skew cannot look like a variance; CREDITs only, since reversals debit these accounts.

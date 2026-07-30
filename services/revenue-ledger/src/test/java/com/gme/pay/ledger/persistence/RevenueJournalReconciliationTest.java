@@ -29,7 +29,11 @@ import static org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTest
 /**
  * T2-4 self-check: {@code revenue_records} / {@code commission_splits} versus the journal lines for the
  * same period. Proves the report finds recorded-but-not-journalled rows, ties the amounts stream by
- * stream, and names the money it could NOT journal for want of an account code.
+ * stream, and quantifies any recorded money still absent from the double-entry books.
+ *
+ * <p>T2-10 additions: the partner commission carve now has a tie-out of its own, and the
+ * {@code PARTNER_COMMISSION_SHARE} unmapped component clears to zero exactly when the carve was actually
+ * booked — never merely because the decision was taken.
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = NONE)
@@ -126,7 +130,7 @@ class RevenueJournalReconciliationTest {
     }
 
     @Test
-    void commissionSplit_schemeLegTiesOut_andPartnerCarveIsReportedAsUnmapped() {
+    void commissionSplit_bothLegsTieOut_andTheCarveClearsTheUnmappedComponent() {
         // net=1800, gmeGross=1260, scheme=540, partner=378, gmeNet=882
         splits.recordIfAbsent("CS-1", 7L, 1L, DATE, 100_000L,
                 new BigDecimal("0.0200"), new BigDecimal("0.0020"),
@@ -142,19 +146,62 @@ class RevenueJournalReconciliationTest {
         assertEquals(0, share.recordedAmount().compareTo(new BigDecimal("1260")));
         assertTrue(share.tied(), "the scheme leg must tie, variance=" + share.variance());
 
-        // The partner carve is recorded but unjournalled — reported with its amount, never dropped.
-        UnmappedComponent partner = view.unmappedComponents().stream()
-                .filter(u -> "PARTNER_COMMISSION_SHARE".equals(u.component()))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("the partner carve must be reported as unmapped"));
+        // T2-10: the carve is booked, so it has a tie-out of its own against PAYABLE_PARTNER.
+        TieOut carve = tieOut(view, "PARTNER_COMMISSION_CARVE", "KRW");
+        assertEquals("PAYABLE_PARTNER", carve.account());
+        assertEquals(0, carve.recordedAmount().compareTo(new BigDecimal("378")));
+        assertTrue(carve.tied(), "the partner leg must tie, variance=" + carve.variance());
+
+        // ...and the unmapped component now reports ZERO, because nothing is off the books any more.
+        UnmappedComponent partner = unmapped(view);
         assertEquals("commission_splits.partner_share_krw", partner.source());
         assertEquals("KRW", partner.currency());
+        assertEquals(0, partner.amount().signum(),
+                "a booked carve must clear the unmapped component, got " + partner.amount());
+        assertEquals(0, partner.recordCount());
+        assertTrue(view.clean(), "with both legs booked and tied, the period IS clean");
+    }
+
+    /**
+     * The unmapped component must clear ONLY for money actually booked: a split row carrying a carve with
+     * no {@code PAYABLE_PARTNER} credit (a pre-T2-10 row) still holds {@code clean} false, and reports
+     * exactly its own amount rather than the period's whole carve.
+     */
+    @Test
+    void anUnbookedCarve_stillHoldsCleanFalse_andReportsOnlyWhatIsMissing() {
+        splits.recordIfAbsent("CS-BOOKED", 7L, 1L, DATE, 100_000L,
+                new BigDecimal("0.0200"), new BigDecimal("0.0020"),
+                new BigDecimal("0.70"), new BigDecimal("0.30"));
+        // A pre-T2-10 row: recorded with a 378 carve, no journal at all.
+        commissionSplitRepo.save(CommissionSplitRecordEntity.of(
+                "CS-PRE-T210", 7L, 1L, DATE, 100_000L,
+                new BigDecimal("0.0200"), new BigDecimal("0.0020"),
+                new BigDecimal("0.70"), new BigDecimal("0.30"),
+                new com.gme.pay.ledger.fees.CommissionSplit(2000, 200, 1800, 540, 1260, 378, 882),
+                Instant.now()));
+
+        RevenueJournalReconciliationView view = reconciliation.reconcile(START, END);
+
+        UnmappedComponent partner = unmapped(view);
         assertEquals(0, partner.amount().compareTo(new BigDecimal("378")),
-                "the exposure must be quantified exactly, got " + partner.amount());
-        assertTrue(partner.decisionRequired().toLowerCase().contains("finance owner"),
-                "the report must name whose decision this is: " + partner.decisionRequired());
-        assertFalse(view.clean(),
-                "while money is recorded that cannot be journalled, the period is NOT clean");
+                "only the unbooked row's carve is outstanding, got " + partner.amount());
+        assertEquals(1, partner.recordCount(), "one offending split");
+        assertFalse(view.clean(), "recorded carve money absent from the books is not clean");
+    }
+
+    /** A split configured with a zero partner share has no carve, so nothing is outstanding. */
+    @Test
+    void zeroPartnerShare_isNotAnUnmappedException() {
+        splits.recordIfAbsent("CS-NO-CARVE", 7L, 1L, DATE, 100_000L,
+                new BigDecimal("0.0200"), new BigDecimal("0.0020"),
+                new BigDecimal("0.70"), BigDecimal.ZERO);
+
+        RevenueJournalReconciliationView view = reconciliation.reconcile(START, END);
+
+        assertEquals(0, unmapped(view).amount().signum());
+        assertTrue(view.tieOuts().stream().noneMatch(t -> "PARTNER_COMMISSION_CARVE".equals(t.stream())),
+                "no carve in the period → no carve tie-out row");
+        assertTrue(view.clean());
     }
 
     @Test
@@ -178,7 +225,7 @@ class RevenueJournalReconciliationTest {
     }
 
     @Test
-    void emptyPeriod_reportsNothingMissing_butStillNotClean_whileTheCarveIsUndecided() {
+    void emptyPeriod_reportsNothingMissing_andIsClean() {
         RevenueJournalReconciliationView view = reconciliation.reconcile(START, END);
 
         assertEquals(0, view.revenueRecords().total());
@@ -191,6 +238,14 @@ class RevenueJournalReconciliationTest {
     @Test
     void invertedRangeIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> reconciliation.reconcile(END, START));
+    }
+
+    private static UnmappedComponent unmapped(RevenueJournalReconciliationView view) {
+        return view.unmappedComponents().stream()
+                .filter(u -> "PARTNER_COMMISSION_SHARE".equals(u.component()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "the partner carve component must always be reported, booked or not"));
     }
 
     private static TieOut tieOut(RevenueJournalReconciliationView view, String stream, String currency) {
