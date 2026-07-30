@@ -2,6 +2,46 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-07-28 — both `/v1/journals` POSTs returned 406 on every call (T3-12, feat/exec-gap-closure-2026-07-28)
+
+No schema change, no Flyway migration, no behaviour change to any posting. The JSON wire shape is
+unchanged — only the Java type used to produce it.
+
+### Fixed
+- **`POST /v1/journals/rounding-residual` and `POST /v1/journals/reversal` returned HTTP 406 Not
+  Acceptable on every successful post**, so the rounding-residual journal (the ₩500-class remainder)
+  and the refund/cancel reversal journal were **never written**. Found by the T3-5 footprint run over
+  200 real payments: `payment-executor.revenue_posting_failures` grew by exactly 1.00 rows/payment
+  because `RestRevenueLedgerClient` swallows posting failures by design (T2-1) and diverted every
+  residual to the replay queue. Nobody noticed and the whole suite stayed green.
+  - **Root cause: the controller returned the domain `Journal`.** `Journal` and `LedgerEntry` are plain
+    final classes with record-*style* accessors (`journalId()`, `entries()`, `amount()`) and are not
+    Java records, so Jackson discovers **zero** properties. With default `FAIL_ON_EMPTY_BEANS`,
+    `ObjectMapper.canSerialize(Journal.class)` is `false` ⇒ `MappingJackson2HttpMessageConverter.canWrite`
+    is `false` ⇒ Spring MVC finds no converter able to produce a representation and raises
+    `HttpMediaTypeNotAcceptableException`. It is a **406, not a 500**, because the failure is in converter
+    *selection*, before serialization is ever attempted.
+  - **Fix: new `JournalResponse` web DTO** (a record — natively introspectable) returned by both POSTs.
+    Content negotiation was **not** loosened and `FAIL_ON_EMPTY_BEANS` was **not** disabled: that would
+    have turned the 406 into a silently-empty `{}` body, which is the same defect wearing a 200. It also
+    keeps the domain model off the wire, like `RevenueCaptureResponse` and `JournalView` already do.
+  - **The client was correct and is unchanged** — it sends `Content-Type: application/json` and no
+    `Accept` (= `*/*`). Nothing in `payment-executor` was touched. settlement-reconciliation's per-batch
+    `RestRoundingResidualClient` was hitting the same 406 and is cured by this server-side fix alone.
+
+### Tests
+- **New `RevenueLedgerHttpContractTest` — a `@WebMvcTest` slice, not another standalone MockMvc test.**
+  It runs against the real Boot-configured message converters and real content negotiation, and covers
+  all four endpoints the cross-service clients post to (`/v1/journals/rounding-residual`,
+  `/v1/journals/reversal`, `/v1/revenue/capture`, `/v1/revenue/commission-split`), asserting response
+  **bodies** rather than just statuses, plus the no-`Accept`-header request shape the real client sends
+  and the 204/400 branches. Against the pre-fix controller the three journal cases fail with
+  `Status expected:<200> but was:<406>`.
+- The gap existed because the two `/v1/journals` POSTs **had no HTTP-level test at all** — they were
+  covered only at service level (`RoundingResidualTest`, `RevenueReversalRoundingResidualTest`), which
+  never goes through a message converter. `/v1/revenue/capture` and `/v1/revenue/commission-split` were
+  verified over real HTTP here and were always fine.
+
 ## 2026-07-28 — the main P&L now reaches the double-entry journal (T2-4, feat/exec-gap-closure-2026-07-28)
 
 Additive. **No schema change** — no new table or column was needed, so no Flyway migration was added
