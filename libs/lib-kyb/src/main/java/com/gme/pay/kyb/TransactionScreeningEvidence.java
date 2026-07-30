@@ -202,12 +202,20 @@ public record TransactionScreeningEvidence(
      * stored</b> — there is deliberately no column, field or setter that can make this true on its own.
      * Every caller asking "has this party been screened" must read this and never {@code status !=
      * HIT}.
+     *
+     * <p>{@code @JsonProperty} is load-bearing rather than cosmetic: Jackson serialises a record from
+     * its components, so without it this field would be absent from the wire and a remote consumer
+     * would have to re-derive "was this screened" from {@code status} and {@code providerAuthoritative}
+     * itself — which is exactly the derivation this type exists to stop callers doing by hand. The
+     * conclusion travels with the evidence.
      */
+    @com.fasterxml.jackson.annotation.JsonProperty("completedScreening")
     public boolean completedScreening() {
         return providerAuthoritative && status != ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER;
     }
 
     /** {@code true} when the payment path refused because of this party. */
+    @com.fasterxml.jackson.annotation.JsonProperty("refused")
     public boolean refused() {
         return posture != null && posture.refuses();
     }

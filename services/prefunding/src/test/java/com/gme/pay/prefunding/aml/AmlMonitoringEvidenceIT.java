@@ -2,6 +2,8 @@ package com.gme.pay.prefunding.aml;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -101,30 +103,25 @@ class AmlMonitoringEvidenceIT {
                 .containsExactly("2026-07-01", "2026-07-02", "2026-07-03", "2026-07-05");
 
         AmlWindowEvidence.DayUsage d1 = e.days().get(0);
-        assertThat(d1.netUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("300"));
+        assertThat(d1.netUsd()).isEqualByComparingTo("300");
         assertThat(d1.netTxnCount()).isEqualTo(2);
         assertThat(d1.chargeCount()).isEqualTo(2);
 
         // The reversed day: nets to zero volume and zero velocity, but one charge WAS attempted.
         AmlWindowEvidence.DayUsage d2 = e.days().get(1);
-        assertThat(d2.netUsd()).usingComparator(BigDecimal::compareTo).isEqualTo(BigDecimal.ZERO);
+        assertThat(d2.netUsd()).isEqualByComparingTo("0");
         assertThat(d2.netTxnCount()).isZero();
         assertThat(d2.chargeCount())
                 .as("a fully reversed day nets out, but the attempt is still visible")
                 .isEqualTo(1);
 
-        assertThat(e.days().get(2).netUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("50"));
-        assertThat(e.days().get(3).netUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("25"));
+        assertThat(e.days().get(2).netUsd()).isEqualByComparingTo("50");
+        assertThat(e.days().get(3).netUsd()).isEqualByComparingTo("25");
 
         // 300 + 0 + 50 + 25 — the 999 on 06-30 and the 777 on 07-06 are outside the bounds.
-        assertThat(e.windowNetUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("375"));
+        assertThat(e.windowNetUsd()).isEqualByComparingTo("375");
         assertThat(e.windowNetTxnCount()).isEqualTo(4);
-        assertThat(e.maxDailyNetUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("300"));
+        assertThat(e.maxDailyNetUsd()).isEqualByComparingTo("300");
         assertThat(e.maxDailyNetTxnCount()).isEqualTo(2);
     }
 
@@ -134,10 +131,8 @@ class AmlMonitoringEvidenceIT {
         AmlWindowEvidence.ConfiguredCaps caps =
                 monitoring.evidence(PARTNER, "2026-07-01", "2026-07-05").caps();
 
-        assertThat(caps.dailyCapUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("5000"));
-        assertThat(caps.monthlyCapUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("100000"));
+        assertThat(caps.dailyCapUsd()).isEqualByComparingTo("5000");
+        assertThat(caps.monthlyCapUsd()).isEqualByComparingTo("100000");
         assertThat(caps.annualCapUsd())
                 .as("unconstrained must not be reported as a cap of zero")
                 .isNull();
@@ -150,8 +145,7 @@ class AmlMonitoringEvidenceIT {
         AmlWindowEvidence e = monitoring.evidence(PARTNER, "2026-07-01", "2026-07-01");
         assertThat(e.spanDays()).isEqualTo(1);
         assertThat(e.days()).hasSize(1);
-        assertThat(e.windowNetUsd()).usingComparator(BigDecimal::compareTo)
-                .isEqualTo(new BigDecimal("300"));
+        assertThat(e.windowNetUsd()).isEqualByComparingTo("300");
     }
 
     @Test
@@ -159,7 +153,7 @@ class AmlMonitoringEvidenceIT {
     void quietWindow() {
         AmlWindowEvidence e = monitoring.evidence(PARTNER, "2026-08-01", "2026-08-31");
         assertThat(e.days()).isEmpty();
-        assertThat(e.windowNetUsd()).usingComparator(BigDecimal::compareTo).isEqualTo(BigDecimal.ZERO);
+        assertThat(e.windowNetUsd()).isEqualByComparingTo("0");
         assertThat(e.windowNetTxnCount()).isZero();
     }
 
@@ -233,7 +227,9 @@ class AmlMonitoringEvidenceIT {
                 .andExpect(jsonPath("$.days[1].chargeCount").value(1))
                 .andExpect(jsonPath("$.windowNetTxnCount").value(4))
                 .andExpect(jsonPath("$.configuredCaps.dailyTxnCountCap").value(25))
-                .andExpect(jsonPath("$.configuredCaps.annualCapUsd").doesNotExist());
+                // Money rides as a decimal STRING (MONEY_CONVENTION), and an unset cap stays null.
+                .andExpect(jsonPath("$.configuredCaps.dailyCapUsd", startsWith("5000")))
+                .andExpect(jsonPath("$.configuredCaps.annualCapUsd").value(nullValue()));
     }
 
     @Test
