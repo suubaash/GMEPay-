@@ -94,7 +94,11 @@ public class PartnerMtlsCertService {
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param environment SANDBOX | PRODUCTION.
      * @param certPem     one PEM-encoded X.509 leaf certificate.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the fresh ACTIVE binding as a canonical {@link PartnerMtlsCertView}.
      * @throws ResponseStatusException 404 unknown partner; 400 on roster /
      *         parse / validity-window failure; 409 when the identical cert

@@ -52,6 +52,26 @@ public class AuditConfig {
      * DB publisher, because tier 1 is already written by this service's own JPA path — see the
      * class javadoc for what happened when the DB publisher won.
      */
+    /**
+     * Takes ownership of the {@link DbAuditPublisher} bean definition, <b>without</b>
+     * {@code @Primary}.
+     *
+     * <p>{@link com.gme.pay.audit.AuditPublisherAutoConfiguration} declares its own copy as
+     * {@code @Primary @ConditionalOnBean(DataSource.class) @ConditionalOnMissingBean(DbAuditPublisher.class)}.
+     * Because user configuration is registered before auto-configuration, declaring it here makes
+     * that condition back off — which is the point: two {@code @Primary AuditPublisher} candidates
+     * would leave {@link AuditLogService}'s constructor injection ambiguous and the service would
+     * fail to start. Suppressing the auto-configured definition is therefore not optional
+     * decoration; it is what keeps exactly one primary in the context.
+     *
+     * <p>The bean is still available by type for anything that wants a chained JDBC writer
+     * directly, and it is deliberately NOT what {@link AuditLogService} fans out to.
+     */
+    @Bean
+    public DbAuditPublisher dbAuditPublisher(javax.sql.DataSource dataSource) {
+        return new DbAuditPublisher(dataSource);
+    }
+
     @Bean
     @Primary
     public AuditPublisher registryAuditFanout(ObjectProvider<KafkaAuditPublisher> kafka) {

@@ -378,7 +378,7 @@ class KybServiceTest {
                         e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
 
         // Daily rescreen path: screening is NOT gated on ONBOARDING.
-        assertThat(service.runScreening("KYB_LIVE", "system").screeningStatus())
+        assertThat(service.runScreening("KYB_LIVE", com.gme.pay.audit.AuditActors.UNATTRIBUTED).screeningStatus())
                 .isEqualTo("NOT_SCREENED_NO_PROVIDER");
     }
 

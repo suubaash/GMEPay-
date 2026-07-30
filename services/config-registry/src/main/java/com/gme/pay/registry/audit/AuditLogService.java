@@ -60,9 +60,16 @@ public class AuditLogService {
      *                      is internal-only. (When the Contract migration drops the
      *                      legacy column we'll switch the chain key to surrogate
      *                      ids in one mechanical refactor.)
-     * @param actorId       who proposed/approved/applied the change. {@code "system"}
-     *                      is reserved for the auto-suspend / sanctions-hit flows
-     *                      that have no human operator.
+     * @param actorId       who proposed/approved/applied the change, in the
+     *                      {@link com.gme.pay.audit.AuditActors} vocabulary. Gap T5-1: the bare
+     *                      literal {@code "system"} is <b>no longer writable</b> — it used to mean
+     *                      both "a platform action with no human operator" and "the {@code X-Actor}
+     *                      header was absent", and it was simultaneously the 4-eyes carve-out, so
+     *                      it could not mean anything. A genuine platform action names its
+     *                      component ({@code AuditActors.system("auto-suspend")}); a lost identity
+     *                      is {@code AuditActors.UNATTRIBUTED}; an unproven claim from the wire is
+     *                      {@code AuditActors.unverified(claim)}. Passing {@code "system"} or a
+     *                      blank throws {@link IllegalArgumentException}.
      * @param actorIp       client IP at the BFF; {@code null} for system events.
      * @param eventType     the verb (Slice 1: {@code "PARTNER_SAVED"}).
      * @param beforeJsonb   pre-write snapshot bytes (UTF-8 JSON) or {@code null} for

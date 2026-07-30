@@ -105,7 +105,11 @@ public class PartnerSchemeService {
      *
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param schemes     the FULL desired set; empty clears, {@code null} is a 400.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the freshly-inserted current set as canonical {@link PartnerSchemeView}s.
      * @throws ResponseStatusException 404 when no current partner row matches;
      *         409 when the partner is no longer in {@code ONBOARDING}
