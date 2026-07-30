@@ -17,7 +17,6 @@ import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -34,11 +33,15 @@ import java.util.UUID;
  * <ol>
  *   <li>Resolve merchant QR (same lenient policy as GMEREMIT domestic).
  *   <li>Validate merchant ACTIVE.
- *   <li>Fetch live KRW→MNT mid-rate from sim-rate-provider (:9101).
- *   <li>Apply FX margin ({@code gmepay.payment.sendmn.fx-margin}, default 2%):
- *       {@code offerRate = midRate * (1 - margin)} — partner gets fewer MNT per KRW.
- *       MNT payout = {@code amountKrw * offerRate}, rounded HALF_UP to 0 decimal places.
- *   <li>Fixed service fee: ₩500. chargedKrw = amountKrw + 500.
+ *   <li>Resolve the corridor's commercial terms through {@link SendmnCorridorPricing} (CFO#11):
+ *       live KRW→MNT mid rate from the rate provider, plus the FX margin and the service fee from
+ *       config-registry's commercial-terms surface — no longer constants in this class. Nothing is
+ *       configured today, so the corridor's historical 2% / ₩500 remain in force as visibly-labelled
+ *       code defaults; see {@link SendmnCorridorPricing} for why SENDMN keeps charging them instead
+ *       of failing closed the way Nepal does.
+ *   <li>Apply the FX margin: {@code offerRate = midRate * (1 - margin)} — partner gets fewer MNT per
+ *       KRW. MNT payout = {@code amountKrw * offerRate}, rounded HALF_UP to 0 decimal places.
+ *   <li>Service fee: chargedKrw = amountKrw + the resolved fee.
  *   <li>Compute USD equivalent for prefunding: {@code chargedKrw / krwPerUsd}, where the
  *       USD/KRW rate is fetched LIVE from sim-rate-provider; if that fetch fails we fall back
  *       to the conservative {@link #KRW_PER_USD} constant so the prefunding check still proceeds.
@@ -63,13 +66,16 @@ public class SendmnPaymentService {
 
     private static final Logger log = LoggerFactory.getLogger(SendmnPaymentService.class);
 
-    /** Fixed service fee in KRW. */
-    static final BigDecimal FEE_KRW = new BigDecimal("500");
-
     /**
      * Fallback KRW/USD rate for the prefunding deduction when the live USD/KRW rate is unavailable.
-     * Now sourced from {@link UsdAmountBasis} so the prefunding deduction and the T4-2 limit check
-     * cannot drift onto different constants.
+     * Sourced from {@link UsdAmountBasis} so the prefunding deduction and the T4-2 limit check cannot
+     * drift onto different constants.
+     *
+     * <p><b>Kept on purpose (CFO#11).</b> Unlike the fee and the margin, this is not a price: it turns
+     * the KRW charge into the USD figure the float is debited by and the regulatory cap is measured on.
+     * Failing closed on it would take a live corridor down during a rate blip, and its wrongness is
+     * already detected downstream (T2-2 {@code fallback_rate_basis_count}). An owner who prefers the
+     * outage to the exposure sets {@code gmepay.payment.sendmn.usd-basis-strict=true}.
      */
     static final BigDecimal KRW_PER_USD = UsdAmountBasis.KRW_PER_USD_FALLBACK;
 
@@ -95,7 +101,8 @@ public class SendmnPaymentService {
     private final SchemeClient schemeClient;
     private final ExecutionAttemptRepository attemptRepository;
     private final boolean lenientMerchantValidation;
-    private final BigDecimal fxMargin;
+    /** CFO#11: the corridor's commercial terms, resolved per payment instead of hardcoded here. */
+    private final SendmnCorridorPricing pricing;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
     /** T2-1: durable sink for a revenue posting that could not be delivered. */
@@ -106,6 +113,10 @@ public class SendmnPaymentService {
     /**
      * Production constructor.
      * Spring 6: @Autowired must be on the @Value-bearing constructor.
+     *
+     * <p>CFO#11: the FX margin is no longer a {@code @Value} on this class. It — and the service fee —
+     * come from {@link SendmnCorridorPricing}, which reads config-registry first and falls back to the
+     * corridor's historical values with a loud, readable provenance rather than silently.
      */
     @Autowired
     public SendmnPaymentService(
@@ -115,22 +126,14 @@ public class SendmnPaymentService {
             SchemeClient schemeClient,
             ExecutionAttemptRepository attemptRepository,
             @Value("${gmepay.payment.merchant-validation:strict}") String merchantValidation,
-            @Value("${gmepay.payment.sendmn.fx-margin:0.02}") BigDecimal fxMargin,
+            SendmnCorridorPricing pricing,
             @Nullable TransactionClient transactionClient,
             @Nullable RevenueLedgerClient revenueLedgerClient,
             @Nullable RevenuePostingFailureStore revenuePostingFailureStore,
             @Nullable WalletLimitGate limitGate) {
-        this.qrClient = qrClient;
-        this.rateClient = rateClient;
-        this.prefundingClient = prefundingClient;
-        this.schemeClient = schemeClient;
-        this.attemptRepository = attemptRepository;
-        this.lenientMerchantValidation = "lenient".equalsIgnoreCase(merchantValidation);
-        this.fxMargin = fxMargin;
-        this.transactionClient = transactionClient;
-        this.revenueLedgerClient = revenueLedgerClient;
-        this.revenuePostingFailureStore = revenuePostingFailureStore;
-        this.limitGate = limitGate != null ? limitGate : WalletLimitGate.disabled();
+        this(qrClient, rateClient, prefundingClient, schemeClient, attemptRepository,
+                "lenient".equalsIgnoreCase(merchantValidation), pricing, transactionClient,
+                revenueLedgerClient, revenuePostingFailureStore, limitGate);
     }
 
     /** Test constructor — no @Value needed. */
@@ -163,7 +166,12 @@ public class SendmnPaymentService {
                 revenuePostingFailureStore, null);
     }
 
-    /** Test constructor with the T4-2 limit gate. */
+    /**
+     * Test constructor with the T4-2 limit gate, taking the margin directly — a convenience that wraps
+     * it as {@link SendmnCorridorPricing}'s module-config override, so a test that pins the FX
+     * arithmetic does not have to care where the margin came from. The fee resolves to the corridor's
+     * code default (₩500), exactly as an unconfigured deployment does.
+     */
     SendmnPaymentService(QrClient qrClient,
                          RateClient rateClient,
                          PrefundingClient prefundingClient,
@@ -175,13 +183,32 @@ public class SendmnPaymentService {
                          @Nullable RevenueLedgerClient revenueLedgerClient,
                          @Nullable RevenuePostingFailureStore revenuePostingFailureStore,
                          @Nullable WalletLimitGate limitGate) {
+        this(qrClient, rateClient, prefundingClient, schemeClient, attemptRepository,
+                lenientMerchantValidation,
+                new SendmnCorridorPricing(rateClient, null,
+                        fxMargin == null ? "" : fxMargin.toPlainString(), ""),
+                transactionClient, revenueLedgerClient, revenuePostingFailureStore, limitGate);
+    }
+
+    /** Canonical constructor — the pricing resolver supplied explicitly. */
+    SendmnPaymentService(QrClient qrClient,
+                         RateClient rateClient,
+                         PrefundingClient prefundingClient,
+                         SchemeClient schemeClient,
+                         ExecutionAttemptRepository attemptRepository,
+                         boolean lenientMerchantValidation,
+                         SendmnCorridorPricing pricing,
+                         @Nullable TransactionClient transactionClient,
+                         @Nullable RevenueLedgerClient revenueLedgerClient,
+                         @Nullable RevenuePostingFailureStore revenuePostingFailureStore,
+                         @Nullable WalletLimitGate limitGate) {
         this.qrClient = qrClient;
         this.rateClient = rateClient;
         this.prefundingClient = prefundingClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.lenientMerchantValidation = lenientMerchantValidation;
-        this.fxMargin = fxMargin;
+        this.pricing = pricing;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
         this.revenuePostingFailureStore = revenuePostingFailureStore;
@@ -223,31 +250,49 @@ public class SendmnPaymentService {
                     merchant.merchantName(), "MERCHANT_INACTIVE");
         }
 
-        // Step 3: Fetch KRW→MNT live rate
-        RateClient.LiveRate liveRate = rateClient.fetchLiveRate("KRW", "MNT");
-        BigDecimal midRate = liveRate.rate(); // e.g. 3.5 (1 KRW = 3.5 MNT)
-
-        // Step 4: Apply FX margin — offer rate is lower (partner receives fewer MNT)
-        // offerRate = midRate * (1 - fxMargin)
-        BigDecimal offerRate = midRate.multiply(BigDecimal.ONE.subtract(fxMargin),
-                new MathContext(10, RoundingMode.HALF_UP));
+        // Step 3+4 (CFO#11): price the corridor from CONFIGURATION, not from constants in this file.
+        //
+        // resolveRates gives the live KRW→MNT mid rate, the resolved FX margin and therefore the offer
+        // rate (mid × (1 − margin) — the partner receives fewer MNT per KRW), plus the USD/KRW basis the
+        // float leg is measured in. The margin comes from config-registry's partner_fx_config when the
+        // owner has entered it; until then it is SENDMN's historical 2%, carried as an explicitly
+        // labelled code default (rates.marginFromCodeDefault()) rather than an invisible literal. The
+        // corridor deliberately does NOT refuse for want of configured terms the way Nepal does — see
+        // SendmnCorridorPricing: Nepal had no price, SENDMN has a working one and live traffic.
+        CorridorPricing.Rates rates;
+        try {
+            rates = pricing.resolveRates(PARTNER_CODE);
+        } catch (CorridorPricingUnavailableException ex) {
+            // Reachable only on a live-rate outage (or a malformed override), never on absent terms.
+            log.warn("SENDMN payment refused (unpriceable): {}", ex.getMessage());
+            throw ex;
+        }
+        BigDecimal offerRate = rates.offerRate();
 
         // MNT payout = amountKrw * offerRate, rounded HALF_UP to whole MNT
         BigDecimal payAmountMnt = amountKrw.multiply(offerRate)
                 .setScale(0, RoundingMode.HALF_UP);
 
         // FX margin revenue = payout at mid-rate minus payout at offer rate, in KRW terms
-        // fxMarginKrw = amountKrw * fxMargin (the KRW the house keeps as margin)
-        BigDecimal fxMarginKrw = amountKrw.multiply(fxMargin)
+        // fxMarginKrw = amountKrw * margin (the KRW the house keeps as margin)
+        BigDecimal fxMarginKrw = amountKrw.multiply(rates.marginFraction())
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // Step 5: Fixed service fee
-        BigDecimal chargedKrw = amountKrw.add(FEE_KRW);
+        // Step 5: the service fee — from config-registry's partner_fee_schedule when configured,
+        // otherwise SENDMN's historical flat ₩500 as a labelled code default. Resolved on this
+        // transaction's USD volume so a tiered/bps schedule works the moment one is entered.
+        // The USD basis is the SAME rate the float debit below uses (rates.krwPerUsd()).
+        BigDecimal krwPerUsd = rates.krwPerUsd();
+        BigDecimal amountUsd = amountKrw.divide(krwPerUsd, CorridorPricing.USD_SCALE, RoundingMode.HALF_UP);
+        CorridorPricing.Fee fee = pricing.resolveFee(PARTNER_CODE, amountUsd, krwPerUsd);
+        BigDecimal feeKrw = fee.feeKrw();
+        BigDecimal chargedKrw = amountKrw.add(feeKrw);
 
-        // Step 6: Compute USD equivalent of chargedKrw for prefunding deduction, using the LIVE
-        // USD/KRW rate (falls back to KRW_PER_USD if the rate provider is unavailable).
-        BigDecimal krwPerUsd = fetchKrwPerUsd();
-        BigDecimal chargedUsd = chargedKrw.divide(krwPerUsd, 8, RoundingMode.HALF_UP);
+        // Step 6: USD equivalent of chargedKrw for the prefunding deduction. rates.krwPerUsd() is the
+        // LIVE USD/KRW rate, falling back to KRW_PER_USD when the rate provider is unavailable
+        // (rates.usdBasisFallbackUsed() records which happened — see the KRW_PER_USD javadoc for why
+        // this fallback is kept while the fee/margin ones were externalised).
+        BigDecimal chargedUsd = chargedKrw.divide(krwPerUsd, CorridorPricing.USD_SCALE, RoundingMode.HALF_UP);
 
         String partnerTxnRef = "SENDMN-" + UUID.randomUUID();
 
@@ -453,7 +498,7 @@ public class SendmnPaymentService {
                         revenueDate,
                         BigDecimal.ZERO,   // collectionMarginUsd
                         fxMarginUsd,       // payoutMarginUsd — the KRW→MNT FX margin
-                        FEE_KRW,           // serviceCharge
+                        feeKrw,            // serviceCharge — the resolved corridor fee
                         "KRW",             // serviceChargeCcy
                         BigDecimal.ZERO);  // feeSharePct
             } catch (RuntimeException ex) {
@@ -461,7 +506,7 @@ public class SendmnPaymentService {
                 // this catch covers any other implementation that throws. Either way the posting must
                 // NOT be lost: the money has already moved.
                 log.warn("SENDMN revenue capture post failed for {}: {}", txnRef, ex.getMessage());
-                recordFailedRevenueCapture(txnRef, partnerId, revenueDate, fxMarginUsd, ex);
+                recordFailedRevenueCapture(txnRef, partnerId, revenueDate, fxMarginUsd, feeKrw, ex);
             }
         }
 
@@ -473,30 +518,26 @@ public class SendmnPaymentService {
         String committedAt = KST_FMT.format(
                 schemeResp.approvedAt() != null ? schemeResp.approvedAt() : Instant.now());
 
+        // CFO#11: every approval states which commercial terms priced it, so "what did we charge and
+        // on whose authority" is answerable from the transaction log and not only from the source tree.
+        log.info("SENDMN APPROVED ref={} {} KRW + {} fee → {} MNT @ {} (margin {} from {}; fee from {};"
+                        + " usdBasisFallback={})",
+                partnerTxnRef, amountKrw, feeKrw, payAmountMnt, offerRate,
+                rates.marginFraction(), rates.marginSource(), fee.source(),
+                rates.usdBasisFallbackUsed());
+
         return GmeremitPaymentService.WalletResult.approvedFx(
                 schemeResp.schemeTxnRef(),
                 // T4-4: the SAME value that was just persisted, so the synchronous response and the
                 // later transaction-detail read of this payment can never disagree about who was paid.
                 persistedMerchantName,
                 amountKrw,
-                FEE_KRW,
+                feeKrw,
                 chargedKrw,
                 committedAt,
                 offerRate.setScale(6, RoundingMode.HALF_UP),
                 payAmountMnt
         );
-    }
-
-    /**
-     * Live USD/KRW rate from sim-rate-provider for the prefunding (USD) deduction. Falls back to the
-     * conservative {@link #KRW_PER_USD} constant when the rate provider is unreachable or returns a
-     * non-positive rate, so the SENDMN path degrades gracefully instead of failing the payment.
-     */
-    private BigDecimal fetchKrwPerUsd() {
-        // Delegates to the single platform USD-basis helper (T4-2) so the prefunding deduction and the
-        // regulatory limit check are guaranteed to be on the SAME rate. Same behaviour as before:
-        // live USD/KRW, conservative KRW_PER_USD fallback on an empty/unavailable rate.
-        return UsdAmountBasis.krwPerUsd(rateClient);
     }
 
     /**
@@ -508,7 +549,8 @@ public class SendmnPaymentService {
      * context) this degrades to the log line only.
      */
     private void recordFailedRevenueCapture(String txnRef, long partnerId, LocalDate revenueDate,
-                                            BigDecimal fxMarginUsd, RuntimeException cause) {
+                                            BigDecimal fxMarginUsd, BigDecimal feeKrw,
+                                            RuntimeException cause) {
         if (revenuePostingFailureStore == null) {
             log.error("SENDMN revenue capture for {} is LOST (no failure store wired): {}",
                     txnRef, cause.toString());
@@ -521,7 +563,7 @@ public class SendmnPaymentService {
         payload.put("revenueDate", revenueDate == null ? null : revenueDate.toString());
         payload.put("collectionMarginUsd", BigDecimal.ZERO);
         payload.put("payoutMarginUsd", fxMarginUsd);
-        payload.put("serviceChargeAmount", FEE_KRW);
+        payload.put("serviceChargeAmount", feeKrw);
         payload.put("serviceChargeCcy", "KRW");
         payload.put("feeSharePct", BigDecimal.ZERO);
         revenuePostingFailureStore.record(txnRef,

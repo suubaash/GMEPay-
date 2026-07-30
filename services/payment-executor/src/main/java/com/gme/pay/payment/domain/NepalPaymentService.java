@@ -146,7 +146,7 @@ public class NepalPaymentService {
         String partnerCode = partner == null ? null : partner.code();
 
         // ---- Step 1: price the corridor. Refuses (503) rather than inventing a rate/margin/fee. ----
-        NepalCorridorPricing.Rates rates;
+        CorridorPricing.Rates rates;
         try {
             rates = pricing.resolveRates(partnerCode);
         } catch (CorridorPricingUnavailableException ex) {
@@ -163,11 +163,11 @@ public class NepalPaymentService {
         if (NepalCorridorPricing.PAYOUT_CURRENCY.equals(currency)) {
             // RECEIVE quote: the caller fixed the merchant payout; derive the KRW to collect.
             payAmountNpr = amount.setScale(NPR_SCALE, RoundingMode.HALF_UP);
-            amountKrw = payAmountNpr.divide(rates.offerRateNprPerKrw(), KRW_SCALE, RoundingMode.HALF_UP);
+            amountKrw = payAmountNpr.divide(rates.offerRate(), KRW_SCALE, RoundingMode.HALF_UP);
         } else {
             // SEND quote (default): the caller fixed the KRW; derive the NPR payout.
             amountKrw = amount;
-            payAmountNpr = amountKrw.multiply(rates.offerRateNprPerKrw())
+            payAmountNpr = amountKrw.multiply(rates.offerRate())
                     .setScale(NPR_SCALE, RoundingMode.HALF_UP);
         }
         if (payAmountNpr.signum() <= 0 || amountKrw.signum() <= 0) {
@@ -187,7 +187,7 @@ public class NepalPaymentService {
         // ---- Step 3: the configured service fee, resolved on this transaction's USD volume. ----
         BigDecimal amountUsd = amountKrw.divide(krwPerUsd, NepalCorridorPricing.USD_SCALE,
                 RoundingMode.HALF_UP);
-        NepalCorridorPricing.Fee fee;
+        CorridorPricing.Fee fee;
         try {
             fee = pricing.resolveFee(partnerCode, amountUsd, krwPerUsd);
         } catch (CorridorPricingUnavailableException ex) {
@@ -364,7 +364,7 @@ public class NepalPaymentService {
         String committedAt = KST_FMT.format(approvedAt);
         log.info("Nepal APPROVED ref={} {} KRW + {} fee → {} NPR @ {} (margin {} from {})",
                 partnerTxnRef, amountKrw, fee.feeKrw(), payAmountNpr,
-                rates.offerRateNprPerKrw(), rates.marginFraction(), rates.marginSource());
+                rates.offerRate(), rates.marginFraction(), rates.marginSource());
 
         return WalletResult.approvedFxInCurrency(
                 txnRef,
@@ -374,7 +374,7 @@ public class NepalPaymentService {
                 fee.feeKrw(),
                 chargedKrw,
                 committedAt,
-                rates.offerRateNprPerKrw().setScale(6, RoundingMode.HALF_UP),
+                rates.offerRate().setScale(6, RoundingMode.HALF_UP),
                 payAmountNpr,
                 NepalCorridorPricing.PAYOUT_CURRENCY);
     }
@@ -426,7 +426,7 @@ public class NepalPaymentService {
      * the exact {@code POST /v1/revenue/capture} body). Never throws — the money has already moved.
      */
     private void recordFailedRevenueCapture(String txnRef, long partnerId, LocalDate revenueDate,
-                                            BigDecimal fxMarginUsd, NepalCorridorPricing.Fee fee,
+                                            BigDecimal fxMarginUsd, CorridorPricing.Fee fee,
                                             RuntimeException cause) {
         if (revenuePostingFailureStore == null) {
             log.error("Nepal revenue capture for {} is LOST (no failure store wired): {}",
