@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerRegulatoryConfigView;
 import com.gme.pay.registry.regulatory.PartnerRegulatoryConfigService;
@@ -67,7 +68,7 @@ public class PartnerRegulatoryConfigController {
     public PartnerRegulatoryConfigView patchDraftStep8Regulatory(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep8Regulatory req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (req == null || req.regulatory() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "request body with a 'regulatory' object required");

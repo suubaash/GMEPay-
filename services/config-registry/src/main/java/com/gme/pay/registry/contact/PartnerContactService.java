@@ -1,5 +1,6 @@
 package com.gme.pay.registry.contact;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.ContactCommand;
 import com.gme.pay.contracts.ContactView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -74,7 +75,7 @@ public class PartnerContactService {
      * Default actor until the Keycloak {@code sub} claim is threaded through the
      * BFF (same Slice 1B.4 carve-out as {@code PartnerDraftService}).
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final ContactRepository contactRepository;
     private final PartnerRepository partnerRepository;

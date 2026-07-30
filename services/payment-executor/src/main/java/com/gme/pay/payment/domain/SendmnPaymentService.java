@@ -378,6 +378,13 @@ public class SendmnPaymentService {
         // deduction so the booked margin and the deducted float are on one rate basis.
         BigDecimal fxMarginUsd = fxMarginKrw.divide(krwPerUsd, 4, RoundingMode.HALF_UP);
 
+        // T4-4: the merchant name to PERSIST. SendMN's own verify-qr answer wins over the hub's
+        // merchant-qr-data row — it is the name the scheme will show on the Mongolian side, and on the
+        // lenient branch above the hub value is the synthesised "Unknown Merchant" placeholder, which
+        // realOrNull refuses so a receipt never claims a merchant we never looked up.
+        String persistedMerchantName =
+                MerchantNames.realOrNull(schemeResp.merchantName(), merchant.merchantName());
+
         // Step 9: Record in transaction-mgmt (resilient)
         String txnRef = partnerTxnRef;
         if (transactionClient != null) {
@@ -387,7 +394,8 @@ public class SendmnPaymentService {
                                 partnerId, partnerTxnRef, SCHEME_ID, "OVERSEAS", "MPM",
                                 payAmountMnt, "MNT", amountKrw, "KRW",
                                 merchant.merchantId(), null,
-                                null));  // SENDMN wallet uses its own fee model, not the rate-based merchant fee
+                                null,   // SENDMN wallet uses its own fee model, not the rate-based merchant fee
+                                persistedMerchantName));
                 txnRef = created.txnRef();
                 // T2-1: the APPROVED commit used to pass the 5-arg StatusPatch, i.e. NULL margins — so
                 // transaction-mgmt persisted a zero-revenue transaction and the payment.approved event
@@ -467,7 +475,9 @@ public class SendmnPaymentService {
 
         return GmeremitPaymentService.WalletResult.approvedFx(
                 schemeResp.schemeTxnRef(),
-                merchant.merchantName(),
+                // T4-4: the SAME value that was just persisted, so the synchronous response and the
+                // later transaction-detail read of this payment can never disagree about who was paid.
+                persistedMerchantName,
                 amountKrw,
                 FEE_KRW,
                 chargedKrw,

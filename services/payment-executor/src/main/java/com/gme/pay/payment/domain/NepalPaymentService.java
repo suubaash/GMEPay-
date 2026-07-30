@@ -292,6 +292,15 @@ public class NepalPaymentService {
         Instant approvedAt =
                 schemeResp.approvedAt() != null ? schemeResp.approvedAt() : Instant.now();
 
+        // T4-4: ask the Nepal adapter who was actually paid. This corridor does no hub-side merchant
+        // lookup (step 6) — the adapter is the ONLY component that can name the receiver, by decoding
+        // the QR — so the name has to be requested explicitly; /submit returns amounts and a status
+        // only. Deliberately AFTER the approval decision: the lookup is display-only, so it must never
+        // sit in front of the money movement, and resolveMerchantName is contractually non-throwing
+        // (null = unknown = an em dash on the receipt, never a failed payment).
+        String merchantName =
+                MerchantNames.realOrNull(schemeClient.resolveMerchantName(SCHEME_ID, qrPayload));
+
         // ---- Step 7: transaction-mgmt, carrying the REAL money values (resilient). ----
         String txnRef = partnerTxnRef;
         if (transactionClient != null) {
@@ -302,7 +311,8 @@ public class NepalPaymentService {
                                 payAmountNpr, NepalCorridorPricing.PAYOUT_CURRENCY,
                                 amountKrw, NepalCorridorPricing.COLLECTION_CURRENCY,
                                 null, null,
-                                null));  // the Nepal wallet fee is a partner fee, not a scheme merchant fee
+                                null,   // the Nepal wallet fee is a partner fee, not a scheme merchant fee
+                                merchantName));  // T4-4: persisted, so the receipt read carries it
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(
@@ -359,7 +369,7 @@ public class NepalPaymentService {
         return WalletResult.approvedFxInCurrency(
                 txnRef,
                 schemeResp.schemeTxnRef(),
-                null,               // merchantName resolved by the adapter; not surfaced yet (T4-4)
+                merchantName,       // T4-4: the adapter's decoded receiver name (null when unknown)
                 amountKrw,
                 fee.feeKrw(),
                 chargedKrw,

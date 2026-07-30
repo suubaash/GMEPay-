@@ -14,6 +14,12 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // T3-4: the ops.alert transport for batch-run failures. Without this the adapter's EventPublisher can
+    // only ever be the log fallback, so a failed 02:00 ZP0011 could not reach the platform's alert pipeline
+    // at all (the same first-hop break T3-3 found in payment-executor). The auto-config is inert unless
+    // spring.kafka.bootstrap-servers is set, so local/CI boots stay broker-free and no OTHER event starts
+    // being published — this adapter emits no domain events, only ops alerts.
+    implementation project(':libs:lib-events-kafka')
     // Wave-3 reconcile: canonical /refunded read DTO (RefundedTransactionView) so the refund
     // enrichment consumer binds the producer's real field names instead of ad-hoc names → null.
     implementation project(':libs:lib-api-contracts')

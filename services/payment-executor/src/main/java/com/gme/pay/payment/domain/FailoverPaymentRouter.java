@@ -548,7 +548,11 @@ public class FailoverPaymentRouter {
             TransactionClient.CreateResult created = transactionClient.createPending(
                     new TransactionClient.CreateRequest(
                             candidate.partnerId(), resp.schemeTxnRef(), candidate.schemeId(),
-                            dir, "MPM", amount, currency, amount, currency, null, null, null));
+                            dir, "MPM", amount, currency, amount, currency, null, null, null,
+                            // T4-4: the failover path does no merchant lookup of its own, so the only
+                            // name available is whatever the winning scheme reported on its submit
+                            // (SendMN's verify-qr does; ZeroPay does not → null → em dash).
+                            MerchantNames.realOrNull(resp.merchantName())));
             transactionClient.commitStatus(created.txnRef(),
                     new TransactionClient.StatusPatch(
                             PaymentStatus.APPROVED, resp.schemeTxnRef(), resp.schemeApprovalCode(),

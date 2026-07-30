@@ -128,7 +128,7 @@ class TransactionsControllerTest {
         TransactionMgmtClient.TransactionSummary summary = new TransactionMgmtClient.TransactionSummary(
                 "TXN-FAIL", "partner_test_001", "FAILED",
                 new BigDecimal("10.00"), "USD", Instant.parse("2026-06-09T10:15:30Z"),
-                null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
                 "SCHEME_DECLINED", "Declined", "Insufficient funds at issuer",
                 List.of(
                         TransactionMgmtClient.StatusEntry.of("CREATED", Instant.parse("2026-06-09T10:15:30Z")),

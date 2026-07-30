@@ -219,7 +219,13 @@ public class GmeremitPaymentService {
                                 0L, partnerTxnRef, SCHEME_ID, "DOMESTIC", "MPM",
                                 amountKrw, "KRW", amountKrw, "KRW",
                                 merchant.merchantId(), null,
-                                null));  // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
+                                null,   // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
+                                // T4-4: persist the name merchant-qr-data just gave us, so the receipt
+                                // read shows it. realOrNull filters the dev-synth "Unknown Merchant"
+                                // placeholder — the WalletResult below still surfaces it to the caller
+                                // (it explains WHY the merchant is unnamed), but storing it would make
+                                // an un-looked-up merchant indistinguishable from a real named one.
+                                MerchantNames.realOrNull(merchant.merchantName())));
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(

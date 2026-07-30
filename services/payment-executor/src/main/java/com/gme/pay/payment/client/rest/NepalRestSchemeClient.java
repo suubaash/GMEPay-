@@ -42,6 +42,9 @@ import java.time.Instant;
 @Component
 public class NepalRestSchemeClient implements SchemeClient {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(NepalRestSchemeClient.class);
+
     /** Router key this adapter serves. */
     public static final String SCHEME_CODE = "NEPAL";
 
@@ -150,6 +153,40 @@ public class NepalRestSchemeClient implements SchemeClient {
         }
     }
 
+    /**
+     * T4-4: decodes the scanned QR to the receiver/merchant display name via the adapter's
+     * {@code POST /internal/scheme/nepal/decode}. This corridor performs NO hub-side merchant lookup
+     * (see {@code NepalPaymentService} step 6 — the adapter resolves the merchant from the QR itself),
+     * so the adapter is the only component that can name who is being paid, and the name has to be
+     * asked for explicitly: the {@code /submit} response carries {@code {schemeTxnRef,status,amountPaisa}}
+     * and nothing else.
+     *
+     * <p>Never throws, per the {@link SchemeClient#resolveMerchantName} contract: a decode failure,
+     * an empty body or a blank name all degrade to null so the payment is unaffected and the receipt
+     * honestly shows "—". Returning the merchant CITY or the raw QR would be worse than nothing.
+     */
+    @Override
+    public String resolveMerchantName(String schemeId, String qrPayload) {
+        if (qrPayload == null || qrPayload.isBlank()) {
+            return null;
+        }
+        try {
+            NepalDecodeResponse body = restClient.post()
+                    .uri("/internal/scheme/nepal/decode")
+                    .body(new NepalDecodeRequest(qrPayload))
+                    .retrieve()
+                    .body(NepalDecodeResponse.class);
+            if (body == null || body.merchantName() == null || body.merchantName().isBlank()) {
+                return null;
+            }
+            return body.merchantName().trim();
+        } catch (RuntimeException ex) {
+            log.debug("scheme-adapter-nepal decode unavailable — merchant name left unknown: {}",
+                    ex.toString());
+            return null;
+        }
+    }
+
     /** Maps the Nepal adapter's status vocabulary onto the canonical {@link LookupStatus}. */
     private static LookupStatus mapStatus(String status) {
         String s = status.trim().toUpperCase(java.util.Locale.ROOT);
@@ -210,6 +247,24 @@ public class NepalRestSchemeClient implements SchemeClient {
             String schemeTxnRef,
             String status,
             BigDecimal amountPaisa
+    ) {}
+
+    /**
+     * T4-4 decode contract. {@code qs} matches the adapter's {@code DecodeRequest} field name exactly
+     * (Jackson binds by name); the response is its {@code DecodeResponse}, of which only the merchant
+     * name is read here — {@code merchantCity} / {@code network} are deliberately NOT used as
+     * stand-ins for a missing name.
+     */
+    record NepalDecodeRequest(String qs) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record NepalDecodeResponse(
+            String network,
+            String merchantId,
+            String merchantName,
+            String merchantCity,
+            Long amountPaisa,
+            String currency
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.commercial;
 
+import com.gme.pay.audit.AuditActors;
 import static com.gme.pay.registry.commercial.CommercialValidation.badRequest;
 import static com.gme.pay.registry.commercial.CommercialValidation.normalizeScale4;
 import static com.gme.pay.registry.commercial.CommercialValidation.requireOnboarding;
@@ -58,7 +59,7 @@ public class LimitsService {
     static final BigDecimal SOAEK_ANNUAL_MAX = new BigDecimal("50000");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final LimitsRepository limitsRepository;
     private final PartnerRepository partnerRepository;

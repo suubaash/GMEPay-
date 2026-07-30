@@ -91,6 +91,28 @@ public interface SchemeClient {
         return LookupStatus.NOT_FOUND;
     }
 
+    /**
+     * Asks the scheme's adapter to decode a scanned QR into the merchant's DISPLAY NAME (T4-4).
+     *
+     * <p>Exists for corridors whose merchant identity lives ONLY at the scheme: the Nepal adapter
+     * resolves the receiver from the QR itself ({@code POST /internal/scheme/nepal/decode}) and the hub
+     * performs no merchant lookup on that path at all, so without this the Nepal receipt could never
+     * carry a name. Schemes whose submit round-trip already reports the name use
+     * {@link MpmSubmitResponse#merchantName()} instead, and the ZeroPay/GMEREMIT path uses its own
+     * merchant-qr-data lookup — so the default here returns null and only Nepal overrides it.
+     *
+     * <p><b>Best-effort by contract.</b> Implementations MUST NOT throw: this is a display-only lookup
+     * on the money path, and a decode hiccup must degrade to "name unknown" (null → the UI's em dash),
+     * never to a failed or reversed payment.
+     *
+     * @param schemeId    scheme CODE (routes to the right adapter)
+     * @param qrPayload   the raw scanned QR string
+     * @return the merchant display name, or null when this scheme cannot answer
+     */
+    default String resolveMerchantName(String schemeId, String qrPayload) {
+        return null;
+    }
+
     /** Outcome of an idempotent {@link #lookupStatus} probe. */
     enum LookupStatus {
         /** The scheme confirms this reference was paid — treat as APPROVED, do NOT retry. */
@@ -125,11 +147,26 @@ public interface SchemeClient {
         }
     }
 
+    /**
+     * @param merchantName T4-4: the merchant DISPLAY NAME the scheme itself reported while executing
+     *                     this payment, when it reports one. SendMN's verify-qr step returns the
+     *                     Mongolian merchant's business name and the adapter client used to discard it
+     *                     between verify-qr and Confirm; carrying it here is what lets the corridor
+     *                     persist the name the SCHEME will show on its own side. Null for schemes that
+     *                     report no name on the submit round-trip (ZeroPay — the hub resolves it from
+     *                     merchant-qr-data instead; Nepal — see {@link #resolveMerchantName}).
+     */
     record MpmSubmitResponse(
             String schemeApprovalCode,
             String schemeTxnRef,
-            Instant approvedAt
-    ) {}
+            Instant approvedAt,
+            String merchantName
+    ) {
+        /** Back-compat 3-arg form for schemes/fakes that report no merchant name. */
+        public MpmSubmitResponse(String schemeApprovalCode, String schemeTxnRef, Instant approvedAt) {
+            this(schemeApprovalCode, schemeTxnRef, approvedAt, null);
+        }
+    }
 
     /**
      * Scheme-routed cancel/refund request (T2-7).

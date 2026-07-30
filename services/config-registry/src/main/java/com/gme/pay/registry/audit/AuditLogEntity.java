@@ -1,6 +1,7 @@
 package com.gme.pay.registry.audit;
 
 import com.gme.pay.audit.AuditEvent;
+import com.gme.pay.audit.HashChain;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -92,6 +93,27 @@ public class AuditLogEntity {
     @Column(name = "recorded_at", nullable = false, updatable = false)
     private Instant recordedAt;
 
+    /**
+     * Which digest sealed this row — {@link HashChain#CHAIN_V1} or {@link HashChain#CHAIN_V2}
+     * (V043, gap T5-1).
+     *
+     * <h3>Why this is an {@code Integer} and not an {@code int}</h3>
+     *
+     * <p>This is the READ side that rehydrates <b>historical</b> rows, and the honest answer
+     * for a row written before the column existed is "v1" — those rows were sealed with the
+     * five-field digest that omits {@code aggregate_type}, {@code aggregate_id} and
+     * {@code actor_ip}. V043 backfills them to {@code 1} via the column DEFAULT, so in a
+     * migrated database the value is never null; a boxed type plus the {@link #chainVersion()}
+     * fallback below covers the one case the DDL cannot: a row read through an entity mapping
+     * that pre-dates the migration (e.g. a partially-migrated test fixture). Defaulting the
+     * unknown case to v1 is the only safe direction — verifying a v1 row under the v2 digest
+     * fails loudly (a false tamper alarm, annoying but safe), while verifying a v2 row under
+     * the v1 digest would <b>succeed while ignoring three sealed columns</b>, i.e. it would
+     * report "intact" for a row whose aggregate_id had been rewritten. Never guess v2.
+     */
+    @Column(name = "chain_version", nullable = false, updatable = false)
+    private Integer chainVersion;
+
     public AuditLogEntity() {
         // JPA
     }
@@ -114,12 +136,21 @@ public class AuditLogEntity {
         e.prevHash = event.prevHash();
         e.rowHash = event.rowHash();
         e.recordedAt = event.recordedAt();
+        e.chainVersion = event.chainVersion();
         return e;
     }
 
     public AuditEvent toDomain() {
         return new AuditEvent(id, aggregateType, aggregateId, actorId, actorIp, eventType,
-                beforeJsonb, afterJsonb, prevHash, rowHash, recordedAt);
+                beforeJsonb, afterJsonb, prevHash, rowHash, recordedAt, chainVersion());
+    }
+
+    /**
+     * The sealed-under version, defaulting to {@link HashChain#CHAIN_V1} when the column is
+     * absent/null. See the field javadoc for why the unknown case must resolve to v1.
+     */
+    public int chainVersion() {
+        return chainVersion == null ? HashChain.CHAIN_V1 : chainVersion;
     }
 
     public Long getId() {

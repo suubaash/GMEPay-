@@ -60,7 +60,14 @@ public class BatchRunRecorder {
      * so the six-argument call sites in the schedulers stay readable.
      */
     public record RunKey(String runKind, String fileType, String settlementWindow, LocalDate businessDate,
-                         BatchRunTrigger trigger, BusinessDayVerdict verdict) {
+                         BatchRunTrigger trigger, BusinessDayVerdict verdict,
+                         String operatorId, String reason) {
+
+        /** Scheduled run: no operator attribution (the cron is the actor). */
+        public RunKey(String runKind, String fileType, String settlementWindow, LocalDate businessDate,
+                      BatchRunTrigger trigger, BusinessDayVerdict verdict) {
+            this(runKind, fileType, settlementWindow, businessDate, trigger, verdict, null, null);
+        }
 
         public static RunKey generation(String fileType, String window, LocalDate date,
                                         BatchRunTrigger trigger, BusinessDayVerdict verdict) {
@@ -144,6 +151,10 @@ public class BatchRunRecorder {
         row.setOutcome(outcome.name());
         row.setTriggerSource(key.trigger().name());
         row.setCalendarVerdict((key.verdict() == null ? BusinessDayVerdict.UNVERIFIED : key.verdict()).name());
+        // Operator attribution, set only for OPERATOR_RERUN — so the ledger answers "who regenerated
+        // yesterday's ZP0061, and why?" without a separate audit lookup.
+        row.setOperatorId(key.operatorId());
+        row.setReason(key.reason());
         row.setStartedAt(startedAt == null ? Instant.now() : startedAt);
         row.setFinishedAt(Instant.now());
         return row;

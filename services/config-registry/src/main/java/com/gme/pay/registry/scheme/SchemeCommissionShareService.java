@@ -1,5 +1,6 @@
 package com.gme.pay.registry.scheme;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.SchemeCommissionShareCommand;
 import com.gme.pay.contracts.SchemeCommissionShareView;
 import com.gme.pay.registry.audit.AuditLogService;
@@ -56,7 +57,7 @@ public class SchemeCommissionShareService {
     static final Set<String> DIRECTIONS = Set.of("INBOUND", "OUTBOUND", "BOTH");
 
     /** Default actor until the auth {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final SchemeCommissionShareRepository repository;
     private final SchemeCatalogService schemeCatalogService;

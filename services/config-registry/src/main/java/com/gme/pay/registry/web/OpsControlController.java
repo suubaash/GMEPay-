@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.OperationalStatusView;
 import com.gme.pay.registry.ops.OpsControlService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -54,14 +55,14 @@ public class OpsControlController {
     @PostMapping("/pause")
     public OperationalStatusView pause(
             @RequestBody(required = false) PauseRequest body,
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         return service.pause(body == null ? null : body.reason(), actor, ip);
     }
 
     @PostMapping("/resume")
     public OperationalStatusView resume(
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         return service.resume(actor, ip);
     }
@@ -69,7 +70,7 @@ public class OpsControlController {
     @PostMapping("/maintenance")
     public OperationalStatusView maintenance(
             @RequestBody MaintenanceRequest body,
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         boolean on = body != null && body.on();
         String reason = body == null ? null : body.reason();
@@ -79,7 +80,7 @@ public class OpsControlController {
     @PostMapping("/suspend")
     public OperationalStatusView suspend(
             @RequestBody SuspendRequest body,
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         String type = body == null ? null : body.entityType();
         String id = body == null ? null : body.entityId();
@@ -90,7 +91,7 @@ public class OpsControlController {
     @PostMapping("/unsuspend")
     public OperationalStatusView unsuspend(
             @RequestBody SuspendRequest body,
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         String type = body == null ? null : body.entityType();
         String id = body == null ? null : body.entityId();

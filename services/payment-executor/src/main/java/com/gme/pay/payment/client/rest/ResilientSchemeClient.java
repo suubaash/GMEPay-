@@ -115,6 +115,25 @@ public class ResilientSchemeClient implements SchemeClient {
     }
 
     /**
+     * T4-4: merchant-name decode, guarded on the scheme's own breaker/bulkhead like every other call —
+     * a decode against a dead adapter must not sit on a socket while the customer waits. Because the
+     * name is display-only, a short-circuit is swallowed here and reported as "unknown" (null) rather
+     * than propagated: the guard translates OPEN/saturated into {@link SchemeTimeoutException}, which
+     * on any other method means "fail over", and failing a payment over because a NAME lookup was
+     * unavailable would be a money-path decision taken for a cosmetic reason.
+     */
+    @Override
+    public String resolveMerchantName(String schemeId, String qrPayload) {
+        try {
+            return guarded(schemeId, () -> delegate.resolveMerchantName(schemeId, qrPayload));
+        } catch (RuntimeException ex) {
+            log.debug("merchant-name decode unavailable for scheme {} — leaving the name unknown: {}",
+                    schemeId, ex.toString());
+            return null;
+        }
+    }
+
+    /**
      * Runs {@code call} through the scheme's own circuit breaker and bulkhead. An OPEN breaker
      * ({@link CallNotPermittedException}) or a saturated bulkhead ({@link BulkheadFullException}) is
      * translated to {@link SchemeTimeoutException} — a technical failure the router fails over on.

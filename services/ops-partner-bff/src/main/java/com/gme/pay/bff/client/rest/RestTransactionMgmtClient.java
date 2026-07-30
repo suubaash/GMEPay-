@@ -378,6 +378,9 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             String merchantId,
+            // T4-4: field name matches transaction-mgmt's TransactionResponse exactly (Jackson binds
+            // by name) — a typo here would deserialize to null and silently re-open the gap.
+            String merchantName,
             Instant approvedAt,
             // CS support-read fields from transaction-mgmt's TransactionResponse
             String failureReason,
@@ -405,6 +408,7 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
                     schemeTxnRef,
                     schemeApprovalCode,
                     merchantId,
+                    merchantName,   // T4-4: the real captured name (null when never resolved)
                     approvedAt,
                     failureReason,
                     statusLabel,

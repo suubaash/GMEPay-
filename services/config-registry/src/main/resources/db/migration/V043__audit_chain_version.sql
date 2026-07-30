@@ -1,0 +1,61 @@
+-- V043: audit_log.chain_version — record WHICH digest sealed each row (gap T5-1).
+--
+-- WHY
+-- ---
+-- V006 sealed five fields into row_hash:
+--
+--     event_type | actor_id | recorded_at | before_jsonb | after_jsonb
+--
+-- which left aggregate_type, aggregate_id and actor_ip OUTSIDE the digest. The CISO
+-- security audit (outputs/agent/audit_ciso-security_2026-07-28.md §9) called this out:
+-- those three columns could be rewritten in place and every verification would still
+-- pass. Re-pointing an audit row from one partner to another, or erasing the IP an
+-- operator acted from, was undetectable by the very mechanism whose whole purpose is to
+-- detect exactly that.
+--
+-- libs/lib-audit/HashChain now defines CHAIN_V2, which seals those three columns plus the
+-- version number itself (so a v2 row cannot be laundered into a v1 row by editing this
+-- new column and re-verifying under the weaker digest).
+--
+-- WHY EXISTING ROWS ARE **NOT** RE-SEALED
+-- --------------------------------------
+-- Re-hashing history under the new algorithm would destroy the property the chain exists
+-- to provide. After a bulk re-seal, nobody — not us, not a regulator, not a forensic
+-- examiner — could distinguish "an honest migration recomputed these hashes" from "an
+-- attacker rewrote the log and recomputed the hashes". The chain would still verify, and
+-- its verification would no longer mean anything for any row written before the re-seal.
+--
+-- So each row records the version it was sealed under, verification canonicalises per-row
+-- under that version, and the verifier REPORTS the number of rows still on the weaker v1
+-- digest (HashChain.ChainVerification.legacyV1Rows, surfaced by
+-- GET /v1/admin/audit/verify). The residual exposure becomes a number in a report rather
+-- than an unstated assumption, and it only ever goes down: v1 rows are append-only
+-- history and nothing writes new ones.
+--
+-- DEFAULT 1, NOT 2
+-- ----------------
+-- The default applies to precisely the rows that pre-date the column, and those rows ARE
+-- v1. Defaulting to 2 would tell the verifier to canonicalise historical rows under a
+-- digest they were not sealed with, and every one of them would fail — a false tamper
+-- alarm across the entire existing log. The reverse mistake is worse: verifying a v2 row
+-- under the v1 digest SUCCEEDS while silently ignoring three sealed columns. When the
+-- version is unknown, v1 is the only safe guess, and that is what the entity's
+-- chainVersion() fallback also does.
+--
+-- ADR-013 Expand discipline: additive column with a DEFAULT, so no NOT NULL backfill
+-- window and no rewrite of application code required to keep old readers working (an old
+-- reader that never SELECTs this column keeps verifying v1 rows correctly, because
+-- HashChain's v1 canonicalisation is byte-identical to what it always was).
+--
+-- PostgreSQL + H2 (PostgreSQL mode) both accept this spelling — no vendor split needed
+-- for the column itself. The DB-level append-only enforcement DOES need one; it lives in
+-- db/vendor/{vendor}/V044__audit_log_append_only.sql.
+
+ALTER TABLE audit_log
+    ADD COLUMN chain_version SMALLINT NOT NULL DEFAULT 1;
+
+-- Reject an unknown version at INSERT rather than at the next verification sweep, where
+-- it would surface as "unverifiable" — which reads as suspicion rather than as the
+-- deployment error it actually is.
+ALTER TABLE audit_log
+    ADD CONSTRAINT chk_audit_log_chain_version CHECK (chain_version IN (1, 2));

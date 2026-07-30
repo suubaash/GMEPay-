@@ -1,5 +1,6 @@
 package com.gme.pay.registry.webhook;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.IssuedWebhookSubscription;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerStatus;
@@ -93,7 +94,7 @@ public class WebhookProvisioningService {
     private static final int MAX_EVENT_TYPE_LENGTH = 100;
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerWebhookSubscriptionRepository subscriptionRepository;
     private final PartnerRepository partnerRepository;

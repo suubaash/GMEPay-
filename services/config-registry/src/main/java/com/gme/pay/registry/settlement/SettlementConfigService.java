@@ -1,5 +1,6 @@
 package com.gme.pay.registry.settlement;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.contracts.SettlementConfigView;
@@ -94,7 +95,7 @@ public class SettlementConfigService {
     static final int CALENDAR_WINDOW_DAYS = 70;
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final SettlementConfigRepository configRepository;
     private final BusinessDayCalendarRepository calendarRepository;

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.ops;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.OperationalStatusView;
 import com.gme.pay.registry.audit.AuditLogService;
 import java.nio.charset.StandardCharsets;
@@ -46,7 +47,7 @@ public class OpsControlService {
     static final String AGG_CONTROL = "ops-control";
     static final String AGG_SUSPENSION = "ops-suspension";
     static final String GLOBAL_ID = "global";
-    static final String DEFAULT_ACTOR = "ops";
+    static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final OpsControlRepository controlRepository;
     private final OpsSuspensionRepository suspensionRepository;

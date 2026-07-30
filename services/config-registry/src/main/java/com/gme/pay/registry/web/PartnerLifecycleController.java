@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.ActivationGateView;
 import com.gme.pay.contracts.LifecycleCommand;
 import com.gme.pay.contracts.PartnerLifecycleAction;
@@ -60,7 +61,7 @@ public class PartnerLifecycleController {
     public ResponseEntity<?> activate(
             @PathVariable String partnerCode,
             @RequestBody(required = false) LifecycleCommand.Activate body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return respond(lifecycleService.execute(
                 partnerCode, PartnerLifecycleAction.ACTIVATE, null, null, actor));
     }
@@ -74,7 +75,7 @@ public class PartnerLifecycleController {
     public ResponseEntity<?> suspend(
             @PathVariable String partnerCode,
             @RequestBody LifecycleCommand.Suspend body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         String reason = body == null ? null : body.reason();
         String notes = body == null ? null : body.notes();
         return respond(lifecycleService.execute(
@@ -90,7 +91,7 @@ public class PartnerLifecycleController {
     public ResponseEntity<?> reactivate(
             @PathVariable String partnerCode,
             @RequestBody(required = false) LifecycleCommand.Reactivate body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return respond(lifecycleService.execute(
                 partnerCode, PartnerLifecycleAction.REACTIVATE, null, null, actor));
     }
@@ -103,7 +104,7 @@ public class PartnerLifecycleController {
     public ResponseEntity<?> terminate(
             @PathVariable String partnerCode,
             @RequestBody LifecycleCommand.Terminate body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         String reason = body == null ? null : body.reason();
         return respond(lifecycleService.execute(
                 partnerCode, PartnerLifecycleAction.TERMINATE, reason, null, actor));

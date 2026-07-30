@@ -108,4 +108,14 @@ public class SchemeClientRouter implements SchemeClient {
         // Route the anti-double-charge probe (ADR-016 §4) to the scheme's own adapter.
         return route(schemeId).lookupStatus(schemeId, reference);
     }
+
+    /**
+     * T4-4: route the merchant-name decode to the scheme's own adapter. Only NEPAL implements it
+     * (its adapter is the sole holder of the merchant identity on that corridor); every other
+     * delegate inherits the null-returning default, so this is a no-op for them.
+     */
+    @Override
+    public String resolveMerchantName(String schemeId, String qrPayload) {
+        return route(schemeId).resolveMerchantName(schemeId, qrPayload);
+    }
 }

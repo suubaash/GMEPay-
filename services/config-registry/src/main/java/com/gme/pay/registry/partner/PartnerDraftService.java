@@ -1,5 +1,6 @@
 package com.gme.pay.registry.partner;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.changerequest.ChangeRequestState;
 import com.gme.pay.contracts.AddressCommand;
 import com.gme.pay.contracts.AddressView;
@@ -91,7 +92,7 @@ public class PartnerDraftService {
      * so wizard drafts work end-to-end until the Keycloak slice lands and we
      * resolve a real {@code sub} claim into the actor field.
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerStore partnerStore;
     private final PartnerRepository partnerRepository;

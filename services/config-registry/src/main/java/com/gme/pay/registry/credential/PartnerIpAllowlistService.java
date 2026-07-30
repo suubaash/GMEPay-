@@ -1,5 +1,6 @@
 package com.gme.pay.registry.credential;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerIpAllowlistCommand;
 import com.gme.pay.contracts.PartnerIpAllowlistView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -75,7 +76,7 @@ public class PartnerIpAllowlistService {
     static final Set<String> ENVIRONMENTS = Set.of("SANDBOX", "PRODUCTION");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerIpAllowlistRepository allowlistRepository;
     private final PartnerRepository partnerRepository;

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.scheme;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.MerchantFeeScheduleCommand;
 import com.gme.pay.contracts.MerchantFeeScheduleView;
 import com.gme.pay.registry.audit.AuditLogService;
@@ -35,7 +36,7 @@ public class MerchantFeeScheduleService {
     public static final String AGGREGATE_TYPE = "merchant_fee_schedule";
     public static final String EVENT_TYPE_REPLACED = "MERCHANT_FEE_SCHEDULE_REPLACED";
 
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     /** NUMERIC(7,4) ceiling — a fee RATE above 100% is nonsensical. */
     private static final BigDecimal MAX_RATE = BigDecimal.ONE;

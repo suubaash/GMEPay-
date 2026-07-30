@@ -33,6 +33,7 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
                     "ZP-TXN-1001-CONF",                // schemeTxnRef (scheme settlement id)
                     "AUTH-1001",                       // schemeApprovalCode
                     "M0000000001",                     // merchantId
+                    "Seoul Central Mart",              // merchantName (T4-4: captured at payment time)
                     Instant.parse("2026-06-09T10:15:31Z"),  // approvedAt
                     null,                              // failureReason (approved txn)
                     "Approved",                        // statusLabel
@@ -85,7 +86,7 @@ public class StubTransactionMgmtClient implements TransactionMgmtClient {
                 existing.qrSchemeId(), existing.krwAmount(), existing.payerCurrency(),
                 existing.payerCurrencyAmount(), existing.appliedFxRate(), existing.rateTimestamp(),
                 existing.prefundingDeductedUsd(), existing.schemeTxnRef(), existing.schemeApprovalCode(),
-                existing.merchantId(), existing.approvedAt(),
+                existing.merchantId(), existing.merchantName(), existing.approvedAt(),
                 existing.failureReason(), existing.statusLabel(), existing.declineReasonText(),
                 existing.statusHistory());
     }

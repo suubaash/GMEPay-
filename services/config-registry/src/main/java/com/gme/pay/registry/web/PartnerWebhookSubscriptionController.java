@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.WebhookSubscriptionView;
 import com.gme.pay.registry.webhook.WebhookProvisioningService;
@@ -56,7 +57,7 @@ public class PartnerWebhookSubscriptionController {
     public WebhookSubscriptionView patchDraftStep8WebhookSubscription(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep8WebhookSubscription req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return webhookService.saveDraftSubscription(partnerCode, req, actor);
     }
 

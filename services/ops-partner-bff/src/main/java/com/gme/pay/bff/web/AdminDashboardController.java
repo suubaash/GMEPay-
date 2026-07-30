@@ -402,8 +402,9 @@ public class AdminDashboardController {
     /**
      * Builds the {@link TransactionDetail} from the read-side summary using the REAL values that
      * transaction-mgmt's {@code GET /v1/transactions/{id}} now carries — the scheme txn ref, approval
-     * code, merchant id and scheme-approval instant are the genuine evidence the QR scheme paid the
-     * merchant (not the former {@code "SCH-"/"AP-"} placeholders). Settlement booking (booked amount +
+     * code, merchant id, merchant NAME (T4-4) and scheme-approval instant are the genuine evidence the
+     * QR scheme paid the merchant (not the former {@code "SCH-"/"AP-"} placeholders, and not a
+     * hardcoded null for the name). Settlement booking (booked amount +
      * residual) is locked at settlement time, not at payment time, so it is left null on a freshly
      * approved txn rather than derived from the amount; the partner's configured rounding mode is real.
      */
@@ -422,7 +423,11 @@ public class AdminDashboardController {
                 mode,
                 null,   // roundingResidual — locked at settlement time
                 summary.merchantId(),
-                null,   // merchantName — not persisted on the txn yet (wallet response carries it)
+                // T4-4: the REAL merchant name, now persisted at payment time (V012). This was a
+                // hardcoded null while the corridors already knew the name, so the drawer showed an
+                // em dash on every transaction ever. Null still passes through untouched when the
+                // corridor could not resolve a name — the UI's em dash then means what it says.
+                summary.merchantName(),
                 summary.statusHistory(),   // CS: ordered status history from transaction-mgmt (null-safe)
                 summary.failureReason(),   // CS: null-safe on older txns
                 summary.statusLabel(),     // CS: plain-language status label (null-safe)

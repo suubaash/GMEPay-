@@ -71,7 +71,10 @@ public class RestTransactionClient implements TransactionClient {
                             request.collectionUsd(),
                             request.payoutUsdCost(),
                             request.collectionMarginUsd(),
-                            request.payoutMarginUsd()))
+                            request.payoutMarginUsd(),
+                            // T4-4: the merchant name the corridor resolved, so transaction-mgmt
+                            // persists it (V012) instead of the receipt read finding nothing.
+                            request.merchantName()))
                     .retrieve()
                     .body(TransactionCreatedResponse.class);
 
@@ -148,9 +151,13 @@ public class RestTransactionClient implements TransactionClient {
             BigDecimal collectionUsd,
             BigDecimal payoutUsdCost,
             BigDecimal collectionMarginUsd,
-            BigDecimal payoutMarginUsd
+            BigDecimal payoutMarginUsd,
+            // T4-4: merchant display name. The field name matches transaction-mgmt's
+            // CreateTransactionRequest EXACTLY — Jackson binds by name, and a mismatch here would
+            // silently POST null, i.e. reproduce the very gap this field closes.
+            String merchantName
     ) {
-        /** Backwards-compatible 12-arg constructor; pool fields default null. */
+        /** Backwards-compatible 12-arg constructor; pool + merchantName fields default null. */
         TransactionCreateRequest(
                 long partnerId,
                 String partnerTxnRef,
@@ -166,7 +173,7 @@ public class RestTransactionClient implements TransactionClient {
                 BigDecimal merchantFeeRate) {
             this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
                     payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
-                    merchantFeeRate, null, null, null, null, null, null, null, null);
+                    merchantFeeRate, null, null, null, null, null, null, null, null, null);
         }
     }
 

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.corridor;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerCorridorCommand;
 import com.gme.pay.contracts.PartnerCorridorView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -67,7 +68,7 @@ public class PartnerCorridorService {
     static final Pattern CURRENCY = Pattern.compile("[A-Z]{3}");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerCorridorRepository corridorRepository;
     private final PartnerRepository partnerRepository;

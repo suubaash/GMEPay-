@@ -1,5 +1,6 @@
 package com.gme.pay.registry.kyb;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.KybCommand;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -77,7 +78,7 @@ public class KybService {
     static final Set<String> RISK_RATINGS = Set.of("LOW", "MEDIUM", "HIGH");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     /** Audit verb for a full verify run landing on the row. */
     public static final String EVENT_TYPE_VERIFIED = "PARTNER_KYB_VERIFIED";

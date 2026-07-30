@@ -148,6 +148,13 @@ public class SettlementBatchJobService {
      * in-process {@link FixtureRefundedTransactionAdapter} no-op and a permissive registration
      * status). Kept so existing call sites/tests compile unchanged; production DI uses the full
      * constructor above.
+     *
+     * <p><b>Calendar (T3-4):</b> defaults to {@link BusinessCalendar#empty()}, which is the honest
+     * meaning of "this caller supplied no calendar". An empty calendar has no data, so it answers
+     * {@link BusinessDayVerdict#UNVERIFIED} for every date and is fail-open — it therefore asserts
+     * nothing about which days are KRW banking days (it does <em>not</em> claim every day is open) and
+     * blocks nothing, so existing call sites keep their exact previous behaviour. Inventing a
+     * business-day default here is precisely what this gap forbids.
      */
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -161,12 +168,14 @@ public class SettlementBatchJobService {
         this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
                 new FixtureRefundedTransactionAdapter(),
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                BusinessCalendar.empty(),
                 morningCutoff, afternoonCutoff);
     }
 
     /**
      * Backwards-compatible constructor with the refund-date port but a permissive registration
-     * status (pre-gate call sites/tests).
+     * status (pre-gate call sites/tests). Calendar defaults to {@link BusinessCalendar#empty()} for the
+     * same reason as the constructor above.
      */
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -181,14 +190,47 @@ public class SettlementBatchJobService {
         this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
                 refundedPort,
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                BusinessCalendar.empty(),
                 morningCutoff, afternoonCutoff);
     }
 
-    /** @param fileType "ZP0061" (morning) or "ZP0063" (afternoon); @param window e.g. "MORNING"/"AFTERNOON". */
+    /**
+     * Run today's (KST) window — the scheduled entry point.
+     *
+     * @param fileType "ZP0061" (morning) or "ZP0063" (afternoon)
+     * @param window   e.g. "MORNING"/"AFTERNOON"
+     */
     @Transactional
     public SettlementBatchEntity runWindow(String fileType, String window) {
+        return runWindow(fileType, window, LocalDate.now(KST));
+    }
+
+    /**
+     * Run a window for an EXPLICIT business date.
+     *
+     * <p>Split out for T3-4's operator re-run tooling: the business date used to be
+     * {@code LocalDate.now(KST)} deep inside this method, which meant nothing could re-run a window for
+     * <em>yesterday</em> — the single most likely thing an operator needs after a failed 22:00. Every
+     * date-dependent step below (batch identity, the transaction query, the window cutoff, the cross-date
+     * claw-back, the file header) already keyed off this one local, so parameterising it changes no
+     * behaviour for the scheduled path, which passes today.
+     *
+     * <p>Still idempotent per {@code (fileType, businessDate, window)}: {@code createOrGet} plus the
+     * PENDING-only guard mean a second invocation for the same coordinates is a no-op that returns the
+     * existing batch rather than producing a second file.
+     */
+    @Transactional
+    public SettlementBatchEntity runWindow(String fileType, String window, LocalDate date) {
         requireRequestFile(fileType);
-        LocalDate date = LocalDate.now(KST);
+
+        // T3-4 business-day gate, checked HERE rather than only in the scheduler so that no caller —
+        // scheduler, operator re-run, or a future direct one — can generate a settlement file for a date
+        // the configured calendar declares closed. Throws NonBusinessDayException (which BatchRunExecutor
+        // records as SKIPPED_NON_BUSINESS_DAY, not FAILED) before anything is persisted, so a blocked
+        // window leaves no partial batch. An EMPTY calendar — the shipped default — classifies every date
+        // UNVERIFIED and does not block; the run is still stamped UNVERIFIED on its batch_runs row and
+        // raises BATCH_CALENDAR_UNVERIFIED, so "we never checked" is visible rather than assumed away.
+        BusinessDayVerdict verdict = calendar.gate(date, fileType + "/" + window);
 
         // §8.2 prerequisite (tickets 9.1-T18/T19): the settlement REQUEST may not be generated
         // until the date's payment registration completed both legs — ZP0011 transmitted AND
@@ -218,6 +260,11 @@ public class SettlementBatchJobService {
         // (KST). A txn approved after the morning cutoff is left for the afternoon batch; a txn with no
         // approval timestamp fails OPEN (included) so we never silently drop settle-able volume.
         Instant cutoff = windowCutoff(date, window);
+        // The cutoff decides which day's volume this file carries, so the business-day verdict for that
+        // date belongs in the same log line: a cutoff computed for an UNVERIFIED date is a settlement
+        // boundary nobody has confirmed is a KRW banking day.
+        log.info("settlement batch {} window {} cutoff={} businessDate={} calendarVerdict={}",
+                fileType, window, cutoff, date, verdict);
 
         List<TransactionRecord> txns = txnPort.findUnbatchedApproved(date).stream()
                 .filter(TransactionRecord::isApproved)
@@ -378,9 +425,20 @@ public class SettlementBatchJobService {
      */
     @Transactional
     public SettlementBatchEntity runDetailWindow(String fileType) {
+        return runDetailWindow(fileType, LocalDate.now(KST));
+    }
+
+    /**
+     * Detail-file generation for an EXPLICIT business date — the re-runnable entry point (T3-4). Same
+     * rationale and same idempotency as {@link #runWindow(String, String, LocalDate)}.
+     */
+    @Transactional
+    public SettlementBatchEntity runDetailWindow(String fileType, LocalDate date) {
         requireDetailFile(fileType);
-        LocalDate date = LocalDate.now(KST);
         String window = "DETAIL";
+        // Same T3-4 gate as runWindow — the detail files describe the same business date, so they must
+        // obey the same calendar verdict.
+        calendar.gate(date, fileType + "/" + window);
         SettlementBatchEntity batch = batchFactory.createOrGet(fileType, date, window);
 
         if (!SettlementBatchStatus.PENDING.name().equals(batch.getStatus())) {

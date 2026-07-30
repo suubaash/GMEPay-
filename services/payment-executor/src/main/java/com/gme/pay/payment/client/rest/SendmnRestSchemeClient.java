@@ -145,7 +145,12 @@ public class SendmnRestSchemeClient implements SchemeClient {
         // schemeTxnRef ← SendMN paymentNo when known, else the txTokenNo.
         String schemeTxnRef = body.paymentNo() != null && !body.paymentNo().isBlank()
                 ? body.paymentNo() : body.txTokenNo();
-        return new MpmSubmitResponse(body.status(), schemeTxnRef, Instant.now());
+        // T4-4: carry the merchant name verify-qr already told us (SendMN's MERCHANT_NAME). It was
+        // resolved two calls ago and then dropped on the floor here, which is why a SENDMN receipt
+        // could never show who was paid. The scheme's own name is the authoritative one for this
+        // corridor — the hub's merchant-qr-data row is a cache of the Korean-side registry.
+        return new MpmSubmitResponse(body.status(), schemeTxnRef, Instant.now(),
+                verified.merchantName());
     }
 
     @Override

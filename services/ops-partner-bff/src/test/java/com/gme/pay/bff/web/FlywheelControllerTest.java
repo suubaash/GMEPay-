@@ -59,7 +59,7 @@ class FlywheelControllerTest {
                 Instant.parse("2026-06-15T00:00:00Z"),
                 null, null, null, null, null, null,
                 new BigDecimal(deductedUsd),
-                null, null, null, Instant.parse("2026-06-15T00:00:05Z"),
+                null, null, null, null, Instant.parse("2026-06-15T00:00:05Z"),
                 null, null, null, null);
     }
 

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.regulatory;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.BokFxReportingCategory;
 import com.gme.pay.contracts.BokRemitterType;
 import com.gme.pay.contracts.LegalBasisCode;
@@ -100,7 +101,7 @@ public class PartnerRegulatoryConfigService {
     static final int KRW_MAX_INTEGER_DIGITS = 16;
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerRegulatoryConfigRepository configRepository;
     private final PartnerRepository partnerRepository;

@@ -42,6 +42,32 @@ settlement:
       international-fee-share-rate: "0.0021"
 
 gmepay:
+  # ---- business-day calendar (GAP T3-4: "holidays ignored") ----
+  # The batch schedulers and the settlement window/cutoff logic consult this before generating or
+  # reconciling anything. It ships EMPTY on purpose: there is no Korean banking-holiday table here and no
+  # rule for deriving one, because Seollal/Chuseok are lunar and substitute/temporary holidays are gazetted
+  # annually — a hardcoded table would be wrong for some year and believed anyway.
+  #
+  # POPULATING THIS IS AN OPERATOR / BUSINESS INPUT, not a code change. See
+  # Documentation/RUNBOOK_BATCH_OPS.md for what to put here and where the authoritative list comes from.
+  #
+  # While it is empty, every date classifies UNVERIFIED: batch runs still PROCEED (fail-open — refusing to
+  # settle until somebody types in a holiday table would be worse), but each run is stamped
+  # calendar_verdict=UNVERIFIED in the batch_runs ledger and the day's first run raises a
+  # BATCH_CALENDAR_UNVERIFIED WARN ops alert. The absence of calendar data is therefore VISIBLE rather than
+  # silently equivalent to "every day is a banking day".
+  calendar:
+    # ISO dates the KRW banking system is closed. Comma-separated. EMPTY by default.
+    non-business-dates: ${GMEPAY_CALENDAR_NON_BUSINESS_DATES:}
+    # Recurring weekly closures, e.g. SATURDAY,SUNDAY. EMPTY by default — which of the six batch windows
+    # to suppress at weekends is a business decision, so it is configuration, not a built-in assumption.
+    non-business-days-of-week: ${GMEPAY_CALENDAR_NON_BUSINESS_DAYS_OF_WEEK:}
+    # The operator-asserted coverage horizon. Dates AFTER it classify UNVERIFIED even when the holiday list
+    # is non-empty, so a calendar populated for 2026 stops silently vouching for 2027.
+    verified-through: ${GMEPAY_CALENDAR_VERIFIED_THROUGH:}
+    # true = refuse to run on an UNVERIFIED date instead of proceeding + alerting. Turn this on only once
+    # the calendar is genuinely maintained, or every batch window stops.
+    fail-closed: ${GMEPAY_CALENDAR_FAIL_CLOSED:false}
   settlement:
     recon:
       # Gate: set to true in production only. Default false prevents accidental recon in dev/test.

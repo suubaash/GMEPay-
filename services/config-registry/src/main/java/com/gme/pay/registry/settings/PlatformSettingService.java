@@ -1,5 +1,6 @@
 package com.gme.pay.registry.settings;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.registry.audit.AuditLogService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -35,7 +36,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class PlatformSettingService {
 
     static final String AGGREGATE = "platform-setting";
-    static final String DEFAULT_ACTOR = "admin";
+    static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
     static final String TYPE_NUMBER = "NUMBER";
     static final String TYPE_STRING = "STRING";
 

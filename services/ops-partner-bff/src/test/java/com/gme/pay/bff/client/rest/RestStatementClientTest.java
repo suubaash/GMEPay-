@@ -102,7 +102,7 @@ class RestStatementClientTest {
                     id, "GMEREMIT", state, new BigDecimal("1"), "KRW", committedAt,
                     qrSchemeId, krwAmount, payerCurrency, payerCurrencyAmount, appliedFxRate,
                     null, prefundingDeductedUsd,
-                    null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null);
         }
     }
 

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerCorridorView;
 import com.gme.pay.registry.corridor.PartnerCorridorService;
@@ -65,7 +66,7 @@ public class PartnerCorridorController {
     public List<PartnerCorridorView> patchDraftStep7Corridors(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep7Corridors req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
         }

@@ -247,7 +247,11 @@ public class PaymentOrchestrator {
                         // persists real margins (FX1015). Cost rates are not on the quote view → null.
                         quote.offerRateColl(), quote.crossRate(), null, null,
                         quote.collectionUsd(), quote.payoutUsdCost(),
-                        quote.collectionMarginUsd(), quote.payoutMarginUsd()));
+                        quote.collectionMarginUsd(), quote.payoutMarginUsd(),
+                        // T4-4: the merchant name Step 2 just resolved from merchant-qr-data, persisted
+                        // at AUTHORIZE (the earliest moment it is known) so the transaction carries it
+                        // for every later read even if the confirm never happens.
+                        MerchantNames.realOrNull(merchant.merchantName())));
 
         // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
         // SETTLEMENT_FLOW_SPEC §D10/§7.4: the hold must equal payout-cost + FX-margin +
@@ -536,7 +540,11 @@ public class PaymentOrchestrator {
                         cmd.merchantId(),
                         null,  // no quoteId for CPM
                         // V032: no merchant lookup on the CPM path → resolve the scheme default rate.
-                        resolveMerchantFeeRate(cmd.schemeId(), null)
+                        resolveMerchantFeeRate(cmd.schemeId(), null),
+                        // T4-4: null merchantName, honestly. CPM has no QR decode and no merchant
+                        // lookup, so the name is genuinely unknown on this path; the detail read shows
+                        // an em dash rather than a value we would have had to invent.
+                        null
                 )
         );
 
@@ -624,7 +632,11 @@ public class PaymentOrchestrator {
                 txn.paymentId(),
                 PaymentStatus.APPROVED,
                 schemeResponse.schemeTxnRef(),
-                cmd.merchantId(),   // merchantName not available without QR decode
+                // T4-4: merchantName is NOT available on the CPM path (no QR decode, no merchant
+                // lookup). This slot used to be filled with the merchant ID, so every CPM response
+                // and stored payment showed a terminal identifier under a "merchant name" label —
+                // a fabricated value, and one that made the gap look closed. Null is the truth.
+                null,
                 cmd.merchantId(),
                 cmd.payoutAmount(),
                 cmd.payoutCurrency(),

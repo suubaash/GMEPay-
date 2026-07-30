@@ -20,8 +20,9 @@ import java.util.List;
  *
  * <p>UC-10-03 additive fields:
  * <ul>
- *   <li>{@code merchantId}     – merchant terminal/store id from the QR scheme. Null until scheme-adapter wires it.</li>
- *   <li>{@code merchantName}   – merchant display name. Null until scheme-adapter wires it.</li>
+ *   <li>{@code merchantId}     – merchant terminal/store id from the QR scheme.</li>
+ *   <li>{@code merchantName}   – merchant display name, captured at payment time and read from
+ *       transaction-mgmt (T4-4 / V012). Null means the corridor could not resolve a name; render "—".</li>
  *   <li>{@code statusHistory}  – ordered list of status transitions, oldest first. Null until tracking table is wired.</li>
  * </ul>
  *
@@ -42,9 +43,14 @@ public record TransactionDetail(
         RoundingMode settlementRoundingMode,
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal roundingResidual,
         // --- UC-10-03 additive fields ---
-        /** Merchant terminal/store identifier from the QR scheme. TODO: populate from scheme-adapter. */
+        /** Merchant terminal/store identifier from the QR scheme. */
         String merchantId,
-        /** Merchant display name from the QR scheme. TODO: populate from scheme-adapter. */
+        /**
+         * T4-4: merchant DISPLAY NAME, read from the persisted transaction
+         * ({@code transactions.merchant_name}). Null = not known (legacy row, or a corridor that
+         * cannot resolve a name); the UI shows an em dash and MUST NOT substitute
+         * {@link #merchantId()}.
+         */
         String merchantName,
         /** Ordered status-transition history, oldest first. Non-null from transaction-mgmt; null on older txns. */
         List<TransactionMgmtClient.StatusEntry> statusHistory,

@@ -95,6 +95,18 @@ public class BatchRunExecutor {
     public <T> RunResult<T> execute(String runKind, String fileType, String window, LocalDate date,
                                     BatchRunTrigger trigger, BatchWork<T> work,
                                     Function<T, RunSummary> describe) {
+        return execute(runKind, fileType, window, date, trigger, work, describe, null, null);
+    }
+
+    /**
+     * Same as {@link #execute(String, String, String, LocalDate, BatchRunTrigger, BatchWork, Function)} with
+     * operator attribution, used by the re-run API so {@code batch_runs.operator_id} / {@code reason} record
+     * who asked for the run and why.
+     */
+    public <T> RunResult<T> execute(String runKind, String fileType, String window, LocalDate date,
+                                    BatchRunTrigger trigger, BatchWork<T> work,
+                                    Function<T, RunSummary> describe,
+                                    String operatorId, String reason) {
         Instant startedAt = Instant.now();
         BusinessDayVerdict verdict = calendar.classify(date);
 
@@ -104,7 +116,8 @@ public class BatchRunExecutor {
             verdict = calendar.gate(date, fileType + "/" + window);
         } catch (NonBusinessDayException e) {
             BatchRunRecorder.RunKey key =
-                    new BatchRunRecorder.RunKey(runKind, fileType, window, date, trigger, verdict);
+                    new BatchRunRecorder.RunKey(runKind, fileType, window, date, trigger, verdict,
+                            operatorId, reason);
             Long runId = recorder.recordSkipped(key, startedAt,
                     BatchRunOutcome.SKIPPED_NON_BUSINESS_DAY, e.getMessage());
             log.info("batch window {}/{} for {} SKIPPED: {}", fileType, window, date, e.getMessage());
@@ -121,7 +134,8 @@ public class BatchRunExecutor {
         }
 
         BatchRunRecorder.RunKey key =
-                new BatchRunRecorder.RunKey(runKind, fileType, window, date, trigger, verdict);
+                new BatchRunRecorder.RunKey(runKind, fileType, window, date, trigger, verdict,
+                            operatorId, reason);
 
         // (3) + (4) Run; record and report either way.
         try {

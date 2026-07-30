@@ -338,9 +338,10 @@ public class PartnerPortalController {
     private TransactionDetail buildDetail(TransactionMgmtClient.TransactionSummary summary) {
         ConfigRegistryClient.PartnerSummary partner = configRegistry.getPartner(summary.partnerId());
         RoundingMode mode = partner == null ? RoundingMode.HALF_UP : partner.settlementRoundingMode();
-        // Real values from transaction-mgmt — the scheme ref / approval / merchant id / approvedAt are
-        // the genuine merchant-paid evidence (not "SCH-"/"AP-" placeholders). Settlement booking is
-        // locked at settlement time, so booked amount + residual are null on a freshly approved txn.
+        // Real values from transaction-mgmt — the scheme ref / approval / merchant id / merchant NAME
+        // (T4-4) / approvedAt are the genuine merchant-paid evidence (not "SCH-"/"AP-" placeholders).
+        // Settlement booking is locked at settlement time, so booked amount + residual are null on a
+        // freshly approved txn.
         return new TransactionDetail(
                 summary,
                 summary.schemeTxnRef(),
@@ -351,7 +352,7 @@ public class PartnerPortalController {
                 mode,
                 null,
                 summary.merchantId(),
-                null,
+                summary.merchantName(),       // T4-4: real captured name; null = genuinely not known
                 summary.statusHistory(),      // ordered status history (null-safe)
                 summary.failureReason(),      // null-safe on older txns
                 summary.statusLabel(),        // plain-language status label (null-safe)

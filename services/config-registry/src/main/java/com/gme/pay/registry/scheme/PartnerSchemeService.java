@@ -1,5 +1,6 @@
 package com.gme.pay.registry.scheme;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerSchemeCommand;
 import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -82,7 +83,7 @@ public class PartnerSchemeService {
     static final Set<String> APPROVAL_METHODS = Set.of("CONFIRMATION", "SILENT");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerSchemeRepository schemeRepository;
     private final SchemeOperatingHoursRepository operatingHoursRepository;

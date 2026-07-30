@@ -104,7 +104,21 @@ public interface TransactionClient {
             BigDecimal collectionUsd,
             BigDecimal payoutUsdCost,
             BigDecimal collectionMarginUsd,
-            BigDecimal payoutMarginUsd
+            BigDecimal payoutMarginUsd,
+            /**
+             * T4-4: the merchant DISPLAY NAME this corridor resolved at payment time, carried so
+             * transaction-mgmt PERSISTS it (V012 {@code transactions.merchant_name}). Until this field
+             * existed the name lived only on the synchronous wallet response, so every later receipt /
+             * transaction-detail read rendered an em dash even though the corridor had known the name
+             * seconds earlier.
+             *
+             * <p>Nullable, and null is the correct value whenever the name is genuinely unknown (the
+             * CPM path has no QR decode; the failover path has no merchant lookup). Populate it via
+             * {@link com.gme.pay.payment.domain.MerchantNames#realOrNull} so a lenient-mode
+             * {@code "Unknown Merchant"} placeholder or the merchant id can never be stored as if it
+             * were a real name.
+             */
+            String merchantName
     ) {
         /** Backwards-compatible 12-arg constructor; rate-lock pool fields default null. */
         public CreateRequest(
@@ -114,7 +128,37 @@ public interface TransactionClient {
                 String quoteId, BigDecimal merchantFeeRate) {
             this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
                     payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
-                    merchantFeeRate, null, null, null, null, null, null, null, null);
+                    merchantFeeRate, null, null, null, null, null, null, null, null, null);
+        }
+
+        /**
+         * T4-4 13-arg form: the pre-Wave-3 shape PLUS the merchant name. For corridors that carry no
+         * rate-lock pool (the wallet paths) but DO know who the merchant is.
+         */
+        public CreateRequest(
+                long partnerId, String partnerTxnRef, String schemeId, String direction,
+                String paymentMode, BigDecimal targetPayout, String payoutCurrency,
+                BigDecimal collectionAmount, String collectionCurrency, String merchantId,
+                String quoteId, BigDecimal merchantFeeRate, String merchantName) {
+            this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                    payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                    merchantFeeRate, null, null, null, null, null, null, null, null, merchantName);
+        }
+
+        /** Back-compat 20-arg Wave-3 constructor; {@code merchantName} defaults null. */
+        public CreateRequest(
+                long partnerId, String partnerTxnRef, String schemeId, String direction,
+                String paymentMode, BigDecimal targetPayout, String payoutCurrency,
+                BigDecimal collectionAmount, String collectionCurrency, String merchantId,
+                String quoteId, BigDecimal merchantFeeRate,
+                BigDecimal offerRateColl, BigDecimal crossRate,
+                BigDecimal costRateColl, BigDecimal costRatePay,
+                BigDecimal collectionUsd, BigDecimal payoutUsdCost,
+                BigDecimal collectionMarginUsd, BigDecimal payoutMarginUsd) {
+            this(partnerId, partnerTxnRef, schemeId, direction, paymentMode, targetPayout,
+                    payoutCurrency, collectionAmount, collectionCurrency, merchantId, quoteId,
+                    merchantFeeRate, offerRateColl, crossRate, costRateColl, costRatePay,
+                    collectionUsd, payoutUsdCost, collectionMarginUsd, payoutMarginUsd, null);
         }
     }
 

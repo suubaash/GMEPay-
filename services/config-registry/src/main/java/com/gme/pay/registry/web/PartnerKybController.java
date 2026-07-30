@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.KybCommand;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.registry.kyb.KybService;
@@ -48,7 +49,7 @@ public class PartnerKybController {
     @PatchMapping("/draft/{partnerCode}/step-3")
     public KybView patchDraftStep3(@PathVariable String partnerCode,
                                    @RequestBody KybCommand.UpdateStep3 req,
-                                   @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                   @AuditActorHeader String actor) {
         return kybService.upsertStep3(partnerCode, req, actor);
     }
 
@@ -73,7 +74,7 @@ public class PartnerKybController {
      */
     @PostMapping("/{id}/kyb/screen")
     public KybView runScreening(@PathVariable String id,
-                                @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                @AuditActorHeader String actor) {
         return kybService.runScreening(id, actor);
     }
 
@@ -91,7 +92,7 @@ public class PartnerKybController {
     @PostMapping("/{id}/kyb/verify")
     public KybView runVerification(@PathVariable String id,
                                    @RequestBody(required = false) VerifyRequest req,
-                                   @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                   @AuditActorHeader String actor) {
         List<String> docs = req == null ? null : req.suppliedDocuments();
         boolean force = req != null && Boolean.TRUE.equals(req.force());
         return kybService.runVerification(id, docs, force, actor);

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.document;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.DocumentView;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.registry.audit.AuditLogService;
@@ -78,7 +79,7 @@ public class PartnerDocumentService {
      * Default actor until the Keycloak {@code sub} claim is threaded through
      * the BFF (same Slice 1B.4 carve-out as {@code PartnerDraftService}).
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final DocumentRepository documentRepository;
     private final PartnerRepository partnerRepository;

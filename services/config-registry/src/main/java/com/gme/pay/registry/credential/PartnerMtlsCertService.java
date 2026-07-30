@@ -1,5 +1,6 @@
 package com.gme.pay.registry.credential;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerMtlsCertView;
 import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
@@ -73,7 +74,7 @@ public class PartnerMtlsCertService {
     static final Set<String> ENVIRONMENTS = Set.of("SANDBOX", "PRODUCTION");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerMtlsCertRepository certRepository;
     private final PartnerRepository partnerRepository;

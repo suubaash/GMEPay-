@@ -1,5 +1,6 @@
 package com.gme.pay.registry.commercial;
 
+import com.gme.pay.audit.AuditActors;
 import static com.gme.pay.registry.commercial.CommercialValidation.badRequest;
 import static com.gme.pay.registry.commercial.CommercialValidation.normalizeScale4;
 import static com.gme.pay.registry.commercial.CommercialValidation.requirePartner;
@@ -55,7 +56,7 @@ public class PartnerCommissionShareService {
 
     static final Set<String> DIRECTIONS = Set.of("INBOUND", "OUTBOUND", "BOTH");
 
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerCommissionShareRepository repository;
     private final PartnerRepository partnerRepository;

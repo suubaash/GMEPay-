@@ -1,5 +1,6 @@
 package com.gme.pay.registry.bank;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.BankAccountCommand;
 import com.gme.pay.contracts.BankAccountView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -118,7 +119,7 @@ public class PartnerBankAccountService {
     static final Set<String> PURPOSES = Set.of("PAYOUT", "FLOAT_TOPUP", "REFUND");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private static final Logger log = LoggerFactory.getLogger(PartnerBankAccountService.class);
 

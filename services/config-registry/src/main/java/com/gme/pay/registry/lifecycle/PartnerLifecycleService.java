@@ -1,5 +1,6 @@
 package com.gme.pay.registry.lifecycle;
 
+import com.gme.pay.audit.AuditActors;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -60,7 +61,7 @@ public class PartnerLifecycleService {
             PartnerLifecycleChangeRequestApplier.AGGREGATE_TYPE;
 
     /** Pre-Keycloak default actor (Slice 1B.4 carve-out, same as PartnerDraftService). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerRepository partnerRepository;
     private final ChangeRequestRepository changeRequestRepository;

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.IssuedCredentialBundle;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerCredentialView;
@@ -53,7 +54,7 @@ public class PartnerCredentialController {
     public IssuedCredentialBundle rotate(
             @PathVariable("partnerCode") String partnerCode,
             @RequestBody PartnerCommand.RotateCredentials body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (body == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "request body is required");
