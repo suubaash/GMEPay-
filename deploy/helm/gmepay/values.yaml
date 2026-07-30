@@ -768,7 +768,9 @@ services:
                     # arrives from the ABI ConfigMap; the password is a secret and must be here too,
                     # or on a Redis with auth the cooldown silently degrades to per-JVM and the
                     # escalation sweep pages a human once per replica.
-                    SPRING_DATA_REDIS_PASSWORD]
+                    SPRING_DATA_REDIS_PASSWORD,
+                    # This service now owns a small database (see env below).
+                    SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
     envSecretAliases:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
@@ -781,12 +783,13 @@ services:
       #   GMEPAY_OPS_PAGING_WEBHOOK_URL: https://hooks.slack.com/services/REPLACE/ME
       # Left unset on purpose (an empty value would register the webhook adapter with no target).
       #
-      # STILL OPEN (not fixable from a values file): the BFF's OpsAlertStore is an in-memory
-      # ArrayDeque capped at gmepay.ops.alerts.capacity, so the aggregate view is still lost on
-      # restart -- and at >1 replica it also DIVERGES per replica (different alert lists, and an ack
-      # on one replica is invisible on another). payment-executor now persists what IT raises
-      # (ops_alerts, Flyway V006); giving the BFF a durable store is the remaining half of T3-3 and
-      # is what keeps THIS SERVICE at 1 replica. See services/ops-partner-bff/.../OpsAlertStore.java.
+      # CLOSED 2026-07-30: the BFF's OpsAlertStore was an in-memory ArrayDeque, which lost the
+      # aggregate view on every restart and DIVERGED per replica (different alert lists, per-replica
+      # seq numbering so acking id N could hit a different alert, and an ack on one replica invisible
+      # on another). It is now this service's OWN ops_alerts table (Flyway V001) -- the consumer half
+      # of T3-3, matching payment-executor's emitter-side ops_alerts (its V006). THAT WAS THE LAST
+      # SINGLE-REPLICA CEILING IN THE PLATFORM: with the datasource below set, ops-partner-bff may
+      # run N>1. See services/ops-partner-bff/.../alert/OpsAlertStore.java.
       #
       # Escalation (GMEPAY_OPS_PAGING_ESCALATION_ENABLED) stays off by operator choice, but the
       # reason recorded here until 2026-07-30 -- "single-replica-only, no ShedLock, arming it under
@@ -795,6 +798,26 @@ services:
       # claimed atomically before each page). The sweep runs on EVERY replica deliberately: the
       # alert buffer is per-replica, so pinning the sweep to one would leave every other replica's
       # un-acked CRITICAL alerts never escalated -- a missed page, which is worse than a duplicate.
+      # That reason is now partly historical (the store is shared, so any replica sees every alert),
+      # but the sweep is STILL deliberately unlocked: a stuck lock row or an unavailable lock provider
+      # would mean NO replica sweeps, i.e. the lock becomes a new way to silence the pager. The
+      # retention sweeper next to it IS locked -- see V003 for the contrast.
+      #
+      # ---- The BFF's own datastore (REQUIRED; the ceiling above is only lifted with it) ----------
+      # ops_alerts (V001) + operator_action_audit (V002) + shedlock (V003). Without these vars the
+      # image falls back to an in-memory H2, which is a per-JVM store wearing the durable store's
+      # name -- the exact defect, restored silently. The service logs a WARN when it resolves an
+      # in-memory H2 and scripts/check_helm_chart_wiring.py fails the build if this is missing.
+      # NOTE: this is a NEW database (`bff`); it must exist before the chart is upgraded. The cloud
+      # overlays point it at their managed instances.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-bff:5432/bff
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # Durable operator-action audit (who paused the platform / suspended which partner). 'db' is
+      # also the code default now; set explicitly because this selector being set NOWHERE is exactly
+      # how the in-memory stub became the live audit trail in every environment, minting colliding
+      # "OA-n" ids per replica. Do NOT set 'rest': no service exposes
+      # POST /v1/audit/operator-actions yet, so recordDurable() would fail closed on every action.
+      GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT: "db"
       GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
       GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
       # Live partner transactions: activate the real REST transaction-mgmt client

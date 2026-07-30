@@ -130,6 +130,12 @@ services:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-settlement.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/settlement }
   revenue-ledger:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-ledger.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/ledger }
+  # ops-partner-bff owns a small database as of 2026-07-30: ops_alerts + operator_action_audit +
+  # shedlock. Without this it falls back to an in-memory H2 and the alerts list, the alert ids and the
+  # operator ACKs go back to differing per replica — the ceiling this closed. A small instance is
+  # enough (low write volume, 90-day retention), but it must be a real one.
+  ops-partner-bff:
+    env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-bff.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/bff }
   # One realm (`gmepay`), one client id per SPA, and the SAME issuer string the
   # resource servers expect (abi.OIDC_ISSUER_URI above) — see docker/keycloak/README.md.
   # BFF_PROXY_TARGET is server-side only; NEXT_PUBLIC_BFF_BASE_URL is intentionally

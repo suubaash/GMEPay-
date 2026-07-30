@@ -64,7 +64,7 @@ class ControlTowerControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        alerts = new com.gme.pay.bff.alert.OpsAlertStore(200);
+        alerts = new com.gme.pay.bff.alert.InMemoryOpsAlertStore(200);
         mvc = standaloneSetup(new ControlTowerController(
                 transactions, webhooks, prefunding, systemHealth, settlements, configRegistry, opsControl, alerts))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))

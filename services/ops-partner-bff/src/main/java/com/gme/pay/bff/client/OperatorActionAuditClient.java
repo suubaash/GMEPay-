@@ -11,11 +11,27 @@ import java.time.Instant;
  * transaction resolve, webhook replay, recon rerun) writes BEFORE delegating to the
  * upstream service. Read side stays {@link AuditClient} (paginated timeline).
  *
- * <p><b>Ownership.</b> The audit log is owned by {@code auth-identity} (Phase 4). The
- * production implementation POSTs to auth-identity's operator-action audit endpoint;
- * the Phase-1 default {@link com.gme.pay.bff.client.stub.StubOperatorActionAuditClient}
- * captures records in memory so the BFF boots standalone and controller tests can
- * assert the record was written without an operating auth service.
+ * <p><b>Implementations, and which one is the default.</b>
+ * <ul>
+ *   <li>{@link com.gme.pay.bff.client.db.DbOperatorActionAuditClient} — <b>the default</b>
+ *       ({@code gmepay.operator-action-audit.client=db}, also selected when the property is absent).
+ *       Writes the durable {@code operator_action_audit} table (Flyway V002) this service owns.</li>
+ *   <li>{@link com.gme.pay.bff.client.rest.RestOperatorActionAuditClient} — {@code rest}. POSTs to
+ *       {@code /v1/audit/operator-actions}, <b>an endpoint that does not exist in this repo yet</b>;
+ *       read that class before selecting it.</li>
+ *   <li>{@link com.gme.pay.bff.client.stub.StubOperatorActionAuditClient} — {@code stub}, opt-in only
+ *       and {@code WARN}ing at construction. It is not an audit trail: per-JVM ids that collide across
+ *       replicas, lost on restart, and {@link #recordDurable} cannot fail. It was nevertheless the live
+ *       bean in every environment until this commit, because it carried {@code matchIfMissing = true}
+ *       and nothing set the selector.</li>
+ * </ul>
+ * An unrecognised selector value leaves <b>no</b> bean, so the service refuses to start rather than
+ * silently degrading (the T1-1 shape).
+ *
+ * <p><b>Where the regulator-grade log lives.</b> config-registry owns the hash-chained
+ * {@code audit_log} (read at {@code GET /v1/audit}, with chain verification) and remains the eventual
+ * home for these rows. The table behind the default implementation is flat and append-only: it proves
+ * what an operator did, not that nobody edited it afterwards.
  *
  * <p><b>Two write modes.</b>
  * <ul>

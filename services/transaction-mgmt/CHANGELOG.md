@@ -1,5 +1,43 @@
 # transaction-mgmt — CHANGELOG
 
+## 2026-07-30 - POST /v1/transactions claims the idempotency key BEFORE it creates anything
+
+Two simultaneous requests carrying the same `Idempotency-Key` created **two transactions**: the claim
+was taken *after* `doCreate`, so only one response was returned and the loser's row was orphaned with
+a `txn_ref` no caller ever saw. Sequential retries were always correct; the concurrent window - the
+one an idempotency key exists for - was not.
+
+### Added
+- **Flyway `V014__idempotency_claim.sql`** - `state` (`RESERVED` | `COMPLETED`, CHECK-constrained) +
+  `claim_expires_at` on `idempotency_keys`. Existing rows default to `COMPLETED`, which is what they
+  are.
+- **Flyway `V015__unique_partner_txn_ref.sql`** - `ux_transactions_partner_txn_ref` on
+  `(partner_id, partner_txn_ref)`: **the DB-level uniqueness `IdempotencyStore`'s javadoc had been
+  promising while none existed.** Not belt-and-braces - payment-executor's `createPending` sends no
+  `Idempotency-Key` at all (only api-gateway enforces the header, at the partner edge), so on that
+  path this index is the only duplicate suppression there is. Legacy rows (both columns NULL) are
+  unconstrained. **If a database already holds duplicate pairs the migration FAILS and the deploy
+  stops** - correct for duplicate money rows; the migration carries the detection query.
+- **`gmepay.idempotency.claim-ttl`** (engineering default 2 minutes) - how long a `RESERVED` claim may
+  be held. An owner should confirm it against real p99 create latency.
+- `TransactionCreateDuplicateSuppressionTest` - two **real threads**, one key: exactly one 201, one
+  409, one row. Plus the index rejecting a duplicate with the store not involved at all.
+
+### Changed
+- **`IdempotencyStore` is a claim-first protocol**: `claim(key)` -> `CLAIMED` | `IN_FLIGHT` |
+  `REPLAY`, then `complete(key, snapshot)` or `release(key)`. `putIfAbsent` is gone - it could only
+  ever be called after the thing it was supposed to guard already existed.
+- **`POST /v1/transactions` answers 409 `IDEMPOTENCY_CONFLICT`** while a duplicate is in flight. New
+  status on this endpoint, and the honest one: the alternatives are "201 plus a second transaction"
+  (the defect) or "200 with a response that does not exist yet" (a lie). It is **retryable** - the
+  same key retried later replays the winner's response, so a duplicate never becomes a *lost* payment.
+- A failed create **releases** the claim, so one bad request does not 409 the retry for two minutes.
+- **A claim whose holder dies lapses.** Without that, a pod evicted mid-create would 409 every retry
+  for the full 24h window, and a payment that can never be retried is worse than the duplicate this
+  change removes. The residual risk (the dead claimant had already inserted its row) is exactly what
+  V015 catches - the two halves were designed together.
+
+
 ## 2026-07-30 — Idempotency keys move to a durable table: transaction-mgmt can run N>1
 
 The `Idempotency-Key` window is the only thing between a partner retry and a **second money

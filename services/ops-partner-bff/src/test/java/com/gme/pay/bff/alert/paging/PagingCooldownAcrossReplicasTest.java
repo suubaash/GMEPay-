@@ -1,5 +1,7 @@
 package com.gme.pay.bff.alert.paging;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.gme.pay.bff.alert.OpsAlertStore;
 import com.gme.pay.bff.alert.OpsAlertView;
 import com.gme.pay.contracts.events.OpsAlertPayload;
@@ -244,13 +246,13 @@ class PagingCooldownAcrossReplicasTest {
     }
 
     private static OpsPagingDispatcher dispatcher(PagingPort port, PagingCooldown cooldown) {
-        return new OpsPagingDispatcher(port, new OpsAlertStore(200), cooldown,
+        return new OpsPagingDispatcher(port, new InMemoryOpsAlertStore(200), cooldown,
                 "CRITICAL", WINDOW, "", CLOCK);
     }
 
     private static OpsAlertView critical(String type, String subjectRef) {
         // OpsAlertView.from is package-private; the store is the public way to mint a view.
-        return new OpsAlertStore(200).add(new OpsAlertPayload(OpsAlertPayload.EVENT_TYPE,
+        return new InMemoryOpsAlertStore(200).add(new OpsAlertPayload(OpsAlertPayload.EVENT_TYPE,
                 type, "CRITICAL", subjectRef, "detail", "2026-07-30T11:00:00Z"));
     }
 

@@ -297,6 +297,28 @@ public class TransactionController {
     /**
      * Creates a transaction. Accepts payment-executor's 11-field {@code TransactionCreateRequest}.
      * Returns {@code { txnRef, paymentId, createdAt }}.
+     *
+     * <h2>Idempotency: the claim is taken BEFORE anything is created</h2>
+     * This method used to call {@code doCreate(req)} first and claim the key second, so two
+     * simultaneous requests carrying the same {@code Idempotency-Key} created <b>two transactions</b> —
+     * only one response was returned and the loser's row was orphaned. The claim now comes first, so
+     * the database decides who may create:
+     *
+     * <ul>
+     *   <li><b>201</b> — this caller won the claim and created the transaction;</li>
+     *   <li><b>200</b> — a previous request already answered; its response is replayed byte-for-byte;</li>
+     *   <li><b>409 {@code IDEMPOTENCY_CONFLICT}</b> — a concurrent duplicate holds the claim. Nothing was
+     *       created and nothing was lost: <b>retry the same key</b> and the winner's response is
+     *       replayed. This status is new, and it is the honest answer — the alternative shapes are "201
+     *       with a second transaction" (the defect) or "200 with a response that does not exist yet"
+     *       (a lie).</li>
+     * </ul>
+     *
+     * <p>A failed create <b>releases</b> the claim, so a real failure never blocks the retry that
+     * follows it. No {@code Idempotency-Key} header ⇒ unchanged behaviour (create, 201): the header is
+     * required at the partner edge by api-gateway, and payment-executor's internal
+     * {@code createPending} does not send one — for that path the DB-level unique index on
+     * {@code transactions (partner_id, partner_txn_ref)} (V015) is the duplicate defence.
      */
     @PostMapping
     public ResponseEntity<CreateTransactionResponse> create(
@@ -307,19 +329,42 @@ public class TransactionController {
             return ResponseEntity.status(HttpStatus.CREATED).body(doCreate(req));
         }
 
-        // Fast-path replay: a duplicate after the first response was stored.
-        Optional<String> replayed = idempotencyStore.get(idempotencyKey);
-        if (replayed.isPresent()) {
-            return ResponseEntity.ok(readSnapshot(replayed.get()));
+        IdempotencyStore.Claim claim = idempotencyStore.claim(idempotencyKey);
+        switch (claim.outcome()) {
+            case REPLAY -> {
+                log.info("idempotent replay for key={}", idempotencyKey);
+                return ResponseEntity.ok(readSnapshot(claim.snapshot()));
+            }
+            case IN_FLIGHT -> {
+                log.info("idempotency key={} is held by a concurrent duplicate — answering 409",
+                        idempotencyKey);
+                throw new ApiException(ErrorCode.IDEMPOTENCY_CONFLICT,
+                        "A request with this Idempotency-Key is already in flight. No transaction was "
+                                + "created by this call; retry the SAME key to receive the original "
+                                + "response.");
+            }
+            default -> {
+                // We own the claim. Create, then make the response replayable.
+                CreateTransactionResponse fresh;
+                try {
+                    fresh = doCreate(req);
+                } catch (RuntimeException e) {
+                    // Release, or a failed attempt would 409 every retry until the claim lapses.
+                    idempotencyStore.release(idempotencyKey);
+                    throw e;
+                }
+                try {
+                    idempotencyStore.complete(idempotencyKey, writeSnapshot(fresh));
+                } catch (RuntimeException e) {
+                    // The transaction EXISTS. Losing the snapshot costs a later replay (a retry gets a
+                    // fresh 201 once the claim lapses, and V015 stops that becoming a second row); it
+                    // must never cost the caller the response to the transaction it just created.
+                    log.error("created txnRef={} but FAILED to store the idempotency snapshot for "
+                            + "key={}: {}", fresh.txnRef(), idempotencyKey, e.toString());
+                }
+                return ResponseEntity.status(HttpStatus.CREATED).body(fresh);
+            }
         }
-
-        CreateTransactionResponse fresh = doCreate(req);
-        Optional<String> winner = idempotencyStore.putIfAbsent(idempotencyKey, writeSnapshot(fresh));
-        if (winner.isPresent()) {
-            log.info("idempotent replay for key={} (lost concurrent create race)", idempotencyKey);
-            return ResponseEntity.ok(readSnapshot(winner.get()));
-        }
-        return ResponseEntity.status(HttpStatus.CREATED).body(fresh);
     }
 
     private CreateTransactionResponse doCreate(CreateTransactionRequest req) {

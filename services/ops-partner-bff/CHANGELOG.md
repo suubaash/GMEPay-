@@ -2,6 +2,68 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-30 - The BFF gains a datastore, and the last single-replica ceiling in the platform is gone
+
+`OpsAlertStore` was a 200-entry per-JVM `ArrayDeque` with a per-JVM `AtomicLong` minting the alert
+ids. It was the ONE thing keeping this service at one replica.
+
+### Added
+- **This service now owns a small database** - a deliberate, narrow exception to its "owns no data"
+  rule. Only state that is *born* here: `ops_alerts` (Flyway **V001**), `operator_action_audit`
+  (**V002**), `shedlock` (**V003**). Everything else the BFF shows is still read over HTTP from the
+  service that owns it. `spring-boot-starter-data-jpa` + `flyway-core` + `postgresql`/`h2`, and
+  `shedlock-spring`/`-provider-jdbc-template` for one locked job.
+- **`alert/OpsAlertStore` is now a port** with `JpaOpsAlertStore` (default) and
+  `InMemoryOpsAlertStore`, selected by `gmepay.ops.alerts.store` = `db` | `memory`; anything else
+  **refuses to start**, and `db` over an in-memory H2 logs a WARN naming the N=1 ceiling it silently
+  reimposes.
+- **`alert/OpsAlertRetentionSweeper`** - `gmepay.ops.alerts.retention-days` (default 90, the same
+  property name and default as payment-executor's emitter-side `ops_alerts` so the two halves of one
+  alert's history age out together). An ENGINEERING default: a records-retention owner should confirm
+  how long operational alert evidence and the acks on it must be kept.
+- **`client/db/DbOperatorActionAuditClient`** - the durable operator-action audit trail, and the new
+  default.
+- Tests: `JpaOpsAlertStoreTest` (two replicas, restart, the concurrent paging-stamp-vs-ack race),
+  `OpsAlertStoreConfigTest`, `EscalationSweepAcrossReplicasTest`,
+  `OperatorActionAuditClientSelectionTest`, `DbOperatorActionAuditClientTest`. Every cross-replica
+  assertion is paired with the per-JVM version getting it wrong.
+
+### Fixed
+- **The alert IDS collided at N>1**, which nobody had written down: `seq` restarted at 1 on every
+  replica and every restart, so `POST /v1/admin/ops/alerts/{id}/ack` could acknowledge a **different
+  alert than the operator clicked**. One database sequence mints them now.
+- The alerts list and the ack state no longer differ per replica, and neither is lost on restart.
+- **`StubOperatorActionAuditClient` was the live audit trail in every environment** (it carried
+  `matchIfMissing = true` and `GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT` was set nowhere): per-JVM `OA-n`
+  ids colliding across replicas, lost on restart, and `recordDurable()` could not fail - so
+  "no money-affecting operator action without a durable audit record" was decorative. The stub is now
+  opt-in and WARNs at construction; an unrecognised selector leaves no bean so the service refuses to
+  boot. **The default did NOT become `rest`**, because `rest` POSTs
+  `/v1/audit/operator-actions`, which **no service in this repo exposes** - selecting it today
+  fail-closes every audited operator action. Verifying that first is the T1-1 precedent, and it is
+  what stopped a straight inversion.
+
+### Changed
+- `update(seq, mutator)` runs under `SELECT ... FOR UPDATE`, so a concurrent ack and paging stamp
+  cannot drop one another's fields - the read-modify-write that made a Redis hash the wrong *shape*
+  for this store. Explicit `TransactionTemplate`s, not `@Transactional`: the boundary is a correctness
+  requirement, and an annotation that only works through a proxy would silently do nothing when the
+  store is constructed directly.
+- `add()` **never throws** (it is called immediately before paging a human, so a storage failure must
+  not become a missed page); reads **do** propagate, because "no alerts" from an unreachable store is
+  a lie a human acts on. `management.health.db.enabled=false` for the same asymmetry: the datastore
+  backs 2 of ~40 surfaces, and marking every replica unready would take the whole console down.
+- **The escalation sweep is STILL not ShedLocked**, now that a `LockProvider` exists here. A lock can
+  only ever *subtract* escalations, so a stuck lock row would silence the pager; the duplicate it
+  would prevent is already prevented at the pager by the shared `PagingCooldown`. A reflection test
+  fails the build if anyone adds the annotation, paired with one proving the retention sweep *is*
+  locked so neither reads as an oversight.
+- The escalation query is capped at `OpsAlertStore.MAX_LIMIT` instead of the old "0 = unlimited",
+  which against a table would fetch the whole retention window every tick.
+- `docker-compose.yml` (+ `postgres-bff` on host port 5448) and all four Helm values files set
+  `SPRING_DATASOURCE_URL` and `GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT=db`.
+
+
 ## 2026-07-30 — Paging dedupe is shared: the BFF no longer pages a human once per replica
 
 ### Added

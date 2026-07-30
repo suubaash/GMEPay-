@@ -23,7 +23,7 @@ class OpsAlertEventHandlerTest {
 
     @Test
     void consumesStoresAndReturnsNewestFirst() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
@@ -39,7 +39,7 @@ class OpsAlertEventHandlerTest {
 
     @Test
     void filtersBySeverityAndType() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
@@ -55,7 +55,7 @@ class OpsAlertEventHandlerTest {
 
     @Test
     void limitCaps() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
@@ -66,7 +66,7 @@ class OpsAlertEventHandlerTest {
 
     @Test
     void capacityEvictsOldest() {
-        OpsAlertStore store = new OpsAlertStore(1);
+        OpsAlertStore store = new InMemoryOpsAlertStore(1);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));
@@ -79,7 +79,7 @@ class OpsAlertEventHandlerTest {
 
     @Test
     void rejectsPoison() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));

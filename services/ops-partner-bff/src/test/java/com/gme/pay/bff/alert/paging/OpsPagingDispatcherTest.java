@@ -1,5 +1,7 @@
 package com.gme.pay.bff.alert.paging;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.gme.pay.bff.alert.OpsAlertEventHandler;
 import com.gme.pay.bff.alert.OpsAlertStore;
 import com.gme.pay.bff.alert.OpsAlertView;
@@ -26,7 +28,7 @@ class OpsPagingDispatcherTest {
 
     @Test
     void criticalPagesAndRecordsDelivered() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store, TestPaging.dispatcher(port, store));
 
@@ -42,7 +44,7 @@ class OpsPagingDispatcherTest {
 
     @Test
     void infoIsStoredButNotPaged() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store, TestPaging.dispatcher(port, store));
 
@@ -55,7 +57,7 @@ class OpsPagingDispatcherTest {
 
     @Test
     void warnPagesWhenThresholdLowered() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsPagingDispatcher d = TestPaging.dispatcher(port, store, "WARN",
                 Duration.ofMinutes(15), Clock.systemUTC());
@@ -68,7 +70,7 @@ class OpsPagingDispatcherTest {
 
     @Test
     void dedupeSuppressesRepeatWithinWindow() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsPagingDispatcher d = TestPaging.dispatcher(port, store, "CRITICAL",
                 Duration.ofMinutes(15), Clock.systemUTC());
@@ -84,7 +86,7 @@ class OpsPagingDispatcherTest {
 
     @Test
     void dedupeExpiresAfterWindow() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         MutableClock clock = new MutableClock(Instant.parse("2026-07-02T00:00:00Z"));
         OpsPagingDispatcher d = TestPaging.dispatcher(port, store, "CRITICAL",

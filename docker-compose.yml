@@ -34,6 +34,7 @@ volumes:
   pg-scheme:
   pg-sendmn:
   pg-ninepay:
+  pg-bff:
   pg-keycloak:
   mongo-data:
   minio-data:
@@ -248,6 +249,24 @@ services:
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d npadapter"], interval: 5s, timeout: 3s, retries: 12 }
     networks: [gmepay]
     profiles: ["full"]
+
+  # ops-partner-bff's own datastore — the change that lifted the LAST single-replica ceiling in
+  # the platform. The BFF is still an aggregator of upstream services; it owns only state that is
+  # BORN there and has nowhere upstream to live: ops_alerts (V001 — the ops-alert read model plus
+  # the paging record and the operator ACK, previously a 200-entry per-JVM ArrayDeque whose per-JVM
+  # seq counter meant acking id N could hit a DIFFERENT alert on another replica),
+  # operator_action_audit (V002 — who paused the platform, previously an in-memory list in a stub
+  # that was live in every environment and minted colliding "OA-n" ids) and shedlock (V003).
+  # Host port 5448: 5433-5447 are all taken by the existing per-service datastores, so this
+  # continues the band at the first free number rather than reusing one (5441 is postgres-executor).
+  postgres-bff:
+    image: postgres:16-alpine
+    environment: { POSTGRES_DB: bff, POSTGRES_USER: gmepay, POSTGRES_PASSWORD: *pg-password }
+    ports: ["5448:5432"]
+    volumes: ["pg-bff:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U gmepay -d bff"], interval: 5s, timeout: 3s, retries: 12 }
+    networks: [gmepay]
+    profiles: ["core", "full"]
 
   # Keycloak's own datastore (ADR-011: human IdP, PostgreSQL-backed). Kept on a
   # separate volume + host port (5446) from postgres-authid (5439) so the two
@@ -1173,6 +1192,21 @@ services:
       # indicator is off for this service so a Redis outage cannot make the BFF unready.
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      # ---- The BFF's own datastore (replica ceiling / gap T3-3 consumer half) ------
+      # WITHOUT THIS the image falls back to an in-memory H2, which is a per-JVM store wearing the
+      # durable store's name: the ops-alert list, the alert IDS and the operator ACKs would again
+      # differ per replica and vanish on restart, and the operator-action audit trail would be
+      # unqueryable after a container restart. OpsAlertStoreConfig logs a WARN when it resolves an
+      # in-memory H2, and scripts/check_helm_chart_wiring.py fails the build if the chart omits it.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-bff:5432/bff
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      SPRING_DATASOURCE_USERNAME: gmepay
+      SPRING_DATASOURCE_PASSWORD: *pg-password
+      # Durable operator-action audit (who/what/when/reason). 'db' is also the code default now --
+      # set explicitly because this selector being set NOWHERE is precisely how the in-memory stub
+      # became the live audit trail in every environment. Do NOT set 'rest': no service exposes
+      # POST /v1/audit/operator-actions yet, and recordDurable() would 500 every operator action.
+      GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT: db
     depends_on:
       config-registry: { condition: service_healthy }
       transaction-mgmt: { condition: service_healthy }
@@ -1180,6 +1214,7 @@ services:
       revenue-ledger: { condition: service_healthy }
       settlement-reconciliation: { condition: service_healthy }
       redis: { condition: service_healthy }
+      postgres-bff: { condition: service_healthy }
     healthcheck: *tcp-health
     networks: [gmepay]
     profiles: ["core", "full"]

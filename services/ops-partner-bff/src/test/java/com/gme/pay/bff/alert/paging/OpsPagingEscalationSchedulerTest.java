@@ -1,5 +1,7 @@
 package com.gme.pay.bff.alert.paging;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.gme.pay.bff.alert.OpsAlertEventHandler;
 import com.gme.pay.bff.alert.OpsAlertStore;
 import com.gme.pay.bff.alert.OpsAlertView;
@@ -28,7 +30,7 @@ class OpsPagingEscalationSchedulerTest {
 
     @Test
     void rePagesUnackedCritical() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsPagingDispatcher d = dispatcher(port, store);
         new OpsAlertEventHandler(store, d).handle("TXN-9", OLD_CRIT); // page #1 on consume
@@ -44,7 +46,7 @@ class OpsPagingEscalationSchedulerTest {
 
     @Test
     void ackStopsEscalation() {
-        OpsAlertStore store = new OpsAlertStore(200);
+        OpsAlertStore store = new InMemoryOpsAlertStore(200);
         TestPaging.RecordingPort port = new TestPaging.RecordingPort();
         OpsPagingDispatcher d = dispatcher(port, store);
         new OpsAlertEventHandler(store, d).handle("TXN-9", OLD_CRIT);

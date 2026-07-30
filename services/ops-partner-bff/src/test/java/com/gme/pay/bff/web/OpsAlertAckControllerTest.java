@@ -1,5 +1,7 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.bff.alert.OpsAlertEventHandler;
 import com.gme.pay.bff.alert.OpsAlertStore;
@@ -35,7 +37,7 @@ class OpsAlertAckControllerTest {
 
     @BeforeEach
     void setUp() {
-        store = new OpsAlertStore(200);
+        store = new InMemoryOpsAlertStore(200);
         audit = new StubOperatorActionAuditClient();
         new OpsAlertEventHandler(store, TestPaging.dispatcher(new TestPaging.RecordingPort(), store))
                 .handle("TXN-9", CRIT);

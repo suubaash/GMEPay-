@@ -1,0 +1,45 @@
+-- V015 - the DB-level uniqueness the code has been promising: one partner reference, one transaction.
+--
+-- WHY THIS EXISTS. IdempotencyStore's javadoc used to claim that "the DB unique constraint on the
+-- transaction key remains the last-resort backstop". No such constraint existed: V001-V014 contain no
+-- UNIQUE anywhere on transactions, and a second create simply minted a fresh txn_ref, so there was
+-- nothing for a duplicate to collide with. The claim was corrected in the javadoc when it was found --
+-- and this migration makes the original claim true, because a money path with no database-level
+-- uniqueness is depending entirely on application code being reached.
+--
+-- It is the backstop for the two things the application-level claim cannot cover:
+--
+--   1. THE PRIMARY CALLER DOES NOT SEND AN IDEMPOTENCY KEY AT ALL. payment-executor's
+--      RestTransactionClient.createPending() POSTs /v1/transactions with NO Idempotency-Key header
+--      (grep-verified). The header is only enforced at the partner edge (api-gateway's
+--      IdempotencyKeyFilter requires it on POST). So for the internal money path the idempotency
+--      table is not even consulted, and THIS INDEX is the only duplicate suppression there is.
+--   2. A LAPSED CLAIM (V014). If a claimant dies after inserting its transaction but before
+--      completing its claim, the claim expires and the next retry is allowed to create. This index
+--      is what turns that into a rejected insert instead of a second payment row.
+--
+-- THE KEY. (partner_id, partner_txn_ref) is the partner's own reference for the payment, and it is
+-- NOT NULL on the payment-executor create contract (Transaction's 11-field constructor requires
+-- both). Legacy rows created through the 5-field constructor leave both NULL and are unaffected:
+-- both PostgreSQL and H2 treat NULLs as distinct in a unique index, so any number of legacy rows
+-- coexist. This is deliberately NOT a constraint on txn_ref (already the primary key) and NOT on
+-- quote_id (one quote may legitimately be re-presented).
+--
+-- OPERATIONAL NOTE, STATED RATHER THAN DISCOVERED. If a database already contains duplicate
+-- (partner_id, partner_txn_ref) pairs -- which is precisely what the create-before-claim defect
+-- produced -- THIS MIGRATION WILL FAIL and the deployment will stop. That is the correct behaviour:
+-- duplicate money rows need a human, not an index that silently tolerates them. Find them with
+--
+--   SELECT partner_id, partner_txn_ref, COUNT(*), STRING_AGG(txn_ref, ',')
+--     FROM transactions
+--    WHERE partner_id IS NOT NULL AND partner_txn_ref IS NOT NULL
+--    GROUP BY partner_id, partner_txn_ref HAVING COUNT(*) > 1;
+--
+-- and resolve each pair (the orphan is the one with no payment against it) before upgrading. No
+-- production data exists at the time of writing.
+--
+-- A UNIQUE INDEX rather than a UNIQUE CONSTRAINT: identical enforcement, and IF NOT EXISTS is
+-- portable for indexes but not for constraints in PostgreSQL.
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_partner_txn_ref
+    ON transactions (partner_id, partner_txn_ref);

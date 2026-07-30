@@ -1,10 +1,25 @@
 // ops-partner-bff: Aggregation API for Admin UI and Partner Self-Service Portal.
 //
 // This is the "Ops/Partner BFF" box in the Edge / API Layer of the architecture
-// diagram. It is a CLIENT of backend services (over REST) — it does NOT own data
-// and does NOT connect to any database. Each upstream call is wrapped in a thin
-// adapter under com.gme.pay.bff.client; controllers orchestrate 1-N adapter
-// calls and combine the results into a UI-shaped DTO.
+// diagram. It is a CLIENT of backend services (over REST): each upstream call is
+// wrapped in a thin adapter under com.gme.pay.bff.client; controllers orchestrate
+// 1-N adapter calls and combine the results into a UI-shaped DTO.
+//
+// IT NOW OWNS A SMALL DATABASE — a deliberate, narrow exception to the "owns no
+// data" rule above, and the change that lifted this service's single-replica
+// ceiling (the last one in the platform). It owns only state that is BORN here and
+// has nowhere upstream to live:
+//   * ops_alerts (V001) — the ops-alert read model consumed from gmepay.ops.alert,
+//     plus the paging record and the operator ACK, which nothing else produces. It
+//     was a 200-entry per-JVM ArrayDeque with a per-JVM seq counter, so at N>1 the
+//     alerts list, the ack state and the alert IDS all differed per replica.
+//   * operator_action_audit (V002) — who paused the platform / suspended which
+//     partner. This was an in-memory list in a stub that was live in EVERY
+//     environment, minting colliding "OA-n" ids per replica.
+//   * shedlock (V003) — one @Scheduled job (retention) is locked; the escalation
+//     sweep deliberately is NOT (see V003 and OpsPagingEscalationScheduler).
+// Everything else this BFF shows still belongs to the service that owns it and is
+// still read over HTTP; no upstream entity is cached or duplicated here.
 plugins {
     id 'org.springframework.boot'
     id 'io.spring.dependency-management'
@@ -39,6 +54,28 @@ dependencies {
     // NOT the reactive starter: this is a spring-boot-starter-web (servlet) service, and one
     // SET NX EX per page is not work that wants a reactive client.
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
+    // --- The BFF's own datastore (see the header comment) -------------------------------------
+    // Added to close the LAST single-replica ceiling in the platform: OpsAlertStore was a per-JVM
+    // ArrayDeque. Redis was rejected on SHAPE, not effort -- update(seq, mutator) is a
+    // read-modify-write over a row with two independently-written fields (paging stamp, operator
+    // ack), which on a Redis hash needs WATCH/Lua or one silently overwrites the other. Here it is
+    // one SELECT ... FOR UPDATE, and restart durability plus an ack audit trail come with it.
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.flywaydb:flyway-core'
+    // ShedLock for the ops_alerts retention sweeper only. The paging ESCALATION sweep is
+    // deliberately unlocked -- a lock there could only ever silence a page (V003, T3-11).
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.13.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.13.0'
+
+    runtimeOnly 'org.postgresql:postgresql'
+    // Flyway 10 ships PostgreSQL support as a separate artifact; required when the migrations run
+    // against real PostgreSQL (compose / Helm / production).
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    // H2 (PostgreSQL mode) backs the no-Docker unit slices AND the shipped default datasource, so a
+    // laptop / single-service run still boots with no database -- loudly, via the WARN in
+    // OpsAlertStoreConfig, rather than by silently pretending to be durable.
+    runtimeOnly 'com.h2database:h2'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.kafka:spring-kafka-test'
