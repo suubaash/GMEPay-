@@ -299,8 +299,12 @@ authid_code = "\n".join(
     if not l.lstrip().startswith(("*", "/*", "//")))
 check(PUBLISHED_JWT_KEY not in authid_code,
       "auth-identity: AuthConfig's @Value no longer defaults the signing key to the published literal")
-check('${gme.auth.jwt.signing-secret:}' in authid_code,
-      "auth-identity: AuthConfig reads the signing key with an EMPTY @Value default")
+# The @Value that reads the key moved into JwtSigningKeyEnforcedConfig when the single value became
+# a key SET, so that the guard and the bean that builds the set read the property in one place.
+guard_code = "\n".join(
+    l for l in guard.split("\n") if not l.lstrip().startswith(("*", "/*", "//")))
+check('${gme.auth.jwt.signing-secret:}' in guard_code,
+      "auth-identity: the signing key is read with an EMPTY @Value default (no in-code fallback)")
 
 _authid_env = ((compose.get("services") or {}).get("auth-identity") or {}).get("environment") or {}
 check(JWT_KEY_VAR in (set(_authid_env) if isinstance(_authid_env, dict)
@@ -337,6 +341,92 @@ for ov in OVERLAYS:
 
 check(re.search(r"\$env:" + JWT_KEY_VAR + r"\s*=", code_lines) is not None,
       f"run-fleet.ps1: exports {JWT_KEY_VAR} (auth-identity will not boot without it)")
+
+
+# ---------------------------------------------------------------------------
+# 6b. T0-6 (rotation half) — the JWT signing key is a VERSIONED SET
+#
+# A single un-versioned HS256 key means a suspected compromise has no recovery path that is not a
+# hard cutover invalidating every live session, and a scheduled rotation is not expressible at all.
+# The key is now the ACTIVE member of a set: tokens carry a derived `kid`, verification selects by
+# it, and previously active keys stay accepted until their tokens expire.
+#
+# What must never regress:
+#   * the accepted-key list and the rotation-safety inputs are reachable from a manifest at all;
+#   * the accepted list ships EMPTY everywhere (an entry is a live key, not a placeholder);
+#   * hard cutover — "lose every live token" — is never the shipped default in application.yml;
+#   * every key in the set goes through the same T0-6 validation, i.e. the gate was extended and
+#     not holed open for the sake of rotation.
+# ---------------------------------------------------------------------------
+JWT_PREV_VAR      = "GME_AUTH_JWT_PREVIOUS_KEYS"
+JWT_ACTIVATED_VAR = "GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT"
+JWT_CUTOVER_VAR   = "GME_AUTH_JWT_ALLOW_HARD_CUTOVER"
+
+check("previous-keys: ${" + JWT_PREV_VAR + ":}" in authid_cfg,
+      "auth-identity: the accepted (previously active) key list is wired with no default",
+      "without it a rotation cannot be expressed and the key set is single-valued again")
+check("active-key-activated-at: ${" + JWT_ACTIVATED_VAR + ":}" in authid_cfg,
+      "auth-identity: the active-key activation instant is wired with no default",
+      "it is the only input to the premature-retirement check")
+check("allow-hard-cutover: ${" + JWT_CUTOVER_VAR + ":false}" in authid_cfg,
+      "auth-identity: hard cutover defaults to FALSE in shipped config",
+      "losing every live token must never be the default behaviour")
+
+keyset_src = read(os.path.join("services", "auth-identity", "src", "main", "java", "com", "gme",
+                               "pay", "auth", "domain", "JwtKeySet.java"))
+check("kidFor" in keyset_src and "KID_PREFIX" in keyset_src,
+      "auth-identity: the key set derives a kid per key (JwtKeySet.kidFor)")
+helper_src = read(os.path.join("services", "auth-identity", "src", "main", "java", "com", "gme",
+                               "pay", "auth", "domain", "JwtHelper.java"))
+check('"kid"' in helper_src and "UNKNOWN_KID" in helper_src,
+      "auth-identity: JwtHelper stamps a kid and rejects an unknown one as its own outcome",
+      "an unknown kid must be rejected, never resolved by trying every key")
+check("validateKeyMaterial" in guard and "previous-keys" in guard,
+      "auth-identity: the T0-6 key validation is applied to EVERY key in the set",
+      "an accepted key is live signing material; it must clear the same bar as the active one")
+check("HARD CUTOVER" in guard,
+      "auth-identity: retiring a key whose tokens can still be live refuses the boot")
+
+_authid_env_names = (set(_authid_env) if isinstance(_authid_env, dict)
+                     else {e.split("=", 1)[0] for e in _authid_env})
+for _var in (JWT_PREV_VAR, JWT_ACTIVATED_VAR, JWT_CUTOVER_VAR):
+    check(_var in _authid_env_names, f"compose: auth-identity sets {_var}")
+check("x-auth-jwt-previous-keys:" in compose_text,
+      "compose: the accepted-key list is a single anchor, not an inline literal")
+# The dev fleet has no previously-active key, so there is nothing to overlap with. If a literal ever
+# appears here it is a checked-in signing key with a longer life than the active one.
+check(re.search(r"x-auth-jwt-previous-keys:\s*&\S+\s*\$\{" + JWT_PREV_VAR + r":-\}", compose_text)
+      is not None,
+      "compose: the accepted-key list defaults to EMPTY (never a checked-in key)")
+
+check(JWT_PREV_VAR in set(base["secrets"]["data"]),
+      f"Helm: {JWT_PREV_VAR} is declared in secrets.data (it is key material)")
+check(str(base["secrets"]["data"][JWT_PREV_VAR] or "") == "",
+      "Helm values.yaml: the accepted-key list ships EMPTY",
+      "empty is the steady state; a placeholder here would be rejected AS a key and fail the boot")
+check(JWT_PREV_VAR in set(authid_helm.get("envSecretKeys") or []),
+      f"Helm values.yaml: auth-identity pulls {JWT_PREV_VAR} from the Secret")
+_authid_helm_env = authid_helm.get("env") or {}
+for _var in (JWT_ACTIVATED_VAR, JWT_CUTOVER_VAR):
+    check(_var in _authid_helm_env,
+          f"Helm values.yaml: auth-identity sets {_var} (not a secret — a timestamp and a flag)")
+for ov in OVERLAYS:
+    data = (yaml.safe_load(read(os.path.join(HELM, ov))) or {})
+    ovv = ((data.get("secrets") or {}).get("data") or {})
+    check(JWT_PREV_VAR in ovv and str(ovv.get(JWT_PREV_VAR) or "") == "",
+          f"Helm {ov}: {JWT_PREV_VAR} is declared and EMPTY",
+          str(ovv.get(JWT_PREV_VAR, "missing")))
+
+runbook = os.path.join("docs", "runbooks", "JWT_KEY_ROTATION.md")
+check(os.path.exists(runbook),
+      "docs/runbooks/JWT_KEY_ROTATION.md exists",
+      "rotation is only an operation if the sequence is written down")
+if os.path.exists(runbook):
+    rb = read(runbook)
+    for _var in (JWT_KEY_VAR, JWT_PREV_VAR, JWT_ACTIVATED_VAR, JWT_CUTOVER_VAR):
+        check(_var in rb, f"runbook: names {_var}")
+    check("/internal/auth/token/keys" in rb,
+          "runbook: says how to VERIFY the rotation took")
 
 # The vendor DB credential the CISO audit named must not be back in the working tree.
 octa = os.path.join("Octa Solution AML external partner", "appsettings.json")

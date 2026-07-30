@@ -57,6 +57,12 @@ secrets:
     # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
     # on a placeholder — generate with `openssl rand -hex 32` and inject it here.
     GME_AUTH_JWT_SIGNING_SECRET: REPLACE_WITH_AUTH_JWT_SIGNING_SECRET
+    # T0-6 rotation: previously active JWT keys, accepted for verification only while their tokens
+    # expire — `<secret>@<ISO-8601 demoted-at>`, `;`-separated. EMPTY is the steady state; populate
+    # it only for the duration of a rotation window, then empty it again.
+    # A REPLACE_* placeholder would be REJECTED as key material, so this is empty by design.
+    # Procedure: docs/runbooks/JWT_KEY_ROTATION.md
+    GME_AUTH_JWT_PREVIOUS_KEYS: ""
     GMEPAY_SCHEME_NEPAL_TOKEN: REPLACE_FROM_SECRET_STORE
     GMEPAY_SCHEME_NEPAL_KEY: REPLACE_FROM_SECRET_STORE
     GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM: REPLACE_FROM_SECRET_STORE

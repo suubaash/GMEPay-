@@ -244,6 +244,15 @@ secrets:
     # placeholder or previously-published value, so leaving this placeholder as-is fails the service
     # closed rather than signing forgeable tokens. Must be >= 32 chars of random material.
     GME_AUTH_JWT_SIGNING_SECRET: CHANGE_ME_AUTH_JWT_SIGNING_SECRET
+    # T0-6 rotation: previously active JWT keys, accepted for VERIFICATION ONLY while the tokens
+    # they signed expire. Format `<secret>@<ISO-8601 instant it stopped signing>`, entries separated
+    # by `;`. EMPTY IS THE CORRECT STEADY STATE — an entry exists only inside a rotation window, and
+    # leaving one here after the window closes is an extra copy of live signing material in a
+    # manifest (auth-identity WARNs about it at startup). Empty deliberately rather than a
+    # CHANGE_ME_ placeholder: a placeholder here would be a *rejected key value*, so it would fail
+    # the service closed for the situation that is normal.
+    # Procedure: docs/runbooks/JWT_KEY_ROTATION.md
+    GME_AUTH_JWT_PREVIOUS_KEYS: ""
     # ---- partner scheme credentials (gap T3-10) ----
     # The Nepal pair was referenced by scheme-adapter-nepal's envSecretKeys but declared
     # NOWHERE in secrets.data. A secretKeyRef to a key the Secret does not contain is not a
@@ -447,7 +456,11 @@ services:
                     # REQUIRED TO BOOT (T0-6): the HS256 key for the platform capability tokens this
                     # service mints. No default exists in the image any more; a blank / placeholder /
                     # previously-published value stops the service starting.
-                    GME_AUTH_JWT_SIGNING_SECRET]
+                    GME_AUTH_JWT_SIGNING_SECRET,
+                    # T0-6 rotation: previously active signing keys, accepted for verification only
+                    # while their tokens expire. Secret material, so it comes from the Secret and
+                    # not from env below. Empty in steady state.
+                    GME_AUTH_JWT_PREVIOUS_KEYS]
     envSecretAliases:
       GMEPAY_RBAC_VERIFY_SECRET: GMEPAY_RBAC_SECRET
     env:
@@ -457,6 +470,22 @@ services:
       GME_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
       GMEPAY_RBAC_ENABLED: "true"
       GMEPAY_INTERNAL_AUTH_ENABLED: "true"
+      # ---- JWT key rotation (T0-6) -------------------------------------------------
+      # NOT secrets — a timestamp and a boolean — so they live here rather than in the Secret.
+      #
+      # GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT: the instant the CURRENT signing key started signing,
+      # as an ISO-8601 instant (e.g. "2026-07-28T09:00:00Z"). Set it in the same change that
+      # promotes a new key. If it is less than one max-token-TTL ago and GME_AUTH_JWT_PREVIOUS_KEYS
+      # is empty, auth-identity REFUSES TO START — that combination is a rotation that dropped the
+      # outgoing key in the same step, silently invalidating every live token. Left empty the check
+      # simply cannot run (the service says so at startup) and rotation safety is on the operator.
+      GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT: ""
+      # Declares an intentional hard cutover: every live token dies. Correct for a FIRST deployment
+      # (there is no outgoing key to overlap with) and for a suspected key compromise (killing live
+      # tokens is the objective). It ships "true" so a first install of this chart comes up, and the
+      # rotation runbook's first step is to set it to "false" once the platform is live — after that
+      # it must only ever be flipped back deliberately, per docs/runbooks/JWT_KEY_ROTATION.md.
+      GME_AUTH_JWT_ALLOW_HARD_CUTOVER: "true"
 
   transaction-mgmt:
     image: transaction-mgmt

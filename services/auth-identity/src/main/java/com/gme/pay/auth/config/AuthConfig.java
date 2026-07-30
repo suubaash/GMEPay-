@@ -2,6 +2,7 @@ package com.gme.pay.auth.config;
 
 import com.gme.pay.auth.domain.InMemoryNonceStore;
 import com.gme.pay.auth.domain.JwtHelper;
+import com.gme.pay.auth.domain.JwtKeySet;
 import com.gme.pay.auth.domain.NonceStore;
 import com.gme.pay.auth.domain.PartnerCredentialPort;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,11 +48,16 @@ public class AuthConfig {
      * published in the repo. {@link JwtSigningKeyEnforcedConfig} refuses to start the service on a
      * blank, too-short, placeholder or previously-published value, so reaching this method at all
      * means a usable operator-supplied key is present.
+     *
+     * <p>T0-6 (rotation): the helper now takes the whole {@link JwtKeySet} — the active key it
+     * signs with, plus any previously active keys still accepted for verification — rather than a
+     * bare string. The set is built and validated by {@link JwtSigningKeyEnforcedConfig}, so this
+     * method is a pure wiring step and there is exactly one place a key can enter the process.
      */
     @Bean
     public JwtHelper jwtHelper(
-            @Value("${gme.auth.jwt.signing-secret:}") String secret,
+            JwtKeySet keySet,
             @Value("${gme.auth.jwt.access-token-ttl-seconds:1800}") long ttlSeconds) {
-        return new JwtHelper(secret, ttlSeconds);
+        return new JwtHelper(keySet, ttlSeconds);
     }
 }

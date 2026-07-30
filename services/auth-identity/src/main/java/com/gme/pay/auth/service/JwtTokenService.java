@@ -7,7 +7,10 @@ import com.gme.pay.auth.domain.JwtHelper;
 import com.gme.pay.auth.domain.JwtHelper.VerificationResult;
 import com.gme.pay.auth.dto.IssueTokenRequest;
 import com.gme.pay.auth.dto.IssueTokenResponse;
+import com.gme.pay.auth.dto.JwtKeySetStatusResponse;
 import com.gme.pay.auth.dto.VerifyTokenResponse;
+import java.time.Duration;
+import java.util.List;
 import java.util.TreeSet;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -138,6 +141,26 @@ public class JwtTokenService {
         return switch (result.outcome()) {
             case VALID -> VerifyTokenResponse.ok(
                     result.claims().subject(), result.claims().jti(), result.claims().exp());
+            case UNKNOWN_KID -> {
+                // T0-6 rotation: the token names a key this process does not hold. Operationally
+                // this is the opposite diagnosis from a bad signature — a burst of these right
+                // after a rotation means a key was RETIRED WHILE ITS TOKENS WERE STILL LIVE (or a
+                // replica did not pick up the new key set), whereas a burst of INVALID_TOKEN means
+                // someone is trying to forge. Recorded separately so the two are distinguishable in
+                // the trail; the kid is logged because it is a one-way thumbprint carrying no key
+                // material, and it is what an operator matches against the retirement report.
+                //
+                // The wire code stays INVALID_TOKEN: which keys this service holds is not something
+                // an unauthenticated caller gets to enumerate one probe at a time.
+                audit.recordRejection(AuthAuditEvents.TOKEN, AuthAuditEvents.UNKNOWN_SUBJECT,
+                        AuthAuditEvents.TOKEN_VERIFY_FAILED,
+                        AuditPayload.of()
+                                .put("reason", "UNKNOWN_KID")
+                                .put("kid", result.kid())
+                                .put("tokenFingerprint", AuditPayload.fingerprint(token))
+                                .json());
+                yield VerifyTokenResponse.fail("INVALID_TOKEN");
+            }
             case EXPIRED -> {
                 // Signature verified, so the subject in the claims is trustworthy enough to key
                 // the chain by — an expired token was genuinely minted for that subject.
@@ -168,6 +191,31 @@ public class JwtTokenService {
                 yield VerifyTokenResponse.fail("INVALID_TOKEN");
             }
         };
+    }
+
+    /**
+     * The key set this process holds, with the retirement arithmetic already done (T0-6).
+     *
+     * <p>This is the operator's verification step for a rotation: after promoting a new key, the
+     * {@code activeKid} reported here must be the new one on <em>every</em> replica, and the
+     * outgoing key must appear as {@code ACCEPTED} with a {@code safeToRemoveAfter} in the future.
+     * Deriving it from the live {@link JwtHelper} rather than from configuration is the point —
+     * it reports what the process is actually signing with, not what a manifest says it should be.
+     */
+    public JwtKeySetStatusResponse keySetStatus() {
+        Duration maxTtl = Duration.ofSeconds(Math.max(maxTtlSeconds, 0));
+        List<JwtKeySetStatusResponse.KeyStatus> keys = jwtHelper.keySet()
+                .report(maxTtl, Instant.now()).stream()
+                .map(s -> new JwtKeySetStatusResponse.KeyStatus(
+                        s.kid(),
+                        s.active() ? JwtKeySetStatusResponse.KeyStatus.ROLE_ACTIVE
+                                   : JwtKeySetStatusResponse.KeyStatus.ROLE_ACCEPTED,
+                        s.demotedAt(),
+                        s.safeToRemoveAfter(),
+                        s.safeToRemoveNow(),
+                        s.overdueForRemoval()))
+                .toList();
+        return new JwtKeySetStatusResponse(jwtHelper.activeKid(), maxTtl.toSeconds(), keys);
     }
 
     /** Clamp the requested TTL into (0, maxTtlSeconds]; default when unset/non-positive. */

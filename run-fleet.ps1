@@ -122,6 +122,14 @@ if (-not $authJwtSigningSecret) {
 }
 $env:GME_AUTH_JWT_SIGNING_SECRET = $authJwtSigningSecret
 
+# JWT key rotation (T0-6, rotation half). The key above is now the ACTIVE member of a versioned key
+# SET: tokens carry a derived `kid` and verification selects by it, so a previously active key can
+# stay accepted while the tokens it signed expire. A local fleet is always a first activation, so
+# there is nothing to overlap with and the hard cutover is declared. Rotating for real is a
+# deployment procedure, not a script flag: docs/runbooks/JWT_KEY_ROTATION.md.
+if (-not $env:GME_AUTH_JWT_PREVIOUS_KEYS)  { $env:GME_AUTH_JWT_PREVIOUS_KEYS = '' }
+if (-not $env:GME_AUTH_JWT_ALLOW_HARD_CUTOVER) { $env:GME_AUTH_JWT_ALLOW_HARD_CUTOVER = 'true' }
+
 # OIDC issuer for the two resource servers (ops-partner-bff :18095, api-gateway :18080). Their Java
 # default is the stale :8090 (= scheme-adapter-zeropay), so a host-run BFF 401s everything without
 # this (gap T1-2). Canonical local topology, asserted by docker/keycloak/check-topology.mjs.

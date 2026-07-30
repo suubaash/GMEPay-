@@ -140,6 +140,32 @@ $env:OIDC_ISSUER_URI             = 'http://localhost:8097/realms/gmepay'
 .\run-fleet.ps1
 ```
 
+### Rotating the JWT signing key (T0-6, rotation half)
+
+`GME_AUTH_JWT_SIGNING_SECRET` is now the **ACTIVE** member of a versioned key set rather than a lone
+value. Tokens carry a derived `kid`, verification selects the key by it, and previously active keys
+stay accepted until the tokens they signed expire — so rotating is an operation with an overlap
+window instead of a cutover that kills every live session.
+
+| Variable | Compose anchor | Meaning |
+|---|---|---|
+| `GME_AUTH_JWT_PREVIOUS_KEYS` | `x-auth-jwt-previous-keys` | previously active keys, **verification only**, as `<secret>@<ISO-8601 demoted-at>` separated by `;`. Empty is the steady state |
+| `GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT` | `x-auth-jwt-activated-at` | when the active key started signing. Inside one max-TTL with an **empty** previous list ⇒ `auth-identity` **refuses to start** (that is a rotation that dropped the outgoing key in the same step) |
+| `GME_AUTH_JWT_ALLOW_HARD_CUTOVER` | `x-auth-jwt-allow-hard-cutover` | declares that losing every live token is intended. `true` in dev/first-install only |
+
+Every key in the set — accepted ones included — must clear the same T0-6 bar (≥ 32 bytes, not
+placeholder-shaped, never a value published in this repo), because an accepted key is live signing
+material for as long as it is accepted.
+
+Verify a rotation with `GET /internal/auth/token/keys` (behind `X-Gme-Internal`): it reports the
+`activeKid` the **process** is signing with, so a replica that missed the rollout is visible as a
+different value.
+
+**Full procedure — including the compromise response — is `docs/runbooks/JWT_KEY_ROTATION.md`.** It
+also states, per secret, which other credentials this does *not* cover (`GMEPAY_INTERNAL_AUTH_SECRET`
+and `GMEPAY_WEBHOOK_SIGNING_SECRET` are materially different rotation problems, and Keycloak's OIDC
+tokens are a separate trust path that rotates itself).
+
 **Still committed, and NOT closed by the above** — see gap register T0-6:
 `docker/keycloak/realm-gmepay.json` (confidential-client secrets `admin-ui-dev-secret` /
 `partner-portal-ui-dev-secret`, plus the `admin`/`demo` and `partner-demo`/`demo` users);
@@ -189,18 +215,21 @@ precedence). Host ports fan out as follows:
 | 8083 | prefunding | core+full | |
 | 8084 | smart-router | full | |
 | 8085 | qr-service | core+full | |
-| 8086 | auth-identity | full | |
+| 8086 | auth-identity | core+full | |
 | 8087 | transaction-mgmt | core+full | |
 | 8088 | payment-executor | core+full | |
 | 8089 | merchant-qr-data | core+full | boots on in-memory repo (Mongo autoconfig excluded in module) |
 | 8090 | scheme-adapter-zeropay | core+full | |
 | 8091 | notification-webhook | core+full | |
-| 8100 | settlement-reconciliation | core+full | |
+| 8092 | scheme-adapter-nepal | full | |
 | 8093 | revenue-ledger | core+full | |
 | 8094 | reporting-compliance | full | |
 | 8095 | ops-partner-bff | core+full | |
 | 8096 | **config-registry** | core+full | **moved from 8081** to free the SR port |
 | 8097 | **keycloak** | core+full | human IdP (ADR-011); see below |
+| 8098 | scheme-adapter-sendmn | full | |
+| 8099 | scheme-adapter-ninepay | full | |
+| 8100 | settlement-reconciliation | core+full | **moved from 8092**, which scheme-adapter-nepal already published — the `full` profile could never start both. Nepal kept 8092 (its port is in the E2E harness and its README) |
 | 9104 | **kyb-adapter** | core+full | gap T1-4: added 2026-07-28. The `8080..8099` band was full and `9103/9106/9107` are the scheme simulators, so it sits at 9104. **Screens nothing** while `gmepay.kyb.provider=stub` — `GET /v1/kyb/health` reports `authoritative=false`; the rest of `/v1/kyb/**` requires `X-Gme-Internal` |
 | 5433–5440 | postgres-{config,txn,prefunding,ledger,settlement,notify,authid,scheme} | core+full | one PostgreSQL per stateful service |
 | 5446 | postgres-keycloak | core+full | Keycloak's own datastore (separate from authid) |

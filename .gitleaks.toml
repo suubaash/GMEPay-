@@ -80,6 +80,34 @@ description = "GMEPay+ platform internal service token (X-Gme-Internal / GMEPAY_
 regex = '''(?i)(?:X-Gme-Internal|GMEPAY_INTERNAL_AUTH_SECRET|gmepay\.internal\.auth\.secret)["']?\s*[:=]\s*["']?([A-Za-z0-9._+/=\-]{12,})'''
 keywords = ["x-gme-internal", "gmepay_internal_auth_secret", "gmepay.internal.auth.secret"]
 
+  # VALUE-scoped (never line-scoped — see the family-3 warning above: a line-scoped
+  # pattern here would silence the real secret sitting on the same line).
+  #
+  # Why this is needed: the rule's value class includes `.`, so a CODE REFERENCE
+  # that hands the token to a header reads exactly like a value —
+  # `{ 'X-Gme-Internal': CREDENTIALS.internalToken! }` captured
+  # `CREDENTIALS.internalToken` (26 chars) and reported it as a leak. Verified
+  # false positive at gmepay-test-platform/src/engine/credentials.ts:341.
+  #
+  # Deliberately TIGHT: a dotted identifier chain only — each segment starts with a
+  # letter/_/$, and the whole value is nothing but those segments (plus an optional
+  # TypeScript non-null `!`). Verified against real secret shapes: base64, hex,
+  # passphrases, AWS keys and `sk_live_…` are all still reported.
+  #
+  # SEGMENT LENGTH CAP (2..24 chars, max 3 segments) is load-bearing, not tidiness.
+  # A JWT is ALSO dotted and identifier-shaped (`eyJhbGci….eyJzdWI….sig`), so an
+  # uncapped identifier pattern here would have silenced a leaked bearer token sat
+  # in an `X-Gme-Internal:` position. Real JWT headers base64url to 36+ chars, so
+  # the 24-char cap excludes them. Residual, stated rather than hidden: a toy
+  # `alg:none` JWT with tiny segments could still fit the shape — acceptable only
+  # because such a token grants nothing.
+  [rules.allowlist]
+  description = "code references that pass the token to a header, not literal token values"
+  regexTarget = "match"
+  regexes = [
+    '''^[A-Za-z_$][A-Za-z0-9_$]{1,23}(?:\.[A-Za-z_$][A-Za-z0-9_$]{1,23}){1,2}!?$''',
+  ]
+
 [[rules]]
 id = "gmepay-inline-db-password"
 description = "Password inlined into a JDBC / MongoDB connection URI"
@@ -154,6 +182,11 @@ regexes = [
   '''"[A-Za-z0-9]{16,}"\s*\.toCharArray\(\)''',
   #   plaintextWebhookSecret: result.plaintextWebhookSecret ?? null,
   '''[:=]\s*[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*\s*(?:\?\?|;|,|\)|$)''',
+  # NOTE: `{ 'X-Gme-Internal': CREDENTIALS.internalToken! }` is NOT handled here.
+  # It is handled by the VALUE-scoped [rules.allowlist] on the
+  # gmepay-internal-platform-token rule above, which is strictly tighter — a
+  # line-scoped entry would silence the whole line, including a real secret that
+  # happened to share it (the family-3 warning).
   #   case MISSING_IDEMPOTENCY_KEY -> HttpStatus.BAD_REQUEST;
   '''\bcase\s+[A-Z][A-Z0-9_]*\s*(?:->|:)''',
 

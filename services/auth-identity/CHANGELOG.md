@@ -2,6 +2,48 @@
 
 All notable changes to the auth-identity service. Newest first.
 
+## 2026-07-28 — JWT signing key is VERSIONED and rotatable (T0-6, rotation half)
+
+### Added
+- **`domain/JwtKeySet`** — the signing key is now the ACTIVE member of a key *set*: one key that
+  signs, plus previously active keys accepted for **verification only** until the tokens they signed
+  expire. The `kid` is **derived** from the secret (truncated, domain-separated SHA-256,
+  `gmek_<16 hex>`), never operator-chosen, so a label can never point at the wrong material and the
+  same key yields the same id on every replica. Carries no key material — it is already in the
+  header of every token.
+- **`GET /internal/auth/token/keys`** (`dto/JwtKeySetStatusResponse`) — the active `kid`, each
+  accepted predecessor, and the instant each becomes safe to remove, read from the **live** signing
+  helper. This is how an operator confirms a rotation reached every pod. No key material returned.
+- **`docs/runbooks/JWT_KEY_ROTATION.md`** — add → overlap ≥ one max token TTL → retire, how to
+  verify, and the compromise response (which is deliberately a *hard cutover*, since a graceful
+  rotation leaves forged tokens valid for the whole window).
+- Tests: `JwtKeySetTest`, `JwtHelperKeyRotationTest`, `JwtKeySetEnforcedConfigTest`,
+  `JwtTokenServiceRotationTest`.
+
+### Changed
+- **`domain/JwtHelper`** stamps `kid` into every token header and selects the verification key by
+  it. An **unknown `kid` is rejected outright** (`Outcome.UNKNOWN_KID`) — never by trying the other
+  keys, which would make the `kid` advisory and let an unauthenticated caller cost one HMAC per
+  configured key per bad token. A token with **no `kid` is rejected** (pinned; the upgrade therefore
+  costs one max-TTL window in which pre-upgrade tokens are refused). `alg` is now validated
+  explicitly.
+- **`config/JwtSigningKeyEnforcedConfig` was EXTENDED, not relaxed.** Every key in the set —
+  accepted ones included — must still clear the length / not-placeholder / never-published bar, and
+  a set with no active key still refuses to boot. New refusals: an undated or unparseable
+  `previous-keys` entry, a demotion timestamp in the future, the same secret twice, and an
+  **undeclared hard cutover** (active key promoted within one max TTL with an empty accepted set —
+  i.e. a rotation that silently killed every live token; requires
+  `GME_AUTH_JWT_ALLOW_HARD_CUTOVER=true`). A key kept a full extra TTL past safe is WARNed about,
+  not refused.
+- `JwtTokenService` audits `UNKNOWN_KID` as its own `reason` (a key retired too early) distinctly
+  from `INVALID_TOKEN` (a forgery attempt), while both stay `INVALID_TOKEN` on the wire.
+
+### Deployment
+- New: `GME_AUTH_JWT_PREVIOUS_KEYS` (secret; ships **empty** everywhere — empty is the steady state
+  and a `CHANGE_ME_` placeholder would be rejected *as a key*), `GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT`
+  and `GME_AUTH_JWT_ALLOW_HARD_CUTOVER` (neither is secret). Wired in `docker-compose.yml` (three new
+  single-use anchors), all four Helm values files and `run-fleet.ps1`.
+
 ## 2026-07-28 — JWT signing key is required from config and fails closed (T0-6)
 
 ### Changed

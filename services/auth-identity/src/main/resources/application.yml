@@ -47,9 +47,29 @@ gme:
       #
       #   OPERATOR ACTION:  GME_AUTH_JWT_SIGNING_SECRET=<random 32+ chars>   (e.g. openssl rand -hex 32)
       #
-      # No rotation/kid window exists yet — rotating this key is a fleet-wide cutover that
-      # invalidates every live token (gap register T0-6 residual).
+      # This is the ACTIVE key: the one that signs. Its `kid` is derived from the value itself
+      # (JwtKeySet#kidFor) and stamped into every token header, so it is never configured by hand
+      # and can never point at the wrong secret.
       signing-secret: ${GME_AUTH_JWT_SIGNING_SECRET:}
+      # ── Rotation: previously active keys, accepted for VERIFICATION ONLY (T0-6) ──
+      # Format:  <secret>@<ISO-8601 instant it stopped signing>   entries separated by `;`
+      #   GME_AUTH_JWT_PREVIOUS_KEYS="oldsecret@2026-07-28T09:00:00Z"
+      # Each entry must clear exactly the same bar as the active key (>= 32 bytes, not
+      # placeholder-shaped, never a value published in this repo) — an accepted key is live signing
+      # material for as long as it is accepted. The timestamp is mandatory: it is what determines
+      # when the key becomes safe to delete (demoted-at + max-token-ttl-seconds).
+      # Empty is the correct steady state; entries exist only during a rotation window.
+      # Runbook: docs/runbooks/JWT_KEY_ROTATION.md
+      previous-keys: ${GME_AUTH_JWT_PREVIOUS_KEYS:}
+      # When the ACTIVE key started signing. Set by the rotation runbook. If it is within one
+      # max-token-ttl-seconds of now and previous-keys is EMPTY, the service refuses to start:
+      # that combination means the outgoing key was dropped in the same step the new one was
+      # promoted, which silently invalidates every live token.
+      active-key-activated-at: ${GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT:}
+      # Declares that losing every live token is intended. Legitimate in exactly two situations:
+      # a first deployment (there is no outgoing key), and a response to a suspected key compromise
+      # (invalidating live tokens is the whole point). Never a way to skip a failing startup check.
+      allow-hard-cutover: ${GME_AUTH_JWT_ALLOW_HARD_CUTOVER:false}
       # Access token lifetime: 30 minutes (1800 s).
       access-token-ttl-seconds: ${GME_AUTH_JWT_ACCESS_TOKEN_TTL_SECONDS:1800}
       # Hard upper bound on a per-request TTL override at /internal/auth/token/issue.

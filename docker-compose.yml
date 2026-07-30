@@ -97,6 +97,35 @@ x-internal-auth-secret: &internal-auth-secret ${GMEPAY_INTERNAL_AUTH_SECRET:-dev
 # Do NOT re-inline this literal in a service block. Helm carries only a CHANGE_ME_ placeholder.
 x-auth-jwt-signing-secret: &auth-jwt-signing-secret ${GME_AUTH_JWT_SIGNING_SECRET:-dev-auth-jwt-signing-key-not-for-prod}
 
+# ─────────── AUTH-IDENTITY JWT KEY ROTATION (T0-6, rotation half) ───────────
+# The key above is the ACTIVE key — the one that signs. These three make it a versioned key SET, so
+# rotating it is an operation with an overlap window instead of a cutover that kills every live
+# session. Full procedure: docs/runbooks/JWT_KEY_ROTATION.md.
+#
+#   GME_AUTH_JWT_PREVIOUS_KEYS  previously active keys, accepted for VERIFICATION ONLY, as
+#                               `<secret>@<ISO-8601 instant it stopped signing>` separated by `;`.
+#                               EMPTY is the correct steady state — an entry exists only during a
+#                               rotation window. Each entry must clear the same bar as the active
+#                               key (>= 32 bytes, not placeholder-shaped, never a value published in
+#                               this repo); auth-identity refuses to start otherwise, because an
+#                               accepted key is live signing material for as long as it is accepted.
+#   GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT
+#                               when the ACTIVE key started signing. If that is less than one
+#                               max-token-TTL ago and PREVIOUS_KEYS is empty, the service refuses to
+#                               start: that combination means the outgoing key was dropped in the
+#                               same step the new one was promoted, i.e. every live token just died.
+#   GME_AUTH_JWT_ALLOW_HARD_CUTOVER
+#                               declares that losing every live token is intended. True in exactly
+#                               two situations — a first deployment (no outgoing key exists) and a
+#                               response to a suspected key compromise. Never a way to silence the
+#                               check above.
+#
+# The dev default below is `true` because a throwaway `docker compose up` is always a first
+# deployment; a real environment sets ACTIVATED_AT and leaves this false.
+x-auth-jwt-previous-keys: &auth-jwt-previous-keys ${GME_AUTH_JWT_PREVIOUS_KEYS:-}
+x-auth-jwt-activated-at: &auth-jwt-activated-at ${GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT:-}
+x-auth-jwt-allow-hard-cutover: &auth-jwt-allow-hard-cutover ${GME_AUTH_JWT_ALLOW_HARD_CUTOVER:-true}
+
 # ─────────── RBAC CLAIM-PROVENANCE SIGNING KEY (#90) ───────────
 # api-gateway SIGNS the X-Gme-* claim bundle with it; downstream services VERIFY with it and refuse any
 # bundle that arrives unsigned. Both sides must hold the same value. T0-6: the dev literal used to
@@ -655,6 +684,13 @@ services:
       # The service now refuses to start without a usable value — see the anchor at the top of this
       # file for the operator action.
       GME_AUTH_JWT_SIGNING_SECRET: *auth-jwt-signing-secret
+      # Key rotation (T0-6, rotation half). The signing key is now the ACTIVE member of a versioned
+      # key set: tokens carry a derived `kid` and verification selects by it, so a previously active
+      # key can stay accepted while its tokens expire. See the anchors at the top of this file and
+      # docs/runbooks/JWT_KEY_ROTATION.md for the add -> overlap -> retire sequence.
+      GME_AUTH_JWT_PREVIOUS_KEYS: *auth-jwt-previous-keys
+      GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT: *auth-jwt-activated-at
+      GME_AUTH_JWT_ALLOW_HARD_CUTOVER: *auth-jwt-allow-hard-cutover
     depends_on:
       postgres-authid: { condition: service_healthy }
       config-registry: { condition: service_healthy }
