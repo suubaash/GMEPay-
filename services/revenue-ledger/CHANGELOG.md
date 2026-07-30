@@ -2,6 +2,51 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## 2026-07-28 — ShedLock on the outbox publisher: the last unlocked scheduler in the fleet (T3-11 defect 3, feat/exec-gap-closure-2026-07-28)
+
+Flyway **V007** (additive `CREATE TABLE IF NOT EXISTS shedlock`). No behaviour change on a single
+replica; no posting, account code or amount is affected.
+
+### Fixed
+- **`OutboxPublisher#publishPending` had no distributed lock**, and after the T3-11 pass locked
+  payment-executor (V011), settlement-reconciliation (V014), notification-webhook (V008) and
+  scheme-adapter-zeropay (V005), revenue-ledger was the **only** service in the fleet still running
+  `@Scheduled` work unguarded. It was skipped there because this module was concurrently owned.
+  - **What a second replica did.** The 1-second tick selects unpublished outbox rows and stamps
+    `published_at` only *after* `EventPublisher.publish(..)` returns, so the read-to-stamp window is
+    wide open. Two replicas ticking a second apart both select the same batch and both publish it —
+    every revenue-ledger domain event delivered once per replica. Consumers are contractually
+    idempotent (the class documents at-least-once), but "at least once" bounds redelivery of the same
+    event; it is not a licence to multiply publishes by the replica count, and these are the events
+    reporting and reconciliation aggregate.
+  - **Fixed with the identical pattern, deliberately not a variant.** Same ShedLock coordinates
+    (`shedlock-spring` + `shedlock-provider-jdbc-template` 5.16.0), same `JdbcTemplateLockProvider`
+    with `usingDbTime()` so lock expiry follows the *database* clock rather than each pod's, same
+    canonical table shape. Three subtly different lock implementations across one fleet is how one of
+    them ends up wrong.
+  - `lockAtMostFor = PT5M` is a crash safety net, not a runtime budget — a batch of 100 publishes
+    takes milliseconds, so five minutes only elapses if the holder died. Sizing it *short* is the
+    dangerous direction: an early expiry admits the concurrent drain the lock exists to prevent.
+    `lockAtLeastFor = PT0S` because the queue must drain as fast as it fills.
+
+### Added
+- `config/ShedLockConfig` (`@EnableSchedulerLock`, `@ConditionalOnMissingBean` provider so a slice can
+  substitute an in-memory one without dropping the annotation and silently disabling locking).
+- `db/migration/V007__create_shedlock.sql` — next free version in this module (V001–V006 existed).
+  This module has no `db/vendor/{h2,postgresql}` overlay (only config-registry does), so there was
+  nothing to mirror.
+- `spring.task.scheduling.pool.size=2` (T3-11 defect 2's follow-up for this service). Spring's silent
+  default is **one** thread for every `@Scheduled` method in the context, and lib-errors'
+  `SchedulerLagProbe` registers a second fixed-rate task on the same registrar. At pool size 1 a slow
+  outbox tick starves the probe — i.e. the one signal that would reveal the stall goes quiet exactly
+  when it matters. 2 = job count + heartbeat.
+- `config/ShedLockTest` — the same two enforcement tests the other four services got: a reflection
+  guard over every `@Scheduled` method that fails when one lacks a uniquely-named `@SchedulerLock`
+  (precisely how this service came to be the last unlocked one), and a real H2 + **full Flyway
+  migration set** test proving V007 applies on top of V001–V006, that the lock row lands in the table
+  it created, and that a second holder is refused then admitted after release. Plus a check that the
+  shipped pool size still covers the job count.
+
 ## 2026-07-28 — both `/v1/journals` POSTs returned 406 on every call (T3-12, feat/exec-gap-closure-2026-07-28)
 
 No schema change, no Flyway migration, no behaviour change to any posting. The JSON wire shape is

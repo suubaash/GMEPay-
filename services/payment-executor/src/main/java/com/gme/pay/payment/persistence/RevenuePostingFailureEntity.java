@@ -193,6 +193,49 @@ public class RevenuePostingFailureEntity {
         this.updatedAt = now;
     }
 
+    /**
+     * Operator requeue: move a POISON row back to PENDING with a <b>fresh attempt budget</b>
+     * (gap <b>T2-5</b> follow-up — "POISON is terminal with no requeue path anywhere in the codebase").
+     *
+     * <h2>Why this exists</h2>
+     * <p>POISON is terminal by design, and that design assumed the reason was a property of the row. The
+     * revenue-ledger 406 defect (T3-12) broke that assumption: a <b>server-side</b> bug returned a
+     * non-retryable 4xx, so every rounding-residual and reversal posting was poisoned on the first sweep for
+     * a reason that has since been fixed. Terminal-with-no-way-back turned a temporary server defect into
+     * permanently missing revenue, recoverable only by hand-editing the table in production.
+     *
+     * <h2>Why attempts resets to 0, not to its old value</h2>
+     * <p>{@code attempts} is the budget the sweep spends before poisoning. A requeue that left it at 8 would
+     * poison the row again on the very next sweep, which is a no-op dressed as a fix. The count is an audit
+     * trail of pushes at the ledger, so resetting it does lose history — {@code last_error} therefore records
+     * both the requeue reason and the attempt count being discarded, and the {@code ledger_ops_runs} row
+     * records who asked and when.
+     *
+     * <p><b>Deliberately POISON-only.</b> The caller filters; this method assumes nothing. But the caller's
+     * filter excludes {@code ABANDONED}, because abandoning is an <em>operator's</em> judgement that the
+     * posting should not be booked, and a bulk requeue must not silently overturn a human decision. An
+     * operator who wants an abandoned row back can requeue it by explicit id only.
+     *
+     * @param reason free text stamped onto {@code last_error}, e.g. the defect that has since been fixed
+     * @param now    the requeue instant; the row becomes due immediately
+     */
+    public void requeue(String reason, Instant now) {
+        this.status = STATUS_PENDING;
+        this.lastError = truncateError("REQUEUED by operator (discarding attempts=" + this.attempts + "): "
+                + (reason == null || reason.isBlank() ? "no reason given" : reason));
+        this.attempts = 0;
+        // Due immediately: the operator requeued precisely because the blocker is believed fixed, so making
+        // them wait out a backoff computed from the OLD failures would be the wrong schedule entirely.
+        this.nextAttemptAt = now;
+        this.replayedAt = null;
+        this.updatedAt = now;
+    }
+
+    /** {@code last_error} is VARCHAR(1024); a requeue reason is operator free text, so it is clamped here. */
+    private static String truncateError(String error) {
+        return error.length() <= 1024 ? error : error.substring(0, 1024);
+    }
+
     public Long getId() {
         return id;
     }

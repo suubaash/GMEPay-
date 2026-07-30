@@ -57,4 +57,30 @@ public interface RevenuePostingFailureRepository
 
     /** Every row, newest-first, bounded — the ops list view with no status filter. */
     List<RevenuePostingFailureEntity> findAllByOrderByUpdatedAtDesc(Pageable pageable);
+
+    /**
+     * The operator requeue's candidate set (gap T2-5 follow-up): rows in {@code status} whose posting type is
+     * in {@code postingTypes}, oldest first.
+     *
+     * <p>Ordered by {@code createdAt, id} rather than {@code updatedAt} so a requeue that hits the bound
+     * takes the <b>oldest missing revenue</b> first, and so repeated calls walk the backlog deterministically
+     * instead of re-selecting whatever a previous call happened to touch last.
+     */
+    @Query("""
+            select f from RevenuePostingFailureEntity f
+             where f.status = :status
+               and f.postingType in :postingTypes
+             order by f.createdAt asc, f.id asc
+            """)
+    List<RevenuePostingFailureEntity> findForRequeueByPostingType(@Param("status") String status,
+                                                                  @Param("postingTypes") List<String> postingTypes,
+                                                                  Pageable pageable);
+
+    /** The id-targeted half of the requeue: exactly these rows, oldest first, whatever their status. */
+    @Query("""
+            select f from RevenuePostingFailureEntity f
+             where f.id in :ids
+             order by f.createdAt asc, f.id asc
+            """)
+    List<RevenuePostingFailureEntity> findForRequeueByIds(@Param("ids") List<Long> ids);
 }

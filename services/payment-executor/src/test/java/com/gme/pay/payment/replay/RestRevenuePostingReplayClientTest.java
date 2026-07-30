@@ -9,6 +9,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import com.gme.pay.payment.persistence.RevenuePostingFailureStore;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -156,6 +157,74 @@ class RestRevenuePostingReplayClientTest {
         assertThat(client.replay(RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE, "  ").kind())
                 .isEqualTo(RevenuePostingReplayOutcome.Kind.UNREPLAYABLE);
         server.verify();
+    }
+
+    /**
+     * <b>The T3-12 regression pin.</b> 406 used to be classified permanent, and that is how a server-side
+     * content-negotiation defect in revenue-ledger turned into POISON — terminal, unrecoverable — on the
+     * FIRST sweep for every rounding-residual and reversal posting.
+     *
+     * <p>The reasoning, asserted rather than left in a comment: a 406 is the server saying it cannot produce
+     * a representation, which is a fact about which code is deployed, not about whether the posting is
+     * valid. Between two services we deploy ourselves it can only be a version mismatch — precisely the
+     * condition a retry after a deploy fixes.
+     */
+    @Test
+    @DisplayName("406 is TRANSIENT: content negotiation is a deployment fact, not a verdict on the payload")
+    void notAcceptableIsTransientBecauseItIsADeploymentMismatch() {
+        // The exact answer revenue-ledger gave on every call before T3-12 was fixed.
+        server.expect(requestTo("http://revenue-ledger:8080/v1/journals/rounding-residual"))
+                .andRespond(withStatus(HttpStatus.NOT_ACCEPTABLE));
+
+        RevenuePostingReplayOutcome outcome =
+                client.replay(RevenuePostingFailureStore.TYPE_ROUNDING_RESIDUAL, PAYLOAD);
+
+        assertThat(outcome.kind())
+                .as("a 406 must NOT poison the row on the first sweep — that is what made the T3-12 "
+                        + "defect unrecoverable rather than merely delayed")
+                .isEqualTo(RevenuePostingReplayOutcome.Kind.TRANSIENT_FAILURE);
+        assertThat(outcome.permanent()).isFalse();
+        assertThat(outcome.status()).isEqualTo(406);
+    }
+
+    @Test
+    @DisplayName("404/405/415 join 406: the dispatcher could not route or negotiate, so it is not a verdict")
+    void theOtherThreeRoutingAndNegotiationCodesAreTransientToo() {
+        // Each is raised by Spring MVC BEFORE the handler method sees the body — NoHandlerFound (404),
+        // MethodNotSupported (405), MediaTypeNotSupported (415). All three mean "the deployed server cannot
+        // take this call", which a deploy fixes; none means "this posting is wrong".
+        for (HttpStatus status : List.of(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED,
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE)) {
+            setUp();
+            server.expect(requestTo("http://revenue-ledger:8080/v1/journals/reversal"))
+                    .andRespond(withStatus(status));
+
+            assertThat(client.replay(RevenuePostingFailureStore.TYPE_REVERSAL_JOURNAL, PAYLOAD).kind())
+                    .as("HTTP %s is a routing/negotiation answer, not a business rejection", status.value())
+                    .isEqualTo(RevenuePostingReplayOutcome.Kind.TRANSIENT_FAILURE);
+        }
+    }
+
+    /**
+     * The other half of the decision, and the reason it is not "make everything retryable": a genuine
+     * business rejection must still terminate on the first sweep. Retrying a body revenue-ledger has read and
+     * refused only delays the alert by the whole backoff schedule.
+     */
+    @Test
+    @DisplayName("400/409/422 stay PERMANENT — the server read the body and refused it")
+    void businessRejectionsStillTerminateImmediately() {
+        for (HttpStatus status : List.of(HttpStatus.BAD_REQUEST, HttpStatus.CONFLICT,
+                HttpStatus.UNPROCESSABLE_ENTITY, HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN)) {
+            setUp();
+            server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/capture"))
+                    .andRespond(withStatus(status));
+
+            assertThat(client.replay(RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE, PAYLOAD).permanent())
+                    .as("HTTP %s must still poison: 400/409/422 are verdicts on the payload, and 401/403 "
+                            + "are credential verdicts that a retry schedule must not re-present",
+                            status.value())
+                    .isTrue();
+        }
     }
 
     @Test

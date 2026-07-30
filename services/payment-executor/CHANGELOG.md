@@ -2,6 +2,58 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (the POISON trap in the revenue-posting replay: T2-5 follow-up / T3-12)
+
+Flyway **V012** (widens `ck_ledger_ops_runs_job` — additive, cannot fail on existing data).
+
+### Fixed - HTTP 406 no longer buries a replay row on the first sweep
+`RestRevenuePostingReplayClient.isRetryableStatus` was `>= 500 || 408 || 429`, so a 406 became a
+`permanentRejection` and `RevenuePostingReplayService` called `row.poison(..)` on the **first** sweep.
+POISON is terminal by design and there was no requeue path anywhere in the codebase. That turned
+T3-12 — revenue-ledger returning 406 on two journal endpoints because of a *server-side*
+content-negotiation defect — into permanently orphaned booked revenue, recoverable only by editing
+`revenue_posting_failures` in production by hand.
+
+- **406 is now retryable, and so are 404, 405 and 415.** The boundary is a real one rather than a
+  convenient one: these four are the codes Spring MVC raises from **routing and content negotiation**
+  (`NoHandlerFound`, `MethodNotSupported`, `MediaTypeNotSupported`, `MediaTypeNotAcceptable`), all
+  *before* the handler method reads the body. They are statements about which code is deployed, not
+  verdicts on the payload — and between two services we deploy ourselves over a contract we own, they
+  can only mean a version mismatch, which is exactly what a retry after a deploy fixes.
+- **This is not "retry everything".** 400/409/422 still terminate on the first sweep — the server read
+  the body and refused it, so the fast alert is the right answer. 401/403 also still terminate: they
+  are a credential verdict, and re-presenting rejected credentials on a schedule is a bad pattern
+  regardless of whether the row survives it. Both directions are pinned by test.
+- **Retryable is still bounded.** The eight-attempt exponential budget is unchanged, so a genuinely
+  permanent 406 still reaches POISON — after a deploy window (~2 h) instead of within one sweep.
+
+### Added - `POST /internal/ops/revenue-posting-failures/requeue`
+The general escape hatch, because no status classification will be right about every future server
+defect: retryability buys hours, a defect found a week later needs this.
+
+- Moves **POISON** rows back to `PENDING` with `attempts=0` and `next_attempt_at=now()`, targetable by
+  `postingTypes` and/or `ids` — the immediate need being
+  `['ROUNDING_RESIDUAL','REVERSAL_JOURNAL']`. It does **not** replay: requeue makes rows due, the
+  sweep sends them, so an operator can inspect what became PENDING before triggering `POST /replay`.
+- `attempts` resets to 0 rather than being preserved: leaving it at the exhausted value would poison
+  the row again on the very next sweep, which is a no-op dressed as a fix.
+- **Idempotent** — only POISON is selected, so a repeat requeues 0 rows and still answers 200. A
+  nervous operator running the command twice is a no-op, not a corruption.
+- **Audited** to `ledger_ops_runs` as `REVENUE_POSTING_REQUEUE` / `OPERATOR` / `X-Operator-Id`
+  (hence V012). Load-bearing rather than decorative: resetting `attempts` discards the row's own
+  record of how many times the posting was pushed at the ledger, so this row is where that history
+  and the *why* survive. Unlike the other three jobs it is never scheduled.
+- **Internal-auth gated** by the wholesale `/internal/**` rule in `SandboxSurfaceInternalAuthConfig`;
+  401 without the token is asserted over real HTTP, because the gate is a servlet filter a slice test
+  never runs and the endpoint re-arms money postings.
+- **Refused rather than guessed.** An unfiltered requeue (`{}`) is **400** — "requeue everything" is a
+  much larger decision than "requeue what the 406 broke", and an empty body must not silently mean the
+  larger one. A mistyped posting type is **400** too, never a silent `requeued=0` that would let the
+  operator believe the backlog was already clear.
+- Rows poisoned as structurally unreplayable (no payload was ever captured) are **skipped and
+  counted**, not requeued into a budget they cannot survive. A bulk type filter never touches
+  `ABANDONED` — that is a human's judgement, reversible only by naming the id.
+
 ## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (T4-1: the Nepal corridor gets a real money path)
 
 ### Fixed - the Nepal corridor stopped sending KRW as NPR

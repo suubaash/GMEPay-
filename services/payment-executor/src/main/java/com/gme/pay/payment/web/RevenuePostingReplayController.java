@@ -7,12 +7,14 @@ import com.gme.pay.payment.persistence.RevenuePostingFailureRepository;
 import com.gme.pay.payment.replay.RevenuePostingOutstandingQuery;
 import com.gme.pay.payment.replay.RevenuePostingOutstandingView;
 import com.gme.pay.payment.replay.RevenuePostingReplayService;
+import com.gme.pay.payment.replay.RevenuePostingRequeueService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -28,6 +30,7 @@ import java.util.List;
  *   GET  /internal/ops/revenue-posting-failures            -- what is outstanding (aggregated headline)
  *   GET  /internal/ops/revenue-posting-failures/rows       -- the rows themselves, bounded
  *   POST /internal/ops/revenue-posting-failures/replay     -- run the sweep NOW
+ *   POST /internal/ops/revenue-posting-failures/requeue    -- move POISON rows back to PENDING
  * </pre>
  *
  * <h2>Authorisation</h2>
@@ -54,13 +57,16 @@ public class RevenuePostingReplayController {
 
     private final RevenuePostingOutstandingQuery outstandingQuery;
     private final RevenuePostingReplayService replayService;
+    private final RevenuePostingRequeueService requeueService;
     private final RevenuePostingFailureRepository repository;
 
     public RevenuePostingReplayController(RevenuePostingOutstandingQuery outstandingQuery,
                                           RevenuePostingReplayService replayService,
+                                          RevenuePostingRequeueService requeueService,
                                           RevenuePostingFailureRepository repository) {
         this.outstandingQuery = outstandingQuery;
         this.replayService = replayService;
+        this.requeueService = requeueService;
         this.repository = repository;
     }
 
@@ -114,6 +120,64 @@ public class RevenuePostingReplayController {
                 "error_code", "REPLAY_RUN_FAILED",
                 "message", failure == null ? "replay run failed" : String.valueOf(failure),
                 "ledgerOpsRunId", result.runId() == null ? "UNWRITTEN" : result.runId()));
+    }
+
+    /**
+     * Move POISON rows back to PENDING with a fresh attempt budget, after the reason they were poisoned has
+     * been fixed (gap T2-5 follow-up, opened by T3-12).
+     *
+     * <p><b>Why this endpoint exists.</b> {@code POISON} is terminal, and that was correct only as long as
+     * the reason was a property of the row. Revenue-ledger's 406 content-negotiation defect made it a
+     * property of the <em>server</em>: every {@code ROUNDING_RESIDUAL} and {@code REVERSAL_JOURNAL} posting
+     * was poisoned on the first sweep for a bug that was later fixed, with no path back short of editing the
+     * table in production. That is the immediate need this shape is cut to —
+     * {@code {"postingTypes":["ROUNDING_RESIDUAL","REVERSAL_JOURNAL"],"reason":"..."}} — but it is general.
+     *
+     * <p><b>It does not replay.</b> Requeueing makes rows due; the sweep sends them. Keeping the two
+     * separate means an operator can requeue, inspect what became PENDING, and only then trigger
+     * {@code POST /replay} — rather than discovering the shape of a mass re-send after it has happened.
+     *
+     * <p>Returns 200 with the counts, 400 for a bad or absent selector, 500 if the audited run itself failed.
+     */
+    @PostMapping("/requeue")
+    @Operation(summary = "Requeue POISON postings to PENDING (idempotent, audited, filtered)")
+    public ResponseEntity<?> requeue(@RequestBody(required = false) RequeueRequest request,
+                                     @RequestHeader(name = "X-Operator-Id", required = false) String operatorId) {
+        RequeueRequest body = request == null ? RequeueRequest.EMPTY : request;
+        LedgerOpsRunExecutor.RunResult<RevenuePostingRequeueService.RequeueResult> result;
+        try {
+            result = requeueService.requeue(body.postingTypes(), body.ids(), body.reason(), operatorId);
+        } catch (RevenuePostingRequeueService.RequeueRejectedException rejected) {
+            // A selector mistake is the CALLER's error, so it must not become a FAILED run row and a
+            // CRITICAL ops alert — that would page someone for a typo.
+            return ResponseEntity.badRequest().body(java.util.Map.of(
+                    "error_code", rejected.errorCode(),
+                    "message", String.valueOf(rejected.getMessage())));
+        }
+        if (result.succeeded()) {
+            return ResponseEntity.ok(result.value());
+        }
+        Throwable failure = result.failure();
+        return ResponseEntity.internalServerError().body(java.util.Map.of(
+                "error_code", "REQUEUE_RUN_FAILED",
+                "message", failure == null ? "requeue run failed" : String.valueOf(failure),
+                "ledgerOpsRunId", result.runId() == null ? "UNWRITTEN" : result.runId()));
+    }
+
+    /**
+     * The requeue selectors.
+     *
+     * @param postingTypes posting types to requeue — the immediate need is
+     *                     {@code ["ROUNDING_RESIDUAL","REVERSAL_JOURNAL"]}
+     * @param ids          specific {@code revenue_posting_failures.id} values
+     * @param reason       why, stamped onto each row's {@code last_error} and onto the audit row. Not
+     *                     mandatory at the type level, because refusing the fix over a missing string would
+     *                     be worse than recording "no reason given" — but the audit row is much less useful
+     *                     without it.
+     */
+    public record RequeueRequest(List<String> postingTypes, List<Long> ids, String reason) {
+
+        static final RequeueRequest EMPTY = new RequeueRequest(null, null, null);
     }
 
     /**

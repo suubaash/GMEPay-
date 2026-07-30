@@ -33,6 +33,13 @@ dependencies {
     // listener API must be on the main classpath. The @KafkaListener container is still gated
     // on spring.kafka.bootstrap-servers, so no broker is required for the local default.
     implementation 'org.springframework.kafka:spring-kafka'
+    // T3-11 defect 3 follow-up: distributed scheduler locking. revenue-ledger was the LAST service in
+    // the fleet whose @Scheduled work was unlocked, so a second replica double-published the outbox.
+    // Same coordinates as payment-executor / settlement-reconciliation / notification-webhook /
+    // scheme-adapter-zeropay / prefunding / transaction-mgmt — one version across the fleet, because
+    // subtly different lock implementations are how one of them ends up wrong.
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'

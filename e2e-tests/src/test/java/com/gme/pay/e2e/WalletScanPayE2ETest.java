@@ -84,6 +84,13 @@ class WalletScanPayE2ETest {
     private static final BigDecimal AMOUNT_KRW = new BigDecimal("50000");
     private static final BigDecimal FEE_KRW = new BigDecimal("500");
 
+    // ---- revenue-ledger account codes (LedgerPostingService) ----
+    // Asserted by name so a journal with the right AMOUNT but the wrong ACCOUNTS cannot pass. The old
+    // "any balanced journal containing a ₩500 line" check would have accepted a revenue-capture posting.
+    private static final String ACC_RECEIVABLE = "RECEIVABLE_PARTNER";
+    private static final String ACC_ROUNDING   = "REVENUE_ROUNDING";  // the ₩500 fee books here
+    private static final String ACC_REVERSAL   = "REVENUE_REVERSAL";  // contra-revenue for cancel/refund
+
     // ---- fleet ports (merchant-qr-data + transaction-mgmt both default to 8083, so we
     //      override them to distinct ports; payment-executor is pointed at these) ----
     private static final int PORT_PAYMENT_EXECUTOR = 8084;   // jar default
@@ -207,15 +214,32 @@ class WalletScanPayE2ETest {
         // --- 4) LEDGER TIE-OUT: the ₩500 fee journal really posted (also fire-and-forget). ---
         // This closes the harness's original known limitation — revenue-ledger now has a
         // read API (GET /v1/journals?reference=), so "code exists" becomes "tied to the won".
-        assertFeeJournalPosted(receipt.path("txnRef").asText());
+        String txnRef = receipt.path("txnRef").asText();
+        assertRoundingResidualJournalPosted(txnRef);
+
+        // --- 5) CLIENT-SIDE TIE-OUT (T3-12): the hub also has to BELIEVE the posting landed. ---
+        assertNoRevenuePostingFailureWasRecorded(txnRef);
+
+        // --- 6) The second endpoint that carried the identical 406 defect. ---
+        assertReversalJournalEndpointBooks(txnRef);
     }
 
     /**
-     * Asserts revenue-ledger holds a BALANCED journal for the payment's fee booking: the hub
-     * posts the ₩500 service fee under the payment's {@code txnRef} (fire-and-forget, so a
-     * green receipt alone proves nothing) — this queries the ledger's read API independently.
+     * Asserts revenue-ledger holds the payment's <b>rounding-residual</b> journal — the ₩500 service fee.
+     *
+     * <h2>The naming matters, and it was wrong before</h2>
+     * <p>This used to be called "the fee journal", which hid what it actually is: {@code
+     * GmeremitPaymentService} books the ₩500 fee by calling {@code postRoundingResidual}, so the journal
+     * this assertion looks for is a {@code ROUNDING_RESIDUAL} posting — the exact posting type the T3-12
+     * 406 defect broke. Calling it "the fee journal" is why nobody connected this assertion to that gap.
+     *
+     * <h2>It is now specific about the SHAPE, not just the amount</h2>
+     * <p>The old version accepted any balanced journal containing a ₩500 line. That would pass on a journal
+     * with entirely the wrong account codes — including a revenue-capture posting that happened to be ₩500.
+     * A residual is {@code DEBIT RECEIVABLE_PARTNER / CREDIT REVENUE_ROUNDING} (a rounding gain), which is
+     * what makes it the residual rather than merely a journal.
      */
-    private void assertFeeJournalPosted(String txnRef) throws Exception {
+    private void assertRoundingResidualJournalPosted(String txnRef) throws Exception {
         assertTrue(txnRef != null && !txnRef.isBlank(), "receipt must carry the hub txnRef");
         Instant deadline = Instant.now().plusSeconds(15);
         String lastBody = "";
@@ -225,17 +249,8 @@ class WalletScanPayE2ETest {
             if (resp.statusCode() == 200) {
                 lastBody = resp.body();
                 for (JsonNode journal : JSON.readTree(resp.body()).path("items")) {
-                    BigDecimal debits = BigDecimal.ZERO;
-                    BigDecimal credits = BigDecimal.ZERO;
-                    boolean feeAmountSeen = false;
-                    for (JsonNode line : journal.path("lines")) {
-                        BigDecimal amount = new BigDecimal(line.path("amount").asText("0"));
-                        String side = line.path("side").asText("");
-                        if (side.startsWith("D")) debits = debits.add(amount); else credits = credits.add(amount);
-                        feeAmountSeen |= FEE_KRW.compareTo(amount) == 0;
-                    }
-                    if (feeAmountSeen && debits.compareTo(credits) == 0 && debits.signum() > 0) {
-                        return; // a balanced ₩500 journal exists for this payment
+                    if (isBalancedJournalWith(journal, ACC_RECEIVABLE, ACC_ROUNDING, FEE_KRW, "KRW")) {
+                        return; // the ROUNDING_RESIDUAL journal for this payment exists and balances
                     }
                 }
             } else {
@@ -243,9 +258,129 @@ class WalletScanPayE2ETest {
             }
             Thread.sleep(1000);
         }
-        fail("No balanced ₩" + FEE_KRW + " journal found in revenue-ledger for reference " + txnRef
+        fail("No balanced ₩" + FEE_KRW + " ROUNDING_RESIDUAL journal (DEBIT " + ACC_RECEIVABLE
+                + " / CREDIT " + ACC_ROUNDING + ") found in revenue-ledger for reference " + txnRef
                 + ". The fee posting is fire-and-forget in the hub, so the receipt cannot prove it "
                 + "— and it didn't land. Last /v1/journals response: " + lastBody);
+    }
+
+    /**
+     * <b>The assertion that would have caught T3-12, and the reason the old test could not.</b>
+     *
+     * <p>Revenue-ledger's {@code POST /v1/journals/rounding-residual} answered <b>406 on every call</b>
+     * because it returned a domain type Jackson could not serialise. The subtle part: the 406 is raised
+     * during response-converter <em>selection</em>, i.e. AFTER the service method has already committed the
+     * journal. So the ledger-side assertion above kept passing while 100% of production calls "failed" —
+     * the journal was there, and the only symptom was on the CLIENT side, where payment-executor recorded a
+     * {@code revenue_posting_failures} row for every single payment. That is the 12th row per transaction
+     * where a healthy deployment writes 11.
+     *
+     * <p>So a ledger-state assertion is structurally incapable of catching this class of defect. What
+     * catches it is asserting that the caller also believes it succeeded, which is what this does: the
+     * hub's own replay queue must be empty for this payment.
+     */
+    private void assertNoRevenuePostingFailureWasRecorded(String txnRef) throws Exception {
+        // Bounded settle window: the posting is fire-and-forget, so a failure row can appear slightly
+        // after the receipt. Poll for STABILITY rather than sampling once and calling it clean.
+        Instant deadline = Instant.now().plusSeconds(8);
+        String lastBody = "";
+        while (Instant.now().isBefore(deadline)) {
+            HttpResponse<String> resp = get("http://localhost:" + PORT_PAYMENT_EXECUTOR
+                    + "/internal/ops/revenue-posting-failures/rows?limit=500");
+            assertEquals(200, resp.statusCode(),
+                    "the ops replay-queue surface must be readable with the internal token. Body: "
+                            + resp.body());
+            lastBody = resp.body();
+            for (JsonNode row : JSON.readTree(resp.body())) {
+                if (txnRef.equals(row.path("reference").asText())) {
+                    fail("payment-executor recorded a revenue_posting_failures row for " + txnRef
+                            + " (postingType=" + row.path("postingType").asText()
+                            + ", status=" + row.path("status").asText()
+                            + ", lastError=" + row.path("lastError").asText() + "). The journal may well be "
+                            + "in the ledger — T3-12's 406 was raised AFTER the commit — but the hub believes "
+                            + "the posting was lost, and a POISONed row is booked revenue that ops will chase. "
+                            + "Rows: " + lastBody);
+                }
+            }
+            Thread.sleep(1000);
+        }
+    }
+
+    /**
+     * {@code POST /v1/journals/reversal} — the <b>second</b> endpoint that carried the identical T3-12
+     * defect, and the one nobody noticed: every cancel/refund reversal journal was 406ing too.
+     *
+     * <p>This fleet has no cancel flow to drive (the wallet journey is authorize-and-capture in one call,
+     * and reversals come from {@code PaymentOrchestrator}'s separate {@code /v1/payments} lifecycle), so
+     * rather than invent one this drives the endpoint directly against the <b>live</b> revenue-ledger in
+     * the running fleet and asserts both halves the defect broke:
+     * <ol>
+     *   <li>the HTTP answer is 200 with a serialisable body — a 406 here is exactly the regression;</li>
+     *   <li>the journal is really on the books as {@code DEBIT REVENUE_REVERSAL / CREDIT
+     *       RECEIVABLE_PARTNER}, read back through the independent query API.</li>
+     * </ol>
+     *
+     * <p>Stated honestly: this proves the endpoint, not a cancelled payment end to end. An E2E cancel
+     * journey is a bigger piece of work and is not pretended to exist here.
+     */
+    private void assertReversalJournalEndpointBooks(String txnRef) throws Exception {
+        String reversalRef = txnRef + "-REV";
+        String body = """
+                { "reference": "%s", "reversalAmount": "%s", "currency": "KRW" }
+                """.formatted(reversalRef, FEE_KRW.toPlainString());
+
+        HttpResponse<String> resp = post(
+                "http://localhost:" + PORT_REVENUE_LEDGER + "/v1/journals/reversal", body);
+
+        assertEquals(200, resp.statusCode(),
+                "POST /v1/journals/reversal must answer 200 with a serialisable journal body. A 406 here "
+                        + "is the T3-12 defect: the endpoint returned the domain Journal type, which has "
+                        + "record-STYLE accessors but is not a record, so Jackson found zero properties and "
+                        + "Spring could select no converter. Body: " + resp.body());
+        assertTrue(JSON.readTree(resp.body()).path("journalId").asText("").length() > 0,
+                "the response body must actually carry the journal — an empty {} would be the same defect "
+                        + "with a success code on it. Body: " + resp.body());
+
+        HttpResponse<String> read = get("http://localhost:" + PORT_REVENUE_LEDGER + "/v1/journals?reference="
+                + URLEncoder.encode(reversalRef, StandardCharsets.UTF_8));
+        assertEquals(200, read.statusCode(), "journal read-back. Body: " + read.body());
+        for (JsonNode journal : JSON.readTree(read.body()).path("items")) {
+            if (isBalancedJournalWith(journal, ACC_REVERSAL, ACC_RECEIVABLE, FEE_KRW, "KRW")) {
+                return;
+            }
+        }
+        fail("No balanced REVERSAL journal (DEBIT " + ACC_REVERSAL + " / CREDIT " + ACC_RECEIVABLE
+                + ") found for " + reversalRef + ". Read-back: " + read.body());
+    }
+
+    /**
+     * True when {@code journal} is a balanced two-sided posting of {@code amount} {@code currency} with
+     * {@code debitAccount} on the DR side and {@code creditAccount} on the CR side.
+     *
+     * <p>Balance is checked as well as the accounts, because a journal that names the right accounts but
+     * does not balance is a broken ledger, not a passing test.
+     */
+    private static boolean isBalancedJournalWith(JsonNode journal, String debitAccount,
+                                                 String creditAccount, BigDecimal amount, String currency) {
+        BigDecimal debits = BigDecimal.ZERO;
+        BigDecimal credits = BigDecimal.ZERO;
+        boolean debitSeen = false;
+        boolean creditSeen = false;
+        for (JsonNode line : journal.path("lines")) {
+            BigDecimal lineAmount = new BigDecimal(line.path("amount").asText("0"));
+            String side = line.path("side").asText("");
+            String account = line.path("account").asText("");
+            boolean matches = amount.compareTo(lineAmount) == 0
+                    && currency.equals(line.path("currency").asText(""));
+            if (side.startsWith("D")) {
+                debits = debits.add(lineAmount);
+                debitSeen |= matches && debitAccount.equals(account);
+            } else {
+                credits = credits.add(lineAmount);
+                creditSeen |= matches && creditAccount.equals(account);
+            }
+        }
+        return debitSeen && creditSeen && debits.compareTo(credits) == 0 && debits.signum() > 0;
     }
 
     @Test
