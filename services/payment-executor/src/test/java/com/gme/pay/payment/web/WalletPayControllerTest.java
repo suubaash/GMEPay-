@@ -7,6 +7,7 @@ import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
 import com.gme.pay.payment.domain.OperationalGate;
 import com.gme.pay.payment.domain.OperationalGateException;
 import com.gme.pay.payment.domain.PaymentStatus;
+import com.gme.pay.payment.domain.SchemeClosedException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
@@ -746,6 +747,84 @@ class WalletPayControllerTest {
                 .andExpect(jsonPath("$.status", is("REFUNDED")));
 
         // The gate must never be consulted on the in-flight refund path.
+        verifyNoInteractions(operationalGate);
+    }
+
+    // ---- T3-6: the scheme's own operating window, on the WALLET entry point ----
+
+    @Test
+    @DisplayName("T3-6: closed scheme on /v1/pay → 409 SCHEME_CLOSED, no scheme call, no payment")
+    void walletPay_closedScheme_structuredError_noSideEffect() throws Exception {
+        // The gate the controller calls is the SAME OperationalGate the orchestrated authorize path
+        // calls, so the wallet path cannot drift from it (the T4-2 split this gap refused to repeat).
+        doThrow(new SchemeClosedException(com.gme.pay.contracts.SchemeAvailability.evaluate(
+                "ZEROPAY",
+                java.util.List.of(new com.gme.pay.contracts.SchemeOperatingHoursView(
+                        "ZEROPAY", 1, java.time.LocalTime.of(18, 0), java.time.LocalTime.of(22, 0),
+                        java.time.LocalTime.of(16, 30), "Asia/Seoul")),
+                java.time.Instant.parse("2026-07-28T03:00:00Z"))))
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+
+        String body = """
+                {
+                  "qrPayload": "ZPQR0001",
+                  "amountKrw": "50000",
+                  "partner": "GMEREMIT",
+                  "userRef": "user-007"
+                }
+                """;
+
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code", is("SCHEME_CLOSED")))
+                .andExpect(jsonPath("$.retryable", is(false)));
+
+        // Nothing moved: no corridor service ran, so no float was deducted and no scheme was called.
+        verifyNoInteractions(gmeremitPaymentService);
+        verifyNoInteractions(sendmnPaymentService);
+        verifyNoInteractions(failoverPaymentRouter);
+        verifyNoInteractions(schemeClient);
+    }
+
+    @Test
+    @DisplayName("T3-6: the wallet path passes the DISPATCHED scheme (ZEROPAY/SENDMN), never a guess")
+    void walletPay_gatePassesTheDispatchedSchemeReference() throws Exception {
+        stubApproved();
+        mockMvc.perform(post("/v1/pay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(IDEM_BODY))
+                .andExpect(status().isCreated());
+
+        // GMEREMIT is the ZeroPay domestic corridor — the gate must receive a scheme reference, or the
+        // seeded V024 window could never be evaluated on this entry point at all (the T3-6 defect).
+        verify(operationalGate).checkNewAuthorization(eq("GMEREMIT"), eq("ZEROPAY"), any());
+    }
+
+    @Test
+    @DisplayName("T3-6: refund is NOT gated by a closed window (the deliberate carve-out)")
+    void walletRefund_notGated_whenSchemeClosed() throws Exception {
+        // A closed rail must not trap a customer's money: the refund path never calls the gate, so even
+        // a gate stubbed to reject every new payment has no effect here.
+        doThrow(new SchemeClosedException(com.gme.pay.contracts.SchemeAvailability.evaluate(
+                "ZEROPAY", java.util.List.of(), java.time.Instant.now())))
+                .when(operationalGate).checkNewAuthorization(anyString(), any(), any());
+        doNothing().when(schemeClient).cancelPayment(cancelOf("AUTH-CPM-001"));
+
+        String body = """
+                {
+                  "authId": "AUTH-CPM-001",
+                  "reason": "CUSTOMER_REQUEST"
+                }
+                """;
+
+        mockMvc.perform(post("/v1/pay/TXN-AABB1122/refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status", is("REFUNDED")));
+
         verifyNoInteractions(operationalGate);
     }
 

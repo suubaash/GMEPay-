@@ -49,6 +49,46 @@ public final class SchemeId {
     }
 
     /**
+     * The CANONICAL roster code for a scheme code, or {@code null} when the code is null/blank or not
+     * in the platform roster. Same normalisation + corridor-suffix tolerance as {@link #resolve}
+     * ({@code zeropay} → {@code ZEROPAY}, {@code zeropay_kr} → {@code ZEROPAY},
+     * {@code napas247} → {@code NAPAS_247}), so config-registry's roster-keyed reads
+     * ({@code /v1/schemes/{schemeId}/operating-hours}, V022/V024) can be called with whatever code
+     * shape the orchestrator/wallet happens to carry.
+     *
+     * <p>T3-6: without this, an adapter-shaped code like {@code zeropay_kr} would 404 at
+     * config-registry and the operating-hours gate would report UNVERIFIED forever — i.e. the seeded
+     * schedule would still have no effective consumer for the platform's only live corridor.
+     */
+    public static String canonicalCode(String schemeCode) {
+        if (schemeCode == null || schemeCode.isBlank()) {
+            return null;
+        }
+        String key = schemeCode.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+        for (Map.Entry<String, String> e : NORMALISED_TO_ROSTER.entrySet()) {
+            if (key.equals(e.getKey()) || key.startsWith(e.getKey())) {
+                return e.getValue();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Normalised key → the roster code config-registry expects on the wire. Only the two
+     * underscore-bearing roster codes differ from their normalised form; the rest are identity.
+     */
+    private static final Map<String, String> NORMALISED_TO_ROSTER = Map.ofEntries(
+            Map.entry("ZEROPAY", "ZEROPAY"),
+            Map.entry("BAKONG", "BAKONG"),
+            Map.entry("KHQR", "KHQR"),
+            Map.entry("NAPAS247", "NAPAS_247"),
+            Map.entry("PROMPTPAY", "PROMPT_PAY"),
+            Map.entry("FASTSG", "FAST_SG"),
+            Map.entry("QRIS", "QRIS"),
+            Map.entry("NEPAL", "NEPAL"),
+            Map.entry("SENDMN", "SENDMN"));
+
+    /**
      * Resolve the numeric scheme id for a scheme code; {@link #UNSET} (0) when the code is null/blank
      * or not in the platform roster. Tolerates corridor suffixes (e.g. {@code zeropay_kr} → ZEROPAY).
      */

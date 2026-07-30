@@ -1,5 +1,6 @@
 package com.gme.pay.payment.domain;
 
+import com.gme.pay.contracts.SchemeAvailability;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
 import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
 import com.gme.pay.payment.domain.client.SchemeClient;
@@ -105,7 +106,18 @@ public class FailoverPaymentRouter {
      * walked by the generic loop, which would send the KRW amount as NPR.
      */
     @Nullable private final NepalPaymentService nepalPaymentService;
+    /**
+     * T3-6: the scheme operating-window gate, applied per RESOLVED candidate. Null in unit slices that
+     * predate the gate — the router then behaves exactly as before (no window check).
+     */
+    @Nullable private final SchemeOperatingHoursGate hoursGate;
 
+    /**
+     * Production wiring (T3-6 adds {@code hoursGate}). The {@code @Autowired} annotation lives on THIS
+     * constructor — the platform's documented multi-constructor {@code @Component} rule — while the
+     * former 7-arg constructor is retained below and delegates with a null gate so existing callers and
+     * tests keep compiling and keep their exact behaviour.
+     */
     @Autowired
     public FailoverPaymentRouter(SmartRouterClient smartRouterClient,
                                  SchemeClient schemeClient,
@@ -113,7 +125,9 @@ public class FailoverPaymentRouter {
                                  @Value("${gmepay.routing.max-hops:3}") int maxHops,
                                  @Nullable TransactionClient transactionClient,
                                  @Nullable WalletLimitGate limitGate,
-                                 @Nullable NepalPaymentService nepalPaymentService) {
+                                 @Nullable NepalPaymentService nepalPaymentService,
+                                 @Nullable SchemeOperatingHoursGate hoursGate) {
+        this.hoursGate = hoursGate;
         this.smartRouterClient = smartRouterClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
@@ -123,11 +137,23 @@ public class FailoverPaymentRouter {
         this.nepalPaymentService = nepalPaymentService;
     }
 
+    /** Pre-T3-6 constructor shape, retained for existing callers: no operating-hours gate. */
+    public FailoverPaymentRouter(SmartRouterClient smartRouterClient,
+                                 SchemeClient schemeClient,
+                                 ExecutionAttemptRepository attemptRepository,
+                                 int maxHops,
+                                 @Nullable TransactionClient transactionClient,
+                                 @Nullable WalletLimitGate limitGate,
+                                 @Nullable NepalPaymentService nepalPaymentService) {
+        this(smartRouterClient, schemeClient, attemptRepository, maxHops, transactionClient, limitGate,
+                nepalPaymentService, null);
+    }
+
     /** Test constructor — no transaction client, default max-hops. */
     FailoverPaymentRouter(SmartRouterClient smartRouterClient,
                           SchemeClient schemeClient,
                           ExecutionAttemptRepository attemptRepository) {
-        this(smartRouterClient, schemeClient, attemptRepository, 3, null, null, null);
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, null, null, null);
     }
 
     /** Test constructor with the T4-2 limit gate wired. */
@@ -135,7 +161,7 @@ public class FailoverPaymentRouter {
                           SchemeClient schemeClient,
                           ExecutionAttemptRepository attemptRepository,
                           @Nullable WalletLimitGate limitGate) {
-        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate, null);
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate, null, null);
     }
 
     /** Test constructor with the T4-1 Nepal corridor delegate wired. */
@@ -145,7 +171,18 @@ public class FailoverPaymentRouter {
                           @Nullable WalletLimitGate limitGate,
                           @Nullable NepalPaymentService nepalPaymentService) {
         this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate,
-                nepalPaymentService);
+                nepalPaymentService, null);
+    }
+
+    /** Test constructor with the T3-6 operating-hours gate wired. */
+    FailoverPaymentRouter(SmartRouterClient smartRouterClient,
+                          SchemeClient schemeClient,
+                          ExecutionAttemptRepository attemptRepository,
+                          @Nullable WalletLimitGate limitGate,
+                          @Nullable NepalPaymentService nepalPaymentService,
+                          @Nullable SchemeOperatingHoursGate hoursGate) {
+        this(smartRouterClient, schemeClient, attemptRepository, 3, null, limitGate,
+                nepalPaymentService, hoursGate);
     }
 
     /**
@@ -216,6 +253,14 @@ public class FailoverPaymentRouter {
                     classification.networkIdentifier(), classification.country(), userRef);
             return WalletResult.declined(null, "unsupported_qr");
         }
+
+        // T3-6: drop candidates whose seeded operating window (scheme_operating_hours, V024) is CLOSED
+        // right now, evaluated in each row's OWN timezone. This runs on the resolved candidates — real
+        // scheme ids, never a code guessed from the QR — and before ANY side effect: before the Nepal
+        // corridor delegation, before the limit gate's cumulative charge, before the first submit. A
+        // closed candidate is skipped so a corridor with a second, open partner still pays; only when
+        // EVERY candidate is closed does the payment stop, with the structured SCHEME_CLOSED error.
+        candidates = openCandidates(candidates, userRef);
 
         // T4-1: a Nepal candidate is NOT walked by the generic loop — it is delegated to the corridor's
         // single money path, which applies FX / fee / prefunding / revenue. See payNepalCorridor.
@@ -315,6 +360,48 @@ public class FailoverPaymentRouter {
         // charge may have landed), so the cumulative cap is returned.
         limitGate.reverse(limitCharge);
         return WalletResult.declined(null, lastReason);
+    }
+
+    /**
+     * T3-6 — the candidates whose operating window does not affirmatively exclude now.
+     *
+     * <p>Keeps every candidate that is OPEN <b>or</b> UNVERIFIED (the gate has already logged + alerted
+     * on the latter), and drops those that are CLOSED. When that leaves nothing, the payment is refused
+     * with {@link SchemeClosedException} — carrying the evaluation of the FIRST (highest-priority)
+     * candidate, so the error names a real window and a real scheme-local time.
+     *
+     * <p>Order is preserved, so the failover order established by priority is unchanged.
+     */
+    private List<PartnerSchemeView> openCandidates(List<PartnerSchemeView> candidates, String userRef) {
+        if (hoursGate == null) {
+            return candidates;
+        }
+        List<PartnerSchemeView> routable = new java.util.ArrayList<>(candidates.size());
+        SchemeAvailability firstClosed = null;
+        for (PartnerSchemeView candidate : candidates) {
+            SchemeAvailability availability;
+            try {
+                // evaluate() reports UNVERIFIED and logs/alerts, but only throws on CLOSED; we catch
+                // that so a single closed partner does not end a multi-candidate payment.
+                availability = hoursGate.evaluate(candidate.schemeId());
+            } catch (SchemeClosedException closed) {
+                availability = closed.availability();
+            }
+            if (availability.closed()) {
+                if (firstClosed == null) {
+                    firstClosed = availability;
+                }
+                log.warn("Skipping candidate {} for userRef={} — {}",
+                        candidate.schemeId(), userRef, availability.reason());
+                continue;
+            }
+            routable.add(candidate);
+        }
+        if (routable.isEmpty()) {
+            // Nothing has moved: no float, no txn row, no scheme call, no cumulative cap charged.
+            throw new SchemeClosedException(firstClosed);
+        }
+        return routable;
     }
 
     /** True when any resolved candidate is the Nepal corridor. */

@@ -98,6 +98,31 @@ public enum ErrorCode {
      * local {@code ResolutionError.DIRECTION_NOT_ENABLED}).
      */
     DIRECTION_NOT_ENABLED(409, false),
+    /**
+     * The resolved scheme is OUTSIDE its operating window right now — gap T3-6. The scheme's weekly
+     * schedule ({@code scheme_operating_hours}, V024) has a row for the current scheme-LOCAL weekday
+     * and the current scheme-local wall-clock time falls outside its {@code open}..{@code close}
+     * window, so the rail is not accepting traffic.
+     *
+     * <p>Raised on the NEW-payment path only (payment-executor's {@code POST /v1/payments/authorize}
+     * and the wallet {@code POST /v1/pay}; smart-router's scheme-for-location resolution), BEFORE any
+     * side effect: no float moves and no scheme call is made. Confirm / cancel / refund of an
+     * already-authorized payment is deliberately NOT gated — an in-flight payment must complete even
+     * when the rail's window has since closed.
+     *
+     * <p>409 + {@code retryable=false}: it is a real, structured state of the corridor rather than a
+     * fault, and an immediate retry cannot succeed (the same rule that makes
+     * {@link #PAYMENT_MODE_NOT_SUPPORTED} a non-retryable 409). It is "not retryable AT THIS TIME" —
+     * the corridor reopens on its published schedule, and the error message names the window and the
+     * scheme-local time so the caller knows when.
+     *
+     * <p>Distinct from {@link #SCHEME_UNAVAILABLE} (a transient technical fault, 503/retryable) and
+     * from the operator-driven {@code SCHEME_SUSPENDED} kill switch (a manual hold, not a schedule).
+     * A scheme whose schedule is NOT seeded is never reported with this code — an unknown window is
+     * {@code SchemeAvailabilityVerdict.UNVERIFIED} (lib-api-contracts), which permits the payment and
+     * raises an ops alert instead of rejecting a corridor over missing reference data.
+     */
+    SCHEME_CLOSED(409, false),
     INTERNAL_ERROR(500, true);
 
     private final int httpStatus;

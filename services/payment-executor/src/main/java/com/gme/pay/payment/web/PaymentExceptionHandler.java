@@ -14,6 +14,7 @@ import com.gme.pay.payment.domain.PaymentNotFoundException;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.RefundAmountInvalidException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
+import com.gme.pay.payment.domain.SchemeClosedException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
@@ -93,6 +94,25 @@ public class PaymentExceptionHandler {
             CorridorPricingUnavailableException ex) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(new ApiError(ex.code(), ex.getMessage(), ex.retryable(), newRequestId()));
+    }
+
+    /**
+     * T3-6: the resolved scheme is outside its seeded operating window ({@code scheme_operating_hours},
+     * V024). 409 {@code SCHEME_CLOSED} with {@code retryable=false} — a real, structured state of the
+     * corridor rather than a fault, and an immediate retry cannot succeed; the message names the window
+     * and the scheme-LOCAL time so the caller knows when it reopens. Unlike the other stable-string
+     * codes in this handler this one IS a canonical {@link ErrorCode} member, added to lib-errors with
+     * this gap so payment-executor and smart-router emit one identical code.
+     *
+     * <p>Nothing was mutated: no float reserved or deducted, no transaction row, no scheme call, no
+     * ledger posting, no event. Declared BEFORE the generic {@code PaymentException} paths.
+     * Confirm/cancel/refund never reach this gate — an in-flight payment must still complete and a
+     * refund must still be possible after the window closes.
+     */
+    @ExceptionHandler(SchemeClosedException.class)
+    public ResponseEntity<ApiError> handleSchemeClosed(SchemeClosedException ex) {
+        return ResponseEntity.status(ErrorCode.SCHEME_CLOSED.httpStatus())
+                .body(ApiError.of(ErrorCode.SCHEME_CLOSED, ex.getMessage(), newRequestId()));
     }
 
     @ExceptionHandler(SchemeDeclinedException.class)

@@ -302,17 +302,7 @@ public class WalletPayController {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
-        // Operations operational gate: refuse NEW payments while the platform is paused / in
-        // maintenance, or when THIS payment's partner alias / classified network (route) is suspended.
-        // Runs at the START, before any merchant lookup / scheme submit, so nothing irreversible fires
-        // on a rejected payment. Confirm/refund of an in-flight txn does not enter this controller.
         Classification gateQr = QrSchemeClassifier.classify(req.qrPayload());
-        if (operationalGate != null) {
-            operationalGate.checkNewAuthorization(
-                    req.partner(),
-                    null,
-                    gateQr.isKnown() ? gateQr.networkIdentifier() : null);
-        }
 
         // ADR-016: route the scanned MPM QR by its OWN network identifier, not by partner. A
         // non-ZeroPay network (Fonepay/NepalPay/Khalti…) arrives as partner=GMEREMIT but must NOT
@@ -334,6 +324,25 @@ public class WalletPayController {
                 && qr.isKnown()
                 && !isZeroPayNetwork(qr.networkIdentifier())
                 && !PARTNER_SENDMN.equalsIgnoreCase(req.partner());
+
+        // Operations operational gate: refuse NEW payments while the platform is paused / in
+        // maintenance, or when THIS payment's partner alias / classified network (route) is suspended.
+        // Runs at the START, before any merchant lookup / scheme submit, so nothing irreversible fires
+        // on a rejected payment. Confirm/refund of an in-flight txn does not enter this controller.
+        //
+        // T3-6: the same call now also enforces the scheme's SEEDED OPERATING WINDOW
+        // (scheme_operating_hours, V024) — the wallet entry point gets it from the same gate as the
+        // orchestrated authorize path, so the two cannot drift the way limit enforcement did in T4-2.
+        // The scheme reference passed here is the one this request is ACTUALLY dispatched to and is
+        // never guessed from the QR's network: the two direct corridors are known statically, and the
+        // failover branch is gated per RESOLVED candidate inside FailoverPaymentRouter (which knows the
+        // real scheme ids and can skip a closed candidate rather than failing the whole payment).
+        if (operationalGate != null) {
+            operationalGate.checkNewAuthorization(
+                    req.partner(),
+                    routeViaFailover ? null : directCorridorSchemeRef(req.partner()),
+                    gateQr.isKnown() ? gateQr.networkIdentifier() : null);
+        }
 
         // T4-2: the regulatory limit subject is the WALLET partner (the issuer charging the customer),
         // whose alias IS its config-registry partner code — that is the licence whose per-txn /
@@ -463,6 +472,25 @@ public class WalletPayController {
     }
 
     /** True when the classified QR network is ZeroPay (domestic path stays on the existing services). */
+    /**
+     * T3-6: the scheme a NON-failover wallet payment is actually dispatched to, for the operating-hours
+     * gate. Both direct corridors are statically known — {@code partner=SENDMN} is an explicit corridor
+     * selection dispatched to {@link SendmnPaymentService} (scheme {@code SENDMN}) and
+     * {@code partner=GMEREMIT} is the ZeroPay domestic path ({@code ZEROPAY}) — so no scheme code is
+     * ever inferred from the QR's network identifier here. Any other partner value is rejected below as
+     * unsupported, so it asserts no scheme.
+     */
+    @Nullable
+    private static String directCorridorSchemeRef(String partner) {
+        if (PARTNER_SENDMN.equalsIgnoreCase(partner)) {
+            return "SENDMN";
+        }
+        if (PARTNER_GMEREMIT.equalsIgnoreCase(partner)) {
+            return "ZEROPAY";
+        }
+        return null;
+    }
+
     private static boolean isZeroPayNetwork(String networkIdentifier) {
         return networkIdentifier != null
                 && networkIdentifier.toLowerCase(java.util.Locale.ROOT).contains("zeropay");
