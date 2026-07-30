@@ -23,4 +23,12 @@ public interface CorridorReconSummaryRepository extends JpaRepository<CorridorRe
     /** A scheme's summaries over a date range, oldest first (finance's period view). */
     List<CorridorReconSummaryEntity> findBySchemeAndSettlementDateBetweenOrderBySettlementDateAsc(
             String scheme, LocalDate fromInclusive, LocalDate toInclusive);
+
+    /**
+     * EVERY scheme's summaries over a date range, deterministically ordered — the obligation source for
+     * the multilateral netting report (T4-5). Cross-scheme by design: netting collapses opposing flows
+     * against the same counterparty, so the report has to see all counterparties in one window.
+     */
+    List<CorridorReconSummaryEntity> findBySettlementDateBetweenOrderBySettlementDateAscSchemeAsc(
+            LocalDate fromInclusive, LocalDate toInclusive);
 }

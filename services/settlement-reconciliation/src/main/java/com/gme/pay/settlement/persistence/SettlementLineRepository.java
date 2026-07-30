@@ -17,6 +17,16 @@ public interface SettlementLineRepository extends JpaRepository<SettlementLineEn
 
     List<SettlementLineEntity> findByBatchId(String batchId);
 
+    /** A batch's lines in a stable order — the per-batch detail read (T4-5). */
+    List<SettlementLineEntity> findByBatchIdOrderByIdAsc(String batchId);
+
+    /** One merchant's lines on one batch — the partner-facing statement's rows (T4-5). */
+    List<SettlementLineEntity> findByBatchIdAndMerchantIdOrderByIdAsc(String batchId, String merchantId);
+
+    /** Every merchant's lines across a set of batches, for a statement over a window (T4-5). */
+    List<SettlementLineEntity> findByBatchIdInAndMerchantIdOrderByIdAsc(
+            java.util.Collection<String> batchIds, String merchantId);
+
     List<SettlementLineEntity> findByBatchIdAndMatched(String batchId, boolean matched);
 
     /** Remove a batch's lines so an outbound generation re-run (PENDING/ERROR batch) is clean. */

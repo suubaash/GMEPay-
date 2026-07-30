@@ -27,4 +27,16 @@ class SettlementBatchStatusTest {
         assertFalse(SettlementBatchStatus.RECONCILED.canMoveTo(SettlementBatchStatus.GENERATED));
         assertFalse(SettlementBatchStatus.GENERATED.canMoveTo(SettlementBatchStatus.PENDING));
     }
+
+    /**
+     * GAP T4-5: the recon path must be able to record a reconciliation WITHOUT first claiming a
+     * transmission. Before this edge existed, {@code ReconDiffEngine} walked
+     * GENERATED → TRANSMITTED → RECEIVED purely to reach a legal RECEIVED, which left every reconciled
+     * batch reading as though GME had sent the request file. Nothing ever had.
+     */
+    @Test
+    @DisplayName("T4-5: GENERATED -> RECEIVED directly, so recon never has to invent a TRANSMITTED")
+    void generatedGoesStraightToReceived() {
+        assertTrue(SettlementBatchStatus.GENERATED.canMoveTo(SettlementBatchStatus.RECEIVED));
+    }
 }

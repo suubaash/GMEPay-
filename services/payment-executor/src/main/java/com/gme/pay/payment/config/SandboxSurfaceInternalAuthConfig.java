@@ -93,6 +93,15 @@ public class SandboxSurfaceInternalAuthConfig {
      * ({@link com.gme.pay.payment.web.OpsAlertQueryController}, gap T3-3) — the durable ops-alert
      * history. Its rows name partners and schemes together with their decline rates, so it is exactly
      * as sensitive as the balance inquiry.
+     *
+     * <p>Gap T2-5 added three more under the same prefix, all at least as sensitive:
+     * {@code /internal/ops/revenue-posting-failures} ({@link com.gme.pay.payment.web.RevenuePostingReplayController} —
+     * transaction references whose revenue never reached the ledger, plus the operator trigger for the replay
+     * sweep), {@code /internal/ops/day-close} and {@code /internal/ops/fx-exposure}
+     * ({@link com.gme.pay.payment.web.DayCloseController} — the whole platform's daily money position and its
+     * open FX position). Because the gate is wholesale over {@code /internal/**}, each of those was covered the
+     * moment it was mounted; nothing had to be added to this list, which is the point of gating the prefix
+     * rather than enumerating routes.
      */
     static final String INTERNAL_PATTERN = "/internal/**";
 

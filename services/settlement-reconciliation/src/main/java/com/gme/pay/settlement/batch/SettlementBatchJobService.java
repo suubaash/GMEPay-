@@ -24,6 +24,8 @@ import com.gme.pay.settlement.port.RefundedTransactionPort;
 import com.gme.pay.settlement.port.RegistrationStatusPort;
 import com.gme.pay.settlement.port.RefundedTransactionPort.RefundLeg;
 import com.gme.pay.settlement.port.TransactionQueryPort;
+import com.gme.pay.settlement.transmission.SettlementTransmissionChannelRegistry;
+import com.gme.pay.settlement.transmission.SettlementTransmissionRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -116,6 +118,16 @@ public class SettlementBatchJobService {
      */
     private final BusinessCalendar calendar;
 
+    /**
+     * T4-5: stamps every freshly GENERATED batch with the most advanced transmission state this
+     * deployment can actually reach, plus the reason. With no channel configured — which is every
+     * environment today — that is {@code NOT_TRANSMITTED_CHANNEL_UNAVAILABLE}, recorded on the row
+     * itself so no reader has to infer "never sent" from a null timestamp. The legacy constructors
+     * default it to a recorder over {@link SettlementTransmissionChannelRegistry#noChannelConfigured()},
+     * which is the honest state of the platform, not a convenience.
+     */
+    private final SettlementTransmissionRecorder transmissionRecorder;
+
     @org.springframework.beans.factory.annotation.Autowired
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -127,6 +139,7 @@ public class SettlementBatchJobService {
                                      RefundedTransactionPort refundedPort,
                                      RegistrationStatusPort registrationPort,
                                      BusinessCalendar calendar,
+                                     SettlementTransmissionRecorder transmissionRecorder,
                                      @Value("${settlement.morning-cutoff:04:30}") String morningCutoff,
                                      @Value("${settlement.afternoon-cutoff:13:30}") String afternoonCutoff) {
         this.txnPort = txnPort;
@@ -139,6 +152,9 @@ public class SettlementBatchJobService {
         this.refundedPort = refundedPort;
         this.registrationPort = registrationPort;
         this.calendar = calendar == null ? BusinessCalendar.empty() : calendar;
+        this.transmissionRecorder = transmissionRecorder != null ? transmissionRecorder
+                : new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo);
         this.morningCutoff = parseCutoff(morningCutoff, "morning-cutoff");
         this.afternoonCutoff = parseCutoff(afternoonCutoff, "afternoon-cutoff");
     }
@@ -169,6 +185,8 @@ public class SettlementBatchJobService {
                 new FixtureRefundedTransactionAdapter(),
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
                 BusinessCalendar.empty(),
+                new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo),
                 morningCutoff, afternoonCutoff);
     }
 
@@ -191,6 +209,8 @@ public class SettlementBatchJobService {
                 refundedPort,
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
                 BusinessCalendar.empty(),
+                new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo),
                 morningCutoff, afternoonCutoff);
     }
 
@@ -389,6 +409,9 @@ public class SettlementBatchJobService {
         batch.setTotalAmount(netTotal);
         batch.setTotalCurrency(SETTLE_CCY);
         transition(batch, SettlementBatchStatus.GENERATED);
+        // T4-5: the file now exists on disk; record on the row whether it can ever be SENT, and why not.
+        // Generated is not transmitted, and this is where that stops being an inference.
+        transmissionRecorder.stampReachableState(batch);
         batchRepo.save(batch);
 
         outbox.publish(new SettlementCompletedEvent(
@@ -482,6 +505,9 @@ public class SettlementBatchJobService {
         batch.setTotalAmount(file.trailerTotal());
         batch.setTotalCurrency(SETTLE_CCY);
         transition(batch, SettlementBatchStatus.GENERATED);
+        // T4-5: the file now exists on disk; record on the row whether it can ever be SENT, and why not.
+        // Generated is not transmitted, and this is where that stops being an inference.
+        transmissionRecorder.stampReachableState(batch);
         batchRepo.save(batch);
 
         outbox.publish(new SettlementCompletedEvent(

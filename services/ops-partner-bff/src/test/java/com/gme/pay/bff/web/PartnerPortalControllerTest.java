@@ -98,10 +98,15 @@ class PartnerPortalControllerTest {
         SettlementClient settlement = new SettlementClient() {
             @Override
             public List<SettlementBatchSummary> recent(String partnerId, int limit) {
+                // T4-5: a real batch id, a real lifecycle status, and NOT_TRANSMITTED — the fixture
+                // must not be able to say "COMPLETED" or imply the file reached the scheme.
                 return List.of(new SettlementBatchSummary(
-                        "BATCH-20260608-001", PARTNER,
+                        "ZP0061-20260608-MORNING", PARTNER,
                         LocalDate.of(2026, 6, 8), "USD",
-                        new BigDecimal("9876.54"), "COMPLETED"));
+                        new BigDecimal("9876.54"), "RECONCILED",
+                        com.gme.pay.bff.settlement.SettlementStatuses.NOT_TRANSMITTED_CHANNEL_UNAVAILABLE,
+                        "no settlement transmission channel is configured",
+                        null));
             }
 
             @Override

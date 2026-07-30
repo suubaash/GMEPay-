@@ -24,11 +24,12 @@ import java.util.Map;
  * database hiccup while writing the failure record must not turn a successful payment into an error. A
  * failure to persist the failure is logged at ERROR (the last-resort signal) and swallowed.
  *
- * <p><b>Known remaining gap:</b> nothing in payment-executor drains this table yet. There is no
- * transactional outbox and no scheduled publisher in this service (its event publisher is still
- * {@code LogEventPublisher}), and inventing that infrastructure is register item T2-5, not this fix. The
- * PENDING rows are the queryable, replayable evidence an operator/job needs; draining them is the next
- * step.
+ * <h2>Draining (gap T2-5)</h2>
+ * <p>The PENDING rows are now drained by {@code RevenuePostingReplayService}: a bounded, backed-off,
+ * idempotent sweep that re-POSTs the stored payload and either lands it (REPLAYED) or, once the attempt
+ * budget is exhausted, stops and ALERTS (POISON). This class stays the WRITE side only — it knows nothing
+ * about the replay beyond scheduling the first attempt, so a change to the retry policy cannot alter what
+ * gets recorded on the money path.
  */
 @Service
 public class RevenuePostingFailureStore {
@@ -44,6 +45,14 @@ public class RevenuePostingFailureStore {
 
     private static final Logger log = LoggerFactory.getLogger(RevenuePostingFailureStore.class);
     private static final int MAX_ERROR_LEN = 1024;
+
+    /**
+     * How far out a HOT-PATH re-failure pushes the next replay attempt.
+     *
+     * <p>Not zero: the hot path failed a moment ago, so revenue-ledger is almost certainly still down and an
+     * immediate replay would just add load to a struggling service and burn an attempt from the bound.
+     */
+    static final java.time.Duration HOT_PATH_REFAILURE_BACKOFF = java.time.Duration.ofMinutes(5);
 
     private final RevenuePostingFailureRepository repository;
     private final ObjectMapper objectMapper;
@@ -71,7 +80,8 @@ public class RevenuePostingFailureStore {
             repository.findByReferenceAndPostingType(reference, postingType)
                     .ifPresentOrElse(
                             existing -> {
-                                existing.recordAnotherFailure(json, trimmedError, now);
+                                existing.recordAnotherFailure(json, trimmedError, now,
+                                        HOT_PATH_REFAILURE_BACKOFF);
                                 repository.save(existing);
                             },
                             () -> repository.save(new RevenuePostingFailureEntity(

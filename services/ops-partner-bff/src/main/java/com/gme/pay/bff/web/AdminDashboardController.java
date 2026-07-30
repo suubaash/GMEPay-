@@ -370,6 +370,30 @@ public class AdminDashboardController {
         return settlement.recent(null, RECENT_LIMIT);
     }
 
+    /**
+     * Persisted settlement batches over a business-date window (GAP T4-5). Previously impossible:
+     * the only upstream read covered a single date, so {@code /settlement/recent} was the whole
+     * surface. Rows carry the real lifecycle status and an honest transmission state.
+     */
+    @GetMapping("/settlement/batches")
+    public List<SettlementClient.SettlementBatchSummary> settlementBatches(
+            @RequestParam(required = false) String partnerId,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to,
+            @RequestParam(required = false, defaultValue = "0") int limit) {
+        return settlement.range(partnerId, from, to, limit);
+    }
+
+    /**
+     * Whether settlement-reconciliation can transmit a settlement file to the scheme at all (T4-5).
+     * The counterpart of {@code GET /v1/admin/compliance/…}'s filing-channel board: an operator must
+     * be able to see that generated ≠ sent, and why, without reading a batch row.
+     */
+    @GetMapping("/settlement/transmission-channel")
+    public SettlementClient.TransmissionChannel settlementTransmissionChannel() {
+        return settlement.transmissionChannel();
+    }
+
     @GetMapping("/settlement/{batchId}")
     public SettlementBatchDetail settlementDetail(@PathVariable String batchId) {
         SettlementClient.SettlementBatchDetail upstream = settlement.detail(batchId);
@@ -377,7 +401,8 @@ public class AdminDashboardController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "no settlement batch with id " + batchId);
         }
-        return new SettlementBatchDetail(upstream.batch(), upstream.lines());
+        return new SettlementBatchDetail(upstream.batch(), upstream.lines(),
+                upstream.matchedCount(), upstream.openCount());
     }
 
     @GetMapping("/revenue/summary")

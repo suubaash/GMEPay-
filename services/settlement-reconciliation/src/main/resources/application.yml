@@ -69,6 +69,26 @@ gmepay:
     # the calendar is genuinely maintained, or every batch window stops.
     fail-closed: ${GMEPAY_CALENDAR_FAIL_CLOSED:false}
   settlement:
+    # ---- outbound transmission channel (GAP T4-5: "settlement never transmits") ----
+    # NOTHING IS EVER TRANSMITTED WHILE THIS IS BLANK, AND IT IS BLANK EVERYWHERE.
+    #
+    # The outbound spine books nets, writes settlement_batches/settlement_lines, builds and checksums the
+    # ZP0061/0063/0065/0066 fixed-width files — and then stops. The platform's only SftpTransport bean is
+    # LocalDirSftpTransport, which copies the file into a local temp directory. Real ZeroPay/KFTC SFTP needs
+    # scheme credentials and a certification run against the scheme: an EXTERNAL GATE, not a code change.
+    #
+    # While no channel is configured, every generated batch is stamped
+    # transmission_state=NOT_TRANSMITTED_CHANNEL_UNAVAILABLE with this reason on the row, the startup log
+    # carries a WARN, GET /v1/settlements/transmission-channel reports it, and every batch/statement read
+    # (service, BFF and UI) surfaces it. SettlementTransmissionRecorder REFUSES to record a transmission
+    # without a live channel, so the state cannot be reached by mistake.
+    #
+    # A local path (file:, /tmp, ./…) or a placeholder credential id is treated as NO CHANNEL on purpose —
+    # that is the LocalDirSftpTransport case, which writes to disk and sends nothing.
+    transmission:
+      channel:
+        endpoint: ${GMEPAY_SETTLEMENT_TRANSMISSION_ENDPOINT:}
+        credential-id: ${GMEPAY_SETTLEMENT_TRANSMISSION_CREDENTIAL_ID:}
     recon:
       # Gate: set to true in production only. Default false prevents accidental recon in dev/test.
       enabled: false

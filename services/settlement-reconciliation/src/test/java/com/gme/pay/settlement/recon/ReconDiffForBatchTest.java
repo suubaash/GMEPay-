@@ -251,4 +251,55 @@ class ReconDiffForBatchTest {
 
         assertThat(b.getResidualPostedAt()).isNull();   // not stamped → retried next run
     }
+
+    // ---- GAP T4-5: recon must not claim a transmission ------------------------------------------
+
+    /**
+     * The recon path used to walk GENERATED → TRANSMITTED → RECEIVED, because GENERATED → RECEIVED was
+     * not a legal edge. That intermediate hop had no evidence behind it — nothing in the platform
+     * transmits, the only {@code SftpTransport} bean writes to a local temp directory — so every
+     * reconciled batch ended up reading as though GME had sent the request file. The edge is now direct
+     * and this pins that reconciling a batch changes NOTHING about its transmission facts.
+     */
+    @Test
+    @DisplayName("T4-5: reconciling a batch never marks it TRANSMITTED and never stamps transmitted_at")
+    void reconNeverClaimsATransmission() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000034720",
+                "EOF0000000001000000000000034720"));
+
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name());
+        b.markNotTransmitted(
+                com.gme.pay.settlement.transmission.SettlementTransmissionState
+                        .NOT_TRANSMITTED_CHANNEL_UNAVAILABLE,
+                "no channel configured");
+
+        engine.runDiffForBatch(b, recs);
+
+        assertThat(b.getStatus()).isEqualTo(SettlementBatchStatus.RECONCILED.name());
+        assertThat(b.getTransmissionState())
+                .isEqualTo(com.gme.pay.settlement.transmission.SettlementTransmissionState
+                        .NOT_TRANSMITTED_CHANNEL_UNAVAILABLE);
+        assertThat(b.getTransmittedAt()).isNull();
+        assertThat(b.getTransmissionChannel()).isNull();
+    }
+
+    @Test
+    @DisplayName("T4-5: a discrepancy holds at RECEIVED, still with no transmission claimed")
+    void discrepancyPathAlsoClaimsNoTransmission() {
+        when(lineRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(line("MRC001", "34720")));
+        List<ZeroPayResultRecord> recs = parser.parse(List.of(
+                "ZP006220260615001",
+                "MRC001          0000000000030000",
+                "EOF0000000001000000000000030000"));
+
+        SettlementBatchEntity b = batch(SettlementBatchStatus.GENERATED.name());
+        engine.runDiffForBatch(b, recs);
+
+        assertThat(b.getStatus()).isEqualTo(SettlementBatchStatus.RECEIVED.name());
+        assertThat(b.getTransmissionState().isSent()).isFalse();
+        assertThat(b.getTransmittedAt()).isNull();
+    }
 }

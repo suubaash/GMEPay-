@@ -47,7 +47,71 @@ public interface TransactionClient {
         return Optional.empty();
     }
 
+    /**
+     * Reads every APPROVED transaction for one business date — leg (a) of the day-close tie-out and the source
+     * of the FX exposure measurement (gap T2-5): {@code GET /v1/transactions?from=&to=&status=APPROVED} paged.
+     *
+     * <p>The default throws rather than returning an empty list. An empty list is a legitimate answer (a day
+     * with no traffic) and would be indistinguishable from "this client cannot read transactions", which would
+     * make the day-close report state confidently that nothing happened. Callers catch the exception and mark
+     * the leg UNAVAILABLE instead. Every hand-written test fake stays valid because it inherits this default and
+     * only the tests that exercise the reports override it.
+     *
+     * @param businessDate the date to read, interpreted by the implementation in the configured close timezone
+     * @return the APPROVED transactions of that date
+     * @throws UnsupportedOperationException when this client cannot perform the read at all
+     */
+    default java.util.List<DailyTransaction> findApprovedForDate(java.time.LocalDate businessDate) {
+        throw new UnsupportedOperationException(
+                "findApprovedForDate not implemented in this TransactionClient");
+    }
+
     // ---- value objects ----
+
+    /**
+     * The projection of an APPROVED transaction that the day-close and FX-exposure reports need (gap T2-5).
+     *
+     * <p>Every field is a value transaction-mgmt ALREADY records. Nothing here is derived, inferred or
+     * defaulted — a report whose inputs were partly invented could not be used to find a discrepancy.
+     *
+     * @param txnRef           the transaction reference
+     * @param schemeId         the QR scheme that executed it (e.g. {@code sendmn}, {@code zeropay_kr}); the
+     *                         corridor dimension of the report
+     * @param collectionCcy    what the payer was charged in
+     * @param collectionAmount how much, in {@code collectionCcy}
+     * @param payoutCcy        what the beneficiary/merchant was paid in
+     * @param payoutAmount     how much, in {@code payoutCcy}
+     * @param prefundDeductedUsd USD taken from the partner float — the SETTLED leg, and the only figure common
+     *                         to the transaction and the prefunding ledger, hence the join for the tie-out
+     * @param appliedFxRate    the rate recorded at commit ({@code payoutAmount / collectionAmount}); null when
+     *                         same-currency or never captured
+     * @param refundedAmount   cumulative refunded amount in {@code collectionCcy}, or null when none
+     * @param approvedAt       when the scheme approved it
+     */
+    record DailyTransaction(
+            String txnRef,
+            String schemeId,
+            String collectionCcy,
+            BigDecimal collectionAmount,
+            String payoutCcy,
+            BigDecimal payoutAmount,
+            BigDecimal prefundDeductedUsd,
+            BigDecimal appliedFxRate,
+            BigDecimal refundedAmount,
+            Instant approvedAt
+    ) {
+        /** The corridor label used to group the report, e.g. {@code sendmn KRW->MNT}. */
+        public String corridor() {
+            return (schemeId == null ? "UNKNOWN" : schemeId) + " "
+                    + (collectionCcy == null ? "?" : collectionCcy) + "->"
+                    + (payoutCcy == null ? "?" : payoutCcy);
+        }
+
+        /** Cumulative refunded amount, never null. */
+        public BigDecimal refunded() {
+            return refundedAmount == null ? BigDecimal.ZERO : refundedAmount.abs();
+        }
+    }
 
     /**
      * The subset of a persisted transaction a refund needs (T2-6).

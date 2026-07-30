@@ -218,6 +218,48 @@ export const portalApi = {
   },
 
   /**
+   * GET /v1/portal/{partnerId}/settlements?from&to&includeLines
+   *
+   * The partner's SETTLEMENT STATEMENT (gap T4-5) — the settled record, read from
+   * settlement-reconciliation's persisted settlement_batches/settlement_lines. Distinct from
+   * `downloadStatement`, which is the CSV of the partner's TRANSACTIONS.
+   *
+   * Read-only: there is no settlement write surface for partners (dispute / adjust / request payout
+   * are an open product decision, gap T1-5), so this module deliberately exposes no POST/PATCH here.
+   *
+   * `transmissionState` is a SEPARATE axis from the batch's `status`. A batch may be RECONCILED —
+   * GMEPay+ booked it and it tied out against the scheme's confirmation file — while never having
+   * been transmitted to the scheme, because no settlement transmission channel is configured
+   * anywhere (scheme SFTP credentials + certification are externally gated). Never render `status`
+   * alone as "settled and sent".
+   *
+   * @param {string} partnerId
+   * @param {{ from?: string, to?: string, includeLines?: boolean }} [opts] - ISO YYYY-MM-DD bounds
+   * @returns {Promise<{
+   *   partnerId:string, from:string|null, to:string|null, currency:string|null,
+   *   entries:Array<{
+   *     batch:{ batchId:string, partnerId:string, settlementDate:string, currency:string,
+   *             amount:string, status:string, transmissionState:string,
+   *             transmissionReason:string|null, transmittedAt:string|null },
+   *     netSettlementAmount:string, paymentAmount:string, clawbackAmount:string,
+   *     lineCount:number, openLineCount:number,
+   *     lines:Array<{ txnRef:string, amount:string, currency:string, matched:boolean }>
+   *   }>,
+   *   netSettlementAmount:string, paymentAmount:string, clawbackAmount:string,
+   *   lineCount:number, openLineCount:number, transmittedEntryCount:number,
+   *   transmissionChannel:{ live:boolean, reachableState:string, reason:string|null }
+   * }>}
+   */
+  getSettlements(partnerId, opts = {}) {
+    const qs = new URLSearchParams();
+    if (opts.from) qs.set('from', opts.from);
+    if (opts.to) qs.set('to', opts.to);
+    if (opts.includeLines !== undefined) qs.set('includeLines', String(opts.includeLines));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request(`/v1/portal/${encodeURIComponent(partnerId)}/settlements${suffix}`);
+  },
+
+  /**
    * POST /v1/portal/{partnerId}/sandbox-keys
    *
    * Self-serve issuance of a SANDBOX API key for the Get-Started flow. Returns

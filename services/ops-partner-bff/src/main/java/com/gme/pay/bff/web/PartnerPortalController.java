@@ -331,6 +331,37 @@ public class PartnerPortalController {
     }
 
     /**
+     * The partner-facing <b>settlement statement</b> (GAP T4-5) — read-only.
+     *
+     * <p>Not to be confused with {@code /{partnerId}/statement}, which is the CSV of the partner's
+     * TRANSACTIONS. This is the settled record: one entry per settlement batch the partner appears on
+     * over the window, each with the batch's real lifecycle status and its honest transmission state,
+     * summed from the persisted settlement lines rather than recomputed from live transactions.
+     *
+     * <p>A partner reading this can distinguish three different things that used to be one word:
+     * GMEPay+ booked the settlement, GMEPay+ reconciled it against the scheme's confirmation, and
+     * GMEPay+ transmitted the instruction to the scheme. Only the first two happen today, which is why
+     * {@code transmittedEntryCount} is 0 and {@code transmissionChannel.live} is false on every
+     * response — stated, not implied.
+     *
+     * <p>Read-only by design: partner self-serve settlement <em>writes</em> (dispute, adjust, request
+     * payout) are an open product decision (T1-5) and are deliberately absent rather than stubbed.
+     */
+    @GetMapping("/{partnerId}/settlements")
+    public SettlementClient.PartnerStatement settlementStatement(
+            @PathVariable String partnerId,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to,
+            @RequestParam(required = false, defaultValue = "true") boolean includeLines) {
+        rbac.requirePartnerScope(partnerId);
+        if (from != null && to != null && to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "to must not be before from");
+        }
+        return settlement.statement(partnerId, from, to, includeLines);
+    }
+
+    /**
      * Synthesizes a Phase-1 {@link TransactionDetail} from the read-side summary.
      * Mirrors {@code AdminDashboardController#buildDetail} so the Portal UI sees
      * the same shape as the Admin UI.
