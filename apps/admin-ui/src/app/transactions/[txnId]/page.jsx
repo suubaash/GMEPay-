@@ -25,7 +25,11 @@ import Breadcrumbs from '@/components/Breadcrumbs';
  *   { summary: TransactionSummary,
  *     schemeTxnRef, schemeApprovalCode,
  *     prefundDeductedUsd, approvedAt,
- *     bookedSettlementAmount, settlementRoundingMode, roundingResidual }
+ *     bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+ *     merchantId, merchantName }
+ *
+ * {@code merchantName} (T4-4) is the name captured when the payment was made; null means the
+ * corridor could not resolve one and the page shows an em dash.
  *
  * Where TransactionSummary is:
  *   { txnId, partnerId, state, amount (string), currency, committedAt }
@@ -119,6 +123,24 @@ export default function TransactionDetailPage() {
                 <Grid size={6}>
                   <Field label="Approved">
                     <Typography>{txn.approvedAt ?? '—'}</Typography>
+                  </Field>
+                </Grid>
+                {/*
+                  T4-4: who was actually paid. The name is captured at payment time and persisted on
+                  the transaction, so it is available on every read — not only on the synchronous
+                  wallet response. An em dash means the corridor could not resolve a name; it is NOT
+                  filled in from the merchant id, which has its own field right next to it.
+                */}
+                <Grid size={6}>
+                  <Field label="Merchant">
+                    <Typography>{txn.merchantName ?? '—'}</Typography>
+                  </Field>
+                </Grid>
+                <Grid size={6}>
+                  <Field label="Merchant ID">
+                    <Typography sx={{ fontFamily: 'monospace' }}>
+                      {txn.merchantId ?? '—'}
+                    </Typography>
                   </Field>
                 </Grid>
               </Grid>
