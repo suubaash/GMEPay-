@@ -72,8 +72,15 @@ public class RestTransactionClient implements TransactionClient {
      */
     @Autowired
     public RestTransactionClient(
+            RestClient.Builder builder,
             @Value("${gmepay.transaction-mgmt.base-url:http://transaction-mgmt:8080}") String baseUrl) {
-        this.restClient = RestClient.builder()
+        // T3-11 defect 1 — see RestCommittedFxTransactionPort's constructor for the full reasoning.
+        // The static RestClient.builder() that used to be here bypassed every RestClientCustomizer, so
+        // this client had no read timeout; `builder` is the injected bean and carries the fleet floor.
+        // This read feeds the KOFIU feed scheduler, which fires on the same second as the BOK report
+        // scheduler (see application.yml's pool sizing), so an unbounded read here does not delay one
+        // job — it stops the other.
+        this.restClient = builder
                 .baseUrl(baseUrl)
                 .build();
     }

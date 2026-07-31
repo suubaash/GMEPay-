@@ -81,7 +81,8 @@ class RestPrefundingMovementClientTest {
     private record Fixture(MockRestServiceServer server, RestPrefundingMovementClient client) {}
 
     private static Fixture fixture(String token) {
-        RestClient.Builder b = RestPrefundingMovementClient.builderFor(BASE, token);
+        RestClient.Builder b = RestPrefundingMovementClient.builderFor(
+                RestClient.builder(), BASE, token);
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
         return new Fixture(server, new RestPrefundingMovementClient(b.build(), "Asia/Seoul"));
     }

@@ -25,6 +25,13 @@ dependencies {
     compileOnly 'org.springframework:spring-webmvc'   // RBAC HandlerInterceptor + WebMvcConfigurer
     compileOnly 'org.springframework:spring-webflux'
     compileOnly 'io.projectreactor:reactor-core'
+    // T3-11: WebClientTimeoutAutoConfiguration bounds the REACTIVE stack (api-gateway). Reactor Netty
+    // for HttpClient.responseTimeout(..) and netty-transport for ChannelOption.CONNECT_TIMEOUT_MILLIS —
+    // the two halves live on two different objects, which is exactly the detail that gets half-done when
+    // it is copy-pasted. compileOnly + @ConditionalOnClass, so a service without a reactive stack on its
+    // classpath is unaffected and nothing leaks to consumers.
+    compileOnly 'io.projectreactor.netty:reactor-netty-http'
+    compileOnly 'io.netty:netty-transport'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
     compileOnly 'org.slf4j:slf4j-api'                 // RBAC default decision listener logging
     compileOnly 'io.micrometer:micrometer-core'      // outbox lag gauges (T3-5)

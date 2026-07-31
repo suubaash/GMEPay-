@@ -1,6 +1,7 @@
 package com.gme.pay.router.resolve;
 
 import com.gme.pay.contracts.SchemeOperatingHoursView;
+import com.gme.pay.http.HttpClientTimeouts;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -52,9 +53,23 @@ public class RestSchemeOperatingHoursSource implements SchemeOperatingHoursSourc
     // Spring 6 trap: with 2 constructors the @Value one MUST carry @Autowired.
     @Autowired
     public RestSchemeOperatingHoursSource(
+            RestClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl,
-            @Value("${gmepay.scheme-hours.cache-ttl-millis:600000}") long cacheTtlMillis) {
-        this(RestClient.builder().baseUrl(baseUrl).build(), cacheTtlMillis);
+            @Value("${gmepay.scheme-hours.cache-ttl-millis:600000}") long cacheTtlMillis,
+            @Value("${gmepay.config-registry.connect-timeout-millis:500}") long connectTimeoutMillis,
+            @Value("${gmepay.config-registry.read-timeout-millis:500}") long readTimeoutMillis) {
+        // T3-11 defect 1 — see RestPartnerSchemeResolver's constructor. The static RestClient.builder()
+        // that used to be here escaped HttpClientTimeoutAutoConfiguration's customizer entirely, so
+        // this hop had no read timeout: the "NEVER a failure" contract in the class javadoc above was
+        // unreachable, because a hop that never returns never degrades either — it just holds the
+        // routing thread. The degraded path (last-known-good, else empty ⇒ UNVERIFIED ⇒ candidate
+        // kept) only exists once the read is bounded. Same 500ms budget as payment-executor's twin,
+        // RestSchemeOperatingHoursClient, which reads the same V024 table.
+        this(builder.baseUrl(baseUrl)
+                        .requestFactory(HttpClientTimeouts.requestFactory(
+                                connectTimeoutMillis, readTimeoutMillis))
+                        .build(),
+                cacheTtlMillis);
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

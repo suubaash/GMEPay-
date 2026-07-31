@@ -50,9 +50,18 @@ public class RestRevenueLedgerClient implements RevenueLedgerClient {
 
     @Autowired
     public RestRevenueLedgerClient(
+            RestClient.Builder builder,
             @Value("${gmepay.revenue-ledger.base-url:http://revenue-ledger:8080}") String baseUrl,
             @Nullable RevenuePostingFailureStore failureStore) {
-        this(RestClient.builder().baseUrl(baseUrl).build(), failureStore);
+        // T3-11: the INJECTED builder, not the static RestClient.builder() factory. Only the builder
+        // BEAN receives RestClientCustomizer beans, so only it carries
+        // HttpClientTimeoutAutoConfiguration's connect/read floor and payment-executor's 5s override;
+        // the static factory produces a client with NO read timeout that reads as if it had one.
+        // This client is invoked inside the payment path (revenue capture, commission split, residual)
+        // and its documented contract is to SWALLOW failures into the durable failureStore — a hop
+        // that swallows is exactly the hop that must be bounded, because an unbounded one does not
+        // swallow anything, it holds the payment's thread open.
+        this(builder.baseUrl(baseUrl).build(), failureStore);
     }
 
     /** Test-friendly constructor that takes a pre-built {@link RestClient}; no durable failure sink. */

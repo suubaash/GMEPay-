@@ -16,6 +16,28 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
   flyway:
     enabled: true
+  # ---- scheduler pool (gap T3-11 defect 2) ----------------------------------
+  # Three @Scheduled jobs, and until now ONE thread (Spring's default when this is unset), which is
+  # the worst pairing in the fleet on the numbers:
+  #   BokReportScheduler        cron 0 0 2 * * ?  Asia/Seoul   (daily, 02:00:00)
+  #   KofiuFeedScheduler        cron 0 0 2 * * *  Asia/Seoul   (daily, 02:00:00 — the SAME SECOND)
+  #   HometaxInvoiceScheduler   cron 0 0 2 L * ?  Asia/Seoul   (month-end, 02:00:00 — also the same)
+  # Two of the three do not merely risk contending, they contend BY CONSTRUCTION every single day, and
+  # on the last day of the month all three do. On one thread the second and third simply do not start
+  # until the first finishes — and each one generates a regulatory file over a date-range query against
+  # transaction-mgmt, so "finishes" depends on a business day's row count and a remote service. A
+  # regulatory filing that silently did not run is the failure mode, and nothing about it looks like an
+  # error: the job just never fired.
+  #
+  # 4 = 3 jobs + 1, and the +1 is not slack. lib-errors' SchedulerLagProbe registers its heartbeat on
+  # this same pool, so at pool == jobs the probe is the first thing a stall starves, and a probe that
+  # cannot get a thread reports NO lag — the metric added to make starvation visible would be exactly
+  # what starvation hid. Enforced fleet-wide by SchedulerPoolSizeWiringGuardTest (pool > job count,
+  # strictly), so a fourth job added here fails the build rather than quietly re-creating the queue.
+  task:
+    scheduling:
+      pool:
+        size: 4
 
 server:
   port: 8087

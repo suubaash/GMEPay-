@@ -53,10 +53,11 @@ public class RestRegistrationStatusClient implements RegistrationStatusPort {
 
     @Autowired
     public RestRegistrationStatusClient(
+            RestClient.Builder builder,
             @Value("${gmepay.clients.scheme-adapter-zeropay.base-url:http://scheme-adapter-zeropay:8080}")
             String baseUrl,
             @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
-        this(builderFor(baseUrl, internalSecret).build());
+        this(builderFor(builder, baseUrl, internalSecret).build());
     }
 
     /**
@@ -64,9 +65,21 @@ public class RestRegistrationStatusClient implements RegistrationStatusPort {
      * secret is configured, the {@code X-Gme-Internal} default header. Package-private so a test can
      * bind a {@code MockRestServiceServer} to the very same builder and assert the header really
      * goes on the wire instead of trusting a hand-built client.
+     *
+     * <p><b>T3-11:</b> the builder is a parameter, and in production it is the <b>injected
+     * {@code RestClient.Builder} bean</b>. It used to be the static {@code RestClient.builder()}
+     * factory called right here, which returns a fresh builder that no {@code RestClientCustomizer}
+     * has touched — so {@code HttpClientTimeoutAutoConfiguration}'s connect/read floor never reached
+     * this client and it had no read timeout at all. This probe is <b>fail-CLOSED</b>: an unbounded
+     * read did not block settlement generation with a visible 401-shaped symptom, it simply never
+     * returned, holding the generation window's scheduler thread. Deliberately no
+     * {@code .requestFactory(..)} call here — a test binds {@code MockRestServiceServer} to this very
+     * builder, and that binding works by installing a request factory, so overwriting the factory
+     * afterwards would silently detach the test from its mock and open real sockets.
      */
-    static RestClient.Builder builderFor(String baseUrl, String internalSecret) {
-        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+    static RestClient.Builder builderFor(
+            RestClient.Builder builder, String baseUrl, String internalSecret) {
+        RestClient.Builder b = builder.baseUrl(baseUrl);
         if (internalSecret != null && !internalSecret.isBlank()) {
             b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
         } else {

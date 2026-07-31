@@ -79,10 +79,11 @@ public class RestPrefundingMovementClient implements PrefundingMovementPort {
     /** Primary constructor — wired by Spring (two constructors ⇒ {@code @Autowired} required). */
     @Autowired
     public RestPrefundingMovementClient(
+            RestClient.Builder builder,
             @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl,
             @Value("${gmepay.internal-auth.secret:}") String internalSecret,
             @Value("${gmepay.settlement.corridor.settlement-zone:Asia/Seoul}") String settlementZone) {
-        this(builderFor(baseUrl, internalSecret).build(), settlementZone);
+        this(builderFor(builder, baseUrl, internalSecret).build(), settlementZone);
     }
 
     /**
@@ -90,9 +91,21 @@ public class RestPrefundingMovementClient implements PrefundingMovementPort {
      * secret is configured, the {@code X-Gme-Internal} default header. Package-private so a test can
      * bind a {@code MockRestServiceServer} to the very same builder and assert the header really goes
      * on the wire instead of trusting a hand-built client.
+     *
+     * <p><b>T3-11:</b> the builder is a parameter, and in production it is the <b>injected
+     * {@code RestClient.Builder} bean</b> that carries {@code HttpClientTimeoutAutoConfiguration}'s
+     * connect/read floor. It used to be the static {@code RestClient.builder()} factory called right
+     * here, which returns a fresh builder no customizer has touched — so this client had no read
+     * timeout. That interacted badly with the paging loop above: {@link #MAX_PAGES} bounds the number
+     * of requests, but an unbounded read means <em>one</em> of those requests can park the nightly
+     * recon's thread indefinitely, and the "partial pages are discarded" policy never runs because the
+     * page never completes. Deliberately no {@code .requestFactory(..)} call here — a test binds
+     * {@code MockRestServiceServer} to this very builder, and that binding installs a request factory
+     * of its own.
      */
-    static RestClient.Builder builderFor(String baseUrl, String internalSecret) {
-        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+    static RestClient.Builder builderFor(
+            RestClient.Builder builder, String baseUrl, String internalSecret) {
+        RestClient.Builder b = builder.baseUrl(baseUrl);
         if (internalSecret != null && !internalSecret.isBlank()) {
             b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
         } else {

@@ -25,11 +25,18 @@ spring:
   # that delays the 1-second outbox drain for its whole duration, so the settlement.completed events
   # for the day queue behind the very file generation that produced them.
   #
-  # Sized to 4 rather than 7: the three generation windows are hours apart and cannot contend, so the
-  # real concurrency demand is the always-on outbox drain plus at most one cron plus the lag
-  # heartbeat, with one spare. These are latency-insensitive background jobs; the cost of a thread is
-  # a rounding error against the heap, and the point is correctness (no job starved by a sibling),
-  # not throughput.
+  # Sized to 8 = 7 jobs + 1. It was 4, justified by the argument that "the three generation windows are
+  # hours apart and cannot contend, so the real demand is the outbox drain plus at most one cron plus
+  # the heartbeat". That argument is an unmeasured assumption about RUNTIME DURATION, and it is the same
+  # argument that had already drifted into a real defect in payment-executor (7 jobs against a pool of
+  # 6). Here it is weaker still: all three of those windows GENERATE AND TRANSMIT A SETTLEMENT FILE, so
+  # how long each one runs depends on a business day's row count and a remote endpoint. Nothing in the
+  # service measures it, and nothing would report a window that silently did not run.
+  #
+  # Counting is auditable; arguing is not. A thread is ~1MB of stack against a 320MB heap; being wrong
+  # costs a settlement window that did not run. Enforced by SchedulerPoolSizeWiringGuardTest (pool >
+  # job count, strictly — the SchedulerLagProbe heartbeat shares this pool, and a probe that cannot get
+  # a thread reports NO lag), so an eighth job added here fails the build.
   #
   # The starvation was also SILENT: no scheduler-lag metric existed. lib-errors now registers one
   # automatically (gmepay.scheduler.lag / .lag.max / .pool.size / .active / .queued) on every service
@@ -37,7 +44,7 @@ spring:
   task:
     scheduling:
       pool:
-        size: 4
+        size: 8
 
 server:
   port: 8085

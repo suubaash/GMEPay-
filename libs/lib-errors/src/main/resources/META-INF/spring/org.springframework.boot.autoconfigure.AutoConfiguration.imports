@@ -7,3 +7,4 @@ com.gme.pay.correlation.CorrelationIdReactiveAutoConfiguration
 com.gme.pay.metrics.OutboxLagAutoConfiguration
 com.gme.pay.metrics.SchedulerLagAutoConfiguration
 com.gme.pay.http.HttpClientTimeoutAutoConfiguration
+com.gme.pay.http.WebClientTimeoutAutoConfiguration

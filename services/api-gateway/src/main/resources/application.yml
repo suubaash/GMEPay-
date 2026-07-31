@@ -79,6 +79,37 @@ api:
 # from it. The gateway therefore treats blank as "credential store unreachable" and answers partner
 # requests 503 rather than skipping the check (AuthIdentityCredentialStatusClient).
 gmepay:
+  # ---- outbound HTTP budgets, REACTIVE stack (gap T3-11 defect 1) ------------
+  # This service is the one place in the fleet that talks upstream over WebClient rather than
+  # RestClient, and that single fact is why its three outbound hops were the last unbounded ones:
+  # HttpClientTimeoutAutoConfiguration installs a RestClientCustomizer, Boot applies that type to the
+  # RestClient.Builder bean and to nothing else, and no part of it has ever had anything to do with
+  # WebClient. So the "fleet-wide floor" documented in T3-11's first pass reached every service EXCEPT
+  # the component every external request passes through. Worse, the guard written to catch that class of
+  # defect scanned for `RestClient.builder()` and could not see a WebClient at all.
+  #
+  # lib-errors' WebClientTimeoutAutoConfiguration is the reactive twin and reads the SAME two keys, so
+  # there is one set of numbers for the fleet rather than two that drift apart. It applies to the
+  # injected WebClient.Builder bean, which all three hops now take:
+  #   WebClientRbacClaimResolver          POST auth-identity /v1/rbac/resolve   (per request, cached 60s)
+  #   AuthIdentityCredentialStatusClient  GET  auth-identity credential status  (per partner request)
+  #   RestConfigRegistryClient            GET  config-registry ip-allowlist     (inside a GlobalFilter)
+  #
+  # 2s, not the 10s fleet floor. Every one of these runs on the Netty EVENT LOOP inside the request
+  # path of an authenticated partner call, against an IN-CLUSTER peer, and each has a declared
+  # degradation (pass-through unstamped / 503 / the fail-open flag). None of those degradations can run
+  # until the call actually gives up, so the budget IS the control.
+  #
+  # 2s is also deliberately TIGHTER than AuthIdentityCredentialStatusClient's own 3s reactive
+  # .timeout(..), so the transport gives up first and releases the socket, rather than the operator
+  # cancelling a subscription while the connection stays open. A per-call operator is a budget nested
+  # inside a transport floor, never a substitute for one: it bounds the subscriber's wait, it is easy to
+  # forget (WebClientRbacClaimResolver has none), and it is invisible in configuration.
+  # Pinned by ReactiveOutboundTimeoutTest.
+  http:
+    client:
+      connect-timeout: 2s
+      read-timeout: 2s
   internal-auth:
     secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
   auth-identity:

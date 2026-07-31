@@ -6,6 +6,7 @@ import com.gme.pay.contracts.PartnerView;
 import com.gme.pay.domain.routing.PartnerSchemeResolver;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.http.HttpClientTimeouts;
 import java.util.LinkedHashSet;
 import java.util.List;
 import org.slf4j.Logger;
@@ -54,8 +55,30 @@ public class RestPartnerSchemeResolver implements PartnerSchemeResolver {
     // or the container picks neither (the RestConfigRegistryClient incident).
     @Autowired
     public RestPartnerSchemeResolver(
-            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            RestClient.Builder builder,
+            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl,
+            @Value("${gmepay.config-registry.connect-timeout-millis:500}") long connectTimeoutMillis,
+            @Value("${gmepay.config-registry.read-timeout-millis:500}") long readTimeoutMillis) {
+        // T3-11 defect 1: this used to be `RestClient.builder()` — the STATIC factory — and the
+        // difference is the whole bug. HttpClientTimeoutAutoConfiguration bounds the fleet's outbound
+        // HTTP with a RestClientCustomizer, and Boot applies customizers only to the
+        // RestClient.Builder BEAN. A client built from the static factory gets a fresh, uncustomized
+        // builder with NO connect timeout and NO read timeout, while
+        // gmepay.http.client.read-timeout still resolves and still shows in /actuator/env — bounded
+        // from every angle except the one that decides.
+        //
+        // This client is ON THE PAYMENT ROUTING PATH: resolveForPartner/resolveForCountry run while a
+        // payment is being routed, so an unresponsive config-registry held the routing thread until
+        // the OS closed the socket. That is the mechanism that turns load into UNCERTAIN rows.
+        //
+        // The explicit factory declares a budget tighter than the 10s fleet floor, mirroring
+        // payment-executor's twin (gmepay.scheme-hours.*=500ms): these are in-cluster reference-data
+        // reads with a documented failure mapping, and resolution happens BEFORE any irreversible
+        // submit — see the class javadoc's failure mapping and ResolvePathTimeoutTest.
+        this(builder.baseUrl(baseUrl)
+                .requestFactory(HttpClientTimeouts.requestFactory(
+                        connectTimeoutMillis, readTimeoutMillis))
+                .build());
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

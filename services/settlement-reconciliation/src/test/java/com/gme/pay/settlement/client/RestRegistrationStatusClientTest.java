@@ -43,7 +43,8 @@ class RestRegistrationStatusClientTest {
     @Test
     @DisplayName("presents the configured internal token and maps the projection")
     void carriesTheInternalTokenAndMapsStatus() {
-        RestClient.Builder b = RestRegistrationStatusClient.builderFor(BASE, INTERNAL_TOKEN);
+        RestClient.Builder b = RestRegistrationStatusClient.builderFor(
+                RestClient.builder(), BASE, INTERNAL_TOKEN);
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
         RestRegistrationStatusClient client = new RestRegistrationStatusClient(b.build());
 
@@ -63,7 +64,8 @@ class RestRegistrationStatusClientTest {
     @Test
     @DisplayName("a blank secret sends NO token — fail-closed, never a fabricated credential")
     void blankSecretSendsNoToken() {
-        RestClient.Builder b = RestRegistrationStatusClient.builderFor(BASE, "  ");
+        RestClient.Builder b = RestRegistrationStatusClient.builderFor(
+                RestClient.builder(), BASE, "  ");
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
         RestRegistrationStatusClient client = new RestRegistrationStatusClient(b.build());
 
@@ -80,7 +82,8 @@ class RestRegistrationStatusClientTest {
     @Test
     @DisplayName("a gated adapter's 401 fails CLOSED — settlement generation blocked, not permitted")
     void unauthorizedFailsClosed() {
-        RestClient.Builder b = RestRegistrationStatusClient.builderFor(BASE, "");
+        RestClient.Builder b = RestRegistrationStatusClient.builderFor(
+                RestClient.builder(), BASE, "");
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
         RestRegistrationStatusClient client = new RestRegistrationStatusClient(b.build());
 
@@ -95,7 +98,8 @@ class RestRegistrationStatusClientTest {
     @Test
     @DisplayName("adapter 5xx fails CLOSED as well")
     void serverErrorFailsClosed() {
-        RestClient.Builder b = RestRegistrationStatusClient.builderFor(BASE, INTERNAL_TOKEN);
+        RestClient.Builder b = RestRegistrationStatusClient.builderFor(
+                RestClient.builder(), BASE, INTERNAL_TOKEN);
         MockRestServiceServer server = MockRestServiceServer.bindTo(b).build();
         RestRegistrationStatusClient client = new RestRegistrationStatusClient(b.build());
 

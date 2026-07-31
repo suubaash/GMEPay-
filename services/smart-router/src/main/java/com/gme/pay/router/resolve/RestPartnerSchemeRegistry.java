@@ -5,6 +5,7 @@ import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.contracts.PartnerView;
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.http.HttpClientTimeouts;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -59,8 +60,22 @@ public class RestPartnerSchemeRegistry implements PartnerSchemeRegistry {
     // or the container picks neither (mirrors RestPartnerSchemeResolver).
     @Autowired
     public RestPartnerSchemeRegistry(
-            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            RestClient.Builder builder,
+            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl,
+            @Value("${gmepay.config-registry.connect-timeout-millis:500}") long connectTimeoutMillis,
+            @Value("${gmepay.config-registry.read-timeout-millis:500}") long readTimeoutMillis) {
+        // T3-11 defect 1 — see RestPartnerSchemeResolver's constructor for the full reasoning. This is
+        // the INJECTED builder (which carries HttpClientTimeoutAutoConfiguration's floor) plus an
+        // explicit, tighter per-hop budget. The static RestClient.builder() that used to be here
+        // bypassed every customizer, so this hop had no read timeout at all.
+        //
+        // This one is the most load-bearing of the three: the registry IS the resolution, so an
+        // unbounded read here holds the routing thread AND the payment behind it. The failure mapping
+        // below (SCHEME_UNAVAILABLE, 503, retryable) only runs if the read actually gives up.
+        this(builder.baseUrl(baseUrl)
+                .requestFactory(HttpClientTimeouts.requestFactory(
+                        connectTimeoutMillis, readTimeoutMillis))
+                .build());
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */
