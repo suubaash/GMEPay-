@@ -60,7 +60,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports
           path: '**/build/reports/tests/**'
@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload IT reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-test-reports
           path: '**/build/reports/tests/integrationTest/**'
@@ -151,7 +151,7 @@ jobs:
 
       - name: Upload E2E reports + fleet logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-reports
           path: |
@@ -231,7 +231,7 @@ jobs:
 
       - name: Upload Next.js build trace on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-${{ matrix.app }}-logs
           path: apps/${{ matrix.app }}/.next/build-trace
@@ -302,7 +302,7 @@ jobs:
 
       - name: Upload gitleaks working-tree report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gitleaks-worktree
           path: ${{ runner.temp }}/gitleaks/worktree.sarif
@@ -372,7 +372,7 @@ jobs:
 
       - name: Upload gitleaks history report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gitleaks-history
           path: ${{ runner.temp }}/gitleaks/history.json
@@ -465,7 +465,7 @@ jobs:
 
       - name: Upload JVM dependency report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependency-scan-jvm
           path: ${{ runner.temp }}/sca/trivy-jvm.json
@@ -518,7 +518,7 @@ jobs:
 
       - name: Upload npm audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependency-scan-npm-${{ matrix.app }}
           path: |
