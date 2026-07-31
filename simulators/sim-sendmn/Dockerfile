@@ -4,7 +4,7 @@
 # Standalone Gradle build (own settings.gradle) driven via the root wrapper with -p.
 # Build context = repo root (so the wrapper + gradle dirs are visible).
 
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
 COPY . .
 # Trust the GME Internal Root CA so Gradle can fetch dependencies through the
@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
  && JAR="$(ls simulators/sim-sendmn/build/libs/ | grep -E '^sim-sendmn-[0-9].*\.jar$' | grep -v -- '-plain\.jar$' | head -n1)" \
  && cp "simulators/sim-sendmn/build/libs/${JAR}" /workspace/app.jar
 
-FROM eclipse-temurin:21-jre AS runtime
+FROM eclipse-temurin:25-jre AS runtime
 
 # ---------------------------------------------------------------------------
 # Run unprivileged — gap T5-5 (CISO audit 2026-07-28 §14 found 23 of 24 images
