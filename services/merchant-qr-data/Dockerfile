@@ -3,7 +3,7 @@
 # Multi-stage build: Gradle bootJar on JDK 21, runtime on JRE 21.
 # Build context = repo root (so the Gradle multi-module project is visible).
 
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
 COPY . .
 # Trust the GME Internal Root CA so Gradle can fetch dependencies through the
@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
  && JAR="$(ls services/merchant-qr-data/build/libs/ | grep -E '^merchant-qr-data-[0-9].*\.jar$' | grep -v -- '-plain\.jar$' | head -n1)" \
  && cp "services/merchant-qr-data/build/libs/${JAR}" /workspace/app.jar
 
-FROM eclipse-temurin:21-jre AS runtime
+FROM eclipse-temurin:25-jre AS runtime
 
 # ---------------------------------------------------------------------------
 # Run unprivileged — gap T5-5 (CISO audit 2026-07-28 §14 found 23 of 24 images
