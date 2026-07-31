@@ -36,8 +36,15 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     @Autowired
     public RestConfigRegistryClient(
+            RestClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+        // T3-11: the INJECTED builder, not the static RestClient.builder() factory. Boot applies
+        // RestClientCustomizer beans — including HttpClientTimeoutAutoConfiguration's connect/read
+        // floor — only to the builder BEAN, so the static factory yields an unbounded client that
+        // looks configured. This one is called while a prefunding balance deduction is in flight, and
+        // the class javadoc above already promises that a config-registry outage must never roll that
+        // transaction back; without a read timeout the outage does not fail, it simply never returns.
+        this(builder.baseUrl(baseUrl).build());
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

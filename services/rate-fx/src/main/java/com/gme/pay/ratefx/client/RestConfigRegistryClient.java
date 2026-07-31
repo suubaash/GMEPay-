@@ -31,8 +31,16 @@ public class RestConfigRegistryClient implements PartnerConfigPort {
 
     @Autowired
     public RestConfigRegistryClient(
+            RestClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+        // T3-11: takes the INJECTED RestClient.Builder, not the static RestClient.builder() factory.
+        // The distinction is the whole fix: com.gme.pay.http.HttpClientTimeoutAutoConfiguration bounds
+        // outbound HTTP through a RestClientCustomizer, and Boot applies customizers only to the
+        // RestClient.Builder BEAN. A client built from the static factory gets a fresh, uncustomized
+        // builder and is therefore unbounded — it reads as configured while having no read timeout at
+        // all. This call is on the quote path, so an unresponsive config-registry would hold a Tomcat
+        // worker until the OS closed the socket.
+        this.restClient = builder.baseUrl(baseUrl).build();
     }
 
     /** Test constructor — pre-built RestClient (e.g. backed by MockRestServiceServer). */

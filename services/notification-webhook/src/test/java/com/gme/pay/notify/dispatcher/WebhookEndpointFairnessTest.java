@@ -312,15 +312,18 @@ class WebhookEndpointFairnessTest {
     // ---------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("the shipped drain interval really is 5 s, and fairness really is on")
+    @DisplayName("the shipped drain interval really is 1 s, and fairness really is on")
     void shippedConfigurationMatchesTheDesign() throws IOException {
         Properties shipped = PropertiesLoaderUtils.loadProperties(
                 new ClassPathResource("application.properties"));
 
         // T3-11 shortened the @Scheduled default to 5000 but this file still shipped 30000, which
         // overrode it — so the cycle change was not in effect in any deployment. Pinned here.
+        // Then 5000 -> 1000: with fixedDelay the interval is dead time after the drain returns, and at
+        // any realistic partner latency it was the dominant term in the cycle rather than a minor one.
+        // The capacity arithmetic that depends on it is asserted in WebhookDrainThroughputTest.
         assertThat(defaulted(shipped.getProperty("gmepay.webhook.dispatcher.interval-ms")))
-                .isEqualTo("5000");
+                .isEqualTo("1000");
         assertThat(defaulted(shipped.getProperty("gmepay.webhook.dispatcher.fair-selection")))
                 .isEqualTo("true");
         assertThat(defaulted(shipped.getProperty("gmepay.webhook.dispatcher.breaker.enabled")))

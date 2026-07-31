@@ -37,6 +37,14 @@ Section 6 covers T3-4: the batch-ops calendar must be wired into both batch serv
 EMPTY (populating it is an operator/business input), and the two duplicated ``BusinessCalendar``
 copies must agree.
 
+Section 8 guards ``docker-compose.yml`` instead of the chart: **no two services may publish the
+same host port.** Compose is the fleet manifest this repo actually starts from, and a duplicate is
+not a warning -- the second bind fails, so ``docker compose up`` cannot bring the profile up at all.
+``scheme-adapter-nepal`` and ``settlement-reconciliation`` both published ``8092`` for months
+(fixed in 31c4397 by moving settlement-reconciliation to ``8100``); nothing in the repo would have
+said so. Uniqueness is asserted GLOBALLY, not per profile: services here overlap across profiles,
+and a port shared by two blocks is a latent break the moment both are selected.
+
 Run (no servers, no Docker, no Helm):
     python scripts/check_helm_chart_wiring.py
 
@@ -121,6 +129,61 @@ def placeholders(text: str) -> dict[str, str | None]:
     return out
 
 
+PROTO = re.compile(r"/(?:tcp|udp|sctp)$", re.I)
+IPV6_BIND = re.compile(r"^\[[0-9A-Fa-f:.]*\]:")
+
+
+def _expand_host_spec(spec: str) -> tuple[list[int], str | None]:
+    """'8092' -> [8092]; '8000-8002' -> [8000, 8001, 8002]. -> (ports, error)."""
+    spec = spec.strip()
+    if not spec:
+        return [], None
+    if spec.isdigit():
+        return [int(spec)], None
+    m = re.fullmatch(r"(\d+)-(\d+)", spec)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo > hi:
+            return [], f"inverted host port range '{spec}'"
+        return list(range(lo, hi + 1)), None
+    return [], f"unparseable host port '{spec}'"
+
+
+def host_ports(entry: object) -> tuple[list[int], str | None]:
+    """Host ports a single compose ``ports:`` entry CLAIMS -> (ports, error).
+
+    Handles short syntax ('8092:8080', '127.0.0.1:8092:8080', '[::1]:8092:8080', ranges,
+    a trailing '/tcp') and long syntax ({published:, target:}).
+
+    A container-only entry ('8080') claims NO fixed host port -- Docker picks an ephemeral one --
+    so it correctly returns []. An entry this function cannot READ returns an error instead of an
+    empty list: silently skipping an unrecognised form is exactly how a duplicate would slip back
+    in past this guard.
+    """
+    if isinstance(entry, dict):                                   # long syntax
+        pub = entry.get("published")
+        if pub is None:
+            return [], None                                       # target-only -> ephemeral
+        return _expand_host_spec(str(pub))
+    if isinstance(entry, bool):
+        return [], f"unrecognised ports entry {entry!r}"
+    if isinstance(entry, int):
+        return [], None                                           # bare container port
+    if not isinstance(entry, str):
+        return [], f"unrecognised ports entry type {type(entry).__name__}"
+
+    text = PROTO.sub("", entry.strip())
+    text = IPV6_BIND.sub("BIND:", text)                           # keep the field count, drop ':'s
+    parts = text.split(":")
+    if len(parts) == 1:
+        return [], None                                           # '8080' -> container only
+    if len(parts) == 2:
+        return _expand_host_spec(parts[0])                        # host:container
+    if len(parts) == 3:
+        return _expand_host_spec(parts[1])                        # bindIP:host:container
+    return [], f"unrecognised ports entry '{entry}'"
+
+
 # ---------------------------------------------------------------------------
 # 0. Load the chart
 # ---------------------------------------------------------------------------
@@ -133,7 +196,7 @@ deployment_tpl = read(os.path.join(HELM, "templates", "_deployment.tpl"))
 
 print("=" * 78)
 print("Helm chart wiring guard - T3-10 (chart omissions), T3-9 (external datastores),")
-print("                          T3-4 (batch-ops calendar)")
+print("                          T3-4 (batch-ops calendar), compose host-port uniqueness")
 print("=" * 78)
 
 # ---------------------------------------------------------------------------

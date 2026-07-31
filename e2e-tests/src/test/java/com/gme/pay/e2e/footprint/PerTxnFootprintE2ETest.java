@@ -257,6 +257,73 @@ class PerTxnFootprintE2ETest {
         assertTrue(report.logBytesPerTxn() > 0,
                 "no log bytes were emitted during the measured window, which cannot be true for a "
                         + "real payment cascade — the log capture is broken");
+
+        // --- assertions: the measured rows are a HEALTHY payment's rows, not an error path's ---
+        assertRoundingResidualJournalLanded(tables);
+        assertNoFailureSinkGrowth(tables);
+    }
+
+    /**
+     * Asserts every measured payment left its rounding-residual journal in revenue-ledger.
+     *
+     * <h2>Why the footprint run asserts a functional outcome (gap T3-12)</h2>
+     *
+     * <p>This harness is what found the 406: revenue-ledger's {@code POST /v1/journals/*} could not
+     * serialize its response, Spring answered {@code 406 Not Acceptable} on every call, and
+     * payment-executor swallows residual-posting failures by design (T2-1) — so the ₩500 journal
+     * never posted, the payment still returned 200, and the only visible trace was one
+     * {@code revenue_posting_failures} row per payment sitting in the footprint table.
+     *
+     * <p>That is precisely a defect a <i>measurement</i> run can see and a measurement run will
+     * happily report. Growth in a failure sink was noted in the rendered report (see
+     * {@link #addCaveats}) and nothing failed, so the harness that observed the money path breaking
+     * exited 0. A report note is the right output for "could not measure X"; it is the wrong output
+     * for "the money path did not work". Both facts are now assertions.
+     *
+     * <p>{@code rounding_residual_keys} is the right table to count. Revenue-ledger inserts exactly
+     * one key row inside the same transaction as each {@code REVENUE_ROUNDING} journal
+     * ({@code JpaJournalStore#save}, Flyway V006), so its growth is the residual journal count —
+     * and because the insert is the idempotency guard, {@code == PAYMENTS} pins BOTH directions:
+     * no payment lost its residual, and no payment double-booked one.
+     *
+     * @param tables the measured window's per-table growth (zero-growth tables are absent)
+     */
+    private static void assertRoundingResidualJournalLanded(List<TableFootprint> tables) {
+        long residualJournals = tables.stream()
+                .filter(t -> "revenue-ledger".equals(t.database())
+                        && "rounding_residual_keys".equals(t.table()))
+                .mapToLong(TableFootprint::rowsAdded)
+                .sum();
+        assertEquals(PAYMENTS, residualJournals,
+                "expected exactly one rounding-residual journal per payment in revenue-ledger "
+                        + "(rounding_residual_keys), got " + residualJournals + " for " + PAYMENTS
+                        + " successful payments. 0 means every residual post failed and the ₩500 "
+                        + "was never journalled — payment-executor swallows that failure (T2-1), so "
+                        + "the payments still returned 200. Check "
+                        + "revenue_posting_failures in payment-executor's DB and grep "
+                        + fleet.logDir() + "/payment-executor.log for 'residual post failed'.");
+    }
+
+    /**
+     * Fails the run when a durable FAILURE sink grew during the measured window.
+     *
+     * <p>A row in one of {@link #FAILURE_SINK_TABLES} means something on the money path failed and
+     * was persisted for replay. On a happy-path run that is a defect, and it also corrupts the
+     * measurement it appears in: the reported bytes/WAL per transaction then include error-path
+     * rows a healthy deployment never writes, which is not a number to size hardware on.
+     */
+    private static void assertNoFailureSinkGrowth(List<TableFootprint> tables) {
+        for (TableFootprint table : tables) {
+            if (FAILURE_SINK_TABLES.contains(table.table()) && table.rowsAdded() > 0) {
+                fail("durable FAILURE sink `" + table.database() + "." + table.table()
+                        + "` grew by " + table.rowsAdded() + " rows ("
+                        + String.format("%.2f", table.rowsAdded() / (double) PAYMENTS)
+                        + " per payment) during a happy-path run: something on the money path "
+                        + "failed and was persisted for replay instead of succeeding. The "
+                        + "footprint numbers from this run include error-path rows. Cause is in "
+                        + "the fleet logs: " + fleet.logDir());
+            }
+        }
     }
 
     /**
