@@ -45,13 +45,21 @@ import java.util.UUID;
  * The startup WARN now names the N&gt;1 consequence so the fallback cannot be mistaken for a
  * replica-safe one.
  *
- * <p><b>A related defect that IS in the production path, recorded rather than fixed here:</b>
- * {@link MinioVaultClient} derives its version the same way (count the objects under the prefix,
- * add one), which is a read-modify-write against the bucket with no compare-and-set. Two concurrent
- * uploads of the same {@code (partnerCode, docType)} — from one pod or several — can both read the
- * same count and both write {@code vN}. That is a genuine multi-writer defect in the real client and
- * needs a monotonic source (the {@code partner_document} row's own sequence, or a conditional put),
- * not a comment.
+ * <h2>The production client no longer shares this defect — this one still has it</h2>
+ *
+ * <p>{@link MinioVaultClient} used to derive its version the same way (count the objects under the
+ * prefix, add one), a read-modify-write with no compare-and-set. <b>That is fixed:</b> it now claims
+ * {@code v<n>} exclusively through a conditional PUT against an append-only ledger key and throws
+ * {@link VaultVersionConflictException} when it loses the race, so a colliding write fails loudly
+ * instead of quietly producing a second {@code vN}.
+ *
+ * <p>This client cannot do the same, and does not pretend to. Its counter is exact <em>within one
+ * JVM</em> — {@link #store} is {@code synchronized}, so two threads here can never collide, and
+ * {@link VaultVersionConflictException} is consequently never thrown. Across JVMs it has nothing to
+ * compare-and-set against: two pods each count their own map and each mint {@code v1}, silently.
+ * <b>The two implementations therefore differ in their concurrency contract above one replica</b>,
+ * which is safe only because this one is unreachable in every deployed environment (see the verdict
+ * above) — and is stated in the startup WARN so nobody discovers it from the data.
  */
 public class InMemoryVaultClient implements VaultClient {
 
@@ -92,8 +100,11 @@ public class InMemoryVaultClient implements VaultClient {
         }
         String sha256 = sha256Hex(bytes);
 
-        // Version = count of prior stores for this (partnerCode, docType) + 1 —
-        // same rule MinioVaultClient applies by counting keys under the prefix.
+        // Version = count of prior stores for this (partnerCode, docType) + 1.
+        // Exact under `synchronized` because this map is the whole universe of a
+        // single JVM — and wrong the moment there are two, which is the divergence
+        // from MinioVaultClient's claim-based counter documented in the class
+        // javadoc and named in the startup WARN.
         String prefix = partnerCode + "/" + docType + "/";
         int version = 1 + (int) objects.keySet().stream().filter(k -> k.startsWith(prefix)).count();
 

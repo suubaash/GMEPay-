@@ -26,6 +26,24 @@ import java.io.InputStream;
  * counter is per {@code (partnerCode, docType)} pair. The full locator comes
  * back as {@link VaultObjectRef#uri()} and is what callers persist.
  *
+ * <h2>Version numbers: strictly increasing, not necessarily contiguous</h2>
+ *
+ * <p>Versions of one {@code (partnerCode, docType)} pair are <b>claimed
+ * exclusively</b> before the bytes are written, so two concurrent uploads can
+ * never both be told they are {@code vN}. The price of that guarantee is that
+ * numbers can be <b>skipped</b>: a claim whose document write then fails, or a
+ * writer that loses a race, burns its number permanently (object-lock forbids
+ * taking it back). Callers may rely on "a higher version was stored later" and
+ * on "no two stored documents of one type share a version"; they may NOT rely
+ * on {@code v1, v2, v3, …} without gaps, and must not compute the next version
+ * themselves.
+ *
+ * <p>A concurrent claim on the same pair fails the losing call with
+ * {@link VaultVersionConflictException} (a {@link VaultException} subtype)
+ * <b>before anything is stored</b>. The vault never renumbers silently — see
+ * that class for why. A caller may retry the whole upload; it will take the
+ * next free number.
+ *
  * <h2>Implementations</h2>
  *
  * <ul>
@@ -53,6 +71,9 @@ public interface VaultClient {
      * @param content     the bytes to store. Fully consumed; NOT closed by the
      *                    vault client (caller owns it).
      * @return locator + version + SHA-256 of the stored object.
+     * @throws VaultVersionConflictException when a concurrent upload of the same
+     *                        {@code (partnerCode, docType)} claimed the same
+     *                        version. Nothing was stored; retrying is safe.
      * @throws VaultException when the backend rejects the write or is
      *                        unreachable.
      */

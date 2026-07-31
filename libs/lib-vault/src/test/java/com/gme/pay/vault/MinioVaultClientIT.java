@@ -11,7 +11,15 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -34,7 +42,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *       retention (and is idempotent);</li>
  *   <li>store → retrieve round-trips bytes + metadata + SHA-256;</li>
  *   <li>re-storing the same {@code (partnerCode, docType)} mints v2 next to an
- *       immutable v1 (no overwrite).</li>
+ *       immutable v1 (no overwrite);</li>
+ *   <li>concurrent stores of the same {@code (partnerCode, docType)} never both
+ *       claim a version — against whatever conditional-write support the pinned
+ *       MinIO image actually has, which is the one thing
+ *       {@code MinioVaultClientVersionRaceTest}'s in-process fake can only
+ *       simulate.</li>
  * </ol>
  */
 @Tag("docker")
@@ -122,6 +135,65 @@ class MinioVaultClientIT {
         try (InputStream in = vault.retrieve(v2.uri()).content()) {
             assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8))
                     .isEqualTo("license v2 — renewed");
+        }
+    }
+
+    /**
+     * The defect this pins: version used to be "count the prefix, add one", so
+     * two concurrent uploads both minted {@code vN} — different object keys (the
+     * {@code docId} is a per-call UUID, so no bytes were lost) but the SAME
+     * version label on two immutable, undeletable KYB documents.
+     *
+     * <p>Asserted against real MinIO, because whether the endpoint enforces
+     * {@code If-None-Match: *} decides which half of the fix does the work:
+     * enforced → one winner and N-1 clean {@code 412}s; ignored → the post-PUT
+     * object-version listing catches the double claim and everybody fails
+     * closed. Both are acceptable; two winners at one version is not.
+     */
+    @Test
+    void concurrentStores_neverMintTheSameVersionTwice() throws Exception {
+        int writers = 6;
+        ExecutorService pool = Executors.newFixedThreadPool(writers);
+        List<VaultObjectRef> won = Collections.synchronizedList(new ArrayList<>());
+        List<Throwable> lost = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch go = new CountDownLatch(1);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < writers; i++) {
+                String body = "CONCURRENT-UPLOAD-" + i;
+                futures.add(pool.submit(() -> {
+                    try {
+                        go.await(10, TimeUnit.SECONDS);
+                        won.add(vault.store("RACECO", "CBDDQ", "cbddq.pdf", "application/pdf",
+                                stream(body)));
+                    } catch (Exception e) {
+                        lost.add(e);
+                    }
+                }));
+            }
+            go.countDown();
+            for (Future<?> future : futures) {
+                future.get(60, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(won).as("at least one writer must get through").isNotEmpty();
+        assertThat(won).extracting(VaultObjectRef::version)
+                .as("two documents may never share a version")
+                .doesNotHaveDuplicates();
+        assertThat(lost).allSatisfy(e -> assertThat(e)
+                .as("a loser must be told, in the port's own vocabulary")
+                .isInstanceOf(VaultVersionConflictException.class));
+        assertThat(won.size() + lost.size()).isEqualTo(writers);
+
+        // Every winner's bytes are intact — nothing was overwritten.
+        for (VaultObjectRef ref : won) {
+            try (InputStream in = vault.retrieve(ref.uri()).content()) {
+                assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8))
+                        .startsWith("CONCURRENT-UPLOAD-");
+            }
         }
     }
 

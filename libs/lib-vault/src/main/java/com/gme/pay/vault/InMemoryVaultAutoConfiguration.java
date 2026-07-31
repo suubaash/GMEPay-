@@ -43,13 +43,22 @@ public class InMemoryVaultAutoConfiguration {
         // numbers are what a reviewer uses to tell the superseded KYB document from the current
         // one. Restart loss is recoverable by re-uploading; two different v1s is not obviously
         // wrong to anyone looking at it.
+        //
+        // Since MinioVaultClient learned to CLAIM its version (conditional PUT against an
+        // append-only ledger, VaultVersionConflictException on a lost race), the two clients no
+        // longer share a concurrency contract: the production one fails a colliding write loudly,
+        // this one cannot detect the collision at all across JVMs. The WARN says so, because a
+        // reader who knows the port "fails closed on version conflicts" would otherwise assume it
+        // of whichever implementation is wired.
         log.warn("DOCUMENT VAULT IS IN-MEMORY: gmepay.vault.endpoint is not set, so every"
                 + " uploaded document is held on the heap and LOST ON RESTART (the metadata rows"
                 + " that reference it are not), and — above ONE REPLICA — a document stored on one"
                 + " pod is a 404 from every other, while the (partnerCode, docType) version counter"
                 + " is computed per-JVM so two pods MINT THE SAME VERSION NUMBER for different"
-                + " documents. Acceptable for unit slices and throwaway single-process dev"
-                + " only. Set GMEPAY_VAULT_ENDPOINT (+ GMEPAY_VAULT_ACCESS_KEY /"
+                + " documents SILENTLY: unlike the MinIO-backed client, this fallback has nothing"
+                + " to compare-and-set against and can NEVER raise the port's"
+                + " VaultVersionConflictException. Acceptable for unit slices and throwaway"
+                + " single-process dev only. Set GMEPAY_VAULT_ENDPOINT (+ GMEPAY_VAULT_ACCESS_KEY /"
                 + " GMEPAY_VAULT_SECRET_KEY) to use the S3/MinIO-backed vault. Bucket would be"
                 + " '{}'.", properties.getBucket());
         return new InMemoryVaultClient(properties.getBucket());
