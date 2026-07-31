@@ -15,6 +15,7 @@ import com.gme.pay.kybadapter.persistence.KybScreeningRepository;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import com.gme.pay.kybadapter.testsupport.TestInternalAuth;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,7 +29,7 @@ import org.springframework.context.annotation.Primary;
  * standing in for the Kafka fan-out. Covers PASS / FAIL / MANUAL_REVIEW
  * decisioning, document completeness, idempotent replay and forced re-run.
  */
-@SpringBootTest
+@SpringBootTest(properties = TestInternalAuth.SECRET_PROPERTY)
 class KybVerificationServiceTest {
 
     @Autowired
@@ -65,24 +66,61 @@ class KybVerificationServiceTest {
     }
 
     @Test
-    @DisplayName("clear subject + verified registration + full docs → PASS, persisted, event published")
-    void pass() {
+    @DisplayName("T1-4: an unscreened run can NEVER be PASS — verified registration + full docs still MANUAL_REVIEW")
+    void unscreenedRun_cannotPass() {
         KybVerificationResult r = service.verify(fullPack(subject("P_OK", "GME Co", "123-45")));
 
-        assertThat(r.decision()).isEqualTo(KybDecision.PASS);
-        assertThat(r.screeningStatus()).isEqualTo(ScreeningResult.Status.CLEAR);
+        // Everything else about this run is as good as it gets: registration
+        // VERIFIED, all three documents supplied, no trigger word in any name. It
+        // used to be PASS. It cannot be, because nothing was screened.
+        assertThat(r.decision()).isEqualTo(KybDecision.MANUAL_REVIEW);
+        assertThat(r.decisionReason()).contains("no authoritative sanctions screening was performed");
+        assertThat(r.screeningStatus()).isEqualTo(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER);
+        assertThat(r.screeningProviderId()).isEqualTo("stub");
+        assertThat(r.screeningAuthoritative()).isFalse();
+        assertThat(r.screeningPerformed()).isFalse();
+        assertThat(r.screeningCaveat()).contains("NOT A SANCTIONS SCREENING");
         assertThat(r.bizRegStatus()).isEqualTo(BizRegStatus.VERIFIED);
         assertThat(r.missingDocumentList()).isEmpty();
         assertThat(r.idempotentReplay()).isFalse();
 
-        assertThat(repository.findByProviderRef(r.providerRef())).isPresent();
+        // The persisted row carries the same provenance, so a later reader of the
+        // run log (GET /v1/kyb/result/{ref}) sees it too.
+        assertThat(repository.findByProviderRef(r.providerRef())).isPresent().get()
+                .satisfies(row -> {
+                    assertThat(row.getScreeningStatus())
+                            .isEqualTo(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER);
+                    assertThat(row.getScreeningProviderId()).isEqualTo("stub");
+                    assertThat(row.isScreeningAuthoritative()).isFalse();
+                    assertThat(row.getScreeningCaveat()).contains("NOT A SANCTIONS SCREENING");
+                    assertThat(row.getDecision()).isEqualTo(KybDecision.MANUAL_REVIEW);
+                });
+
         List<DomainEvent> published = events.published();
         assertThat(published).hasSize(1);
         assertThat(published.get(0)).isInstanceOfSatisfying(KybVerificationEvent.class, e -> {
             assertThat(e.eventType()).isEqualTo("kyb.verification");
             assertThat(e.aggregateId()).isEqualTo("P_OK");
-            assertThat(e.decision()).isEqualTo(KybDecision.PASS);
+            assertThat(e.decision()).isEqualTo(KybDecision.MANUAL_REVIEW);
+            assertThat(e.screeningAuthoritative()).isFalse();
+            assertThat(e.screeningCaveat()).contains("NOT A SANCTIONS SCREENING");
         });
+    }
+
+    @Test
+    @DisplayName("no stub input produces PASS — the decision is unreachable without a real provider")
+    void noStubInputCanReachPass() {
+        List<KybVerificationRequest> everyShape = List.of(
+                fullPack(subject("P_A", "GME Co", "123-45")),
+                fullPack(subject("P_B", "Totally Fine Trading", "999-88")),
+                fullPack(subject("P_C", "클린법인", "555-11")),
+                new KybVerificationRequest(subject("P_D", "Clean Co", "123"),
+                        List.of("BUSINESS_REGISTRATION", "AOA", "UBO_DECLARATION"), true));
+        for (KybVerificationRequest req : everyShape) {
+            assertThat(service.verify(req).decision())
+                    .as("no stub-screened subject may reach PASS")
+                    .isNotEqualTo(KybDecision.PASS);
+        }
     }
 
     @Test
@@ -177,8 +215,11 @@ class KybVerificationServiceTest {
         assertThat(service.findByProviderRef(r.providerRef()))
                 .hasValueSatisfying(found -> {
                     assertThat(found.partnerCode()).isEqualTo("P_GET");
-                    assertThat(found.decision()).isEqualTo(KybDecision.PASS);
+                    assertThat(found.decision()).isEqualTo(KybDecision.MANUAL_REVIEW);
                     assertThat(found.idempotentReplay()).isTrue();
+                    // Provenance survives the round trip through the row (V002).
+                    assertThat(found.screeningAuthoritative()).isFalse();
+                    assertThat(found.screeningProviderId()).isEqualTo("stub");
                 });
         assertThat(service.findByProviderRef("stub-nope")).isEmpty();
     }

@@ -51,6 +51,11 @@ import java.util.Objects;
  *   204 No Content when residual == 0 (nothing posted)
  *   400 Bad Request when reference or currency is missing
  * </pre>
+ *
+ * <p><b>Response body type (GAP T3-12).</b> Both POSTs here serialize the posted journal as
+ * {@link JournalResponse}, NOT the domain {@link Journal}. Returning the domain object made every
+ * successful post fail content negotiation with HTTP 406 — see {@link JournalResponse} for the
+ * full root cause. The JSON shape is unchanged.
  */
 @RestController
 @RequestMapping("/v1/journals")
@@ -66,8 +71,8 @@ public class RoundingResidualController {
      * Post a rounding residual to the {@code REVENUE_ROUNDING} account.
      *
      * @param body the residual request — see {@link RoundingResidualRequest}
-     * @return 200 OK with the journal when posted; 204 No Content when residual is zero;
-     *         400 Bad Request when reference/currency/residual are missing
+     * @return 200 OK with the journal ({@link JournalResponse}) when posted; 204 No Content when
+     *         residual is zero; 400 Bad Request when reference/currency/residual are missing
      */
     @PostMapping("/rounding-residual")
     public ResponseEntity<?> post(@RequestBody RoundingResidualRequest body) {
@@ -99,7 +104,7 @@ public class RoundingResidualController {
             // Zero residual — nothing to post per MONEY_CONVENTION.md.
             return ResponseEntity.noContent().build();
         }
-        return ResponseEntity.ok(journal);
+        return ResponseEntity.ok(JournalResponse.from(journal));
     }
 
     /**
@@ -141,6 +146,6 @@ public class RoundingResidualController {
         if (journal == null) {
             return ResponseEntity.noContent().build();
         }
-        return ResponseEntity.ok(journal);
+        return ResponseEntity.ok(JournalResponse.from(journal));
     }
 }

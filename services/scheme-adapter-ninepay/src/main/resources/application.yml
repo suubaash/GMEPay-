@@ -1,0 +1,137 @@
+spring:
+  application:
+    name: scheme-adapter-ninepay
+
+  # Persistence (np_payouts idempotency registry + np_ipn_events audit).
+  # Defaults to in-memory H2 in PostgreSQL-compat mode so unit/slice tests run without
+  # Docker; production overrides via SPRING_DATASOURCE_* environment variables
+  # (same convention as scheme-adapter-zeropay).
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:npadapterdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  # Flyway owns the schema — Hibernate must not auto-DDL. No dialect pinned: Hibernate
+  # auto-detects H2 vs PostgreSQL so one config serves both engines.
+  jpa:
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: true
+
+server:
+  port: 8096
+
+# Actuator (feat/actuator-health): health + liveness/readiness probes + metrics on the app
+# port. Only health/info/metrics exposed; env/beans/heapdump/shutdown stay off;
+# show-details=never.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+# 9Pay (Vietnam) disbursement scheme — targets the planned sim-ninepay :9107 by default.
+# Real endpoints: test https://stg-api-console.9pay.mobi, prod https://api-console.9pay.vn.
+# Override in production with GMEPAY_SCHEME_NINEPAY_* environment variables. NOTE: 9Pay
+# requires mutual IP whitelisting — OUR egress IPs registered with 9Pay (their side, an
+# onboarding action) and only 9Pay's IPs allowed to hit /scheme/ipn (our side). The inbound
+# half is now enforced HERE TOO: see ipn.allowed-source-ranges below (gap T5-7). It used to
+# say "enforced at the network layer, not here" and was enforced NOWHERE — no ingress
+# allowlist, no NetworkPolicy, no filter.
+gmepay:
+  scheme:
+    ninepay:
+      enabled: true
+      base-url: http://localhost:9107
+      # partner_id issued by 9Pay at onboarding.
+      partner-id: GMEPAY
+      # RSA digest algorithm we told 9Pay we sign with: SHA1/SHA224/SHA256/SHA384/SHA512.
+      sign-algorithm: SHA256
+      # OUR RSA-2048 private key, PEM PKCS#8 ("BEGIN PRIVATE KEY"). Placeholder — inject
+      # the real key via env/secret in production; sign() fails loudly while blank.
+      private-key-pem: ${GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM:}
+      # 9PAY's RSA public key, PEM X.509 ("BEGIN PUBLIC KEY") — verifies responses + IPN.
+      ninepay-public-key-pem: ${GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM:}
+      # Verify 9Pay's RSA signature on API responses. ON by default (gap T5-4): responses
+      # drive payout state, so accepting them unverified let anything that could answer as
+      # 9Pay move money-state. FAIL CLOSED — when ninepay-public-key-pem is blank or
+      # unparseable, responses are treated as UNVERIFIABLE (ambiguous ->
+      # NinepayTransportException -> the payout resolves by polling / stays UNKNOWN);
+      # trust is NEVER the fallback. IPN verification is always attempted regardless.
+      verify-responses: ${GMEPAY_SCHEME_NINEPAY_VERIFY_RESPONSES:true}
+      ipn:
+        # IPN replay protection (T5-4). Duplicate (request_id, trans_id, code) triples are
+        # ignored idempotently; see NinepayIpnReplayGuard. An IPN whose signed created_at is
+        # older than this many minutes is audited but NOT applied. 0 disables the age check
+        # (dedupe + monotonic-status rules still apply). Default 7 days: bank reversals
+        # (code 009) legitimately arrive days late, so this must not be tight.
+        max-age-minutes: ${GMEPAY_SCHEME_NINEPAY_IPN_MAX_AGE_MINUTES:10080}
+        # ---- Source-IP allowlist for POST /scheme/ipn (gap T5-7) -------------------
+        # THE ONLY compensating control for T5-6: 9Pay leaves `code` OUTSIDE the signed
+        # string and a reversal (009) reuses the original transfer's created_at, so a
+        # captured 000 with code rewritten to 009 still verifies and NinepayIpnReplayGuard
+        # cannot tell it from a real reversal. Proving the packet came from 9Pay's network
+        # is what closes that, so this is a security control, not hardening.
+        #
+        # Comma-separated CIDR blocks or bare addresses (IPv4 or IPv6). TWO STATES, both
+        # explicit and both logged at startup — there is no silent middle:
+        #   EMPTY (default)  -> NOT enforcing. Every source is admitted so a local stack and
+        #                       sim-ninepay keep working, and a WARN naming T5-7/T5-6 is
+        #                       emitted on EVERY boot plus once on the first IPN admitted.
+        #   NON-EMPTY        -> FAIL CLOSED. Anything outside the ranges gets 403 before the
+        #                       body is parsed; an undeterminable client address is rejected.
+        # A MALFORMED range is neither: the context refuses to start.
+        #
+        # THE RANGES ARE NOT SHIPPED HERE. They are partner-supplied data and this repo does
+        # not invent them: get 9Pay's current IPN egress ranges IN WRITING from 9Pay and put
+        # them in the deployment's env / Helm values. (Documentation/schemes/
+        # digest_9pay-payout-api_2026-07-27.md records what 9Pay's API doc listed at the time
+        # — a reference to confirm, never a default to trust.) Prefer enforcing at the
+        # ingress as well: deploy/helm/gmepay/templates/ingress-ipn.yaml.
+        allowed-source-ranges: ${GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES:}
+        # Hops between 9Pay and this process that append X-Forwarded-For. 0 (default) =
+        # use the socket peer address and IGNORE the header, which is the only safe choice
+        # when nothing trusted rewrites it. Set to 1 behind a single ingress controller.
+        trusted-proxy-count: ${GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT:0}
+
+  # T3-11: outbound HTTP budget (9Pay leg).
+  # Until T3-11 this adapter's outbound leg had NO read timeout: it took Boot's shared
+  # RestClient.Builder, which carries none, so a 9Pay endpoint that accepted the connection and
+  # then stopped answering held this adapter's request thread until the OS closed the socket
+  # (RUNBOOK_LOAD_AND_CAPACITY.md section 4.1 #7).
+  #
+  # lib-errors (com.gme.pay.http.HttpClientTimeoutAutoConfiguration) now puts a 2s/10s floor on every
+  # service in the fleet. This adapter tightens the READ half to 4s, and the number is chosen for its
+  # NESTING, not for speed:
+  #
+  #     scheme adapter -> 9Pay     4s   (this value)
+  #     payment-executor -> adapter    5s   (gmepay.scheme.read-timeout-millis in payment-executor)
+  #
+  # Strictly inside its caller's budget. If this leg were the looser of the two, payment-executor
+  # would abandon the hub->adapter call first and infer "unknown" from its own socket timeout --
+  # which is exactly how load turns into UNCERTAIN payments an operator resolves by hand. At 4s the
+  # adapter gives up first and answers with a definite SCHEME_UNAVAILABLE that carries a reason.
+  #
+  # What a timeout must NOT do here: resolve the ambiguity. A submit that times out may still have
+  # moved money. ResourceAccessException is already mapped to the technical/ambiguous outcome in this
+  # adapter's client, which payment-executor routes to the ADR-016 section 4 idempotent status probe.
+  # Nothing re-submits.
+  #
+  # Engineering parameter, not an SLO -- no partner is promised either number. If 9Pay's real API
+  # SLA turns out to exceed 4s, BOTH this and payment-executor's 5s must be raised, in that order.
+  http:
+    client:
+      connect-timeout: 2s
+      read-timeout: 4s
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

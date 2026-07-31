@@ -12,8 +12,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Decides whether a consumed alert pages a human, and dispatches it via {@link PagingPort},
@@ -29,13 +27,28 @@ import java.util.concurrent.ConcurrentHashMap;
  * configurable window ({@code gmepay.ops.paging.dedupe-window}, default 15m) so a
  * re-firing sweep can't storm the pager. A suppressed alert is recorded as
  * {@code SUPPRESSED} on the store (still visible in the alerts list). Escalation re-pages
- * bypass the dedupe check via {@link #escalate}.
+ * honour the same cooldown via {@link #escalate}.
  *
  * <h2>Single-fire across replicas</h2>
- * Paging-on-consume is naturally single-fire across replicas: the Kafka consumer group
- * delivers each record to exactly one consumer, so only one replica pages. (The dedupe map
- * is per-replica; the consumer-group guarantee — not the map — is what prevents
- * cross-replica double paging on the consume path.)
+ * The cooldown is now a shared {@link PagingCooldown} (Redis when one is configured), and it is
+ * <b>claimed atomically before</b> the page rather than checked and then set. That is what makes
+ * the BFF safe to run at N&gt;1 as a pager.
+ *
+ * <p>The previous note here — "paging-on-consume is naturally single-fire because the Kafka
+ * consumer group delivers each record to exactly one consumer" — was true of the consume path and
+ * did not cover the two cases that actually page twice:
+ * <ol>
+ *   <li><b>The escalation sweep runs on every replica</b> and re-pages from that replica's own
+ *       alert buffer, with its own per-JVM cooldown map. N replicas, N escalation pages.</li>
+ *   <li><b>A re-firing alert consumed by a different replica than last time</b> finds an empty
+ *       cooldown map and pages again, well inside the 15-minute window.</li>
+ * </ol>
+ *
+ * <p>The escalation sweep is deliberately <b>not</b> ShedLock-guarded or otherwise pinned to one
+ * replica — see {@link OpsPagingEscalationScheduler}, where locking it would be actively wrong.
+ *
+ * <p>A page that fails to deliver <b>releases</b> the claim, so the pre-existing rule that only a
+ * delivered page opens the cooldown survives the change to an atomic claim.
  */
 @Component
 public class OpsPagingDispatcher {
@@ -44,28 +57,35 @@ public class OpsPagingDispatcher {
 
     private final PagingPort pagingPort;
     private final OpsAlertStore store;
+    private final PagingCooldown cooldown;
     private final int minSeverityRank;
     private final Duration dedupeWindow;
     private final String link;
     private final Clock clock;
 
-    /** key = alertType|subjectRef → last successful page instant (for cooldown). */
-    private final Map<String, Instant> lastPaged = new ConcurrentHashMap<>();
-
     @Autowired
     public OpsPagingDispatcher(
             PagingPort pagingPort,
             OpsAlertStore store,
+            PagingCooldown cooldown,
             @Value("${gmepay.ops.paging.min-severity:CRITICAL}") String minSeverity,
             @Value("${gmepay.ops.paging.dedupe-window:15m}") Duration dedupeWindow,
             @Value("${gmepay.ops.paging.link-base:}") String linkBase) {
-        this(pagingPort, store, minSeverity, dedupeWindow, linkBase, Clock.systemUTC());
+        this(pagingPort, store, cooldown, minSeverity, dedupeWindow, linkBase, Clock.systemUTC());
     }
 
+    /** Test constructor; defaults the cooldown to the per-JVM implementation. */
     OpsPagingDispatcher(PagingPort pagingPort, OpsAlertStore store, String minSeverity,
                         Duration dedupeWindow, String linkBase, Clock clock) {
+        this(pagingPort, store, new InMemoryPagingCooldown(clock), minSeverity, dedupeWindow,
+                linkBase, clock);
+    }
+
+    OpsPagingDispatcher(PagingPort pagingPort, OpsAlertStore store, PagingCooldown cooldown,
+                        String minSeverity, Duration dedupeWindow, String linkBase, Clock clock) {
         this.pagingPort = pagingPort;
         this.store = store;
+        this.cooldown = cooldown;
         this.minSeverityRank = rank(minSeverity);
         this.dedupeWindow = dedupeWindow == null || dedupeWindow.isNegative()
                 ? Duration.ofMinutes(15) : dedupeWindow;
@@ -85,36 +105,45 @@ public class OpsPagingDispatcher {
         }
         String key = key(alert);
         Instant now = clock.instant();
-        Instant last = lastPaged.get(key);
-        if (last != null && Duration.between(last, now).compareTo(dedupeWindow) < 0) {
-            log.info("ops paging SUPPRESSED (dedupe {} left) type={} subjectRef={}",
-                    dedupeWindow.minus(Duration.between(last, now)), alert.alertType(), alert.subjectRef());
+        if (!cooldown.tryClaim(key, dedupeWindow)) {
+            log.info("ops paging SUPPRESSED (inside the {} dedupe window, fleet-wide) type={} "
+                            + "subjectRef={}", dedupeWindow, alert.alertType(), alert.subjectRef());
             return record(alert, "SUPPRESSED", "log", null, now);
         }
         return dispatch(alert, now, key);
     }
 
     /**
-     * Escalation re-page of a still-open CRITICAL alert. Cooldown still applies (so an
-     * escalation sweep that runs more often than the window does not storm), but the
-     * severity threshold is assumed already met by the caller.
+     * Escalation re-page of a still-open CRITICAL alert. The cooldown still applies (so an
+     * escalation sweep that runs more often than the window does not storm, and so N replicas
+     * sweeping their own buffers page once between them), but the severity threshold is assumed
+     * already met by the caller.
      */
     public OpsAlertView escalate(OpsAlertView alert) {
         String key = key(alert);
         Instant now = clock.instant();
-        Instant last = lastPaged.get(key);
-        if (last != null && Duration.between(last, now).compareTo(dedupeWindow) < 0) {
+        if (!cooldown.tryClaim(key, dedupeWindow)) {
             return alert; // within cooldown — skip this escalation tick
         }
         return dispatch(alert, now, key);
     }
 
     private OpsAlertView dispatch(OpsAlertView alert, Instant now, String key) {
-        PagingPort.PageOutcome outcome = pagingPort.page(PageRequest.from(alert, link));
-        String status = outcome.delivered() ? "DELIVERED" : "FAILED";
-        if (outcome.delivered()) {
-            lastPaged.put(key, now); // only a delivered page opens the cooldown
+        PagingPort.PageOutcome outcome;
+        try {
+            outcome = pagingPort.page(PageRequest.from(alert, link));
+        } catch (RuntimeException e) {
+            // The claim is held; releasing it keeps "only a delivered page opens the cooldown"
+            // true even when the port throws instead of answering not-delivered.
+            cooldown.release(key);
+            throw e;
         }
+        if (!outcome.delivered()) {
+            // Release, so the next tick or another replica may retry rather than the key being
+            // silenced for the whole window by a failed attempt.
+            cooldown.release(key);
+        }
+        String status = outcome.delivered() ? "DELIVERED" : "FAILED";
         return record(alert, status, outcome.channel(), outcome.detail(), now);
     }
 

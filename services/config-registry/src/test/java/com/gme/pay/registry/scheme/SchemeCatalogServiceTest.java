@@ -39,11 +39,11 @@ class SchemeCatalogServiceTest {
         assertThat(schemes).isNotEmpty();
         assertThat(schemes.get(0).schemeId()).isEqualTo("ZEROPAY");
         assertThat(schemes.get(0).status()).isEqualTo("ACTIVE");
-        // ZEROPAY and NEPAL both have live adapters (ACTIVE); everything else is
-        // honestly PLANNED.
+        // ZEROPAY, NEPAL and SENDMN have live adapters (ACTIVE); everything else
+        // (incl. NINEPAY, whose hub wiring is deferred) is honestly PLANNED.
         assertThat(schemes.stream().filter(s -> "ACTIVE".equals(s.status()))
                         .map(SchemeCatalogResponse::schemeId))
-                .containsExactlyInAnyOrder("ZEROPAY", "NEPAL");
+                .containsExactlyInAnyOrder("ZEROPAY", "NEPAL", "SENDMN");
     }
 
     /** Catalog rows carry the field names the BFF {@code SchemeSummary} binds. */
@@ -70,42 +70,48 @@ class SchemeCatalogServiceTest {
     }
 
     /**
-     * The catalog roster equals the authoritative V022 {@code ck_partner_scheme_scheme}
-     * DB CHECK roster. Parsed straight from the migration so a future edit to either
-     * side without the other fails this test.
+     * The catalog roster equals the authoritative {@code ck_partner_scheme_scheme}
+     * DB CHECK roster as of the LATEST migration that (re-)declares it — V022 created
+     * it, V041 re-created it with SENDMN + NINEPAY. Parsed straight from the migration
+     * so a future edit to either side without the other fails this test.
      */
     @Test
-    void catalogRoster_equalsV022DbCheckRoster() {
-        Set<String> dbCheck = parseV022SchemeCheckRoster();
+    void catalogRoster_equalsDbCheckRoster() {
+        Set<String> dbCheck = parseSchemeCheckRoster(
+                "/db/migration/V041__partner_scheme_sendmn_ninepay.sql");
         assertThat(new TreeSet<>(SchemeCatalogService.schemeIds()))
-                .as("GET /v1/schemes roster must equal the V022 partner_scheme DB CHECK")
+                .as("GET /v1/schemes roster must equal the current partner_scheme DB CHECK (V041)")
                 .isEqualTo(new TreeSet<>(dbCheck));
     }
 
-    /** Read the {@code scheme_id IN (...)} roster out of the V022 migration (classpath). */
-    private static Set<String> parseV022SchemeCheckRoster() {
-        String resource = "/db/migration/V022__partner_scheme.sql";
+    /** Read the {@code scheme_id IN (...)} roster out of a migration on the classpath. */
+    private static Set<String> parseSchemeCheckRoster(String resource) {
         String sql;
         try (InputStream in = SchemeCatalogServiceTest.class.getResourceAsStream(resource)) {
-            assertThat(in).as("V022 migration on the test classpath at " + resource).isNotNull();
+            assertThat(in).as("migration on the test classpath at " + resource).isNotNull();
             sql = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new UncheckedIOException("cannot read V022 migration at " + resource, e);
+            throw new UncheckedIOException("cannot read migration at " + resource, e);
         }
-        // Grab the ck_partner_scheme_scheme CHECK body: scheme_id IN ( '...', '...' )
+        // Grab the LAST ck_partner_scheme_scheme CHECK body (a re-declaring migration
+        // DROPs then ADDs; the ADD is the authoritative roster): scheme_id IN ('...', ...)
         Matcher check = Pattern.compile(
                         "ck_partner_scheme_scheme\\s+CHECK\\s*\\(\\s*scheme_id\\s+IN\\s*\\(([^)]*)\\)",
                         Pattern.CASE_INSENSITIVE | Pattern.DOTALL)
                 .matcher(sql);
-        assertThat(check.find())
-                .as("V022 must declare ck_partner_scheme_scheme with a scheme_id IN (...) list")
-                .isTrue();
+        String group = null;
+        while (check.find()) {
+            group = check.group(1);
+        }
+        assertThat(group)
+                .as(resource + " must declare ck_partner_scheme_scheme with a scheme_id IN (...) list")
+                .isNotNull();
         Set<String> roster = new TreeSet<>();
-        Matcher token = Pattern.compile("'([A-Z0-9_]+)'").matcher(check.group(1));
+        Matcher token = Pattern.compile("'([A-Z0-9_]+)'").matcher(group);
         while (token.find()) {
             roster.add(token.group(1));
         }
-        assertThat(roster).as("parsed a non-empty V022 roster").isNotEmpty();
+        assertThat(roster).as("parsed a non-empty roster from " + resource).isNotEmpty();
         return roster;
     }
 }

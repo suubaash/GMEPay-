@@ -13,6 +13,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.gme.pay.reporting.validation.FilingArtifactValidator;
+
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
@@ -40,6 +43,8 @@ public class BokRecordPersistenceService {
     private final ReportFilingService filingService;
     private final BokReportRecordRepository recordRepository;
     private final BokFxMapper mapper = new BokFxMapper();
+    /** Stateless local format check; same in-field style as {@link BokFxMapper} above. */
+    private final FilingArtifactValidator validator = new FilingArtifactValidator();
 
     public BokRecordPersistenceService(
             ReportFilingService filingService,
@@ -110,12 +115,52 @@ public class BokRecordPersistenceService {
             inserted++;
         }
 
-        // Reflect counts on the filing rows (status -> GENERATED).
+        // Reflect counts on the filing rows (status -> GENERATED), then settle each filing
+        // against its lane's transmission channel. With no BOK SFTP channel configured
+        // (OI-03) that settles to NOT_FILED_CHANNEL_UNAVAILABLE with the reason recorded —
+        // the register must never suggest BOK received anything.
         filingService.recordGenerated(fx1014.getId(), fx1014Count, null);
         filingService.recordGenerated(fx1015.getId(), fx1015Count, null);
+        filingService.settleAgainstChannel(fx1014.getId());
+        filingService.settleAgainstChannel(fx1015.getId());
 
         log.info("Persisted BOK records for {}: inserted={} (FX1014={}, FX1015={})",
                 reportDate, inserted, fx1014Count, fx1015Count);
         return inserted;
+    }
+
+    /**
+     * Attaches the generated artifact to its filing row and advances the filing as far as
+     * the truth allows: GENERATED → VALIDATED (only if the file passes local format checks)
+     * → NOT_FILED_CHANNEL_UNAVAILABLE (because no BOK SFTP channel exists).
+     *
+     * <p>BOK files currently still carry {@code TODO_OI03} in the two mandatory code
+     * columns, so they correctly fail local validation and stop at GENERATED before being
+     * settled — the register therefore never claims a valid, filed BOK report.
+     *
+     * @param reportDate  KST report date
+     * @param reportType  FX1014 | FX1015
+     * @param recordCount records written into the artifact
+     * @param artifact    the generated file (may be null when nothing was written)
+     */
+    @Transactional
+    public void recordArtifact(LocalDate reportDate, String reportType,
+                               int recordCount, Path artifact) {
+        Objects.requireNonNull(reportDate, "reportDate");
+        Objects.requireNonNull(reportType, "reportType");
+
+        ReportFiling filing = filingService.openFiling(
+                ReportFiling.Lane.BOK, reportType, reportDate);
+        filingService.recordGenerated(filing.getId(), recordCount,
+                artifact == null ? null : artifact.toString());
+
+        FilingArtifactValidator.Outcome outcome = validator.validate(artifact);
+        if (outcome.valid()) {
+            filingService.recordValidated(filing.getId());
+        } else {
+            log.warn("BOK {} artifact for {} failed local validation: {}",
+                    reportType, reportDate, outcome.reason());
+        }
+        filingService.settleAgainstChannel(filing.getId());
     }
 }

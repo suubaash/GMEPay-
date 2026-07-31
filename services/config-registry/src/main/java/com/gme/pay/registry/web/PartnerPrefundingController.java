@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PrefundingConfigView;
 import com.gme.pay.registry.prefunding.PrefundingConfigService;
@@ -50,7 +51,7 @@ public class PartnerPrefundingController {
     public PrefundingConfigView patchDraftStep5(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep5 req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return prefundingService.upsertStep5(partnerCode, req, actor);
     }
 

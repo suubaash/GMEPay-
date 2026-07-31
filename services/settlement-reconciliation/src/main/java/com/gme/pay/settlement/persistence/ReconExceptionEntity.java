@@ -81,6 +81,23 @@ public class ReconExceptionEntity {
     @Column(name = "resolved_at")
     private Instant resolvedAt;
 
+    // --- cross-border three-way tie-out fields (added by V010) ---
+
+    /**
+     * Recon lane that raised the break — {@code SENDMN}, {@code ZEROPAY}, … Null on legacy ZeroPay
+     * rows written before V010 (the ZeroPay lane keys its rows by batchId prefix instead).
+     */
+    @Column(name = "scheme", length = 32)
+    private String scheme;
+
+    /**
+     * Transaction the break belongs to. Populated by the transaction-level cross-border tie-out
+     * (the hub partner reference, i.e. the key shared by transaction-mgmt, the prefunding deduct and
+     * the adapter's payment row). Null for the merchant-level ZeroPay file recon.
+     */
+    @Column(name = "txn_ref", length = 64)
+    private String txnRef;
+
     public ReconExceptionEntity() {
         // JPA no-arg constructor
     }
@@ -112,6 +129,20 @@ public class ReconExceptionEntity {
                 line.discrepancyAmount(),
                 line.matchStatus(),
                 createdAt);
+    }
+
+    /**
+     * Build a persistable row for a transaction-level cross-border break: the same shape ops already
+     * works (batch id, merchant, gme/scheme amounts, discrepancy, match status) plus the scheme and
+     * transaction the break belongs to. Amounts on these rows are <b>USD</b>, not KRW — the
+     * settlement currency of the corridor.
+     */
+    public static ReconExceptionEntity fromCorridorLine(String batchId, String scheme, String txnRef,
+                                                        ReconLine line, Instant createdAt) {
+        ReconExceptionEntity e = fromReconLine(batchId, line, createdAt);
+        e.setScheme(scheme);
+        e.setTxnRef(txnRef);
+        return e;
     }
 
     /** Reconstruct the domain-level {@link ReconLine} from the persisted row. */
@@ -221,6 +252,22 @@ public class ReconExceptionEntity {
 
     public void setResolvedAt(Instant resolvedAt) {
         this.resolvedAt = resolvedAt;
+    }
+
+    public String getScheme() {
+        return scheme;
+    }
+
+    public void setScheme(String scheme) {
+        this.scheme = scheme;
+    }
+
+    public String getTxnRef() {
+        return txnRef;
+    }
+
+    public void setTxnRef(String txnRef) {
+        this.txnRef = txnRef;
     }
 
     @Override

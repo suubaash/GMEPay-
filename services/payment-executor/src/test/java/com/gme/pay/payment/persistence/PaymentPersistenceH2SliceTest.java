@@ -34,6 +34,9 @@ class PaymentPersistenceH2SliceTest {
     private IdempotencyRecordRepository records;
 
     @Autowired
+    private RevenuePostingFailureRepository postingFailures;
+
+    @Autowired
     private TestEntityManager entityManager;
 
     @Test
@@ -56,6 +59,71 @@ class PaymentPersistenceH2SliceTest {
         assertThat(reloaded.getRoundingResidual()).isEqualByComparingTo("0.007");
         assertThat(reloaded.getSettlementCurrency()).isEqualTo("KRW");
         assertThat(attempts.findByTxnRefOrderByCreatedAtAscIdAsc("TXN-H2-001")).hasSize(1);
+    }
+
+    /**
+     * T2-1: a revenue posting that never reached revenue-ledger must be durable and replayable.
+     * Proves the V005 migration is H2-compatible, the payload survives the round-trip, and repeated
+     * failures for the same posting bump {@code attempts} on the SAME row (so the PENDING set stays
+     * exactly "postings still missing from revenue-ledger").
+     */
+    @Test
+    void revenuePostingFailureIsPersistedAndReplayableAndDeduplicated() {
+        RevenuePostingFailureStore store = new RevenuePostingFailureStore(postingFailures, null);
+
+        store.record("TXN-SMN-1", RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE,
+                new java.util.LinkedHashMap<>(java.util.Map.of(
+                        "txnRef", "TXN-SMN-1",
+                        "payoutMarginUsd", new BigDecimal("0.1481"),
+                        "serviceChargeAmount", new BigDecimal("500"),
+                        "serviceChargeCcy", "KRW")),
+                "revenue-ledger 503");
+        entityManager.flush();
+        entityManager.clear();
+
+        RevenuePostingFailureEntity row = postingFailures
+                .findByReferenceAndPostingType("TXN-SMN-1",
+                        RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE)
+                .orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(RevenuePostingFailureEntity.STATUS_PENDING);
+        assertThat(row.getAttempts()).isEqualTo(1);
+        assertThat(row.getLastError()).contains("503");
+        // The payload alone must be enough to replay the POST.
+        assertThat(row.getPayload())
+                .contains("\"txnRef\":\"TXN-SMN-1\"")
+                .contains("0.1481")
+                .contains("\"serviceChargeCcy\":\"KRW\"");
+
+        // A second failure of the SAME posting updates the row rather than creating a duplicate.
+        store.record("TXN-SMN-1", RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE,
+                java.util.Map.of("txnRef", "TXN-SMN-1"), "revenue-ledger still down");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(postingFailures.findAll()).hasSize(1);
+        assertThat(postingFailures
+                .findByReferenceAndPostingType("TXN-SMN-1",
+                        RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE)
+                .orElseThrow()
+                .getAttempts()).isEqualTo(2);
+
+        // The replay job's working set.
+        assertThat(postingFailures.findByStatusOrderByCreatedAtAscIdAsc(
+                RevenuePostingFailureEntity.STATUS_PENDING)).hasSize(1);
+    }
+
+    /** Different posting types for one reference are distinct replayable rows. */
+    @Test
+    void revenuePostingFailuresAreKeyedByReferenceAndType() {
+        RevenuePostingFailureStore store = new RevenuePostingFailureStore(postingFailures, null);
+
+        store.record("TXN-MIX-1", RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE,
+                java.util.Map.of("txnRef", "TXN-MIX-1"), "boom");
+        store.record("TXN-MIX-1", RevenuePostingFailureStore.TYPE_ROUNDING_RESIDUAL,
+                java.util.Map.of("reference", "TXN-MIX-1"), "boom");
+        entityManager.flush();
+
+        assertThat(postingFailures.findAll()).hasSize(2);
     }
 
     @Test

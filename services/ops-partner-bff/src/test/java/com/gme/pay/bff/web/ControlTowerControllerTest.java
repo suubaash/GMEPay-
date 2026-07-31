@@ -64,7 +64,7 @@ class ControlTowerControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        alerts = new com.gme.pay.bff.alert.OpsAlertStore(200);
+        alerts = new com.gme.pay.bff.alert.InMemoryOpsAlertStore(200);
         mvc = standaloneSetup(new ControlTowerController(
                 transactions, webhooks, prefunding, systemHealth, settlements, configRegistry, opsControl, alerts))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
@@ -74,7 +74,7 @@ class ControlTowerControllerTest {
     private static PartnerView partner(String code) {
         return new PartnerView(1L, code, PartnerType.OVERSEAS, "USD", RoundingMode.HALF_UP,
                 "USD", "USD", null, code, null, null, "KR", null, null, null, null, PartnerStatus.LIVE,
-                null, null, null);
+                null, null, null, null);
     }
 
     private static TransactionMgmtClient.Page<TransactionSummary> pageWithTotal(long total) {

@@ -2,6 +2,7 @@ package com.gme.pay.prefunding.alert;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.gme.pay.prefunding.audit.PrefundingAuditor;
 import com.gme.pay.prefunding.client.ConfigRegistryClient;
 import com.gme.pay.prefunding.outbox.OutboxWriter;
 import com.gme.pay.prefunding.persistence.BalanceAlertEntity;
@@ -93,15 +94,18 @@ public class TierAlertEvaluator {
     private final OutboxWriter outbox;
     private final ConfigRegistryClient configRegistry;
     private final ObjectMapper objectMapper;
+    private final PrefundingAuditor audit;
 
     public TierAlertEvaluator(BalanceAlertRepository alerts,
                               OutboxWriter outbox,
                               ConfigRegistryClient configRegistry,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              PrefundingAuditor audit) {
         this.alerts = alerts;
         this.outbox = outbox;
         this.configRegistry = configRegistry;
         this.objectMapper = objectMapper;
+        this.audit = audit;
     }
 
     /**
@@ -133,9 +137,15 @@ public class TierAlertEvaluator {
         if (breachedNow && tierIsArmed(partnerCode, BREACH)) {
             BigDecimal thresholdOrZero = threshold != null ? threshold : BigDecimal.ZERO;
             raise(partnerCode, BREACH, newBalance, thresholdOrZero);
-            configRegistry.proposePartnerSuspension(partnerCode,
-                    "prefunding balance breached: " + newBalance.toPlainString() + " "
-                            + row.getCurrency());
+            String reason = "prefunding balance breached: " + newBalance.toPlainString() + " "
+                    + row.getCurrency();
+            configRegistry.proposePartnerSuspension(partnerCode, reason);
+            // Gap T5-1: an auto-suspend proposal is a platform action against a partner with no human
+            // in the loop, so it gets a NAMED system principal (system:prefunding-breach-auto-suspend).
+            // Attributing it to the bare "system" literal — as the change_request proposedBy still
+            // does on the config-registry side — would spell it identically to "we lost the identity",
+            // which is the whole reason AuditEvent.newEvent now refuses that literal.
+            audit.breachSuspensionProposed(partnerCode, newBalance, row.getCurrency(), reason);
         }
     }
 

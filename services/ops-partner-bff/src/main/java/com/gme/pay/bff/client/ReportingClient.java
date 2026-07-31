@@ -16,6 +16,11 @@ import java.util.List;
  * read query. The other UI report types (Hometax, KoFIU, ZeroPay settlement) are
  * scheduler-driven outputs with no query endpoint yet, so the rest client surfaces only the
  * BOK runs it can truthfully source rather than fabricating the others.
+ *
+ * <p>Filing honesty (GAP T5-2): {@link ReportRun#status()} is a FILING status and must always be
+ * either what reporting-compliance reported or an explicit not-filed/unknown value — an
+ * implementation may never synthesize a success-ish status. See
+ * {@link com.gme.pay.bff.compliance.FilingStatuses}.
  */
 public interface ReportingClient {
 

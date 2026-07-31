@@ -22,9 +22,19 @@ global:
 
 abi:
   # Azure Cache for Redis (SSL on 6380 in prod; 6379 shown for non-TLS test caches).
+  #
+  # REPLICA CEILING (2026-07-30): api-gateway's rate-limit window and replay nonce set live here,
+  # and the replay posture is fail-CLOSED, so Redis is a hard dependency of the partner edge. Use a
+  # Standard/Premium tier with replication -- Basic is a single node with no SLA, which would make
+  # every gateway replica 503 on a maintenance restart. ops-partner-bff also uses it for paging
+  # dedupe only and degrades to per-JVM if it is unreachable.
   SPRING_DATA_REDIS_HOST: gmepay.redis.cache.windows.net
   SPRING_DATA_REDIS_PORT: "6380"
   # Event Hubs Kafka endpoint (namespace.servicebus.windows.net:9093, SASL/SSL).
+  # T3-11: SPRING_KAFKA_LISTENER_CONCURRENCY (base values.yaml, default 3) is capped by the Event
+  # Hub's partition count, which is fixed AT CREATION on Standard tier and cannot be raised in place
+  # — an under-partitioned hub has to be recreated and cut over. Create each gmepay.* hub with at
+  # least 3 partitions.
   SPRING_KAFKA_BOOTSTRAP_SERVERS: gmepay-eventhub.servicebus.windows.net:9093
   GMEPAY_SCHEMA_REGISTRY_URL: https://gmepay-eventhub.servicebus.windows.net/$schemagroups
   # Cosmos DB for MongoDB (vCore) connection string placeholder.
@@ -35,9 +45,15 @@ abi:
   GMEPAY_VAULT_PATH_STYLE: "true"
   # OIDC — Keycloak-on-AKS (shown) OR Entra ID issuer:
   #   https://login.microsoftonline.com/<tenantId>/v2.0
+  # This MUST be the browser-facing issuer (identical to the UIs'
+  # NEXT_PUBLIC_KEYCLOAK_URL) because it is what lands in the token's `iss`.
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
   OIDC_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4317
+  # Set only when the pods cannot reach the public issuer for OIDC discovery
+  # (private-only Keycloak / Entra behind a firewall).
+  # SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
+  # T3-2: the dead OTEL_EXPORTER_OTLP_ENDPOINT was removed from the base values and every overlay —
+  # no service has an OTLP exporter and no collector is deployed. See Documentation/RUNBOOK_MONITORING.md.
 
 # Prefer Secrets Store CSI driver backed by Azure Key Vault: set create:false
 # and provision <release>-credentials. Placeholders shown for bootstrap only.
@@ -52,6 +68,19 @@ secrets:
     GMEPAY_RBAC_SECRET: REPLACE_FROM_KEY_VAULT
     GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_FROM_KEY_VAULT
     GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_FROM_KEY_VAULT
+    # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
+    # on a placeholder, so this MUST be substituted from Key Vault before deploy.
+    GME_AUTH_JWT_SIGNING_SECRET: REPLACE_FROM_KEY_VAULT
+    # T0-6 rotation: previously active JWT keys, accepted for verification only while their tokens
+    # expire — `<secret>@<ISO-8601 demoted-at>`, `;`-separated. EMPTY is the steady state; populate
+    # it from Key Vault only for the duration of a rotation window, then empty it again.
+    # A REPLACE_* placeholder would be REJECTED as key material, so this is empty by design.
+    # Procedure: docs/runbooks/JWT_KEY_ROTATION.md
+    GME_AUTH_JWT_PREVIOUS_KEYS: ""
+    GMEPAY_SCHEME_NEPAL_TOKEN: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NEPAL_KEY: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM: REPLACE_FROM_SECRET_STORE
 
 ingress:
   enabled: true
@@ -65,6 +94,30 @@ ingress:
       paths: [{ path: /, pathType: Prefix, service: admin-ui, port: 3000 }]
     - host: partner.gmepay.example.com
       paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
+
+# 9Pay IPN edge (gap T5-7) — AZURE IS THE EXCEPTION AND IT IS DELIBERATE.
+#
+# The Application Gateway Ingress Controller has NO per-Ingress source-IP allowlist
+# annotation. Rendering an Ingress here would produce an object that looks configured
+# and filters NOTHING, which is worse than not having it: the template therefore
+# FAILS if controller=appgw, and this overlay leaves the edge off.
+#
+# On Azure the allowlist has to live where Azure actually enforces it, and it is the
+# operator's action, not a chart value:
+#   1. an Application Gateway WAF custom rule (MatchVariable RemoteAddr, IPMatch on
+#      9Pay's ranges, Action Block) or a listener-scoped rule set, AND
+#   2. an NSG rule on the Application Gateway subnet allowing 443 only from those
+#      ranges.
+# Then set the SERVICE-level list as the in-cluster layer:
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES
+#   (+ GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "1" behind the gateway).
+# The ranges are 9Pay-supplied and are not shipped in this repo.
+ipnIngress:
+  enabled: false
+  controller: appgw          # unsupported for allowlisting on purpose - see above
+  className: azure-application-gateway
+  host: ipn.gmepay.example.com
+  sourceRanges: []
 
 # DB-per-service -> Azure DB for PostgreSQL Flexible Server (placeholders).
 services:
@@ -84,14 +137,25 @@ services:
     env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-settlement.postgres.database.azure.com:5432/settlement?sslmode=require" }
   revenue-ledger:
     env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-ledger.postgres.database.azure.com:5432/ledger?sslmode=require" }
+  # ops-partner-bff owns a small database as of 2026-07-30: ops_alerts + operator_action_audit +
+  # shedlock. Without this it falls back to an in-memory H2 and the alerts list, the alert ids and the
+  # operator ACKs go back to differing per replica — the ceiling this closed. A Burstable tier is
+  # enough (low write volume, 90-day retention), but it must be a real one.
+  ops-partner-bff:
+    env: { SPRING_DATASOURCE_URL: "jdbc:postgresql://gmepay-bff.postgres.database.azure.com:5432/bff?sslmode=require" }
+  # One realm (`gmepay`), one client id per SPA, and the SAME issuer string the
+  # resource servers expect (abi.OIDC_ISSUER_URI above) — see docker/keycloak/README.md.
+  # BFF_PROXY_TARGET is server-side only; NEXT_PUBLIC_BFF_BASE_URL is intentionally
+  # unset (it would make the browser call the BFF cross-origin, which has no CORS).
   admin-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
       NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: admin-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
   partner-portal-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
-      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay-partners
-      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: partner-portal-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

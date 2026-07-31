@@ -14,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -44,10 +46,23 @@ import org.springframework.web.server.ResponseStatusException;
 @Component
 public class PartnerLifecycleChangeRequestApplier implements ChangeRequestApplier {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(PartnerLifecycleChangeRequestApplier.class);
+
     /** Aggregate type discriminator stored on the change_request row. */
     public static final String AGGREGATE_TYPE = "partner_lifecycle";
 
     public static final String EVENT_ACTIVATED = "PARTNER_ACTIVATED";
+
+    /**
+     * Audit verb for an activation that proceeded WITHOUT a sanctions screening
+     * (gap T1-4). Emitted in addition to {@link #EVENT_ACTIVATED}, in the same
+     * transaction, whenever the activation gate passed only because
+     * {@code gmepay.activation.allow-unscreened-kyb} is on. Its AFTER snapshot is
+     * the gate's own one-line basis, so the regulated record states plainly that
+     * this partner's sanctions status was never checked.
+     */
+    public static final String EVENT_ACTIVATED_UNSCREENED = "PARTNER_ACTIVATED_UNSCREENED";
     public static final String EVENT_SUSPENDED = "PARTNER_SUSPENDED";
     public static final String EVENT_REACTIVATED = "PARTNER_REACTIVATED";
     public static final String EVENT_TERMINATED = "PARTNER_TERMINATED";
@@ -115,6 +130,9 @@ public class PartnerLifecycleChangeRequestApplier implements ChangeRequestApplie
                 : request.proposedBy();
 
         String eventType;
+        // Set when the activation gate passed only on the non-prod unscreened
+        // carve-out; recorded as its own audit event below.
+        String unscreenedBasis = null;
         switch (action) {
             case ACTIVATE -> {
                 // Defence in depth: the service refuses to approve when the gate
@@ -128,6 +146,10 @@ public class PartnerLifecycleChangeRequestApplier implements ChangeRequestApplie
                                     .map(ActivationGateService.UnmetCondition::code)
                                     .collect(Collectors.joining(", ")));
                 }
+                // T1-4: the gate may have passed WITHOUT a sanctions screening, but
+                // only under the explicit non-prod flag. Never silent — the basis is
+                // audited alongside the activation below.
+                unscreenedBasis = gate.unscreenedBasis();
                 partner.setStatus(PartnerStatus.LIVE);
                 if (partner.getGoLiveAt() == null) {
                     // First Go-live only: the stamp is the immutability lock
@@ -162,6 +184,15 @@ public class PartnerLifecycleChangeRequestApplier implements ChangeRequestApplie
 
         PartnerEntity saved = partnerRepository.saveAndFlush(partner);
         publishAudit(partnerCode, actor, eventType, before, canonicalLifecycle(saved));
+        if (unscreenedBasis != null) {
+            // Same transaction as the activation: either both land or neither does,
+            // so a LIVE partner can never exist without this row explaining that no
+            // sanctions screening backs it.
+            log.warn("partner {} ACTIVATED WITHOUT A SANCTIONS SCREENING by {}: {}",
+                    partnerCode, actor, unscreenedBasis);
+            publishAudit(partnerCode, actor, EVENT_ACTIVATED_UNSCREENED, null,
+                    unscreenedBasis.getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     /** ADR-007 audit row, same-transaction (commits iff the transition commits). */

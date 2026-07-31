@@ -27,16 +27,30 @@ import java.util.concurrent.atomic.AtomicLong;
  * create or rounding-mode update without booting config-registry.
  */
 /**
- * Default unless {@code gmepay.config-registry.client=rest} (then
- * {@link com.gme.pay.bff.client.rest.RestConfigRegistryClient} wins). Keeping
- * the stub on the classpath lets the BFF and its unit slices boot without
- * config-registry being up.
+ * <b>OPT-IN ONLY since the selector inversion.</b>
+ * {@link com.gme.pay.bff.client.rest.RestConfigRegistryClient} is the default; this bean exists
+ * only when {@code gmepay.config-registry.client=stub} is set deliberately, and an unrecognised
+ * value leaves no bean so the service refuses to start. It used to carry
+ * {@code matchIfMissing = true} — i.e. it was the live partner registry in any environment that
+ * forgot the selector.
+ *
+ * <p><b>Per-JVM state — INCORRECT above one replica, and the largest instance in the service.</b>
+ * Every {@code LinkedHashMap} below (partners, drafts, contacts, KYB, bank accounts, settlement,
+ * prefunding, rules, commission, contracts, documents, credentials, webhooks) and every
+ * {@link AtomicLong} id minter is per-JVM. At N&gt;1: a partner POSTed to replica A is a 404 on B,
+ * uploaded document bytes exist only where they were uploaded, and — the worse half — the twelve
+ * id sequences all restart from the same seed on every replica and every restart, so surrogate
+ * partner ids, document ids and credential ids <b>collide across replicas</b> while looking
+ * perfectly ordinary.
+ *
+ * <p>Deliberately NOT fixed by moving the state anywhere. A durable, shared, id-minting partner
+ * registry is precisely what config-registry is; building a second one here would be building the
+ * wrong thing twice. The fix is the real client, which is now the default.
  */
 @Component
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         name = "gmepay.config-registry.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubConfigRegistryClient implements ConfigRegistryClient {
 
     private final Map<String, PartnerSummary> store = new LinkedHashMap<>();
@@ -45,6 +59,13 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     private final Map<String, PartnerView> draftStore = new LinkedHashMap<>();
     /** Stand-in for {@code partners_id_seq} so the stub-issued surrogate ids look real. */
     private final AtomicLong surrogateSeq = new AtomicLong(900_000L);
+    /**
+     * Surrogate id per seeded partner code, allocated on first {@link #getPartnerView} and then
+     * STABLE for the lifetime of the stub — the seeded {@link PartnerSummary} rows carry no id, but
+     * a code -> id mapping has to be repeatable or the numeric-id-keyed upstreams (auth-identity,
+     * notification-webhook, transaction-mgmt) would be queried under a different id each call.
+     */
+    private final Map<String, Long> seededSurrogateIds = new LinkedHashMap<>();
     /** Slice 2 contact sets — keyed by partner_code, mirrors the bulk-replace semantics. */
     private final Map<String, List<com.gme.pay.contracts.ContactView>> contactStore = new LinkedHashMap<>();
     /** Stand-in for the {@code partner_contact} BIGSERIAL. */
@@ -83,6 +104,48 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     @Override
     public PartnerSummary getPartner(String partnerId) {
         return store.get(partnerId);
+    }
+
+    /**
+     * Canonical single-partner read (gap T1-3). A draft created through this stub already IS a
+     * {@link PartnerView}, so that wins; otherwise the seeded four-field summary is widened via
+     * {@link PartnerView#ofCore} using the surrogate id this stub allocated for the code.
+     *
+     * <p>{@code goLiveAt} is deliberately left {@code null}: the stub has no activation history,
+     * and inventing one is exactly the fabricated {@code onboardedAt} that gap T1-3 removed.
+     */
+    @Override
+    public synchronized PartnerView getPartnerView(String partnerCode) {
+        if (partnerCode == null || partnerCode.isBlank()) {
+            return null;
+        }
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft != null) {
+            return draft;
+        }
+        PartnerSummary summary = store.get(partnerCode);
+        if (summary == null) {
+            return null;
+        }
+        return PartnerView.ofCore(
+                seededSurrogateIds.computeIfAbsent(
+                        partnerCode, code -> surrogateSeq.incrementAndGet()),
+                summary.partnerId(),
+                parseType(summary.type()),
+                summary.settlementCurrency(),
+                summary.settlementRoundingMode());
+    }
+
+    /** Best-effort {@link PartnerType} parse for the stub's String-typed summaries. */
+    private static PartnerType parseType(String type) {
+        if (type == null || type.isBlank()) {
+            return null;
+        }
+        try {
+            return PartnerType.valueOf(type.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Override
@@ -188,7 +251,10 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 prior.status(),
                 prior.validFrom(),
                 prior.validTo(),
-                Instant.now());
+                Instant.now(),
+                // Activation instant is carried forward, never re-stamped: go_live_at marks the
+                // FIRST activation and a currency-split edit is not one.
+                prior.goLiveAt());
         draftStore.put(partnerCode, merged);
         return merged;
     }
@@ -1341,9 +1407,19 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     /**
      * Deterministic in-memory screening mirroring {@code StubKybAdapter}
      * (lib-kyb): any screened name containing {@code SANCTIONED} → HIT,
-     * otherwise containing {@code REVIEW} → NEEDS_REVIEW, else CLEAR. Names
-     * screened = the draft's legal names + every declared UBO name — same
-     * subject assembly as config-registry's {@code KybService.runScreening}.
+     * otherwise containing {@code REVIEW} → NEEDS_REVIEW, else
+     * <b>{@code NOT_SCREENED_NO_PROVIDER}</b>. Names screened = the draft's legal
+     * names + every declared UBO name — same subject assembly as config-registry's
+     * {@code KybService.runScreening}.
+     *
+     * <p><b>The clean branch is no longer called {@code CLEAR} (gap T1-4).</b> This method
+     * consults no sanctions, PEP or adverse-media source — it matches the subject's own names
+     * against two hard-coded tokens — so a {@code CLEAR} from here was a clean sanctions
+     * screening that nobody performed, three hops from the compliance board that renders it
+     * green. lib-kyb's {@code ScreeningResult} and config-registry's V042 CHECK closed that hole
+     * on the real path; this fallback was the last place in the platform that could still mint
+     * one, and it is closed here for the same reason. The keyword rules themselves are
+     * deliberately unchanged: a smarter fake would be a worse fake.
      */
     @Override
     public synchronized com.gme.pay.contracts.KybView runKybScreening(String partnerCode) {
@@ -1371,7 +1447,7 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         }
         String upper = names.toString().toUpperCase(java.util.Locale.ROOT);
         String status = upper.contains("SANCTIONED") ? "HIT"
-                : upper.contains("REVIEW") ? "NEEDS_REVIEW" : "CLEAR";
+                : upper.contains("REVIEW") ? "NEEDS_REVIEW" : "NOT_SCREENED_NO_PROVIDER";
 
         Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         com.gme.pay.contracts.KybView screened = new com.gme.pay.contracts.KybView(
@@ -1393,6 +1469,124 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 now);
         kybStore.put(partnerCode, screened);
         return screened;
+    }
+
+    /** T1-4 (V045): the manual attestation this stub holds per partner, or {@code null}. */
+    private final Map<String, KybScreeningProvenance.ManualAttestationDetail> manualAttestations =
+            new LinkedHashMap<>();
+
+    /**
+     * In-memory MANUAL screening attestation (gap T1-4, owner decision 2026-07-28), mirroring
+     * config-registry's own rules so a BFF-only stack behaves the same way rather than a laxer way:
+     * the outcome roster is enforced, the SOP reference / version / sources are mandatory, the typed
+     * assertion must be verbatim, and a clean outcome is stored as {@code CLEAR_MANUAL_ATTESTATION}
+     * — never a bare {@code CLEAR}.
+     *
+     * <p>The one thing this stub cannot reproduce is the identity check: it has no credential to
+     * verify, so a blank actor is refused and anything else is taken at face value. That difference
+     * is stated rather than papered over — the real gate is upstream, and this path exists so the
+     * SPA is developable without config-registry, not so it can be relied on as a control.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.KybView recordManualKybAttestation(
+            String partnerCode, ManualKybAttestationRequest request, String actor) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        if (actor == null || actor.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "a manual screening attestation must be made by a verified human operator");
+        }
+        String outcome = request.outcome() == null
+                ? "" : request.outcome().trim().toUpperCase(java.util.Locale.ROOT);
+        if (!java.util.Set.of("CLEAR", "HIT", "NEEDS_REVIEW").contains(outcome)) {
+            throw badRequest("outcome must be one of [CLEAR, HIT, NEEDS_REVIEW], was: "
+                    + request.outcome());
+        }
+        requireText(request.sopDocumentRef(), "sopDocumentRef");
+        requireText(request.sopVersion(), "sopVersion");
+        requireText(request.sourcesConsulted(), "sourcesConsulted");
+        if (!MANUAL_ATTESTATION_ASSERTION.equals(
+                request.attestation() == null ? null : request.attestation().trim())) {
+            throw badRequest("the attestation field must be exactly: \""
+                    + MANUAL_ATTESTATION_ASSERTION + "\"");
+        }
+
+        String status = "CLEAR".equals(outcome) ? "CLEAR_MANUAL_ATTESTATION" : outcome;
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.KybView prior = kybStore.get(partnerCode);
+        com.gme.pay.contracts.KybView attested = new com.gme.pay.contracts.KybView(
+                kybSeq.getAndIncrement(),
+                prior == null ? null : prior.riskRating(),
+                prior == null ? null : prior.riskRationale(),
+                prior == null ? null : prior.nextReviewDate(),
+                prior == null ? null : prior.licenseType(),
+                prior == null ? null : prior.licenseNumber(),
+                prior == null ? null : prior.licenseAuthority(),
+                prior == null ? null : prior.licenseExpiry(),
+                prior == null ? null : prior.uboList(),
+                prior == null ? null : prior.cbddqDocId(),
+                status,
+                "manual-sop:" + request.sopDocumentRef().trim() + "@" + request.sopVersion().trim(),
+                now,
+                prior == null ? now : prior.validFrom(),
+                null,
+                now);
+        kybStore.put(partnerCode, attested);
+        manualAttestations.put(partnerCode,
+                new KybScreeningProvenance.ManualAttestationDetail(
+                        actor, now, request.sopDocumentRef().trim(), request.sopVersion().trim(),
+                        request.sourcesConsulted().trim(), true));
+        return attested;
+    }
+
+    @Override
+    public synchronized KybScreeningProvenance getKybScreeningProvenance(String partnerCode) {
+        com.gme.pay.contracts.KybView view = getKyb(partnerCode);
+        var attestation = manualAttestations.get(partnerCode);
+        boolean manual = attestation != null;
+        String status = view.screeningStatus();
+        boolean notScreened = status == null || "NOT_SCREENED_NO_PROVIDER".equals(status);
+        return new KybScreeningProvenance(
+                status,
+                manual ? "manual-sop" : "stub",
+                manual,
+                manual ? null : STUB_SCREENING_CAVEAT,
+                view.screenedAt(),
+                view.screeningProviderRef(),
+                manual,
+                attestation,
+                manual && !notScreened,
+                manual
+                        ? "Screened MANUALLY by " + attestation.attesterActorId() + " under SOP "
+                                + attestation.sopDocumentRef() + " " + attestation.sopVersion()
+                                + ". This is a human control under a compliance-signed procedure,"
+                                + " NOT a vendor screening against automated list feeds."
+                        : "NOTHING WAS SCREENED. " + STUB_SCREENING_CAVEAT);
+    }
+
+    /** The assertion an attester must send verbatim (mirrors config-registry's constant). */
+    private static final String MANUAL_ATTESTATION_ASSERTION =
+            "I performed this sanctions and PEP screening myself, following the SOP named above,"
+            + " and I am accountable for the result.";
+
+    /** Why nothing this stub produces is a screening. */
+    private static final String STUB_SCREENING_CAVEAT =
+            "NOT A SANCTIONS SCREENING: produced in-process by the ops-partner-bff fallback client,"
+            + " which keyword-matches the subject's own names. No sanctions, PEP or adverse-media"
+            + " source was consulted (no KYB vendor is configured — ADR-014).";
+
+    private static void requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw badRequest(field + " is required on a manual screening attestation");
+        }
     }
 
     // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------
@@ -1621,7 +1815,9 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 PartnerStatus.ONBOARDING,
                 Instant.EPOCH,
                 null,
-                Instant.now());
+                Instant.now(),
+                // A fresh ONBOARDING draft has never gone live -> no activation instant.
+                null);
     }
 
     /** Apply non-null Step-1 fields from the request onto the prior view, returning a new PartnerView. */
@@ -1661,7 +1857,9 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 PartnerStatus.ONBOARDING,
                 prior.validFrom(),
                 prior.validTo(),
-                Instant.now());
+                Instant.now(),
+                // Carried forward: a step-1 identity edit never (re-)activates a partner.
+                prior.goLiveAt());
     }
 
     private static RoundingMode parseMode(String raw) {

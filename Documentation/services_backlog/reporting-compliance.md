@@ -7,7 +7,14 @@
 ## Service contract (MSA: own DB, API-only communication)
 
 - **Datastore (owned by this service):** Object storage (reports/exports)
-- **APIs / events I EXPOSE:** /v1/reports, BOK FX1014/1015 export
+- **APIs / events I EXPOSE:** /v1/reports, BOK FX1014/1015 export, /v1/reports/filing-channels
+  - **GENERATION ONLY — this service files nothing.** No regulatory lane (BOK / KoFIU / Hometax) has
+    a transmission channel configured, so a filing's most advanced reachable status is
+    `NOT_FILED_CHANNEL_UNAVAILABLE` and **nothing has ever been submitted to any authority**
+    (T5-2). Separately, **suspicious-transaction DETECTION does not exist**: there is no screening
+    or AML monitoring in the payment path and no party identity in the payment contracts to screen
+    (T5-3, T5-11), so a KoFIU STR body can only ever be produced for a case a human identified by
+    other means.
 - **APIs / events I CONSUME:** revenue-ledger, transaction-mgmt (sync/event)
 - **Integration rule:** never read another service's database or import its private entities — call its API or consume its event; stub consumed services with WireMock in tests.
 
@@ -649,6 +656,39 @@
 
 
 ## WBS 13.8 — AML/KYC hooks & monitoring
+
+> ⚠️ **NOTHING IN THIS SECTION IS BUILT (verified 2026-07-28, gap T5-3).** Read this before quoting any
+> of the 23 tickets below as a capability. There is **no AML transaction monitoring and no
+> sanctions/PEP screening anywhere on the payment path**: no rule engine, no velocity/structuring
+> detection, no alert queue, no case management, no Redis `aml:*` keys, no nightly baseline job, no
+> `/v1/admin/aml/**` endpoints, and no STR/SAR export. A grep of `payment-executor`, `smart-router` and
+> `transaction-mgmt` for sanctions/screening/watchlist/PEP returns no consumer.
+>
+> **Do not confuse these tickets with the two things that DO exist**, because both are routinely
+> mistaken for this section:
+> 1. **Per-partner transaction LIMITS** (`partner_limits` V020, `LimitsEntity` AML velocity cap V034,
+>    enforced in `PaymentOrchestrator`'s "authorize gate 0/0b"). These are numeric comparisons against
+>    operator-entered caps — per-transaction USD, daily/monthly/annual USD, daily transaction count.
+>    They are regulatory ceilings under the 소액해외송금업 licence. **They screen nobody and detect no
+>    pattern**, and the fact that the code and this backlog both call them "AML" is the single most
+>    misleading naming in the platform.
+> 2. **Onboarding-time partner KYB screening** (`config-registry` → `kyb-adapter`, ADR-009), which
+>    screens the licensed *institution* and its UBOs — not the parties to a payment — and which has no
+>    real vendor either (ADR-014, Octa sandbox credentials pending; see gap T1-4 for how a stub `CLEAR`
+>    was stopped from masquerading as a completed check).
+>
+> **What was built for T5-3 is the SEAM, not the control:** `PaymentScreeningPort` (lib-kyb) with a
+> `NoProviderPaymentScreeningPort` default, `PaymentScreeningGate` on both new-payment entry points, a
+> durable count of unscreened payments (`unscreened_payments`, payment-executor V010) readable at
+> `GET /internal/ops/screening-coverage`, an ERROR startup banner, and a de-duplicated
+> `PAYMENT_SCREENING_UNAVAILABLE` ops alert. **No rules, thresholds, risk scores or list sources were
+> invented** — those are the policy and vendor decisions this section describes and compliance owns.
+> See `outputs/agent/fix_t5-aml-seam_2026-07-28.md` §"What a real implementation requires" for the
+> handoff, and note in particular that **buying a vendor is not sufficient**: neither payment contract
+> carries an originator name, so a name-matching provider would still screen nobody.
+>
+> Tickets 13.8-T11/T15/T23 below additionally assume Redis, a hook execution order and an export
+> endpoint that do not exist in this codebase.
 ### 13.8-T01 — Create DB migration: aml_monitoring_rule table  _(30 min)_
 **Context:** WBS 13.8 AML/KYC hooks. GMEPay+ is responsible for hub-level transaction monitoring (SEC-09 §8.2): alert rules on velocity, large amounts, and unusual partner patterns. KYC of end-users is the partner's responsibility; GMEPay+ never receives KYC data. Phase 1 monitoring is rule-based only (velocity, amount thresholds). Need a config table to hold per-partner or global monitoring rules.
 **Steps:** Create Flyway migration V13_8_001__create_aml_monitoring_rule.sql; Define columns: id UUID PK default gen_random_uuid(), partner_id UUID nullable FK references partner(id) (null = global rule), rule_type VARCHAR(50) NOT NULL (VELOCITY_PER_MINUTE, VELOCITY_PER_5MIN, SINGLE_TXN_AMOUNT_USD, DAILY_VOLUME_USD), threshold_value NUMERIC(20,4) NOT NULL, severity VARCHAR(10) NOT NULL (P1, P2, P3), enabled BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(); Add CHECK constraint: rule_type IN ('VELOCITY_PER_MINUTE','VELOCITY_PER_5MIN','SINGLE_TXN_AMOUNT_USD','DAILY_VOLUME_USD','ROLLING_AVG_MULTIPLIER'); Add CHECK constraint: severity IN ('P1','P2','P3','P4'); Add index on (partner_id, rule_type, enabled) for fast lookup at payment time

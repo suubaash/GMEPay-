@@ -28,6 +28,15 @@ import java.util.List;
  * @param idempotentReplay {@code true} when this result was served from the
  *                       persisted run rather than freshly computed.
  * @param screenedAt     run completion instant (UTC, MICROS).
+ * @param screeningProviderId    WHICH provider produced the screening — {@code stub},
+ *                       {@code unknown}, or a vendor id (V002 / gap T1-4).
+ * @param screeningAuthoritative {@code true} only when a real screening provider
+ *                       consulted sanctions / PEP / adverse-media sources. A
+ *                       {@code false} here means <b>nothing was screened</b>,
+ *                       whatever {@link #decision} says.
+ * @param screeningCaveat why the run is not authoritative; {@code null} on an
+ *                       authoritative run. Travels with the verdict so no reader
+ *                       downstream can present the run as a completed check.
  */
 public record KybVerificationResult(
         String providerRef,
@@ -39,7 +48,10 @@ public record KybVerificationResult(
         BusinessRegistrationVerifier.BizRegStatus bizRegStatus,
         List<String> missingDocuments,
         boolean idempotentReplay,
-        Instant screenedAt) {
+        Instant screenedAt,
+        String screeningProviderId,
+        boolean screeningAuthoritative,
+        String screeningCaveat) {
 
     /** Null-safe accessor for the hit list. */
     public List<ScreeningResult.Hit> hitList() {
@@ -54,6 +66,18 @@ public record KybVerificationResult(
     /** Returns a copy with {@code idempotentReplay} set — used when serving a stored run. */
     public KybVerificationResult asReplay() {
         return new KybVerificationResult(providerRef, partnerCode, decision, decisionReason,
-                screeningStatus, hits, bizRegStatus, missingDocuments, true, screenedAt);
+                screeningStatus, hits, bizRegStatus, missingDocuments, true, screenedAt,
+                screeningProviderId, screeningAuthoritative, screeningCaveat);
+    }
+
+    /**
+     * {@code true} when this verdict rests on a screening that actually happened.
+     * A caller treating a KYB run as satisfied MUST test this — the
+     * {@link #decision} alone does not distinguish "checked and clean" from
+     * "nothing was checked".
+     */
+    public boolean screeningPerformed() {
+        return screeningAuthoritative
+                && screeningStatus != ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER;
     }
 }

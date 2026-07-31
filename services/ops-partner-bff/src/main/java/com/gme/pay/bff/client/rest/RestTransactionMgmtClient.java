@@ -1,6 +1,7 @@
 package com.gme.pay.bff.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.bff.client.PartnerDirectory;
 import com.gme.pay.bff.client.TransactionMgmtClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,19 +41,30 @@ import java.util.List;
  * from {@code createdAt}, and whose {@code amount}/{@code currency} are the payout
  * leg {@code targetPayout}/{@code targetCcy}). Unknown wire fields are ignored.
  *
- * <p><b>partnerId handling (partner-scoping, security-critical).</b> transaction-mgmt
- * filters by the numeric partner id; the BFF {@link Filter#partnerId()} is a free-form
- * string that in live deploys carries the caller's numeric partner id (JWT/path-derived).
- * When a partnerId filter is present we forward it as the {@code partnerId} query param
- * <em>iff</em> it parses as a long. If a partnerId was supplied but does NOT parse
- * numerically we <b>fail closed</b> — returning an empty page rather than issuing an
- * unfiltered query that would leak every partner's transactions. Only a truly absent
- * (null/blank) partnerId means "all partners" (the Admin surface). See
- * {@link #parseLongOrNull(String)} and {@link #hasText(String)}.
+ * <p><b>partnerId handling (partner-scoping, security-critical).</b> transaction-mgmt filters by the
+ * NUMERIC partner id, while the BFF {@link Filter#partnerId()} is a free-form string that may carry
+ * either that surrogate (the Admin surface) or the business CODE — the Partner Portal's path segment
+ * and the token's {@code partner_id} claim are seeded with codes like {@code "GMEREMIT"}. A supplied
+ * partnerId is therefore resolved in two steps:
+ *
+ * <ol>
+ *   <li>already numeric → forwarded as-is;</li>
+ *   <li>otherwise looked up through {@link PartnerDirectory}, which reads config-registry's
+ *       {@code GET /v1/partners/{code}} for the surrogate id.</li>
+ * </ol>
+ *
+ * <p>If neither resolves we <b>fail closed</b> — an empty page, never an unfiltered query that would
+ * leak every partner's transactions. Only a truly absent (null/blank) partnerId means "all partners".
+ *
+ * <p><b>Gap register T1-3:</b> step 2 is new. Previously a non-numeric partnerId failed closed
+ * outright, so the (correct) security rule silently made the Portal's Transactions page and CSV
+ * statement come back EMPTY for every real partner, while {@code partner_test_00*} appeared to work
+ * against the stub. The fail-closed guarantee is unchanged — an unresolvable code still yields no
+ * rows; it simply now resolves the codes that config-registry knows about.
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest", matchIfMissing = true)
 public class RestTransactionMgmtClient implements TransactionMgmtClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestTransactionMgmtClient.class);
@@ -62,15 +74,48 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
 
     private final RestClient restClient;
 
+    /**
+     * Bridges a partner business CODE to config-registry's numeric surrogate. Nullable: the
+     * package-private test constructor leaves it unset, in which case only already-numeric partner
+     * ids resolve and everything else fails closed exactly as before.
+     */
+    private final PartnerDirectory partners;
+
     @Autowired
     public RestTransactionMgmtClient(
-            @Value("${gmepay.transaction-mgmt.base-url:http://transaction-mgmt:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            @Value("${gmepay.transaction-mgmt.base-url:http://transaction-mgmt:8080}") String baseUrl,
+            PartnerDirectory partners) {
+        this(RestClient.builder().baseUrl(baseUrl).build(), partners);
     }
 
-    /** Package-private constructor for tests to inject a pre-built RestClient. */
+    /**
+     * Package-private constructor for tests to inject a pre-built RestClient. Resolves no partner
+     * codes (see {@link #partners}); use {@link #RestTransactionMgmtClient(RestClient,
+     * PartnerDirectory)} to exercise code resolution.
+     */
     RestTransactionMgmtClient(RestClient restClient) {
+        this(restClient, null);
+    }
+
+    /** Package-private constructor for tests that also need code -> surrogate resolution. */
+    RestTransactionMgmtClient(RestClient restClient, PartnerDirectory partners) {
         this.restClient = restClient;
+        this.partners = partners;
+    }
+
+    /**
+     * Resolves a caller-supplied partner id to transaction-mgmt's numeric filter value, or
+     * {@code null} when it cannot be resolved (caller must then fail closed).
+     */
+    private Long resolvePartner(String partnerId) {
+        Long numeric = parseLongOrNull(partnerId);
+        if (numeric != null) {
+            return numeric;
+        }
+        if (partners == null) {
+            return null;
+        }
+        return partners.numericIdOf(partnerId).orElse(null);
     }
 
     @Override
@@ -120,13 +165,14 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (filter.schemeId() != null && !filter.schemeId().isBlank()) {
                 uri.queryParam("schemeId", filter.schemeId());
             }
-            // Partner-scoping (security-critical): a supplied-but-non-numeric partnerId
-            // must NOT degrade to an unfiltered (all-partners) query — fail closed.
+            // Partner-scoping (security-critical): a supplied partnerId that resolves to no
+            // surrogate must NOT degrade to an unfiltered (all-partners) query — fail closed.
             if (hasText(filter.partnerId())) {
-                Long numericPartner = parseLongOrNull(filter.partnerId());
+                Long numericPartner = resolvePartner(filter.partnerId());
                 if (numericPartner == null) {
-                    log.warn("list: non-numeric partnerId '{}' — failing closed (empty page) "
-                            + "rather than querying transaction-mgmt unscoped", filter.partnerId());
+                    log.warn("list: partnerId '{}' resolves to no config-registry surrogate — "
+                            + "failing closed (empty page) rather than querying transaction-mgmt "
+                            + "unscoped", filter.partnerId());
                     return new Page<>(List.of(), page, size, 0L);
                 }
                 uri.queryParam("partnerId", numericPartner);
@@ -175,13 +221,13 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             if (query.reference() != null && !query.reference().isBlank()) {
                 uri.queryParam("reference", query.reference());
             }
-            // Partner-scoping (security-critical): same fail-closed rule as list() — a
-            // supplied-but-non-numeric partnerId never widens the search to all partners.
+            // Partner-scoping (security-critical): same fail-closed rule as list() — a supplied
+            // partnerId that resolves to nothing never widens the search to all partners.
             if (hasText(query.partnerId())) {
-                Long numericPartner = parseLongOrNull(query.partnerId());
+                Long numericPartner = resolvePartner(query.partnerId());
                 if (numericPartner == null) {
-                    log.warn("search: non-numeric partnerId '{}' — failing closed (empty page)",
-                            query.partnerId());
+                    log.warn("search: partnerId '{}' resolves to no config-registry surrogate — "
+                            + "failing closed (empty page)", query.partnerId());
                     return new Page<>(List.of(), page, size, 0L);
                 }
                 uri.queryParam("partnerId", numericPartner);
@@ -332,6 +378,9 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
             String schemeTxnRef,
             String schemeApprovalCode,
             String merchantId,
+            // T4-4: field name matches transaction-mgmt's TransactionResponse exactly (Jackson binds
+            // by name) — a typo here would deserialize to null and silently re-open the gap.
+            String merchantName,
             Instant approvedAt,
             // CS support-read fields from transaction-mgmt's TransactionResponse
             String failureReason,
@@ -359,6 +408,7 @@ public class RestTransactionMgmtClient implements TransactionMgmtClient {
                     schemeTxnRef,
                     schemeApprovalCode,
                     merchantId,
+                    merchantName,   // T4-4: the real captured name (null when never resolved)
                     approvedAt,
                     failureReason,
                     statusLabel,

@@ -92,10 +92,13 @@ import java.util.stream.Collectors;
  *   <li>FX1015: {@code BOK_FX1015_YYYYMMDD.csv}</li>
  * </ul>
  *
- * <h2>SFTP submission</h2>
- * Real SFTP submission is out of scope (no credentials; calendar-bound OI-03).
- * After writing the file, {@link #submitStub(Path, BokReportType, LocalDate)} is
- * called which logs the would-be submission and returns immediately.
+ * <h2>Transmission — there is none</h2>
+ * No BOK SFTP channel exists (no endpoint, no credentials; calendar-bound OI-03). After
+ * writing the files this builder only logs that they were <b>not</b> transmitted; it never
+ * produces a receipt or an accepted status. The filing register reflects the same fact via
+ * {@link com.gme.pay.reporting.persistence.ReportFiling.Status#NOT_FILED_CHANNEL_UNAVAILABLE}.
+ * Note also that {@code TODO_OI03} still occupies the two mandatory BOK code columns, so a
+ * file generated today additionally fails local validation.
  */
 @Component
 public class BokFxFileBuilder {
@@ -149,8 +152,8 @@ public class BokFxFileBuilder {
         writeFile(fx1014Path, fx1014, BokReportType.FX1014, reportDate);
         writeFile(fx1015Path, fx1015, BokReportType.FX1015, reportDate);
 
-        submitStub(fx1014Path, BokReportType.FX1014, reportDate);
-        submitStub(fx1015Path, BokReportType.FX1015, reportDate);
+        logTransmissionNotAttempted(fx1014Path, BokReportType.FX1014, reportDate);
+        logTransmissionNotAttempted(fx1015Path, BokReportType.FX1015, reportDate);
 
         log.info("BOK FX files written for {}: FX1014={} ({} records), FX1015={} ({} records)",
                 reportDate, fx1014Path.getFileName(), fx1014.size(),
@@ -226,19 +229,23 @@ public class BokFxFileBuilder {
     }
 
     // -------------------------------------------------------------------------
-    // Private: SFTP submission stub
+    // Private: transmission (none exists)
     // -------------------------------------------------------------------------
 
     /**
-     * Stub for SFTP submission to BOK. Real credentials/SFTP are out of scope
-     * (calendar-bound OI-03). Logs the would-be submission and returns.
+     * Records — honestly — that the generated file was <b>not</b> transmitted. There is no
+     * BOK SFTP channel: no endpoint, no credentials (calendar-bound OI-03). This method
+     * performs no submission of any kind and must never be made to look like one.
      *
-     * <p>TODO(OI-03): replace with real SFTP push when BOK SFTP endpoint and
-     * credentials are available.
+     * <p>TODO(OI-03): when a real SFTP push is implemented it must go through
+     * {@link com.gme.pay.reporting.persistence.ReportFilingService#recordTransmission},
+     * which refuses to advance a filing unless
+     * {@link com.gme.pay.reporting.channel.FilingChannelRegistry} reports a live BOK channel.
      */
-    private void submitStub(Path filePath, BokReportType type, LocalDate reportDate) {
-        log.info("[STUB] Would SFTP-submit {} to BOK {} endpoint for {} — OI-03 pending",
-                filePath.getFileName(), type.name(), reportDate);
+    private void logTransmissionNotAttempted(Path filePath, BokReportType type, LocalDate reportDate) {
+        log.warn("BOK {} file {} for {} GENERATED BUT NOT TRANSMITTED — no BOK SFTP channel "
+                        + "is configured (OI-03 pending). Nothing has been filed.",
+                type.name(), filePath.getFileName(), reportDate);
     }
 
     // -------------------------------------------------------------------------

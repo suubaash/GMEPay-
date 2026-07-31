@@ -1,27 +1,27 @@
 /**
  * Auth boilerplate for the admin-ui.
  *
- * As of Slice 1 (PARTNER_SETUP_PLAN.md), authentication is delegated to
- * Keycloak via OIDC authorization-code + PKCE (see ./oidc.js). The legacy
- * username/password BFF login is retired in production but remains available
- * behind `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` so vitest + local-no-Keycloak
- * iteration still work.
+ * Authentication is delegated ENTIRELY to Keycloak via OIDC authorization-code +
+ * PKCE (see ./oidc.js). The legacy username/password BFF login is gone, not
+ * merely retired behind a flag: `POST /v1/auth/login` was deleted from
+ * ops-partner-bff (gap T0-1) and the unsigned token it minted is rejected by the
+ * resource server, so there is nothing left for a password form to call.
  *
- * The session model the rest of the app sees is unchanged: an opaque bearer
- * token in localStorage under TOKEN_KEY, read by {@link client.js} and
- * injected as `Authorization: Bearer <token>` on every BFF request. What
- * changes underneath is *how* the token gets there:
- *   - OIDC path: the callback page exchanges the auth code for tokens and
- *     calls {@link storeOidcSession}. The access_token from Keycloak becomes
- *     the bearer; api-gateway / BFF act as OAuth2 resource servers.
- *   - Dev-skip path: the legacy `loginThunk` is allowed and behaves as before.
+ * The session model the rest of the app sees is unchanged: the Keycloak
+ * access_token in localStorage under TOKEN_KEY, read by {@link client.js} and
+ * injected as `Authorization: Bearer <token>` on every BFF request. The callback
+ * page exchanges the auth code and calls {@link storeOidcSession}; a 401 from the
+ * BFF triggers one {@link refreshSession} attempt.
  *
- * The token is intentionally still in localStorage for Slice 1 — ADR-011
- * notes that phase-D will migrate to httpOnly cookies issued by the BFF once
- * the BFF acquires a session endpoint.
+ * The token is intentionally still in localStorage — ADR-011 notes that phase-D
+ * will migrate to httpOnly cookies issued by the BFF once the BFF acquires a
+ * session endpoint.
  */
-import { adminApi } from './client';
-import { decodeJwtPayload, logoutUrl as oidcLogoutUrl } from './oidc';
+import {
+  decodeJwtPayload,
+  logoutUrl as oidcLogoutUrl,
+  refreshTokens,
+} from './oidc';
 
 export const TOKEN_KEY = 'gmepay.adminToken';
 export const USER_KEY = 'gmepay.adminUser';
@@ -70,16 +70,6 @@ export function isAuthenticated() {
     return Date.now() < ms;
   } catch {
     return true;
-  }
-}
-
-/** Persist the access (bearer) token; safe-no-op on the server. */
-export function setToken(token) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    /* quota / disabled — ignore */
   }
 }
 
@@ -158,31 +148,35 @@ export function storeOidcSession(tokenResponse) {
   }
 }
 
-/**
- * Legacy username/password login against the BFF. Retained for the dev-skip
- * escape hatch (NEXT_PUBLIC_ALLOW_DEV_LOGIN=true) — DO NOT call from the
- * production login path.
- *
- * BFF returns `{ token, expiresAt, role }` — username comes from the form
- * input (BFF does NOT echo it back).
- */
-export async function login(req) {
-  const res = await adminApi.login(req);
-  setToken(res.token);
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(USER_KEY, req.username);
-      if (res.expiresAt) {
-        window.localStorage.setItem(EXPIRES_AT_KEY, String(res.expiresAt));
-      }
-      if (res.role) {
-        window.localStorage.setItem(ROLE_KEY, res.role);
-      }
-    } catch {
-      /* ignore */
-    }
+/** Read the cached OIDC refresh token, or null. */
+export function getRefreshToken() {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(REFRESH_TOKEN_KEY);
+  } catch {
+    return null;
   }
-  return res;
+}
+
+/**
+ * Silent refresh against Keycloak, persisting the result. Resolves to the new
+ * access token, or null when there is nothing to refresh / Keycloak refused —
+ * the caller then treats the session as over (there is no BFF refresh endpoint
+ * any more; `/v1/auth/refresh` was deleted with the dev-login stub).
+ *
+ * @returns {Promise<string | null>}
+ */
+export async function refreshSession() {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const tokenResponse = await refreshTokens(refreshToken);
+    if (!tokenResponse?.access_token) return null;
+    storeOidcSession(tokenResponse);
+    return tokenResponse.access_token;
+  } catch {
+    return null;
+  }
 }
 
 /**

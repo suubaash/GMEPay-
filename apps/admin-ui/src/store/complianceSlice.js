@@ -3,6 +3,7 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import {
   getComplianceOverview,
+  getFilingChannels,
   getRegulatoryConfig,
   getPartnerKyb,
   getAuditLog,
@@ -15,6 +16,11 @@ import {
  *   overview[]          : ComplianceRow[] from GET /v1/admin/compliance/overview
  *   overviewLoading     : boolean
  *   overviewError       : string | null
+ *
+ *   filingChannels      : FilingChannelState[] | null  (null = backend reported no board;
+ *                         NOT the same as "no lanes", and never treated as available)
+ *   filingChannelReason : string | null
+ *   filingChannelsLoading / filingChannelsError
  *
  *   selectedPartnerCode : string | null   (drill-down target)
  *
@@ -46,6 +52,12 @@ const initialState = {
   overview: [],
   overviewLoading: false,
   overviewError: null,
+
+  // Regulatory filing-channel availability (GAP T5-2) — global, not per partner
+  filingChannels: null,
+  filingChannelReason: null,
+  filingChannelsLoading: false,
+  filingChannelsError: null,
 
   // Drill-down
   selectedPartnerCode: null,
@@ -92,6 +104,18 @@ export const fetchComplianceOverview = createAsyncThunk(
   'compliance/fetchOverview',
   async () => {
     return getComplianceOverview();
+  },
+);
+
+/**
+ * Fetch the per-lane filing-channel board (GAP T5-2). Read off GET /v1/admin/reports —
+ * see getFilingChannels(). Failure leaves `filingChannels` null, i.e. "unknown", which
+ * the UI renders as "nothing may be assumed filed" rather than as availability.
+ */
+export const fetchFilingChannels = createAsyncThunk(
+  'compliance/fetchFilingChannels',
+  async () => {
+    return getFilingChannels();
   },
 );
 
@@ -202,6 +226,24 @@ const complianceSlice = createSlice({
       .addCase(fetchComplianceOverview.rejected, (state, action) => {
         state.overviewLoading = false;
         state.overviewError = action.error?.message ?? 'Failed to load compliance overview';
+      })
+
+      // ---- fetchFilingChannels ----
+      .addCase(fetchFilingChannels.pending, (state) => {
+        state.filingChannelsLoading = true;
+        state.filingChannelsError = null;
+      })
+      .addCase(fetchFilingChannels.fulfilled, (state, action) => {
+        state.filingChannelsLoading = false;
+        const payload = action.payload ?? {};
+        state.filingChannels = Array.isArray(payload.channels) ? payload.channels : null;
+        state.filingChannelReason = payload.reason ?? null;
+      })
+      .addCase(fetchFilingChannels.rejected, (state, action) => {
+        state.filingChannelsLoading = false;
+        state.filingChannels = null;
+        state.filingChannelsError =
+          action.error?.message ?? 'Failed to load regulatory filing channel status';
       })
 
       // ---- fetchRegulatoryConfig ----

@@ -24,6 +24,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.gme.pay.prefunding.testsupport.TestInternalAuth;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * Slice 5 (5B.1) MockMvc test for {@link BalanceProvisioningController} against the
@@ -46,6 +49,16 @@ import org.springframework.test.web.servlet.MockMvc;
 class BalanceProvisioningApiTest {
 
     @Autowired private MockMvc mvc;
+
+    /**
+     * Every prefunding endpoint sits behind the internal-auth gate (T0-5), so these tests call as a
+     * trusted in-cluster service. The gate itself (missing/wrong token → 401) is proved in
+     * {@link com.gme.pay.prefunding.api.InternalAuthGateTest}.
+     */
+    private ResultActions call(MockHttpServletRequestBuilder rb) throws Exception {
+        return mvc.perform(TestInternalAuth.authed(rb));
+    }
+
     @Autowired private PartnerBalanceRepository balances;
     @Autowired private BalanceAlertRepository alerts;
     @Autowired private LedgerEntryRepository ledger;
@@ -68,7 +81,7 @@ class BalanceProvisioningApiTest {
     @Test
     @DisplayName("POST /v1/prefunding/provision creates the balance row and returns 201")
     void provision_createsRow() throws Exception {
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(PROVISION_BODY))
                 .andExpect(status().isCreated())
@@ -89,12 +102,12 @@ class BalanceProvisioningApiTest {
     @Test
     @DisplayName("provisioning the same partner twice returns 409 and leaves the row untouched")
     void provision_isIdempotencyGuarded() throws Exception {
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(PROVISION_BODY))
                 .andExpect(status().isCreated());
 
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -118,7 +131,7 @@ class BalanceProvisioningApiTest {
                 new BigDecimal("680.0000"), new BigDecimal("1000.0000"), Instant.now()));
 
         // partner_balance is NUMERIC(20,8): the DB round-trip yields scale-8 strings.
-        mvc.perform(get("/v1/prefunding/{code}/balance", "PROV_P2"))
+        call(get("/v1/prefunding/{code}/balance", "PROV_P2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.partnerCode").value("PROV_P2"))
                 .andExpect(jsonPath("$.currency").value("USD"))
@@ -139,7 +152,7 @@ class BalanceProvisioningApiTest {
                 new BigDecimal("680.0000"), new BigDecimal("1000.0000"),
                 Instant.now().truncatedTo(ChronoUnit.MICROS)));
 
-        mvc.perform(get("/v1/prefunding/{code}/alerts", "PROV_P3"))
+        call(get("/v1/prefunding/{code}/alerts", "PROV_P3"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].tier").value("TIER_70"))
@@ -151,9 +164,9 @@ class BalanceProvisioningApiTest {
     @Test
     @DisplayName("unknown partner returns 404 on balance and alerts")
     void unknownPartner_404() throws Exception {
-        mvc.perform(get("/v1/prefunding/{code}/balance", "GHOST"))
+        call(get("/v1/prefunding/{code}/balance", "GHOST"))
                 .andExpect(status().isNotFound());
-        mvc.perform(get("/v1/prefunding/{code}/alerts", "GHOST"))
+        call(get("/v1/prefunding/{code}/alerts", "GHOST"))
                 .andExpect(status().isNotFound());
     }
 
@@ -161,18 +174,18 @@ class BalanceProvisioningApiTest {
     @DisplayName("invalid provision bodies return 400")
     void invalidProvision_400() throws Exception {
         // missing partnerCode
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"openingBalanceUsd\":\"10\",\"lowBalanceThresholdUsd\":\"5\"}"))
                 .andExpect(status().isBadRequest());
         // negative opening balance
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerCode\":\"X\",\"openingBalanceUsd\":\"-1\","
                                 + "\"lowBalanceThresholdUsd\":\"5\"}"))
                 .andExpect(status().isBadRequest());
         // zero threshold
-        mvc.perform(post("/v1/prefunding/provision")
+        call(post("/v1/prefunding/provision")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerCode\":\"X\",\"openingBalanceUsd\":\"10\","
                                 + "\"lowBalanceThresholdUsd\":\"0\"}"))

@@ -22,6 +22,13 @@ dependencies {
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
     implementation project(':libs:lib-events')
+    // lib-audit: the ADR-007 hash-chained audit trail (AuditEvent / HashChain /
+    // DbAuditPublisher / AuditActors). T5-1: this service authenticates callers, mints
+    // JWTs, issues partner credentials and mutates the RBAC authority matrix, and until
+    // now emitted NOT ONE audit row for any of it. The sealing scheme is deliberately the
+    // shared one — a second, service-local chain format would be unverifiable next to the
+    // rest of the platform's audit_log. See com.gme.pay.auth.audit.AuthAuditService.
+    implementation project(':libs:lib-audit')
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // Docker-backed PostgreSQL 16 ITs (@Tag("docker")) — excluded from the local

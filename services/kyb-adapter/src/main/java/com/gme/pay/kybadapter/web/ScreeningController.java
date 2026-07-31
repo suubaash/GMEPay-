@@ -66,6 +66,14 @@ public class ScreeningController {
                     "partnerCode is required (it keys the gmepay.kyb.screening event stream)");
         }
         ScreeningResult result = kybProvider.screen(subject);
+        if (!result.screeningPerformed()) {
+            // T1-4: the caller gets an honest NOT_SCREENED_NO_PROVIDER status plus
+            // the provenance; the log says it too, so an environment onboarding
+            // partners without a screening provider is visible in operations.
+            log.warn("screening run {} for partner {} SCREENED NOTHING (provider={}, status={}). {}",
+                    result.providerRef(), subject.partnerCode(),
+                    result.provenance().providerId(), result.status(), result.caveat());
+        }
 
         try {
             eventPublisher.publish(KybScreeningEvent.of(subject.partnerCode(), result));
@@ -115,13 +123,34 @@ public class ScreeningController {
 
     /**
      * Liveness probe without the actuator dependency: confirms the service is
-     * up and which provider class is active (stub vs octa) so an operator can
-     * spot a mis-wired environment at a glance.
+     * up, which provider class is active (stub vs octa), and — since T1-4 —
+     * whether that provider's verdicts are AUTHORITATIVE. An operator (or a
+     * pre-flight check) can therefore see "this environment screens nothing"
+     * without having to know which class name means what.
+     *
+     * <p>The provenance is derived by screening a synthetic probe subject through
+     * the live provider, so the answer reflects the bean that is actually wired
+     * rather than a static assumption. A provider that cannot answer (the Octa
+     * placeholder throws until ADR-014's credentials land) reports
+     * {@code authoritative=false} with the failure as the caveat.
      */
     @GetMapping("/health")
     public Map<String, String> health() {
-        return Map.of(
-                "status", "UP",
-                "provider", kybProvider.getClass().getSimpleName());
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        out.put("status", "UP");
+        out.put("provider", kybProvider.getClass().getSimpleName());
+        try {
+            ScreeningResult probe = kybProvider.screen(new KybSubject(
+                    "__PROVENANCE_PROBE__", "provenance probe", "provenance probe",
+                    "KR", null, java.util.List.of()));
+            out.put("providerId", probe.provenance().providerId());
+            out.put("authoritative", String.valueOf(probe.authoritative()));
+            out.put("caveat", probe.caveat() == null ? "" : probe.caveat());
+        } catch (RuntimeException e) {
+            out.put("providerId", "unavailable");
+            out.put("authoritative", "false");
+            out.put("caveat", "the configured KYB provider cannot answer: " + e.getMessage());
+        }
+        return out;
     }
 }

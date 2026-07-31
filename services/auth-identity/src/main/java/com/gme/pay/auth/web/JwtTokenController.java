@@ -2,10 +2,12 @@ package com.gme.pay.auth.web;
 
 import com.gme.pay.auth.dto.IssueTokenRequest;
 import com.gme.pay.auth.dto.IssueTokenResponse;
+import com.gme.pay.auth.dto.JwtKeySetStatusResponse;
 import com.gme.pay.auth.dto.VerifyTokenRequest;
 import com.gme.pay.auth.dto.VerifyTokenResponse;
 import com.gme.pay.auth.service.JwtTokenService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,5 +50,24 @@ public class JwtTokenController {
     public ResponseEntity<VerifyTokenResponse> verify(@RequestBody VerifyTokenRequest request) {
         String token = request == null ? null : request.token();
         return ResponseEntity.ok(tokenService.verify(token));
+    }
+
+    /**
+     * {@code GET /internal/auth/token/keys} — the JWT key set this process is running with (T0-6).
+     *
+     * <p>Rotation is only an operation if it can be verified, and "restart the pods and hope"
+     * is not verification. This returns the active {@code kid} plus each still-accepted
+     * predecessor and the instant it becomes safe to remove, read from the live signing helper
+     * rather than from configuration, so a replica that did not pick up the new key set is visible
+     * as a different {@code activeKid}.
+     *
+     * <p>No key material is returned — a {@code kid} is a one-way thumbprint already present in
+     * the header of every token minted. The route sits under {@code /internal/auth} and is
+     * therefore behind the {@code X-Gme-Internal} gate along with everything else this service
+     * exposes.
+     */
+    @GetMapping("/keys")
+    public ResponseEntity<JwtKeySetStatusResponse> keys() {
+        return ResponseEntity.ok(tokenService.keySetStatus());
     }
 }

@@ -1,5 +1,6 @@
 package com.gme.pay.reporting.persistence;
 
+import com.gme.pay.reporting.channel.FilingChannelRegistry;
 import com.gme.pay.reporting.domain.CommittedTransaction;
 import com.gme.pay.reporting.infrastructure.RestCommittedFxTransactionPort;
 import com.gme.pay.reporting.service.BokRecordPersistenceService;
@@ -32,7 +33,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * plus {@code cross_rate} are persisted from real projection data (not null, not synthesised).
  */
 @DataJpaTest
-@Import({BokRecordPersistenceService.class, ReportFilingService.class})
+@Import({BokRecordPersistenceService.class, ReportFilingService.class, FilingChannelRegistry.class})
 class CommittedFxEndToEndPersistenceTest {
 
     private static final LocalDate REPORT_DATE = LocalDate.of(2026, 5, 20);

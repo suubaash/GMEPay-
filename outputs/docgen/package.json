@@ -1,10 +1,12 @@
 {
   "name": "docgen",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Generates the GMEPay+ exec-facing feature specification (.docx + .html) from Documentation/GAP_REGISTER.md. Offline, deterministic. Never hand-edit the rendered artifacts.",
+  "main": "build.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "node build.js",
+    "check": "node build.js --check",
+    "test": "node build.js --check"
   },
   "keywords": [],
   "author": "",

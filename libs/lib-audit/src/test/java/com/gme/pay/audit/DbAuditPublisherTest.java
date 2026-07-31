@@ -142,13 +142,18 @@ class DbAuditPublisherTest {
         var tampered = new java.util.ArrayList<>(original);
         DbAuditPublisher.ChainRow row1 = (DbAuditPublisher.ChainRow) original.get(1);
         tampered.set(1, new DbAuditPublisher.ChainRow(
-                row1.eventType(),
+                row1.id(),
+                row1.aggregateType(),
+                row1.aggregateId(),
                 row1.actorId(),
+                row1.actorIp(),
+                row1.eventType(),
                 row1.recordedAt(),
                 row1.beforeJsonb(),
                 bytes("{\"silently\":\"rewritten\"}"), // tampered afterJsonb
                 row1.prevHash(),
-                row1.rowHash()));                       // stale stored hash
+                row1.rowHash(),                         // stale stored hash
+                row1.chainVersion()));
 
         int firstBad = HashChain.verify(tampered);
         assertEquals(1, firstBad,

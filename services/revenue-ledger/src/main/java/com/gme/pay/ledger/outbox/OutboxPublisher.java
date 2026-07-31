@@ -2,6 +2,7 @@ package com.gme.pay.ledger.outbox;
 
 import com.gme.pay.events.DomainEvent;
 import com.gme.pay.events.EventPublisher;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -30,6 +31,12 @@ import java.util.Objects;
  * <p>The whole tick runs in a single transaction so the {@code SELECT} and {@code UPDATE}
  * see a consistent view; an exception thrown OUT of {@link #publishPending()} (e.g. from
  * the repository) rolls the tick back and Spring's scheduler retries on the next interval.
+ *
+ * <p><strong>Distributed locking (gap T3-11 defect 3).</strong> The transaction makes the tick
+ * atomic <em>within</em> one JVM; it does not stop a <em>second</em> JVM running its own tick over the
+ * same rows. Both replicas would select the same unpublished batch and both would publish it, because
+ * {@code publishedAt} is stamped only after {@code publish(..)} returns. {@code @SchedulerLock} closes
+ * that: see {@link com.gme.pay.ledger.config.ShedLockConfig}.
  */
 @Component
 public class OutboxPublisher {
@@ -47,7 +54,19 @@ public class OutboxPublisher {
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher required");
     }
 
+    /**
+     * T3-11 defect 3: {@code @SchedulerLock} makes this drain safe on more than one replica.
+     *
+     * <p>{@code lockAtLeastFor = PT0S} because the tick is cheap and the queue must be drained as
+     * fast as it fills; a minimum hold would idle the outbox for no benefit. {@code lockAtMostFor =
+     * PT5M} is the crash safety net, not a runtime budget — a batch of 100 publishes takes
+     * milliseconds, so five minutes only ever elapses if the holder died. Sizing it <em>short</em>
+     * would be the dangerous direction: an early expiry admits the concurrent second drain the lock
+     * exists to prevent.
+     */
     @Scheduled(fixedDelayString = "${gmepay.outbox.poll-ms:1000}")
+    @SchedulerLock(name = "RevenueLedgerOutboxPublisher_publishPending",
+            lockAtMostFor = "PT5M", lockAtLeastFor = "PT0S")
     @Transactional
     public void publishPending() {
         List<OutboxEntity> batch = repository.findUnpublished(PageRequest.of(0, BATCH_SIZE));

@@ -53,8 +53,29 @@ public class RestTransactionMgmtEnrichmentPort implements ZpBatchEnrichmentPort 
     public RestTransactionMgmtEnrichmentPort(
             RestClient.Builder builder,
             @Value("${adapter.zeropay.enrichment.transaction-mgmt-base-url:http://localhost:8080}")
-            String baseUrl) {
-        this.restClient = builder.baseUrl(baseUrl).build();
+            String baseUrl,
+            @Value("${adapter.zeropay.enrichment.connect-timeout-millis:2000}") long connectTimeoutMillis,
+            @Value("${adapter.zeropay.enrichment.read-timeout-millis:30000}") long readTimeoutMillis) {
+        // T3-11: this hop needs a LONGER budget than the rest of this service, which is the reason it
+        // is set here rather than left to gmepay.http.client.read-timeout.
+        //
+        // That service-wide value is 4s, chosen to nest inside payment-executor's 5s hub->adapter
+        // budget on the LIVE PAYMENT path. This call is not on that path: it is a nightly batch window
+        // reading a whole business day of refunds and committed FX from transaction-mgmt. Holding it
+        // to a live-payment budget would make the 02:00 window fail on a perfectly healthy but
+        // unindexed day-range query, and the failure would look like an outage rather than a slow
+        // query.
+        //
+        // Still bounded, and safely so: every method here catches and returns an empty map, so a
+        // timeout degrades the batch to pre-enrichment behaviour (zero refund amount, business-date
+        // value date) instead of hanging the scheduler thread. Nothing here moves money.
+        //
+        // Set on this builder rather than by property because it is a per-HOP decision; the test
+        // constructor below takes a pre-built RestClient, so MockRestServiceServer is unaffected.
+        this.restClient = builder.baseUrl(baseUrl)
+                .requestFactory(com.gme.pay.http.HttpClientTimeouts.requestFactory(
+                        connectTimeoutMillis, readTimeoutMillis))
+                .build();
     }
 
     /** Package-private test constructor — accepts a pre-built RestClient (e.g. MockRestServiceServer). */

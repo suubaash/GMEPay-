@@ -31,9 +31,30 @@ import java.util.List;
  *       uploaded.</li>
  *   <li>{@code screeningStatus} / {@code screeningProviderRef} /
  *       {@code screenedAt} — latest sanctions screening verdict stored on the
- *       row ({@code CLEAR} | {@code HIT} | {@code NEEDS_REVIEW}, the vendor
- *       run reference, and when it completed). {@code null} before the first
- *       run.</li>
+ *       row, the producer's run reference, and when that run finished.
+ *       {@code null} before the first run.
+ *       <p><b>The roster is four values, not three</b> (gap T1-4):
+ *       {@code CLEAR} | {@code HIT} | {@code NEEDS_REVIEW} |
+ *       {@code NOT_SCREENED_NO_PROVIDER}. This javadoc previously listed only
+ *       the first three and described the run as "completed", which is exactly
+ *       the reading that let a stub verdict pass for a real one. <b>Today
+ *       {@code NOT_SCREENED_NO_PROVIDER} is the only reachable outcome of a
+ *       clean run</b>, because no authoritative KYB provider is configured
+ *       (ADR-014, Octa sandbox credentials pending) and
+ *       {@code ScreeningResult} coerces a non-authoritative {@code CLEAR} to
+ *       it. A consumer must therefore treat {@code CLEAR} as
+ *       "a real provider found nothing" and
+ *       {@code NOT_SCREENED_NO_PROVIDER} as "nothing was screened" — never as
+ *       a synonym, and never as a green tick.
+ *       <p><b>Known contract gap:</b> the three provenance columns that carry
+ *       WHY a verdict is non-authoritative
+ *       ({@code screening_provider_id} / {@code screening_authoritative} /
+ *       {@code screening_caveat}, config-registry V042) are persisted and
+ *       returned by kyb-adapter but are <b>not</b> fields on this record, so
+ *       the caveat text does not reach a wizard consumer through this DTO —
+ *       only the status value does. Adding them changes this record's
+ *       constructor arity and therefore every caller in config-registry and
+ *       ops-partner-bff; it is a listed follow-up, not an oversight.</li>
  *   <li>Bitemporal stamps (ADR-010): {@code validFrom} / {@code validTo}
  *       (business time) and {@code recordedAt} (transaction time of this row
  *       version).</li>

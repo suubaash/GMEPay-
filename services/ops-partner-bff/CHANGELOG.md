@@ -2,6 +2,186 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-31 - Stub clients stop winning by default, and the last bare Kafka factory reads its concurrency
+
+Three selectors (`gmepay.reporting-compliance.client`, `gmepay.system-health.client`,
+`gmepay.webhook-ops.client`) were set in NO compose service, NO Helm values file and nothing else,
+while their stubs carried `matchIfMissing = true`. So in every environment the Reports page served
+fixtures instead of BOK FX1014/FX1015 rows, the System Health page reported all 17 services UP
+whether or not any of them were running, and the webhook-secret panel reported zero endpoints -
+which is why T5-8's "every deploy target must set rest" was never actioned: nothing failed when it
+wasn't. This is the T1-1 defect class, third instance, and it is closed here as a class.
+
+### Changed
+- **Every `gmepay.*.client` selector now defaults to `rest`**, not `stub`. `matchIfMissing = true`
+  moved from the 12 `Stub*` beans onto their 17 `Rest*` counterparts. The one deliberate exception
+  is `gmepay.operator-action-audit.client`, which stays `db`: no service exposes
+  `POST /v1/audit/operator-actions`, so making its REST client the fallback would fail-close every
+  audited operator action. All three newly-inverted endpoints were verified to exist FIRST
+  (`GET /v1/reports`; `/actuator/health` fleet-wide; notification-webhook's
+  `/v1/webhooks/{deliveries,endpoints}/**`) - that check is what stopped the operator-audit
+  inversion, and it is the step that makes an inversion safe rather than optimistic.
+- **Five stubs that were bare `@Component`s are now gated** `havingValue = "stub"`:
+  `StubApiKeyClient`, `StubPlatformSettingsClient`, `StubPortalWebhookClient`,
+  `StubPrefundingClient`, `StubStatementClient`. They used to be CONSTRUCTED in every environment
+  and merely displaced at injection time by the real client's `@Primary` - i.e. one removed
+  annotation away from being live. `StubPlatformSettingsClient` served `wallet.fee.krw` and the
+  prefunding alert tiers, so that distance mattered.
+- **An unrecognised selector value leaves no bean**, so the controller that requires the port fails
+  context refresh and the service refuses to start rather than resolving to something that looks
+  functional.
+- **Running standalone with no upstreams is now a deliberate act**: set
+  `GMEPAY_<UPSTREAM>_CLIENT=stub` for the ones you want faked. `BffSecurityFilterChainTest` does
+  exactly that, in the annotation, with the reason.
+- **`OpsAlertKafkaConsumerConfig` reads `spring.kafka.listener.concurrency`** (default 3 =
+  `KAFKA_NUM_PARTITIONS`, clamped at 1). It was the last hand-built factory in the fleet that did
+  not: Boot binds that property only onto its own auto-configured factory, so on this one it was
+  settable, visible in `/actuator/env`, and inert. `0` from a typo would have meant no consumer
+  threads at all - ops alerts silently stopped being stored and paged on.
+
+### Added
+- **`client/StubClientSelectionWarner`** - one startup banner naming every stub this JVM actually
+  wired, with the selector that would replace it. Enumerating the container cannot forget a bean,
+  which a per-class WARN can; and two stubs have no real counterpart at all
+  (`StubAuditClient`, `StubRatesClient`), so nothing else would ever say so. Logs INFO when no stub
+  is wired, because "no warning" has to be a positive statement rather than silence.
+- **`client/StubClientSelectorInversionTest`** - fails the build on a new `:stub` default, a new
+  `matchIfMissing` stub, an ungated stub that has a real counterpart, a `Rest*` bean that does not
+  win when the selector is absent, and on any of the three decision tables breaking.
+- **`alert/OpsAlertKafkaConcurrencyTest`** - reads the concurrency back off the built factory (the
+  only way to distinguish "unset" from "unreadable"), pins the default at the partition count, and
+  pins the clamp. The fleet guard's `KNOWN_UNFIXED` entry for this service was deleted in the same
+  change; that baseline is now empty.
+
+### Documented, not fixed
+- `StubAuditClient` fabricates 25 audit rows for `GET /v1/admin/audit` and has no real counterpart
+  and no selector - it cannot be switched to the truth. The real surfaces already exist
+  (config-registry's hash-chained `audit_log` via `AuditTrailClient`; this service's own
+  `operator_action_audit`). Retiring the page onto one of them changes an Admin UI contract, so it
+  is recorded rather than done here.
+- `StubRatesClient` computes the right shape from a hardcoded treasury table and a flat 1%/1%
+  margin, i.e. plausible and wrong, with no `rate-fx` adapter to switch to.
+- The per-JVM state in `StubOpsControlClient` / `StubConfigRegistryClient` /
+  `StubPlatformSettingsClient` / `StubSandboxKeyClient` is NOT moved to shared state, deliberately:
+  each imitates a system that already is shared and durable, so sharing the imitation would build
+  the wrong thing twice. Each javadoc now states its exact N>1 failure instead.
+
+
+## 2026-07-30 - The BFF gains a datastore, and the last single-replica ceiling in the platform is gone
+
+`OpsAlertStore` was a 200-entry per-JVM `ArrayDeque` with a per-JVM `AtomicLong` minting the alert
+ids. It was the ONE thing keeping this service at one replica.
+
+### Added
+- **This service now owns a small database** - a deliberate, narrow exception to its "owns no data"
+  rule. Only state that is *born* here: `ops_alerts` (Flyway **V001**), `operator_action_audit`
+  (**V002**), `shedlock` (**V003**). Everything else the BFF shows is still read over HTTP from the
+  service that owns it. `spring-boot-starter-data-jpa` + `flyway-core` + `postgresql`/`h2`, and
+  `shedlock-spring`/`-provider-jdbc-template` for one locked job.
+- **`alert/OpsAlertStore` is now a port** with `JpaOpsAlertStore` (default) and
+  `InMemoryOpsAlertStore`, selected by `gmepay.ops.alerts.store` = `db` | `memory`; anything else
+  **refuses to start**, and `db` over an in-memory H2 logs a WARN naming the N=1 ceiling it silently
+  reimposes.
+- **`alert/OpsAlertRetentionSweeper`** - `gmepay.ops.alerts.retention-days` (default 90, the same
+  property name and default as payment-executor's emitter-side `ops_alerts` so the two halves of one
+  alert's history age out together). An ENGINEERING default: a records-retention owner should confirm
+  how long operational alert evidence and the acks on it must be kept.
+- **`client/db/DbOperatorActionAuditClient`** - the durable operator-action audit trail, and the new
+  default.
+- Tests: `JpaOpsAlertStoreTest` (two replicas, restart, the concurrent paging-stamp-vs-ack race),
+  `OpsAlertStoreConfigTest`, `EscalationSweepAcrossReplicasTest`,
+  `OperatorActionAuditClientSelectionTest`, `DbOperatorActionAuditClientTest`. Every cross-replica
+  assertion is paired with the per-JVM version getting it wrong.
+
+### Fixed
+- **The alert IDS collided at N>1**, which nobody had written down: `seq` restarted at 1 on every
+  replica and every restart, so `POST /v1/admin/ops/alerts/{id}/ack` could acknowledge a **different
+  alert than the operator clicked**. One database sequence mints them now.
+- The alerts list and the ack state no longer differ per replica, and neither is lost on restart.
+- **`StubOperatorActionAuditClient` was the live audit trail in every environment** (it carried
+  `matchIfMissing = true` and `GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT` was set nowhere): per-JVM `OA-n`
+  ids colliding across replicas, lost on restart, and `recordDurable()` could not fail - so
+  "no money-affecting operator action without a durable audit record" was decorative. The stub is now
+  opt-in and WARNs at construction; an unrecognised selector leaves no bean so the service refuses to
+  boot. **The default did NOT become `rest`**, because `rest` POSTs
+  `/v1/audit/operator-actions`, which **no service in this repo exposes** - selecting it today
+  fail-closes every audited operator action. Verifying that first is the T1-1 precedent, and it is
+  what stopped a straight inversion.
+
+### Changed
+- `update(seq, mutator)` runs under `SELECT ... FOR UPDATE`, so a concurrent ack and paging stamp
+  cannot drop one another's fields - the read-modify-write that made a Redis hash the wrong *shape*
+  for this store. Explicit `TransactionTemplate`s, not `@Transactional`: the boundary is a correctness
+  requirement, and an annotation that only works through a proxy would silently do nothing when the
+  store is constructed directly.
+- `add()` **never throws** (it is called immediately before paging a human, so a storage failure must
+  not become a missed page); reads **do** propagate, because "no alerts" from an unreachable store is
+  a lie a human acts on. `management.health.db.enabled=false` for the same asymmetry: the datastore
+  backs 2 of ~40 surfaces, and marking every replica unready would take the whole console down.
+- **The escalation sweep is STILL not ShedLocked**, now that a `LockProvider` exists here. A lock can
+  only ever *subtract* escalations, so a stuck lock row would silence the pager; the duplicate it
+  would prevent is already prevented at the pager by the shared `PagingCooldown`. A reflection test
+  fails the build if anyone adds the annotation, paired with one proving the retention sweep *is*
+  locked so neither reads as an oversight.
+- The escalation query is capped at `OpsAlertStore.MAX_LIMIT` instead of the old "0 = unlimited",
+  which against a table would fetch the whole retention window every tick.
+- `docker-compose.yml` (+ `postgres-bff` on host port 5448) and all four Helm values files set
+  `SPRING_DATASOURCE_URL` and `GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT=db`.
+
+
+## 2026-07-30 — Paging dedupe is shared: the BFF no longer pages a human once per replica
+
+### Added
+- **`alert/paging/PagingCooldown`** plus `InMemoryPagingCooldown`, `RedisPagingCooldown`
+  (`SET NX EX`), `FailoverPagingCooldown` and `PagingCooldownConfig`
+  (`gmepay.ops.paging.cooldown-store` = `auto` | `redis` | `memory`; `redis` without a host, or any
+  unrecognised value, **refuses to start**).
+- `spring-boot-starter-data-redis` — the only shared store this BFF can use, since it owns no
+  database. Servlet, not reactive: one `SET NX EX` per page is not work that wants a reactive client.
+
+### Changed
+- **`OpsPagingDispatcher` claims the cooldown atomically before paging**, instead of checking a
+  per-JVM map and then setting it. A failed delivery — or a throwing paging port — **releases** the
+  claim, so the pre-existing rule that only a *delivered* page opens the cooldown survives the change
+  to an atomic claim.
+- **The old "naturally single-fire across replicas" argument was incomplete.** It was true of the
+  consume path (one Kafka consumer per record) and missed the two cases that actually double-page: the
+  escalation sweep runs on *every* replica, and a re-fired alert consumed by a *different* replica
+  than last time finds an empty cooldown map well inside the 15-minute window.
+- **`OpsPagingEscalationScheduler` is deliberately NOT locked to one replica — reversing this class's
+  own earlier note** ("single-replica-only; ShedLock it if the BFF gains a DataSource"). The alert
+  buffer is per-replica, so a lock would let one replica sweep and leave every *other* replica's
+  un-acked CRITICAL alerts never escalated: a missed page, which is worse than the duplicate it
+  prevents. The sweep runs everywhere; duplicates are stopped at the pager.
+- **This control's failure posture is the deliberate inverse of api-gateway's.** An unreachable Redis
+  degrades dedupe to per-JVM and **never suppresses a page** — failing closed would silence the pager
+  during an incident, the one moment it exists for. Not configurable, because there is no operational
+  position from which "silence the pager when its dedupe cache is unreachable" is the right answer. A
+  missed page is not recoverable; a duplicate page is an annoyance.
+- `management.health.redis.enabled=false` — a Redis outage must not mark every BFF replica unready
+  (taking the admin UI and the partner portal down) over a noise-reduction feature.
+
+### Known limitation, recorded rather than papered over
+**`OpsAlertStore` was NOT moved to shared state.** At N>1 the alerts list differs per replica, an ack
+recorded on A is invisible on B (so B keeps escalating an acknowledged alert, bounded to one page per
+dedupe window), and the control tower's counts are a fraction of the fleet's. Redis is the wrong
+*shape* for it: `update(seq, mutator)` is a read-modify-write over a record whose paging stamp and ack
+are written by different threads, which on a Redis hash needs `WATCH`/Lua or an ack silently
+overwrites a concurrent paging stamp — and once `seq` allocation, capacity eviction and filtered
+newest-first queries are added, the thing being described is a **table**: exactly the durable JPA
+store already recorded as the follow-up, which would also fix restart durability and give ack an
+audit trail. Building the Redis version first means building it twice and shipping the weaker one.
+**So run this service at 1 replica** until it has that store, or accept a divergent alerts view
+knowingly. It is an operator-surface correctness defect, not a money one, and it constrains no other
+service.
+
+### Tests
+11 new (487 total, 0 failures). `PagingCooldownAcrossReplicasTest`: two replicas escalating the same
+alert page **once** while two per-JVM cooldowns page **twice**; a re-fired alert on another replica is
+recorded `SUPPRESSED`; a failed or throwing delivery releases the claim so another replica may retry;
+an unavailable Redis still pages **and** still dedupes locally; an absent Redis reply reads as "page
+it"; and Redis is never wired without the failover decorator.
+
 ## 2026-07-03 — Platform-settings pass-through (feat/platform-settings-be)
 
 Additive. Thin proxy so the admin UI (which only talks to this BFF) can reach config-registry's

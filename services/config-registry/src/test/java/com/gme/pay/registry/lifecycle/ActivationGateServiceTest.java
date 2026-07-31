@@ -1,7 +1,9 @@
 package com.gme.pay.registry.lifecycle;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.gme.pay.kyb.ScreeningProvenance;
 import com.gme.pay.domain.Partner;
 import com.gme.pay.domain.PartnerType;
 import com.gme.pay.registry.bank.BankAccountEntity;
@@ -76,6 +78,9 @@ class ActivationGateServiceTest {
     @Autowired
     private PartnerSchemeRepository schemeRepository;
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager em;
+
     // ------------------------------------------------------------- seeding
 
     private PartnerEntity seedPartner(String code, PartnerType type) {
@@ -99,13 +104,35 @@ class ActivationGateServiceTest {
         return partner;
     }
 
+    /**
+     * Seed a KYB row whose screening came from a REAL provider — the shape a
+     * screening-capable environment produces. T1-4: the provenance is mandatory,
+     * because a bare {@code CLEAR} is no longer a passed sanctions check (and the
+     * V042 CHECK {@code ck_partner_kyb_clear_requires_authority} refuses to store
+     * one).
+     */
     private void addKyb(PartnerEntity partner, String riskRating,
                         String riskRationale, String screeningStatus) {
+        addKyb(partner, riskRating, riskRationale, screeningStatus, "octa-test", true, null);
+    }
+
+    /** Seed the stub-produced shape: nothing was screened. */
+    private void addUnscreenedKyb(PartnerEntity partner, String riskRating, String riskRationale) {
+        addKyb(partner, riskRating, riskRationale, "NOT_SCREENED_NO_PROVIDER",
+                "stub", false, ScreeningProvenance.STUB_CAVEAT);
+    }
+
+    private void addKyb(PartnerEntity partner, String riskRating, String riskRationale,
+                        String screeningStatus, String providerId, boolean authoritative,
+                        String caveat) {
         KybEntity kyb = new KybEntity();
         kyb.setPartnerId(partner.getId());
         kyb.setRiskRating(riskRating);
         kyb.setRiskRationale(riskRationale);
         kyb.setScreeningStatus(screeningStatus);
+        kyb.setScreeningProviderId(providerId);
+        kyb.setScreeningAuthoritative(authoritative);
+        kyb.setScreeningCaveat(caveat);
         kyb.setScreenedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
         kybRepository.saveAndFlush(kyb);
     }
@@ -161,6 +188,11 @@ class ActivationGateServiceTest {
         schemeRepository.saveAndFlush(scheme);
     }
 
+    private static java.util.List<String> descriptions(ActivationGateResult result) {
+        return result.unmet().stream()
+                .map(ActivationGateService.UnmetCondition::description).toList();
+    }
+
     private static java.util.List<String> codes(ActivationGateResult result) {
         return result.unmet().stream()
                 .map(ActivationGateService.UnmetCondition::code).toList();
@@ -190,7 +222,7 @@ class ActivationGateServiceTest {
     }
 
     @Test
-    @DisplayName("no KYB row -> KYB_NOT_APPROVED and SANCTIONS_NOT_CLEAR")
+    @DisplayName("no KYB row -> KYB_NOT_APPROVED and SANCTIONS_NOT_SCREENED")
     void kybRowMissing() {
         PartnerEntity partner = seedAllClear("gate_kyb_01");
         kybRepository.findCurrentByPartnerId(partner.getId()).ifPresent(k -> {
@@ -201,7 +233,161 @@ class ActivationGateServiceTest {
         ActivationGateResult result = gate.check(partner);
         assertThat(codes(result)).containsExactlyInAnyOrder(
                 ActivationGateService.KYB_NOT_APPROVED,
-                ActivationGateService.SANCTIONS_NOT_CLEAR);
+                ActivationGateService.SANCTIONS_NOT_SCREENED);
+    }
+
+    // ------------------------------------------- T1-4: unscreened activation
+
+    @Test
+    @DisplayName("T1-4: a stub-derived KYB row cannot satisfy the sanctions pre-condition")
+    void unscreenedKyb_refusesActivation() {
+        PartnerEntity partner = seedPartner("gate_unscreened_01", PartnerType.OVERSEAS);
+        addUnscreenedKyb(partner, "MEDIUM", null);
+        addBankAccount(partner, "USD", BankVerificationStatus.BANK_LETTER);
+        addContract(partner, LocalDate.now().minusDays(1), Instant.now());
+        addPrefunding(partner);
+        addContacts(partner, ContactRole.OPS_24X7, ContactRole.FINANCE,
+                ContactRole.COMPLIANCE_MLRO, ContactRole.TECH);
+        addScheme(partner, true);
+
+        ActivationGateResult result = gate.check(partner);
+        assertThat(result.passes()).isFalse();
+        assertThat(codes(result)).containsExactly(ActivationGateService.SANCTIONS_NOT_SCREENED);
+        assertThat(result.unscreenedBasis())
+                .as("the gate refused, so there is no unscreened basis to record")
+                .isNull();
+        assertThat(descriptions(result).get(0))
+                .contains("NOT AUTHORITATIVE")
+                .contains("No operator override can satisfy this condition");
+    }
+
+    @Test
+    @DisplayName("T1-4: a risk rationale cannot override a screening that never ran")
+    void unscreenedKyb_isNotOverridableByRationale() {
+        PartnerEntity partner = seedPartner("gate_unscreened_02", PartnerType.OVERSEAS);
+        // A rationale that would legitimately override a HIT…
+        addUnscreenedKyb(partner, "MEDIUM",
+                "Compliance committee sign-off 2026-06-01, EDD on file");
+        addBankAccount(partner, "USD", BankVerificationStatus.BANK_LETTER);
+        addContract(partner, LocalDate.now().minusDays(1), Instant.now());
+        addPrefunding(partner);
+        addContacts(partner, ContactRole.OPS_24X7, ContactRole.FINANCE,
+                ContactRole.COMPLIANCE_MLRO, ContactRole.TECH);
+        addScheme(partner, true);
+
+        // …does not manufacture a screening.
+        assertThat(codes(gate.check(partner)))
+                .containsExactly(ActivationGateService.SANCTIONS_NOT_SCREENED);
+    }
+
+    @Test
+    @DisplayName("T1-4: the database itself refuses a CLEAR that names no authority")
+    void clearWithoutAuthority_isRejectedByTheDatabase() {
+        PartnerEntity partner = seedPartner("gate_unscreened_03", PartnerType.OVERSEAS);
+        KybEntity kyb = new KybEntity();
+        kyb.setPartnerId(partner.getId());
+        kyb.setRiskRating("LOW");
+        kyb.setScreeningStatus("CLEAR");
+        // No provenance at all — exactly what a psql UPDATE or a legacy writer does.
+        kyb.setScreenedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
+
+        assertThatThrownBy(() -> kybRepository.saveAndFlush(kyb))
+                .as("V042 ck_partner_kyb_clear_requires_authority must reject it")
+                .isInstanceOf(Exception.class);
+    }
+
+    // ---------------------------------- T1-4 owner decision: manual KYB SOP authority
+
+    /**
+     * Seed the row an attested MANUAL screening produces — the interim authority the owner chose
+     * (2026-07-28). Note the V045 CHECKs are live in this slice, so a partially-attested row
+     * cannot even be seeded through this helper; the incomplete case below has to break the row
+     * AFTER insert, which is exactly how a legacy row / restored dump / hand-edit would present.
+     */
+    private void addManuallyAttestedKyb(PartnerEntity partner, String riskRating,
+                                        String screeningStatus) {
+        KybEntity kyb = new KybEntity();
+        kyb.setPartnerId(partner.getId());
+        kyb.setRiskRating(riskRating);
+        kyb.setScreeningStatus(screeningStatus);
+        kyb.setScreeningProviderId(KybEntity.MANUAL_ATTESTATION_PROVIDER_ID);
+        kyb.setScreeningAuthoritative(true);
+        kyb.setScreenedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
+        kyb.setManualAttesterActorId("compliance.officer@gme.com");
+        kyb.setManualAttestedAt(Instant.now().truncatedTo(ChronoUnit.MICROS));
+        kyb.setManualSopDocumentRef("GME-COMP-SOP-014");
+        kyb.setManualSopVersion("v3");
+        kyb.setManualSourcesConsulted("UN consolidated list + SOP §4 jurisdiction lists");
+        kybRepository.saveAndFlush(kyb);
+    }
+
+    private PartnerEntity seedAllClearExceptKyb(String code) {
+        PartnerEntity partner = seedPartner(code, PartnerType.OVERSEAS);
+        addBankAccount(partner, "USD", BankVerificationStatus.BANK_LETTER);
+        addContract(partner, LocalDate.now().minusDays(1), Instant.now());
+        addPrefunding(partner);
+        addContacts(partner, ContactRole.OPS_24X7, ContactRole.FINANCE,
+                ContactRole.COMPLIANCE_MLRO, ContactRole.TECH);
+        addScheme(partner, true);
+        return partner;
+    }
+
+    @Test
+    @DisplayName("T1-4: an attested manual screening satisfies the sanctions pre-condition")
+    void attestedManualScreening_passesTheGate() {
+        PartnerEntity partner = seedAllClearExceptKyb("gate_manual_01");
+        addManuallyAttestedKyb(partner, "MEDIUM", KybEntity.SCREENING_CLEAR_MANUAL_ATTESTATION);
+
+        ActivationGateResult result = gate.check(partner);
+
+        assertThat(result.passes()).isTrue();
+        assertThat(result.unmet()).isEmpty();
+        assertThat(result.unscreenedBasis())
+                .as("a manual attestation IS a screening — nothing unscreened to record")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("T1-4: a manual HIT still needs an override note, like any other HIT")
+    void manualHit_stillNeedsAnOverrideNote() {
+        PartnerEntity partner = seedAllClearExceptKyb("gate_manual_05");
+        addManuallyAttestedKyb(partner, "MEDIUM", "HIT");
+
+        assertThat(codes(gate.check(partner)))
+                .containsExactly(ActivationGateService.SANCTIONS_NOT_CLEAR);
+    }
+
+    /**
+     * The database will not let an incomplete manual attestation exist at all — not even through a
+     * native UPDATE that bypasses JPA entirely, which is the route a hand-edit or a backfill would
+     * take. Each of the five columns is load-bearing.
+     *
+     * <p>The gate's own {@code SANCTIONS_MANUAL_ATTESTATION_INCOMPLETE} check therefore cannot be
+     * exercised from here; it guards rows this schema cannot produce (a pre-V045 row, an older
+     * dump, a future migration) and is pinned by
+     * {@code ActivationGateManualAttestationTest} against a stubbed repository instead.
+     */
+    @Test
+    @DisplayName("T1-4: the database refuses an incomplete manual attestation, column by column")
+    void incompleteManualAttestation_isRejectedByTheDatabase() {
+        PartnerEntity partner = seedAllClearExceptKyb("gate_manual_06");
+        addManuallyAttestedKyb(partner, "MEDIUM", KybEntity.SCREENING_CLEAR_MANUAL_ATTESTATION);
+
+        for (String column : new String[] {
+                "manual_attester_actor_id", "manual_attested_at", "manual_sop_document_ref",
+                "manual_sop_version", "manual_sources_consulted"}) {
+            assertThatThrownBy(() -> nullOutAttestationColumn(partner, column))
+                    .as("V045 must refuse to let %s be nulled out under a manual clearance", column)
+                    .isInstanceOf(Exception.class);
+        }
+    }
+
+    private void nullOutAttestationColumn(PartnerEntity partner, String column) {
+        em.createNativeQuery("UPDATE partner_kyb SET " + column
+                        + " = NULL WHERE partner_id = :pid AND superseded_at IS NULL")
+                .setParameter("pid", partner.getId())
+                .executeUpdate();
+        em.flush();
     }
 
     @Test
@@ -384,7 +570,7 @@ class ActivationGateServiceTest {
         assertThat(codes(result)).contains(
                 ActivationGateService.LEGAL_NAME_MISSING,
                 ActivationGateService.KYB_NOT_APPROVED,
-                ActivationGateService.SANCTIONS_NOT_CLEAR,
+                ActivationGateService.SANCTIONS_NOT_SCREENED,
                 ActivationGateService.BANK_ACCOUNT_UNVERIFIED,
                 ActivationGateService.CONTRACT_MISSING,
                 ActivationGateService.PREFUNDING_MISSING,

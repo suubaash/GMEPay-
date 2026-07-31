@@ -9,9 +9,12 @@ dependencies {
     // Actuator (feat/actuator-health): /actuator/health + liveness/readiness probes + /actuator/metrics.
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    // Redis-backed idempotency-key store (17.3-G02). Lettuce client; activates only
-    // when spring.data.redis.host is set — in-memory store is the local fallback.
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // NOTE: spring-boot-starter-data-redis was here for a Redis-backed idempotency store that was
+    // auto-selected whenever spring.data.redis.host was set -- which the Helm ABI ConfigMap does
+    // for every pod, so this service used a non-durable cache for its duplicate-money-transaction
+    // control without anyone choosing that. The store is now the module's own idempotency_keys
+    // table (V013), so the dependency is gone: it would otherwise also re-add a Redis health
+    // indicator that could mark this service unready over infrastructure it does not use.
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation 'org.flywaydb:flyway-core'
     // ShedLock: distributed lock so a @Scheduled method fires on at most one replica per tick

@@ -5,7 +5,7 @@ import com.gme.pay.scheme.nepal.client.NepalSchemeApiClient;
 import com.gme.pay.scheme.nepal.dto.DecodeResponse;
 import com.gme.pay.scheme.nepal.dto.SubmitRequest;
 import com.gme.pay.scheme.nepal.dto.SubmitResponse;
-import com.gme.pay.scheme.nepal.sign.StubNepalSigner;
+import com.gme.pay.scheme.nepal.sign.RsaNepalSigner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,9 +36,21 @@ class NepalSchemeAdapterTest {
         ObjectMapper mapper = new ObjectMapper();
         RestClient.Builder builder = RestClient.builder().baseUrl(BASE);
         server = MockRestServiceServer.bindTo(builder).build();
+        // Pass the BUILT client, not the builder: the production constructor installs its own
+        // request factory (T3-11 outbound timeouts), which would replace the one
+        // MockRestServiceServer.bindTo(builder) just installed and send this test at a real socket.
         NepalSchemeApiClient client = new NepalSchemeApiClient(
-                builder, new StubNepalSigner(mapper), mapper, BASE, "t", "k");
+                builder.build(), devSigner(mapper), mapper, "t", "k");
         adapter = new NepalSchemeAdapter(client);
+    }
+
+    /**
+     * A REAL signer for the test, keyed with an explicitly opted-in throwaway RSA-2048 keypair
+     * ({@code EPHEMERAL_DEV}) — the same mode the local/sim stack uses. There is no constant-signature
+     * fallback to lean on any more (T4-1), so the signing path executes for real here too.
+     */
+    private static RsaNepalSigner devSigner(ObjectMapper mapper) {
+        return new RsaNepalSigner(mapper, "", "", "EPHEMERAL_DEV");
     }
 
     @Test

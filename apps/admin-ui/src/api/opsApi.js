@@ -8,18 +8,20 @@
  * adminApi object.
  *
  * Auth:
- *   - Every request carries `Authorization: Bearer <token>` when a JWT is in
+ *   - Every request carries `Authorization: Bearer <Keycloak access_token>` from
  *     localStorage (see ./auth.js), exactly like client.js.
- *   - Money-affecting ACTIONS (pause/resume/maintenance/suspend/unsuspend,
- *     txn resolve, webhook replay, recon re-run) additionally send
- *     `X-Gme-Permissions: ops:operate`. The BFF now FAILS CLOSED on these —
- *     without that permission it returns 403.
+ *   - Money-affecting ACTIONS (pause/resume/maintenance/suspend/unsuspend, txn
+ *     resolve, webhook replay, recon re-run) require the `ops:operate`
+ *     permission, which the BFF reads from the token's `permissions` claim
+ *     (`security/TokenClaims` → `OpsRbacGuard`).
  *
- *     DEV NOTE: hard-coding the permission header here is a dev/tunnel
- *     convenience only. In production the operator's real permissions come
- *     from their token / the PDP (lib-rbac); the BFF derives X-Gme-Permissions
- *     from the verified JWT, NOT from a client-supplied header. Do not ship
- *     this hard-coded header to prod.
+ *     The `X-Gme-Permissions: ops:operate` header this module used to send is
+ *     GONE (gap T0-3). It was never a permission — it was a self-declaration the
+ *     BFF used to trust, i.e. anyone who could reach port 8095 could pause the
+ *     platform with one curl. The BFF now ignores the header entirely, so
+ *     sending it would only mislead the next reader. `init.operate` is kept as a
+ *     documentation marker on the dangerous calls; if the operator's token lacks
+ *     `ops:operate` the BFF returns 403 and that is correct.
  *
  * Endpoint contract (BFF surface):
  *
@@ -44,8 +46,9 @@
 import { TOKEN_KEY } from './auth';
 
 /**
- * Permission required by the BFF for money-affecting ops actions.
- * Sent via the X-Gme-Permissions header on ACTION calls only (reads omit it).
+ * Permission the BFF requires (from the token's `permissions` claim) for
+ * money-affecting ops actions. Exported for display/diagnostics only — it is NOT
+ * sent on the wire; a client cannot grant itself a permission.
  */
 export const OPS_OPERATE_PERMISSION = 'ops:operate';
 
@@ -76,23 +79,21 @@ function qs(params) {
 /**
  * @param {string} path
  * @param {RequestInit & { operate?: boolean }} [init]
- *   When `init.operate` is true, attaches the X-Gme-Permissions: ops:operate
- *   header the fail-closed BFF requires for money-affecting actions.
+ *   `init.operate` marks a money-affecting action that the BFF authorizes from
+ *   the token's `permissions` claim (`ops:operate`). It adds NO header: the
+ *   caller cannot self-authorize.
  */
 async function request(path, init = {}) {
   const url = `${baseUrl()}${path}`;
   const token = readToken();
-  const { operate, headers: extra, ...rest } = init;
+  // `operate` is destructured off so it never leaks into fetch's RequestInit.
+  const { operate: _operate, headers: extra, ...rest } = init;
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
     ...(extra || {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  // DEV-only: the fail-closed BFF requires ops:operate for dangerous actions.
-  // In prod this is derived server-side from the operator's verified token,
-  // not from a client header — see the module header note.
-  if (operate) headers['X-Gme-Permissions'] = OPS_OPERATE_PERMISSION;
 
   let res;
   try {
@@ -178,14 +179,15 @@ export function searchTransactions(filters) {
 }
 
 // ---------------------------------------------------------------------------
-// Actions (money-affecting) — all send X-Gme-Permissions: ops:operate.
+// Actions (money-affecting) — all require the ops:operate permission in the
+// caller's token; the BFF (OpsRbacGuard) enforces it, no header is sent.
 // ---------------------------------------------------------------------------
 
 /**
  * POST /v1/admin/ops/alerts/{id}/ack { note? }
  * Acknowledge an open alert. The BFF derives the operator from the verified
  * token; a free-text `note` may accompany the ack. Money-affecting-adjacent
- * on-call action — sends X-Gme-Permissions: ops:operate (fail-closed BFF).
+ * on-call action — requires ops:operate in the token (fail-closed BFF).
  * Returns the updated OpsAlert (acked=true, ackedBy/ackedAt populated).
  */
 export function ackAlert(id, { note } = {}) {

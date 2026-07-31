@@ -14,6 +14,37 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
   flyway:
     enabled: true
+  # ---- T3-11: @Scheduled thread pool -------------------------------------------------------------
+  # `spring.task.scheduling.pool.size` was set in NO file anywhere in this repo, so Spring's default
+  # of ONE thread applied to every service. settlement-reconciliation stacks SEVEN jobs on it: the
+  # outbox publisher (1s), the morning and afternoon recon runs, the corridor recon, and the three
+  # settlement-generation windows (05:00 / 14:00 / 22:00 KST).
+  #
+  # One thread means these do not merely run late under load — they run in strict sequence, so a slow
+  # job blocks its siblings entirely. The 22:00 window generates two files back to back; on one thread
+  # that delays the 1-second outbox drain for its whole duration, so the settlement.completed events
+  # for the day queue behind the very file generation that produced them.
+  #
+  # Sized to 8 = 7 jobs + 1. It was 4, justified by the argument that "the three generation windows are
+  # hours apart and cannot contend, so the real demand is the outbox drain plus at most one cron plus
+  # the heartbeat". That argument is an unmeasured assumption about RUNTIME DURATION, and it is the same
+  # argument that had already drifted into a real defect in payment-executor (7 jobs against a pool of
+  # 6). Here it is weaker still: all three of those windows GENERATE AND TRANSMIT A SETTLEMENT FILE, so
+  # how long each one runs depends on a business day's row count and a remote endpoint. Nothing in the
+  # service measures it, and nothing would report a window that silently did not run.
+  #
+  # Counting is auditable; arguing is not. A thread is ~1MB of stack against a 320MB heap; being wrong
+  # costs a settlement window that did not run. Enforced by SchedulerPoolSizeWiringGuardTest (pool >
+  # job count, strictly — the SchedulerLagProbe heartbeat shares this pool, and a probe that cannot get
+  # a thread reports NO lag), so an eighth job added here fails the build.
+  #
+  # The starvation was also SILENT: no scheduler-lag metric existed. lib-errors now registers one
+  # automatically (gmepay.scheduler.lag / .lag.max / .pool.size / .active / .queued) on every service
+  # with @EnableScheduling — see com.gme.pay.metrics.SchedulerLagProbe.
+  task:
+    scheduling:
+      pool:
+        size: 8
 
 server:
   port: 8085
@@ -42,7 +73,53 @@ settlement:
       international-fee-share-rate: "0.0021"
 
 gmepay:
+  # ---- business-day calendar (GAP T3-4: "holidays ignored") ----
+  # The batch schedulers and the settlement window/cutoff logic consult this before generating or
+  # reconciling anything. It ships EMPTY on purpose: there is no Korean banking-holiday table here and no
+  # rule for deriving one, because Seollal/Chuseok are lunar and substitute/temporary holidays are gazetted
+  # annually — a hardcoded table would be wrong for some year and believed anyway.
+  #
+  # POPULATING THIS IS AN OPERATOR / BUSINESS INPUT, not a code change. See
+  # Documentation/RUNBOOK_BATCH_OPS.md for what to put here and where the authoritative list comes from.
+  #
+  # While it is empty, every date classifies UNVERIFIED: batch runs still PROCEED (fail-open — refusing to
+  # settle until somebody types in a holiday table would be worse), but each run is stamped
+  # calendar_verdict=UNVERIFIED in the batch_runs ledger and the day's first run raises a
+  # BATCH_CALENDAR_UNVERIFIED WARN ops alert. The absence of calendar data is therefore VISIBLE rather than
+  # silently equivalent to "every day is a banking day".
+  calendar:
+    # ISO dates the KRW banking system is closed. Comma-separated. EMPTY by default.
+    non-business-dates: ${GMEPAY_CALENDAR_NON_BUSINESS_DATES:}
+    # Recurring weekly closures, e.g. SATURDAY,SUNDAY. EMPTY by default — which of the six batch windows
+    # to suppress at weekends is a business decision, so it is configuration, not a built-in assumption.
+    non-business-days-of-week: ${GMEPAY_CALENDAR_NON_BUSINESS_DAYS_OF_WEEK:}
+    # The operator-asserted coverage horizon. Dates AFTER it classify UNVERIFIED even when the holiday list
+    # is non-empty, so a calendar populated for 2026 stops silently vouching for 2027.
+    verified-through: ${GMEPAY_CALENDAR_VERIFIED_THROUGH:}
+    # true = refuse to run on an UNVERIFIED date instead of proceeding + alerting. Turn this on only once
+    # the calendar is genuinely maintained, or every batch window stops.
+    fail-closed: ${GMEPAY_CALENDAR_FAIL_CLOSED:false}
   settlement:
+    # ---- outbound transmission channel (GAP T4-5: "settlement never transmits") ----
+    # NOTHING IS EVER TRANSMITTED WHILE THIS IS BLANK, AND IT IS BLANK EVERYWHERE.
+    #
+    # The outbound spine books nets, writes settlement_batches/settlement_lines, builds and checksums the
+    # ZP0061/0063/0065/0066 fixed-width files — and then stops. The platform's only SftpTransport bean is
+    # LocalDirSftpTransport, which copies the file into a local temp directory. Real ZeroPay/KFTC SFTP needs
+    # scheme credentials and a certification run against the scheme: an EXTERNAL GATE, not a code change.
+    #
+    # While no channel is configured, every generated batch is stamped
+    # transmission_state=NOT_TRANSMITTED_CHANNEL_UNAVAILABLE with this reason on the row, the startup log
+    # carries a WARN, GET /v1/settlements/transmission-channel reports it, and every batch/statement read
+    # (service, BFF and UI) surfaces it. SettlementTransmissionRecorder REFUSES to record a transmission
+    # without a live channel, so the state cannot be reached by mistake.
+    #
+    # A local path (file:, /tmp, ./…) or a placeholder credential id is treated as NO CHANNEL on purpose —
+    # that is the LocalDirSftpTransport case, which writes to disk and sends nothing.
+    transmission:
+      channel:
+        endpoint: ${GMEPAY_SETTLEMENT_TRANSMISSION_ENDPOINT:}
+        credential-id: ${GMEPAY_SETTLEMENT_TRANSMISSION_CREDENTIAL_ID:}
     recon:
       # Gate: set to true in production only. Default false prevents accidental recon in dev/test.
       enabled: false
@@ -59,6 +136,26 @@ gmepay:
       morning-cron: "0 0 5 * * *"     # ZP0061 morning request, 05:00 KST
       afternoon-cron: "0 0 14 * * *"  # ZP0063 afternoon request, 14:00 KST
       detail-cron: "0 0 22 * * *"     # ZP0065 + ZP0066 detail files, 22:00 KST
+    # Cross-border three-way tie-out (GAP T2-2): our transactions ↔ our prefunding USD movements ↔
+    # the scheme adapter's record of what the scheme confirmed. Needs NO partner file — SendMN's
+    # recon file format is an open external question (plan gate O4).
+    corridor-recon:
+      # Gate: set to true in production only (same discipline as settlement.recon.enabled).
+      enabled: ${CORRIDOR_RECON_ENABLED:false}
+      # 02:30 UTC = 11:30 KST — reconciles YESTERDAY, after the KST day closed.
+      cron: "0 30 2 * * *"
+    corridor:
+      # Business-day zone for all three legs' date windows.
+      settlement-zone: "Asia/Seoul"
+      sendmn:
+        # Observations of payment-executor's SENDMN path, needed to reconstruct the KRW charged and to
+        # recognise a deduction priced off the hardcoded fallback rather than a live rate. NOT settings
+        # this service owns — keep in step with that service if it changes them.
+        service-fee-krw: "500"
+        fallback-krw-per-usd: "1350"
+        fallback-match-tolerance-krw: "0.5"
+        # USD shortfall tolerated before a line is flagged RATE_BASIS_VARIANCE. 0 = any shortfall breaks.
+        rate-basis-tolerance-usd: "0"
   clients:
     transaction-mgmt:
       base-url: ${TRANSACTION_MGMT_URL:http://transaction-mgmt:8082}
@@ -77,6 +174,26 @@ gmepay:
       # transmitted + ZP0012 received, read from the adapter's registration-status endpoint,
       # fail-CLOSED on outage). Default false → PermissiveRegistrationStatusAdapter in dev/test.
       enabled: ${SCHEME_ADAPTER_ZEROPAY_ENABLED:false}
+  # Cross-border tie-out leg (b): prefunding's float-movement read surface. Property name and default
+  # match every other consumer of prefunding in the repo (gmepay.prefunding.base-url).
+  prefunding:
+    base-url: ${PREFUNDING_URL:http://prefunding:8080}
+  # Cross-border tie-out leg (c): the scheme adapters' own settlement records. Same property shape
+  # payment-executor uses to reach them (gmepay.scheme-adapters.<CODE>.base-url).
+  scheme-adapters:
+    SENDMN:
+      base-url: ${SCHEME_ADAPTER_SENDMN_URL:http://scheme-adapter-sendmn:8093}
+  # Service-to-service internal-auth token (com.gme.pay.internalauth, #90). OUTBOUND only for this
+  # service, and now needed by TWO callers:
+  #   - scheme-adapter-zeropay's /internal/** — including the §8.2 registration-status projection
+  #     RestRegistrationStatusClient consults — behind the gate since T0-2. Blank ⇒ no header ⇒ 401
+  #     ⇒ the prerequisite fails CLOSED and settlement generation is blocked.
+  #   - prefunding's WHOLE surface (T0-5), which RestPrefundingMovementClient reads for corridor
+  #     tie-out leg (b). Blank ⇒ no header ⇒ 401 ⇒ leg (b) comes back empty and every line breaks
+  #     as MISSING_PREFUNDING. Loud and wrong-in-the-safe-direction, but it must be set.
+  # NO default value: it comes from GMEPAY_INTERNAL_AUTH_SECRET. Fail-closed, never a bypass.
+  internal-auth:
+    secret: ${GMEPAY_INTERNAL_AUTH_SECRET:}
 
 # Springdoc (Swagger UI + /v3/api-docs). See OpenApiConfig.java for the bean.
 springdoc:

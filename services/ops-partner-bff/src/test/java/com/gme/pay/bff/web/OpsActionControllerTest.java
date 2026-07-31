@@ -10,6 +10,8 @@ import com.gme.pay.bff.client.SettlementClient;
 import com.gme.pay.bff.client.stub.StubOperatorActionAuditClient;
 import com.gme.pay.contracts.OperationalStatusView;
 import com.gme.pay.rbac.RbacHeaders;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -77,6 +79,11 @@ class OpsActionControllerTest {
         return standaloneSetup(new OpsActionController(opsControl, settlements, auditClient, new OpsRbacGuard(true)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
     }
 
     @Test
@@ -170,18 +177,20 @@ class OpsActionControllerTest {
     }
 
     @Test
-    void rbacGuard_rejectsWhenPermissionsPresentButLacksOps() throws Exception {
+    void rbacGuard_rejectsWhenTokenLacksOps() throws Exception {
+        TestTokens.hubOperator("partner.view", "txn.view");
         mvc.perform(post("/v1/admin/ops/pause")
-                        .header(RbacHeaders.PERMISSIONS, "partner:read,partner:write")
+                        // A forged permissions header is NOT an authorization source any more (T0-3).
+                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
         assertThat(audit.captured()).isEmpty();
     }
 
     @Test
-    void rbacGuard_allowsWhenOpsPermissionPresent() throws Exception {
+    void rbacGuard_allowsWhenTokenCarriesOps() throws Exception {
+        TestTokens.hubOperator("partner.view", "ops:operate");
         mvc.perform(post("/v1/admin/ops/pause")
-                        .header(RbacHeaders.PERMISSIONS, "partner:read,ops:operate")
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk());
         assertThat(audit.captured()).hasSize(1);
@@ -203,8 +212,8 @@ class OpsActionControllerTest {
 
     @Test
     void rbacGuard_failsClosed_stillProceedsWhenOpsPermissionPresent() throws Exception {
+        TestTokens.hubOperator("ops:operate");
         mvcEnforced(audit).perform(post("/v1/admin/ops/pause")
-                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"))
                 .andExpect(status().isOk());
         assertThat(audit.captured()).hasSize(1);
@@ -218,8 +227,8 @@ class OpsActionControllerTest {
         when(failingAudit.recordDurable(any(), any(), any(), any()))
                 .thenThrow(new OperatorActionAuditClient.AuditWriteException("audit down", null));
 
+        TestTokens.hubOperator("ops:operate");
         mvcEnforced(failingAudit).perform(post("/v1/admin/settlements/recon/rerun")
-                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
                         .header(RbacHeaders.PRINCIPAL_ID, "ops.finance@gmepay.com")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"date\":\"2026-06-30\",\"reason\":\"late file\"}"))

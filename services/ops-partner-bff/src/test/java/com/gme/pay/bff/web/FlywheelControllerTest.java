@@ -50,7 +50,7 @@ class FlywheelControllerTest {
         return new PartnerView(
                 null, code, com.gme.pay.domain.PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP,
                 "KRW", "KRW", null, null, null, null, null, null, null, null, null,
-                status, onboardedAt, null, onboardedAt);
+                status, onboardedAt, null, onboardedAt, onboardedAt);
     }
 
     private static TransactionMgmtClient.TransactionSummary approvedTxn(String id, String deductedUsd) {
@@ -59,7 +59,7 @@ class FlywheelControllerTest {
                 Instant.parse("2026-06-15T00:00:00Z"),
                 null, null, null, null, null, null,
                 new BigDecimal(deductedUsd),
-                null, null, null, Instant.parse("2026-06-15T00:00:05Z"),
+                null, null, null, null, Instant.parse("2026-06-15T00:00:05Z"),
                 null, null, null, null);
     }
 

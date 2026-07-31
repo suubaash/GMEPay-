@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.headerDoesNotExist;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -11,6 +13,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +32,9 @@ import org.springframework.web.server.ResponseStatusException;
  * {@code RestNotificationWebhookClientTest}.
  */
 class RestPrefundingCreditLimitClientTest {
+
+    /** Test fixture, not a credential — never read outside the test source set. */
+    private static final String INTERNAL_TOKEN = "fixture-token-not-a-deployment-secret";
 
     private MockRestServiceServer server;
     private RestPrefundingCreditLimitClient client;
@@ -108,5 +114,50 @@ class RestPrefundingCreditLimitClientTest {
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
         server.verify();
+    }
+
+    // ---- T0-5 / T0-2: prefunding's whole balance API is behind the internal-auth gate ----
+
+    @Test
+    @DisplayName("the configured internal token is presented on the wire (else prefunding 401s)")
+    void internalTokenIsSentWhenConfigured() {
+        // Bound to the SAME builder the production constructor uses, so this asserts the real
+        // default-header wiring rather than a hand-built client.
+        RestClient.Builder builder = RestPrefundingCreditLimitClient.builderFor(
+                "http://prefunding:8080", INTERNAL_TOKEN);
+        MockRestServiceServer gated = MockRestServiceServer.bindTo(builder).build();
+        RestPrefundingCreditLimitClient gatedClient =
+                new RestPrefundingCreditLimitClient(builder.build());
+
+        gated.expect(requestTo(
+                        "http://prefunding:8080/internal/v1/prefunding/GMEREMIT/credit-limit"))
+                .andExpect(method(HttpMethod.PUT))
+                .andExpect(header(InternalAuthHeaders.INTERNAL_TOKEN, INTERNAL_TOKEN))
+                .andRespond(withSuccess());
+
+        gatedClient.pushCreditLimit("GMEREMIT", new CreditLimitPushCommand(
+                new BigDecimal("1"), null, null, null, null));
+
+        gated.verify();
+    }
+
+    @Test
+    @DisplayName("a blank secret sends NO token — fail-closed (prefunding refuses), never a bypass")
+    void blankSecretSendsNoToken() {
+        RestClient.Builder builder =
+                RestPrefundingCreditLimitClient.builderFor("http://prefunding:8080", "  ");
+        MockRestServiceServer ungated = MockRestServiceServer.bindTo(builder).build();
+        RestPrefundingCreditLimitClient blankClient =
+                new RestPrefundingCreditLimitClient(builder.build());
+
+        ungated.expect(requestTo(
+                        "http://prefunding:8080/internal/v1/prefunding/GMEREMIT/credit-limit"))
+                .andExpect(headerDoesNotExist(InternalAuthHeaders.INTERNAL_TOKEN))
+                .andRespond(withSuccess());
+
+        blankClient.pushCreditLimit("GMEREMIT", new CreditLimitPushCommand(
+                new BigDecimal("1"), null, null, null, null));
+
+        ungated.verify();
     }
 }

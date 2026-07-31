@@ -2,6 +2,9 @@ package com.gme.pay.prefunding.api;
 
 import com.gme.pay.contracts.BalanceAlertView;
 import com.gme.pay.contracts.BalanceView;
+import com.gme.pay.prefunding.audit.PrefundingAuditor;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.BalanceState;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.Movement;
 import com.gme.pay.prefunding.persistence.BalanceAlertRepository;
 import com.gme.pay.prefunding.persistence.PartnerBalanceEntity;
 import com.gme.pay.prefunding.persistence.PartnerBalanceRepository;
@@ -45,11 +48,14 @@ public class BalanceProvisioningController {
 
     private final PartnerBalanceRepository balances;
     private final BalanceAlertRepository alerts;
+    private final PrefundingAuditor audit;
 
     public BalanceProvisioningController(PartnerBalanceRepository balances,
-                                         BalanceAlertRepository alerts) {
+                                         BalanceAlertRepository alerts,
+                                         PrefundingAuditor audit) {
         this.balances = balances;
         this.alerts = alerts;
+        this.audit = audit;
     }
 
     /**
@@ -85,6 +91,16 @@ public class BalanceProvisioningController {
         // null ⇒ 0 = strict prepaid, hard-decline at zero.
         entity.setCreditLimit(body.creditLimitUsd() == null ? BigDecimal.ZERO : body.creditLimitUsd());
         PartnerBalanceEntity saved = balances.save(entity);
+        // Gap T5-1: the opening balance is real money appearing on the platform, written straight to
+        // partner_balance with no ledger_entry behind it — so before this row there was no record
+        // anywhere of who provisioned it or with what opening figure. `before` is the all-null state
+        // (the row did not exist), which is materially different from a zero balance.
+        audit.balanceMovement(partnerCode, PrefundingAuditor.BALANCE_PROVISIONED,
+                new BalanceState(null, null, null, null),
+                BalanceState.of(saved),
+                new Movement("PROVISION", saved.getBalance(), null, null,
+                        "partner onboarding — opening prefunding balance"),
+                null);
         return ResponseEntity.status(HttpStatus.CREATED).body(toView(saved));
     }
 

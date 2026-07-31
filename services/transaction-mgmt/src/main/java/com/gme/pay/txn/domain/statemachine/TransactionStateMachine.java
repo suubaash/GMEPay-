@@ -129,6 +129,19 @@ public class TransactionStateMachine {
             eventPublisher.publish(PaymentReversedEvent.fromOperatorResolution(txn, Instant.now()));
         }
 
+        // T2-6: REFUNDED is the OTHER money-terminal state, and it emitted no domain event at all — only
+        // the internal FSM status event above. So an explicit refund left the captured revenue on
+        // revenue-ledger's books (its reversal handler consumes gmepay.payment.reversed and never ran),
+        // gave prefunding no release signal, and gave notification-webhook nothing to notify the partner
+        // with. It now emits the same payment.reversed contract as REVERSED, distinguished by
+        // source=REFUND and carrying the REFUNDED amount (partial refunds carry the partial). Every
+        // consumer of that topic is idempotent per txnRef, so a refund of a transaction that was already
+        // reversed cannot double-book. Same partnerId guard as the other two events: an event with no
+        // partnerId has no consumer route.
+        if (to == TransactionStatus.REFUNDED && txn.partnerId() != null) {
+            eventPublisher.publish(PaymentReversedEvent.fromRefund(txn, Instant.now()));
+        }
+
         return txn;
     }
 }

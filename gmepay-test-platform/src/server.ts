@@ -10,6 +10,8 @@ import { USE_CASES, findUseCase } from './engine/registry';
 import { runUseCase } from './engine/runner';
 import { checkHealth } from './engine/health';
 import { registerRegression } from './regression/routes';
+import { buildPlan, planSummary } from './plan';
+import { allCredentialStatuses } from './engine/credentials';
 import type { UseCaseResult } from './shared/types';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +35,26 @@ app.get('/api/usecases', async () => ({
 }));
 
 app.get('/api/health', async () => ({ services: await checkHealth() }));
+
+/**
+ * Credential plan: which credential each case would present and whether this
+ * environment supplies it. Sends no HTTP downstream, so it answers "what will 401
+ * and why" without a running fleet. Reports variable NAMES only, never values.
+ */
+app.get('/api/plan', async () => {
+  const rows = buildPlan();
+  const s = planSummary(rows);
+  return {
+    credentials: allCredentialStatuses(),
+    summary: {
+      total: s.total,
+      ready: s.ready,
+      blockedOnCredentials: s.blockedOnCredentials,
+      unsupported: s.unsupported,
+    },
+    rows,
+  };
+});
 
 // Before/after regression harness: API under /api/reg + standalone UI at /regression.
 await registerRegression(app);

@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -46,8 +47,16 @@ class FailoverPaymentRouterTest {
     private ExecutionAttemptRepository attemptRepo;
     private FailoverPaymentRouter router;
 
-    private final PartnerSchemeView primary = new PartnerSchemeView(1L, "PrimaryPartner", "NEPAL", 0);
+    /**
+     * Generic (non-Nepal) primary candidate for the failover mechanics. It was NEPAL until T4-1 gave
+     * the Nepal corridor its own money path — a Nepal candidate is now DELEGATED, not walked, so it
+     * can no longer stand in for "some cross-border scheme" here. The Nepal behaviour has its own
+     * tests below.
+     */
+    private final PartnerSchemeView primary = new PartnerSchemeView(1L, "PrimaryPartner", "khqr", 0);
     private final PartnerSchemeView secondary = new PartnerSchemeView(2L, "SecondaryPartner", "zeropay", 1);
+    /** The Nepal corridor candidate — delegated to {@link NepalPaymentService} (T4-1). */
+    private final PartnerSchemeView nepal = new PartnerSchemeView(3L, "NepalPartner", "NEPAL", 0);
 
     @BeforeEach
     void setUp() {
@@ -64,7 +73,7 @@ class FailoverPaymentRouterTest {
     @DisplayName("classifyQr: Fonepay QR → supported, network fonepay.com, country NP, currency NPR")
     void classifyQr_fonepayResolvesToNepalNpr() {
         when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
-                .thenReturn(List.of(primary));   // primary = NEPAL scheme
+                .thenReturn(List.of(nepal));
 
         FailoverPaymentRouter.QrClassification c = router.classifyQr(QR, "OVERSEAS");
 
@@ -98,10 +107,10 @@ class FailoverPaymentRouterTest {
 
         // primary submit → technical failure (timeout)
         when(schemeClient.submitMpm(any(MpmSubmitRequest.class)))
-                .thenThrow(new SchemeTimeoutException("NEPAL"))
+                .thenThrow(new SchemeTimeoutException("khqr"))
                 .thenReturn(new MpmSubmitResponse("ZP_OK", "ZP-TXN-2", Instant.now()));
         // anti-double-charge guard on primary → NOT_FOUND (no charge landed → safe to fail over)
-        when(schemeClient.lookupStatus(eq("NEPAL"), anyString())).thenReturn(LookupStatus.NOT_FOUND);
+        when(schemeClient.lookupStatus(eq("khqr"), anyString())).thenReturn(LookupStatus.NOT_FOUND);
 
         WalletResult result = router.pay(QR, AMT, "user-1", "OVERSEAS");
 
@@ -109,7 +118,7 @@ class FailoverPaymentRouterTest {
         assertEquals("ZP-TXN-2", result.schemeTxnRef());
         // two submit attempts: primary (failed) + secondary (approved)
         verify(schemeClient, times(2)).submitMpm(any(MpmSubmitRequest.class));
-        verify(schemeClient).lookupStatus(eq("NEPAL"), anyString());
+        verify(schemeClient).lookupStatus(eq("khqr"), anyString());
     }
 
     // (b) primary business-decline → terminal, secondary NOT tried
@@ -141,16 +150,16 @@ class FailoverPaymentRouterTest {
 
         // primary submit throws (timeout) — outcome unknown
         when(schemeClient.submitMpm(any(MpmSubmitRequest.class)))
-                .thenThrow(new SchemeTimeoutException("NEPAL"));
+                .thenThrow(new SchemeTimeoutException("khqr"));
         // guard: the payment DID land at the primary
-        when(schemeClient.lookupStatus(eq("NEPAL"), anyString())).thenReturn(LookupStatus.APPROVED);
+        when(schemeClient.lookupStatus(eq("khqr"), anyString())).thenReturn(LookupStatus.APPROVED);
 
         WalletResult result = router.pay(QR, AMT, "user-1", "OVERSEAS");
 
         assertTrue(result.approved());
         // CRITICAL: only ONE submit ever happened — the secondary was NOT charged.
         verify(schemeClient, times(1)).submitMpm(any(MpmSubmitRequest.class));
-        verify(schemeClient).lookupStatus(eq("NEPAL"), anyString());
+        verify(schemeClient).lookupStatus(eq("khqr"), anyString());
     }
 
     // (d) single-candidate ZeroPay QR → unchanged APPROVED
@@ -212,6 +221,47 @@ class FailoverPaymentRouterTest {
 
         ArgumentCaptor<MpmSubmitRequest> captor = ArgumentCaptor.forClass(MpmSubmitRequest.class);
         verify(schemeClient).submitMpm(captor.capture());
-        assertEquals("NEPAL", captor.getValue().schemeId());
+        assertEquals("khqr", captor.getValue().schemeId());
+    }
+
+    // =======================================================================================
+    // T4-1 — the Nepal corridor is delegated, never walked
+    // =======================================================================================
+
+    @Test
+    @DisplayName("T4-1: a Nepal candidate is DELEGATED to the corridor money path, not submitted here")
+    void nepalCandidateDelegatesToCorridorMoneyPath() {
+        when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
+                .thenReturn(List.of(nepal));
+        NepalPaymentService nepalService = mock(NepalPaymentService.class);
+        WalletResult delegated = WalletResult.approvedFxInCurrency(
+                "TXN-1", "NP-IDX-1", null, AMT, BigDecimal.ZERO, AMT,
+                "2026-07-28T10:00:00+09:00", new BigDecimal("0.098"),
+                new BigDecimal("98.00"), "NPR");
+        when(nepalService.pay(anyString(), any(), any(), anyString(), any())).thenReturn(delegated);
+        FailoverPaymentRouter nepalRouter =
+                new FailoverPaymentRouter(smartRouter, schemeClient, attemptRepo, null, nepalService);
+
+        WalletResult result = nepalRouter.pay(QR, AMT, "user-np", "OVERSEAS", "KRW",
+                WalletPartnerRef.GMEREMIT);
+
+        assertTrue(result.approved());
+        assertEquals("NPR", result.payCurrency());
+        // The generic loop must not have run: the corridor owns FX/fee/prefunding/revenue.
+        verify(schemeClient, never()).submitMpm(any(MpmSubmitRequest.class));
+        verify(nepalService).pay(eq(QR), eq(AMT), eq("KRW"), eq("user-np"),
+                eq(WalletPartnerRef.GMEREMIT));
+    }
+
+    @Test
+    @DisplayName("T4-1: no Nepal money path wired → REFUSED (no fallback to the KRW-as-NPR pass-through)")
+    void nepalCandidateWithoutMoneyPathRefuses() {
+        when(smartRouter.resolve(anyString(), any(), anyString(), anyString()))
+                .thenReturn(List.of(nepal));
+
+        assertThrows(CorridorPricingUnavailableException.class,
+                () -> router.pay(QR, AMT, "user-np", "OVERSEAS"));
+
+        verify(schemeClient, never()).submitMpm(any(MpmSubmitRequest.class));
     }
 }

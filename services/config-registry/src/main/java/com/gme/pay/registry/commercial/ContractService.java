@@ -1,5 +1,6 @@
 package com.gme.pay.registry.commercial;
 
+import com.gme.pay.audit.AuditActors;
 import static com.gme.pay.registry.commercial.CommercialValidation.badRequest;
 import static com.gme.pay.registry.commercial.CommercialValidation.requireOnboarding;
 import static com.gme.pay.registry.commercial.CommercialValidation.requirePartner;
@@ -44,7 +45,7 @@ public class ContractService {
     static final Set<String> POLICIES = Set.of("PARTNER_BEARS", "MERCHANT_BEARS", "SHARED");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final ContractRepository contractRepository;
     private final PartnerRepository partnerRepository;

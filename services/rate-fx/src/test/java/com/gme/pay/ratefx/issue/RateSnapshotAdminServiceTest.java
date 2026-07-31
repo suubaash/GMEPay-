@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import com.gme.pay.errors.ApiException;
+import com.gme.pay.ratefx.audit.RateAuditor;
 import com.gme.pay.ratefx.persistence.RateSnapshotEntity;
 import com.gme.pay.ratefx.persistence.RateSnapshotRepository;
 import java.math.BigDecimal;
@@ -27,10 +28,19 @@ class RateSnapshotAdminServiceTest {
     @Mock
     private RateSnapshotRepository snapshots;
 
+    /**
+     * Gap T5-1: the service now also writes a hash-chained audit row naming who set the rate. This
+     * slice covers VALIDATION (which currency codes / sources / amounts are accepted) and stays
+     * DB-free, so the auditor is mocked here; the audit row and its actor are asserted for real in
+     * {@code com.gme.pay.ratefx.audit.RateAuditTrailTest}.
+     */
+    @Mock
+    private RateAuditor audit;
+
     private RateSnapshotAdminService service() {
         when(snapshots.save(any(RateSnapshotEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
-        return new RateSnapshotAdminService(snapshots, clock);
+        return new RateSnapshotAdminService(snapshots, clock, audit);
     }
 
     @Test
@@ -52,21 +62,21 @@ class RateSnapshotAdminServiceTest {
     @Test
     void record_usd_rejected() {
         assertThatThrownBy(() ->
-                new RateSnapshotAdminService(snapshots, clock).record("USD", BigDecimal.ONE, "MANUAL", null))
+                new RateSnapshotAdminService(snapshots, clock, audit).record("USD", BigDecimal.ONE, "MANUAL", null))
                 .isInstanceOf(ApiException.class);
     }
 
     @Test
     void record_liveSource_rejected() {
         assertThatThrownBy(() ->
-                new RateSnapshotAdminService(snapshots, clock).record("KRW", BigDecimal.TEN, "LIVE", null))
+                new RateSnapshotAdminService(snapshots, clock, audit).record("KRW", BigDecimal.TEN, "LIVE", null))
                 .isInstanceOf(ApiException.class);
     }
 
     @Test
     void record_nonPositiveRate_rejected() {
         assertThatThrownBy(() ->
-                new RateSnapshotAdminService(snapshots, clock).record("KRW", BigDecimal.ZERO, "MANUAL", null))
+                new RateSnapshotAdminService(snapshots, clock, audit).record("KRW", BigDecimal.ZERO, "MANUAL", null))
                 .isInstanceOf(ApiException.class);
     }
 }

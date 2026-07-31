@@ -29,10 +29,14 @@ public class XeRateClient {
 
     @Autowired
     public XeRateClient(
+            RestClient.Builder builder,
             @Value("${gmepay.rate-fx.xe.base-url:http://localhost:9101}") String baseUrl) {
-        this.restClient = RestClient.builder()
-                .baseUrl(baseUrl)
-                .build();
+        // T3-11: the INJECTED builder, not the static RestClient.builder() factory — only the bean
+        // carries HttpClientTimeoutAutoConfiguration's connect/read floor (see
+        // com.gme.pay.http.HttpClientTimeouts). This is an EXTERNAL rate provider on the
+        // XeRateFetchScheduler thread; unbounded, one hung fetch parks a scheduler thread forever and
+        // the fleet stops refreshing rates without any error being raised.
+        this.restClient = builder.baseUrl(baseUrl).build();
     }
 
     /**

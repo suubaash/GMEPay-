@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.CommercialTermsView;
 import com.gme.pay.contracts.ContractView;
 import com.gme.pay.contracts.FeeScheduleView;
@@ -84,7 +85,7 @@ public class PartnerCommercialTermsController {
     public CommercialTermsView patchDraftStep6Commercial(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep6Commercial req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return commercialTermsService.upsertStep6Commercial(partnerCode, req, actor);
     }
 
@@ -174,7 +175,7 @@ public class PartnerCommercialTermsController {
     public List<PartnerCommissionShareView> replaceCommissionShares(
             @PathVariable String id,
             @RequestBody List<PartnerCommissionShareCommand> shares,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return commissionShareService.replaceCommissionShares(id, shares, actor);
     }
 }

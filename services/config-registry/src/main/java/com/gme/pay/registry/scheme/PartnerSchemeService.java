@@ -1,5 +1,6 @@
 package com.gme.pay.registry.scheme;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerSchemeCommand;
 import com.gme.pay.contracts.PartnerSchemeView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -82,7 +83,7 @@ public class PartnerSchemeService {
     static final Set<String> APPROVAL_METHODS = Set.of("CONFIRMATION", "SILENT");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerSchemeRepository schemeRepository;
     private final SchemeOperatingHoursRepository operatingHoursRepository;
@@ -104,7 +105,11 @@ public class PartnerSchemeService {
      *
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param schemes     the FULL desired set; empty clears, {@code null} is a 400.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the freshly-inserted current set as canonical {@link PartnerSchemeView}s.
      * @throws ResponseStatusException 404 when no current partner row matches;
      *         409 when the partner is no longer in {@code ONBOARDING}

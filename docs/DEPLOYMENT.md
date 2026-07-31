@@ -122,7 +122,7 @@ helm upgrade --install gmepay deploy/helm/gmepay \
 | Mongo          | in-cluster Mongo           | DocumentDB / self-host      | Cosmos DB for MongoDB                         | `SPRING_DATA_MONGODB_URI`                                                |
 | OIDC           | **Keycloak**               | Keycloak-on-EKS / **Cognito** | Keycloak-on-AKS / **Entra ID**             | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI` (alias `OIDC_ISSUER_URI`) |
 | Secrets        | **K8s Secret / sealed**    | Secrets Manager (ESO/CSI)   | Key Vault (CSI)                               | (the `secrets.data.*` keys)                                             |
-| Observability  | Prometheus/Grafana (OTLP)  | managed / ADOT (OTLP)       | managed (OTLP)                                | `OTEL_EXPORTER_OTLP_ENDPOINT`                                            |
+| Observability  | scrape `/actuator/prometheus` (operator-supplied Prometheus) | same | same | none — the endpoint IS the contract; see `Documentation/RUNBOOK_MONITORING.md` |
 | Image registry | private registry           | **ECR**                     | **ACR**                                       | `global.imageRegistry` / `global.imageTag`                              |
 
 ### Path-style vs. virtual-hosted object storage

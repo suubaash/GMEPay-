@@ -10,7 +10,7 @@ import {
   type UseCaseResult,
 } from './api';
 
-const STATUS_ORDER: Status[] = ['PASS', 'FAIL', 'BLOCKED', 'NOT_AUTOMATED'];
+const STATUS_ORDER: Status[] = ['PASS', 'FAIL', 'BLOCKED', 'UNSUPPORTED', 'NOT_AUTOMATED'];
 
 export function App() {
   const [useCases, setUseCases] = useState<UseCaseMeta[]>([]);
@@ -69,7 +69,7 @@ export function App() {
   }
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { PASS: 0, FAIL: 0, BLOCKED: 0, NOT_AUTOMATED: 0 };
+    const c: Record<string, number> = { PASS: 0, FAIL: 0, BLOCKED: 0, UNSUPPORTED: 0, NOT_AUTOMATED: 0 };
     for (const uc of useCases) {
       const s = results[uc.id]?.status;
       if (s && s in c) c[s]++;
@@ -208,14 +208,19 @@ export function App() {
 }
 
 function label(s: Status): string {
-  return {
-    PASS: 'PASS',
-    FAIL: 'FAIL',
-    BLOCKED: 'BLOCKED',
-    NOT_AUTOMATED: 'TODO',
-    RUNNING: '…',
-    IDLE: 'IDLE',
-  }[s];
+  return (
+    {
+      PASS: 'PASS',
+      FAIL: 'FAIL',
+      BLOCKED: 'BLOCKED',
+      // The capability was deliberately withdrawn from the platform — distinct from
+      // BLOCKED, which means the capability exists but a precondition is missing.
+      UNSUPPORTED: 'REMOVED',
+      NOT_AUTOMATED: 'TODO',
+      RUNNING: '…',
+      IDLE: 'IDLE',
+    }[s] ?? String(s)
+  );
 }
 
 function stepIcon(level: Step['level']): string {

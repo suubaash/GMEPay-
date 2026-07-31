@@ -48,6 +48,9 @@ const NAV = [
   { label: 'Balance', href: '/balance' },
   { label: 'Transactions', href: '/transactions' },
   { label: 'API Keys', href: '/api-keys' },
+  // 'Settlements' = the settled record from settlement-reconciliation (gap T4-5);
+  // 'Statement' = the transaction CSV download. Two different pages, deliberately.
+  { label: 'Settlements', href: '/settlements' },
   { label: 'Statement', href: '/statement' },
   { label: 'Webhooks', href: '/webhooks' },
   { label: 'Profile', href: '/profile' }

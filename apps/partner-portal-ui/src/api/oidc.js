@@ -3,10 +3,24 @@
 /**
  * Browser-side OIDC authorization-code + PKCE flow for the Partner Portal.
  *
- * The partner-portal-ui may be reached by partners who use their own IdP
- * federated into Keycloak (realm `gmepay-partners`, client `gmepay-partner-ui`).
- * The flow is identical to the admin-ui OIDC module but with different
- * realm/client defaults.
+ * Canonical identity topology (gap register T1-2, see docker/keycloak/README.md):
+ *   realm      `gmepay`            — the ONLY realm; the old `gmepay-partners`
+ *                                    default existed in no seed file, no compose
+ *                                    file and no Helm chart, so login 404'd on the
+ *                                    authorize endpoint in every environment.
+ *   client     `partner-portal-ui` — PUBLIC client, PKCE S256. It used to be
+ *                                    confidential with secret
+ *                                    `partner-portal-ui-dev-secret`, and
+ *                                    {@link exchangeCode} (correctly) sends no
+ *                                    client_secret, so Keycloak answered
+ *                                    `invalid_client`. The fix is a public client,
+ *                                    not shipping a secret to the browser.
+ *   issuer     `http://localhost:8097/realms/gmepay` for local docker (host port
+ *                                    8097; 8090 belongs to scheme-adapter-zeropay).
+ *
+ * Partners who federate their own IdP do so as an identity provider INSIDE realm
+ * `gmepay` — a second realm would need its own client, mappers and issuer, and
+ * nothing in the repo provisions one.
  *
  * Flow:
  *   1. {@link buildAuthRequest} — generates PKCE verifier + state, caches in
@@ -19,17 +33,18 @@
  *      access_token as `Authorization: Bearer` on every BFF request.
  *
  * Config env vars (NEXT_PUBLIC_ = burned in at build):
- *   NEXT_PUBLIC_KEYCLOAK_URL       Realm base URL (defaults to localhost:8090/realms/gmepay-partners)
- *   NEXT_PUBLIC_KEYCLOAK_CLIENT_ID Client id (defaults to gmepay-partner-ui)
- *   NEXT_PUBLIC_ALLOW_DEV_LOGIN    "true" => show password form fallback
+ *   NEXT_PUBLIC_KEYCLOAK_URL       Realm base URL (default http://localhost:8097/realms/gmepay)
+ *   NEXT_PUBLIC_KEYCLOAK_CLIENT_ID Client id (default partner-portal-ui)
+ *   NEXT_PUBLIC_ALLOW_DEV_LOGIN    "true" => AuthGate stops auto-redirecting to
+ *                                  Keycloak and shows the /login page instead
  *
- * Dev-skip escape hatch:
- *   When `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true`, the login page keeps the Phase-1
- *   password form visible so vitest + local-no-Keycloak iteration still works.
+ * There is NO password path any more. `POST /v1/auth/login` was deleted from the
+ * BFF (gap T0-1) — Keycloak is the only way to obtain a credential, and
+ * {@link isDevLoginAllowed} now only controls whether the redirect is manual.
  */
 
-const DEFAULT_KEYCLOAK_URL = 'http://localhost:8090/realms/gmepay-partners';
-const DEFAULT_CLIENT_ID = 'gmepay-partner-ui';
+const DEFAULT_KEYCLOAK_URL = 'http://localhost:8097/realms/gmepay';
+const DEFAULT_CLIENT_ID = 'partner-portal-ui';
 
 const PKCE_VERIFIER_KEY = 'gmepay.portal.oidc.pkceVerifier';
 const STATE_KEY = 'gmepay.portal.oidc.state';
@@ -59,8 +74,15 @@ export function keycloakClientId() {
 }
 
 /**
- * Whether the dev escape hatch is active. Returns false unless the env flag
- * is the literal string "true" (typos keep the real OIDC flow).
+ * Whether the MANUAL login page is used instead of an automatic redirect to
+ * Keycloak. Returns false unless the env flag is the literal string "true"
+ * (typos keep the auto-redirect).
+ *
+ * This is NOT a password bypass: the BFF has no `/v1/auth/login` handler any
+ * more, so the only credential source is Keycloak either way. The flag exists
+ * so jsdom/vitest and local iteration land on `/login` (which renders the SSO
+ * button) instead of navigating the whole window away.
+ *
  * @returns {boolean}
  */
 export function isDevLoginAllowed() {
@@ -181,6 +203,10 @@ export async function startLogin(returnTo = '/') {
  *
  * Returns the parsed token response:
  *   `{ access_token, expires_in, refresh_token, id_token, token_type, scope }`
+ *
+ * No `client_secret` is sent — `partner-portal-ui` is a PUBLIC client and PKCE
+ * (`code_verifier`) is the proof of possession. Sending a secret from a browser
+ * bundle would publish it to every visitor; the realm seed was fixed instead.
  *
  * Throws on state mismatch or non-2xx token response.
  *

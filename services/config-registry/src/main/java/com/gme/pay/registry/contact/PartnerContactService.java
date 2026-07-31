@@ -1,5 +1,6 @@
 package com.gme.pay.registry.contact;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.ContactCommand;
 import com.gme.pay.contracts.ContactView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -74,7 +75,7 @@ public class PartnerContactService {
      * Default actor until the Keycloak {@code sub} claim is threaded through the
      * BFF (same Slice 1B.4 carve-out as {@code PartnerDraftService}).
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final ContactRepository contactRepository;
     private final PartnerRepository partnerRepository;
@@ -94,7 +95,11 @@ public class PartnerContactService {
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param contacts    the FULL desired contact set; empty clears, {@code null}
      *                    is rejected with 400.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the freshly-inserted current set as canonical {@link ContactView}s.
      * @throws ResponseStatusException 404 when no current partner row matches;
      *         409 when the partner is no longer in {@code ONBOARDING} (drafts are

@@ -2,6 +2,7 @@ package com.gme.pay.ratefx.issue;
 
 import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
+import com.gme.pay.ratefx.audit.RateAuditor;
 import com.gme.pay.ratefx.persistence.RateSnapshotEntity;
 import com.gme.pay.ratefx.persistence.RateSnapshotRepository;
 import java.math.BigDecimal;
@@ -9,6 +10,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,19 @@ import org.springframework.stereotype.Service;
  * resolution always reads the most recent effective row, so the latest override wins. {@code IDENTITY}
  * is never stored (a USD leg is priced at 1.0 structurally), and {@code LIVE} is reserved for the
  * automated feed — both are rejected here.
+ *
+ * <h2>Audit (gap T5-1 / CISO §9)</h2>
+ *
+ * <p>This is the class behind the finding "FX rate change — <b>NO</b>: {@code rate_snapshots} permits
+ * {@code source='MANUAL'} with no actor column". Every successful {@link #record} now also writes one
+ * hash-chained {@code audit_log} row naming <b>who</b> set the rate, what it was before, and what it
+ * became — see {@link RateAuditor}. The {@code rate_snapshots} row itself is unchanged: it is
+ * immutable, effective-dated and read on the quote hot path, and bolting an actor column onto it would
+ * still leave the before/after and the tamper-evidence unrecorded.
+ *
+ * <p>A rejected call (USD, non-positive rate, {@code LIVE}) writes nothing and is audited nowhere,
+ * because nothing changed. Attempted-and-refused writes are an access-control signal rather than a
+ * rate-change signal and belong with the internal-auth gate's own logging.
  */
 @Service
 public class RateSnapshotAdminService {
@@ -31,10 +46,12 @@ public class RateSnapshotAdminService {
 
     private final RateSnapshotRepository snapshots;
     private final Clock clock;
+    private final RateAuditor audit;
 
-    public RateSnapshotAdminService(RateSnapshotRepository snapshots, Clock clock) {
+    public RateSnapshotAdminService(RateSnapshotRepository snapshots, Clock clock, RateAuditor audit) {
         this.snapshots = snapshots;
         this.clock = clock;
+        this.audit = audit;
     }
 
     /**
@@ -65,9 +82,32 @@ public class RateSnapshotAdminService {
         }
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         Instant effective = (effectiveAt == null ? now : effectiveAt).truncatedTo(ChronoUnit.MICROS);
+        // Read the rate this write displaces BEFORE saving, so the audit row can state what actually
+        // changed. "USD/MNT was moved from 3450 to 3900 by alice@gme.com" is a finding; "USD/MNT was
+        // set to 3900" is a fact with no context.
+        RateAuditor.RateState before = stateInForce(ccy, effective);
         RateSnapshotEntity entity = new RateSnapshotEntity(
                 src.toLowerCase(Locale.ROOT) + "-" + ccy + "-" + UUID.randomUUID(),
                 ccy, usdRate, src, effective, now);
-        return snapshots.save(entity);
+        RateSnapshotEntity saved = snapshots.save(entity);
+        audit.rateWritten(ccy, before, stateOf(saved),
+                "MANUAL".equals(src)
+                        ? "operator treasury-rate override via POST /v1/rates/snapshots"
+                        : "PARTNER rate seeded via POST /v1/rates/snapshots",
+                null);
+        return saved;
+    }
+
+    /** The rate in force for {@code ccy} at {@code asOf}, or {@link RateAuditor.RateState#none()}. */
+    private RateAuditor.RateState stateInForce(String ccy, Instant asOf) {
+        Optional<RateSnapshotEntity> current = snapshots
+                .findFirstByCurrencyCodeAndEffectiveAtLessThanEqualOrderByEffectiveAtDescCapturedAtDesc(
+                        ccy, asOf);
+        return current.map(RateSnapshotAdminService::stateOf).orElseGet(RateAuditor.RateState::none);
+    }
+
+    private static RateAuditor.RateState stateOf(RateSnapshotEntity e) {
+        return new RateAuditor.RateState(e.getUsdRate(), e.getSource(), e.getSnapshotId(),
+                e.getEffectiveAt());
     }
 }

@@ -12,8 +12,8 @@ import java.util.Set;
  *
  * <p>The catalog is static reference data: the set of QR payment schemes GMEPay+
  * can integrate, with {@code status} reflecting integration truth. Today
- * {@code ZEROPAY} and {@code NEPAL} have live scheme adapters ({@code ACTIVE});
- * the Phase-2 corridor schemes are {@code PLANNED} (roadmap, no adapter yet) so
+ * {@code ZEROPAY}, {@code NEPAL} and {@code SENDMN} have live scheme adapters
+ * ({@code ACTIVE}); the remaining corridor schemes are {@code PLANNED} so
  * the Admin UI shows the honest roster rather than implying schemes are routable
  * when they are not.
  *
@@ -54,7 +54,14 @@ public class SchemeCatalogService {
             new SchemeCatalogResponse("NAPAS_247", "NAPAS 247 (Vietnam)", "VN", "VND", "LIVE", "PLANNED"),
             new SchemeCatalogResponse("PROMPT_PAY", "PromptPay (Thailand)", "TH", "THB", "LIVE", "PLANNED"),
             new SchemeCatalogResponse("FAST_SG", "FAST / PayNow (Singapore)", "SG", "SGD", "LIVE", "PLANNED"),
-            new SchemeCatalogResponse("QRIS", "QRIS (Indonesia)", "ID", "IDR", "LIVE", "PLANNED"));
+            new SchemeCatalogResponse("QRIS", "QRIS (Indonesia)", "ID", "IDR", "LIVE", "PLANNED"),
+            // SendMN QR rail (Mongolia, QPay-fronted). A live scheme-adapter-sendmn ships
+            // with the Phase-2 hub wiring (QR scheme plan), so SENDMN is ACTIVE — the third
+            // live adapter beside ZEROPAY/NEPAL. V041 extends the partner_scheme CHECK.
+            new SchemeCatalogResponse("SENDMN", "SendMN QR (Mongolia / QPay)", "MN", "MNT", "LIVE", "ACTIVE"),
+            // 9Pay (Vietnam) — adapter service exists but its hub payout orchestration is
+            // deferred (plan Phase 3 / decision D4), so the roster honestly says PLANNED.
+            new SchemeCatalogResponse("NINEPAY", "9Pay (Vietnam payout)", "VN", "VND", "LIVE", "PLANNED"));
 
     /**
      * The closed set of scheme IDs in the catalog, insertion-ordered (ZEROPAY first).

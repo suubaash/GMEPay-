@@ -2,6 +2,195 @@
 
 All notable changes to the payment-executor service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (ledger_ops_runs observability: missed-run detection + retention, T2-5 caveat (e))
+
+No Flyway migration: the monitor writes no run row (there was no run) and the pruner only deletes.
+
+### Added - `MissedLedgerOpsRunMonitor`
+Every signal `ledger_ops_runs` could produce was produced **by a run that started**. A run that never
+starts writes no row, throws nothing and alerts nobody — the table just stops growing, which from
+inside the service is indistinguishable from a quiet night. For a scheduled financial job that silent
+absence is the failure mode that matters, and the POISON requeue had just added a fourth writer to the
+table without adding a reader.
+
+The monitor checks, per job, how long since **any** run was recorded and raises
+`LEDGER_OPS_RUN_MISSED` (CRITICAL) through the **existing T3-3 `OpsAlertPipeline`** (persist to
+`ops_alerts`, publish, notify) — not a second alerting path. Outcome is deliberately ignored: a FAILED
+run *happened* and already has its own alert; only silence is detected.
+
+Deliberate exclusions, each stated rather than omitted:
+- `REVENUE_POSTING_REQUEUE` is never expected — it is an operator act, so "nobody requeued anything
+  today" is the normal state, and alerting on it would train people to ignore the alert type.
+- A job whose own `enabled` flag is false is not monitored; the monitor reads the same three flags the
+  schedulers are gated on, so the two cannot disagree.
+- "Never ran" is measured from **process start**, not the epoch, so a cold start does not page about a
+  day-close that was simply not due yet.
+
+A reflection test fails if a new `LedgerOpsJob` constant is added to neither the monitored map nor the
+explicit `NOT_SCHEDULED` list.
+
+### Added - `LedgerOpsRunRetentionSweeper`
+Mirrors `OpsAlertRetentionSweeper` exactly (same shape, same default-on convention, same never-throw).
+The table gained a row every five minutes from the replay sweeper and nothing ever removed one:
+~105k rows a year from that job alone, each up to 4 KB of stack excerpt on failure.
+
+`deleteOlderThanKeepingLatestPerJob` always keeps **the newest run of each job**, whatever its age.
+Without that exception the two features here would cancel out — a job silent for longer than the
+retention window would have its last trace deleted, and "silent for 400 days" would become
+indistinguishable from "no history".
+
+### Configuration - engineering defaults, NOT commitments; an owner must confirm them
+- `gmepay.ledger-ops.missed-run.max-silence.revenue-posting-replay=PT30M` (six missed 5-minute cycles)
+- `gmepay.ledger-ops.missed-run.max-silence.day-close=PT26H` / `.fx-exposure=PT26H` (a day + 2 h slack)
+- `gmepay.ledger-ops.missed-run.cooldown=PT6H` (repeat suppression; per-JVM, like `DeclineSpikeMonitor`)
+- `gmepay.ledger-ops.runs.retention-days=365` — longer than `ops_alerts`' 90 because an auditor can
+  fairly ask whether the close ran every night last year; **not** a statutory multi-year horizon,
+  because this table holds no amounts, counterparties or postings, only whether a job ran.
+
+### Changed
+- `spring.task.scheduling.pool.size` 4 → 6. Sized so the job whose entire purpose is to notice that
+  another job stopped cannot itself be starved behind a slow sibling — otherwise the result is silence
+  about silence.
+- Both new jobs carry a uniquely-named `@SchedulerLock`: an alert raised once per replica is one nobody
+  can threshold, and N replicas issuing the same bulk DELETE is contention for nothing.
+
+### Tests
+`MissedLedgerOpsRunMonitorTest` (a stopped job alerts through the real pipeline with the right type,
+severity and subject; a healthy fleet and a single missed cycle stay silent; a never-run job reads
+differently from a long-silent one; a cold start does not alert; the cooldown suppresses and then
+releases; a disabled job is not monitored; every job constant is classified) and
+`LedgerOpsRunRetentionTest` (real H2 + full Flyway: only rows past the window are deleted, the newest
+run of every job survives independently, nothing expired means zero deleted, the shipped default is
+pinned).
+
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (the POISON trap in the revenue-posting replay: T2-5 follow-up / T3-12)
+
+Flyway **V012** (widens `ck_ledger_ops_runs_job` — additive, cannot fail on existing data).
+
+### Fixed - HTTP 406 no longer buries a replay row on the first sweep
+`RestRevenuePostingReplayClient.isRetryableStatus` was `>= 500 || 408 || 429`, so a 406 became a
+`permanentRejection` and `RevenuePostingReplayService` called `row.poison(..)` on the **first** sweep.
+POISON is terminal by design and there was no requeue path anywhere in the codebase. That turned
+T3-12 — revenue-ledger returning 406 on two journal endpoints because of a *server-side*
+content-negotiation defect — into permanently orphaned booked revenue, recoverable only by editing
+`revenue_posting_failures` in production by hand.
+
+- **406 is now retryable, and so are 404, 405 and 415.** The boundary is a real one rather than a
+  convenient one: these four are the codes Spring MVC raises from **routing and content negotiation**
+  (`NoHandlerFound`, `MethodNotSupported`, `MediaTypeNotSupported`, `MediaTypeNotAcceptable`), all
+  *before* the handler method reads the body. They are statements about which code is deployed, not
+  verdicts on the payload — and between two services we deploy ourselves over a contract we own, they
+  can only mean a version mismatch, which is exactly what a retry after a deploy fixes.
+- **This is not "retry everything".** 400/409/422 still terminate on the first sweep — the server read
+  the body and refused it, so the fast alert is the right answer. 401/403 also still terminate: they
+  are a credential verdict, and re-presenting rejected credentials on a schedule is a bad pattern
+  regardless of whether the row survives it. Both directions are pinned by test.
+- **Retryable is still bounded.** The eight-attempt exponential budget is unchanged, so a genuinely
+  permanent 406 still reaches POISON — after a deploy window (~2 h) instead of within one sweep.
+
+### Added - `POST /internal/ops/revenue-posting-failures/requeue`
+The general escape hatch, because no status classification will be right about every future server
+defect: retryability buys hours, a defect found a week later needs this.
+
+- Moves **POISON** rows back to `PENDING` with `attempts=0` and `next_attempt_at=now()`, targetable by
+  `postingTypes` and/or `ids` — the immediate need being
+  `['ROUNDING_RESIDUAL','REVERSAL_JOURNAL']`. It does **not** replay: requeue makes rows due, the
+  sweep sends them, so an operator can inspect what became PENDING before triggering `POST /replay`.
+- `attempts` resets to 0 rather than being preserved: leaving it at the exhausted value would poison
+  the row again on the very next sweep, which is a no-op dressed as a fix.
+- **Idempotent** — only POISON is selected, so a repeat requeues 0 rows and still answers 200. A
+  nervous operator running the command twice is a no-op, not a corruption.
+- **Audited** to `ledger_ops_runs` as `REVENUE_POSTING_REQUEUE` / `OPERATOR` / `X-Operator-Id`
+  (hence V012). Load-bearing rather than decorative: resetting `attempts` discards the row's own
+  record of how many times the posting was pushed at the ledger, so this row is where that history
+  and the *why* survive. Unlike the other three jobs it is never scheduled.
+- **Internal-auth gated** by the wholesale `/internal/**` rule in `SandboxSurfaceInternalAuthConfig`;
+  401 without the token is asserted over real HTTP, because the gate is a servlet filter a slice test
+  never runs and the endpoint re-arms money postings.
+- **Refused rather than guessed.** An unfiltered requeue (`{}`) is **400** — "requeue everything" is a
+  much larger decision than "requeue what the 406 broke", and an empty body must not silently mean the
+  larger one. A mistyped posting type is **400** too, never a silent `requeued=0` that would let the
+  operator believe the backlog was already clear.
+- Rows poisoned as structurally unreplayable (no payload was ever captured) are **skipped and
+  counted**, not requeued into a budget they cannot survive. A bulk type filter never touches
+  `ABANDONED` — that is a human's judgement, reversible only by naming the id.
+
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (T4-1: the Nepal corridor gets a real money path)
+
+### Fixed - the Nepal corridor stopped sending KRW as NPR
+`NepalPaymentService` used to hand the wallet's KRW amount to the Nepal adapter labelled `NPR`: no FX,
+no fee, no prefunding, no revenue. Its own Javadoc said so ("the wallet-labeled KRW must not be sent
+as NPR in production"). It now runs the same pipeline `SendmnPaymentService` runs for KRW->MNT:
+price -> FX -> fee -> USD prefunding debit -> scheme submit -> transaction commit -> revenue capture.
+
+- **FX applied, both directions.** `offerRate = liveMid(KRW/NPR) x (1 - configuredMargin)`.
+  A KRW-quoted request derives the NPR payout; an NPR-quoted request derives the KRW collection.
+  There is no pass-through mode left, and an amount in any other currency is rejected rather than
+  reinterpreted.
+- **Configured service fee.** `chargedKrw = amountKrw + feeKrw`.
+- **Prefunding.** `chargedUsd` is debited exactly once on `partnerTxnRef` and REVERSED on a scheme
+  decline / non-APPROVED status. A `PENDING` (or unresolvable) outcome KEEPS the float - the payment
+  may have landed. A transport failure now runs the idempotent `lookupStatus` probe before deciding
+  (ADR-016 SS4) instead of the old blind path.
+- **Revenue booked for real.** `postRevenueCapture` (FX margin + service charge), never
+  `postRoundingResidual` - corridor P&L must not land in `REVENUE_ROUNDING` (the T2-1 mistake).
+  Failed postings go to the durable `revenue_posting_failures` sink.
+- **Transaction values are real, not null.** The APPROVED `StatusPatch` carries `payoutMarginUsd`,
+  `collectionMarginUsd`, `collectionUsd` and `prefundDeductedUsd`; the row records the NPR payout leg
+  and the KRW collection leg.
+
+### Added - pricing is configuration, and an unpriced corridor REFUSES
+- **`NepalCorridorPricing`** resolves the rate, margin and fee. The margin and fee are business
+  decisions, so they are read from config and **never defaulted**:
+  - margin <- config-registry `GET /v1/partners/{code}/fx-config` -> `marginBps` (`partner_fx_config`, V019)
+  - fee <- config-registry `GET /v1/partners/{code}/fee-schedules/effective?schemeId=NEPAL&direction=OVERSEAS&amountUsd=...`
+    -> `serviceFeeUsd` (`partner_fee_schedule`, V018)
+  - or module config `gmepay.payment.nepal.fx-margin` / `.service-fee-krw`, both **unset by default**
+    (so a local/sim environment is made transactable by CONFIGURATION, not by a hardcoded default).
+- **`CorridorPricingUnavailableException`** -> HTTP 503 with a stable code:
+  `CORRIDOR_PRICING_NOT_CONFIGURED` (retryable=false - an owner must enter the terms) or
+  `CORRIDOR_RATE_UNAVAILABLE` (retryable=true). Every refusal happens **before** any side effect: no
+  float moved, no scheme call, a FAILED attempt row persisted.
+- **The 1350 KRW/USD fallback is NOT used to price.** `UsdAmountBasis.KRW_PER_USD_FALLBACK` exists so
+  a regulatory CAP can still be evaluated during a rate outage (a conservative direction for a
+  control); using it to sell FX is the opposite. Nepal fetches USD/KRW itself and fails closed.
+- **`PartnerConfigClient.resolveFxConfig` / `.resolveServiceFeeUsd`** + their `RestPartnerConfigClient`
+  implementations. Both stay fail-soft (empty on 404/unreachable) - the DECISION to refuse lives in the
+  corridor, preserving the "a client never fails a payment by itself" contract.
+- **`WalletResult.approvedFxInCurrency`** - an approval that both applied FX and paid out in a non-KRW
+  currency (`approvedFx` predates `payCurrency`; `approvedInCurrency` predates FX).
+
+### Changed
+- **`FailoverPaymentRouter` DELEGATES the Nepal corridor** to `NepalPaymentService` instead of walking
+  it in the generic candidate loop. A dispatcher cannot price a corridor, and walking it was exactly
+  how the KRW arrived labelled NPR. `NepalPaymentService` is therefore no longer dead code - it is the
+  corridor's single money path, and there are no longer two divergent Nepal paths. Nepal does not fail
+  over (one scheme edge; a "failover" would pay a different corridor with Nepal's pricing applied), and
+  extra candidates are logged, not walked. **With no Nepal money path wired the router REFUSES** - the
+  pass-through is not an acceptable fallback.
+- **`WalletPayController`** - `payAmount` now reports the FX'd payout (not the KRW leg) whenever a
+  corridor applied FX; a pricing refusal feeds the DECLINE_SPIKE monitor like any other decline.
+- **T4-2 basis on this path got stronger**: the gate runs `enforceUsd(chargedUsd)` - bit-for-bit the
+  figure the prefunding debit moves - instead of converting a pass-through NPR amount at USD/NPR.
+
+### Tests
+- **`NepalPaymentServiceTest`** (24): FX applied / never pass-through, offer rate = mid - margin,
+  NPR-quoted derivation, fee applied, prefunding deducted once + reversed on decline + KEPT on PENDING,
+  revenue to the real accounts with `postRoundingResidual` never called, real margins on the commit,
+  both legs recorded, config-registry-sourced pricing, and six fail-closed refusals (no margin, no fee,
+  no KRW/NPR rate, no USD/KRW rate, nonsense margin, no float ledger) each asserting no scheme call and
+  no float moved - plus T4-2 gating still enforced on the corridor.
+- **`FailoverPaymentRouterTest`** - Nepal delegation + refusal-without-a-money-path. The generic
+  failover-mechanics candidate moved off `NEPAL` (it is delegated now, so it can no longer stand in for
+  "some cross-border scheme"); same for `ResilientFailoverIntegrationTest`.
+- **`WalletLimitEnforcementTest`** - the Nepal block now exercises the real production chain
+  (`/v1/pay` -> router -> corridor -> gate) on KRW amounts and asserts the cap is charged on the
+  corridor's fee-inclusive `chargedUsd`.
+
+### Owner action required before the corridor can transact
+The FX margin and the service fee for KRW->NPR. Until they are configured the corridor refuses every
+payment - deliberately not sellable rather than silently mispriced.
+
 ## [feat/pay-idempotency] — 2026-07-03 (request-level idempotency on POST /v1/pay)
 
 ### Added

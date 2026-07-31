@@ -18,8 +18,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.config-registry.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubAuditTrailClient implements AuditTrailClient {
 
     @Override

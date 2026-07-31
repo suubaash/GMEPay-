@@ -28,7 +28,7 @@ import org.springframework.web.client.RestClient;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest", matchIfMissing = true)
 public class RestRbacAdminClient implements RbacAdminClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestRbacAdminClient.class);

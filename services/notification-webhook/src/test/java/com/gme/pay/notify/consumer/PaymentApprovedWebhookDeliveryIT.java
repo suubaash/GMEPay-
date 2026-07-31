@@ -7,6 +7,8 @@ import com.gme.pay.notify.persistence.WebhookDeliveryRepository;
 import com.gme.pay.notify.persistence.WebhookEndpointEntity;
 import com.gme.pay.notify.persistence.WebhookEndpointRepository;
 import com.gme.pay.notify.persistence.WebhookPersistenceService;
+import com.gme.pay.notify.provisioning.SigningSecrets;
+import com.gme.pay.notify.provisioning.WebhookSecretDeriver;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -64,6 +66,13 @@ import static org.junit.jupiter.api.Assertions.fail;
 })
 class PaymentApprovedWebhookDeliveryIT {
 
+    /**
+     * Mirrors {@code gmepay.webhook.signing-secret} above. Since T5-4 this is the HKDF
+     * derivation ROOT key, not the signing key itself — the secret actually signed with is
+     * derived per endpoint (see {@link WebhookSecretDeriver}).
+     */
+    private static final String ROOT_KEY = "it-signing-secret";
+
     @Container
     private static final KafkaContainer KAFKA =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.8.0"));
@@ -102,6 +111,14 @@ class PaymentApprovedWebhookDeliveryIT {
         endpoint.setWebhookUrl("https://partner-77.example.com/webhooks/gmepay");
         endpoint.setEnvironment("SANDBOX");
         endpoint.setActive(true);
+        // T5-4: the dispatcher signs with THIS endpoint's derived secret and refuses to
+        // deliver unless the derived value matches the digest on the row. So the row must
+        // carry the digest of the secret registration would have minted for
+        // (partner 77, SANDBOX, generation 1) under the configured root key.
+        endpoint.setSigningSecretHash(SigningSecrets.sha256Hex(
+                WebhookSecretDeriver.withRootKey(ROOT_KEY)
+                        .derive(77L, "SANDBOX", WebhookSecretDeriver.INITIAL_GENERATION)));
+        endpoint.setSecretGeneration(WebhookSecretDeriver.INITIAL_GENERATION);
         // created_at/updated_at are NOT NULL with no @PrePersist — the entity expects callers to stamp.
         endpoint.setCreatedAt(Instant.now());
         endpoint.setUpdatedAt(Instant.now());

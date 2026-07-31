@@ -22,6 +22,8 @@ import com.gme.pay.bff.client.stub.StubSettlementClient;
 import com.gme.pay.bff.client.stub.StubStatementClient;
 import com.gme.pay.bff.client.stub.StubTransactionMgmtClient;
 import org.junit.jupiter.api.Assertions;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +60,22 @@ class PortalUc10ControllerTest {
     private MockMvc mvc;
     private ObjectMapper objectMapper;
 
+    /**
+     * Portal endpoints are tenant-scoped against the verified token (T0-4). These tests exercise
+     * portal FUNCTIONALITY, so they authenticate as a platform operator holding the explicit
+     * cross-partner read permission; the scope rules themselves are covered by
+     * {@link PartnerPortalScopeTest}.
+     */
+    @BeforeEach
+    void authenticateAsCrossReadingOperator() {
+        TestTokens.hubOperator("partner.view");
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
+
     @BeforeEach
     void setUp() {
         ConfigRegistryClient configRegistry = new StubConfigRegistryClient();
@@ -69,7 +87,13 @@ class PortalUc10ControllerTest {
                 transactions, prefunding, settlement, configRegistry,
                 new StubApiKeyClient(),
                 new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
-                new StubStatementClient());
+                // Gap T1-3: the statement is built from REAL transaction rows by
+                // RestStatementClient, not from StubStatementClient's five hardcoded TXN-100x
+                // samples. Pointing it at the same transaction source the Transactions page uses
+                // means the CSV and the page cannot disagree.
+                new com.gme.pay.bff.client.rest.RestStatementClient(transactions),
+                new com.gme.pay.bff.client.stub.StubPortalWebhookClient(),
+                new OpsRbacGuard(true));
 
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
@@ -224,13 +248,15 @@ class PortalUc10ControllerTest {
 
         String body = result.getResponse().getContentAsString();
         String[] lines = body.split("\n");
-        // 1 header + 5 data rows
-        Assertions.assertEquals(6, lines.length,
-                "expected 1 header + 5 data rows, got: " + body);
+        // 1 header + the partner's REAL transactions in the window. partner_test_001 has two
+        // (TXN-1001, TXN-1002), both committed 2026-06-09 — sourced from transaction-mgmt, so the
+        // count follows the data rather than a hardcoded sample set.
+        Assertions.assertEquals(3, lines.length,
+                "expected 1 header + 2 real transaction rows, got: " + body);
 
         // UC-10-02 header must match exactly — timestamp,qrSchemeId,krwAmount,...
         Assertions.assertEquals(
-                StubStatementClient.UC10_HEADER, lines[0],
+                com.gme.pay.bff.client.rest.RestStatementClient.UC10_HEADER, lines[0],
                 "CSV header must match UC-10-02 spec");
 
         // Revenue columns must be absent from the header
@@ -244,18 +270,27 @@ class PortalUc10ControllerTest {
         Assertions.assertFalse(header.contains("feeRevenue"),
                 "revenue field feeRevenue must not appear in CSV header");
 
-        // First data row must start with a UTC ISO timestamp
-        Assertions.assertTrue(lines[1].startsWith("2026-06-01T00:00:00Z,"),
-                "data rows must start with UTC ISO timestamp, got: " + lines[1]);
+        // Data rows carry the REAL committedAt of the transaction (TXN-1001 was committed at
+        // 10:15:30Z), not a synthesised midnight timestamp.
+        Assertions.assertTrue(lines[1].startsWith("2026-06-09T10:15:30Z,"),
+                "data rows must start with the transaction's real UTC commit instant, got: "
+                        + lines[1]);
 
-        // Confirm UC-10-02 fields appear in the data rows
-        Assertions.assertTrue(lines[1].contains("zeropay_kr"),
-                "qrSchemeId must appear in data rows");
+        // The status column is the transaction's real state.
+        Assertions.assertTrue(lines[1].endsWith(",COMMITTED"),
+                "status column must carry the real transaction state, got: " + lines[1]);
+
+        // prefundingDeductedUsd is TXN-1001's real value; absent fields stay EMPTY rather than
+        // being zero-filled or invented (qrSchemeId is null on these rows).
+        Assertions.assertTrue(lines[1].contains(",0.0935,"),
+                "prefundingDeductedUsd must be the real persisted value, got: " + lines[1]);
     }
 
     @Test
-    @DisplayName("UC-10-02: statement CSV narrow date range filters correctly")
+    @DisplayName("UC-10-02: statement CSV date range excludes transactions outside the window")
     void statement_uc1002_narrowRangeFilters() throws Exception {
+        // partner_test_001's transactions are all on 2026-06-09, so a window that closes before
+        // then must yield NO data rows — an honest empty statement, not a filtered sample set.
         MvcResult result = mvc.perform(get("/v1/portal/{p}/statement", PARTNER)
                         .param("from", "2026-06-03")
                         .param("to", "2026-06-05"))
@@ -263,9 +298,30 @@ class PortalUc10ControllerTest {
                 .andReturn();
         String body = result.getResponse().getContentAsString();
         String[] lines = body.split("\n");
-        // 1 header + 2 rows (TXN-1002 on 2026-06-03, TXN-1003 on 2026-06-05)
-        Assertions.assertEquals(3, lines.length,
-                "expected 1 header + 2 rows for narrow range, got: " + body);
+        Assertions.assertEquals(1, lines.length,
+                "expected the header only for a window with no transactions, got: " + body);
+        Assertions.assertEquals(
+                com.gme.pay.bff.client.rest.RestStatementClient.UC10_HEADER, lines[0]);
+    }
+
+    @Test
+    @DisplayName("UC-10-02: statement is scoped to the requested partner's own transactions")
+    void statement_uc1002_isPartnerScoped() throws Exception {
+        // partner_test_002 owns exactly one transaction (TXN-1003, KRW 50000) and must not see
+        // partner_test_001's rows in its statement.
+        MvcResult result = mvc.perform(get("/v1/portal/{p}/statement", "partner_test_002")
+                        .param("from", "2026-06-01")
+                        .param("to", "2026-06-30"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String body = result.getResponse().getContentAsString();
+        String[] lines = body.split("\n");
+        Assertions.assertEquals(2, lines.length,
+                "expected 1 header + partner_test_002's single transaction, got: " + body);
+        Assertions.assertTrue(lines[1].startsWith("2026-06-09T12:45:00Z,"),
+                "unexpected row for partner_test_002: " + lines[1]);
+        Assertions.assertFalse(body.contains("0.0935"),
+                "partner_test_002's statement must not contain partner_test_001's data");
     }
 
     // ──────────────────────────────────────────────────────────────────────────

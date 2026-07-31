@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * shape back (optimistic) rather than persisting.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub", matchIfMissing = true)
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub")
 public class StubRbacAdminClient implements RbacAdminClient {
 
     private static final List<PermissionDef> PERMISSIONS = List.of(

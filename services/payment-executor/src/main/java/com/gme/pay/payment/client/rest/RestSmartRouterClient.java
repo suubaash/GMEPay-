@@ -64,21 +64,21 @@ public class RestSmartRouterClient implements SmartRouterClient {
                     .build()
                     .toUriString();
 
-            ResolveResponse body = restClient.get()
+            List<Candidate> body = restClient.get()
                     .uri(uri)
                     .retrieve()
-                    .body(ResolveResponse.class);
+                    .body(new org.springframework.core.ParameterizedTypeReference<List<Candidate>>() {});
 
-            if (body == null || body.candidates() == null) {
+            if (body == null) {
                 return List.of();
             }
             List<PartnerSchemeView> views = new ArrayList<>();
-            for (Candidate c : body.candidates()) {
+            for (Candidate c : body) {
                 views.add(new PartnerSchemeView(
-                        c.partnerId(),
+                        c.partnerId() == null ? 0L : c.partnerId(),
                         c.partnerName(),
                         c.schemeId(),
-                        c.priority()));
+                        c.priority() == null ? Integer.MAX_VALUE : c.priority()));
             }
             views.sort(Comparator.comparingInt(PartnerSchemeView::priority));
             return views;
@@ -94,12 +94,12 @@ public class RestSmartRouterClient implements SmartRouterClient {
     }
 
     // ---- wire formats (smart-router /v1/route/resolve contract) ----
+    // The endpoint returns a BARE JSON ARRAY of PartnerSchemeView rows (see
+    // LocationResolveController + its controller test), NOT a {"candidates":[...]}
+    // envelope — parsing the array is the contract. Boxed types: REST-registry rows
+    // may carry null partnerId/priority; extra view fields are ignoreUnknown'd.
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record ResolveResponse(List<Candidate> candidates) {
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    record Candidate(long partnerId, String partnerName, String schemeId, int priority) {
+    record Candidate(Long partnerId, String partnerName, String schemeId, Integer priority) {
     }
 }

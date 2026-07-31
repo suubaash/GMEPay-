@@ -21,9 +21,20 @@ global:
 
 abi:
   # ElastiCache for Redis (primary endpoint).
+  #
+  # REPLICA CEILING (2026-07-30): this is no longer an optional cache. api-gateway keeps its
+  # per-partner rate-limit window and its replay-protection nonce set here, and its replay posture
+  # is fail-CLOSED -- so an unavailable Redis answers partner traffic 503 rather than admitting
+  # replays. Provision it as MULTI-AZ with automatic failover (and consider
+  # gateway.rate-limit.on-store-error=local so a Redis blip degrades the cap to N x instead of
+  # stopping traffic). ops-partner-bff also uses it, for paging dedupe only, and degrades safely.
   SPRING_DATA_REDIS_HOST: gmepay.xxxxxx.ng.0001.apn2.cache.amazonaws.com
   SPRING_DATA_REDIS_PORT: "6379"
   # MSK bootstrap brokers (TLS — services must use SSL security protocol).
+  # T3-11: SPRING_KAFKA_LISTENER_CONCURRENCY (base values.yaml, default 3) is capped by the topic's
+  # partition count, which MSK owns, not this chart. Set MSK's `num.partitions` in the cluster
+  # configuration BEFORE the gmepay.* topics are auto-created, or create them explicitly with
+  # `--partitions 3`. Raising partitions afterwards re-maps keys to partitions and is a migration.
   SPRING_KAFKA_BOOTSTRAP_SERVERS: b-1.gmepay.xxxxx.kafka.ap-northeast-2.amazonaws.com:9094,b-2.gmepay.xxxxx.kafka.ap-northeast-2.amazonaws.com:9094
   GMEPAY_SCHEMA_REGISTRY_URL: https://schema-registry.gmepay.internal:8081
   # DocumentDB / self-managed Mongo (S3 is not Mongo). Placeholder cluster.
@@ -34,10 +45,16 @@ abi:
   GMEPAY_VAULT_PATH_STYLE: "false"
   # OIDC — Keycloak-on-EKS (shown) OR Cognito issuer:
   #   https://cognito-idp.<region>.amazonaws.com/<userPoolId>
+  # This MUST be the browser-facing issuer (identical to the UIs'
+  # NEXT_PUBLIC_KEYCLOAK_URL) because it is what lands in the token's `iss`.
   SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
   OIDC_ISSUER_URI: https://auth.gmepay.example.com/realms/gmepay
-  # OTLP -> ADOT collector / managed OTLP endpoint.
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://adot-collector.observability.svc:4317
+  # Set only when the pods cannot reach the public issuer for OIDC discovery
+  # (split-horizon DNS / private-only Keycloak). Keeping it unset lets discovery
+  # run against the issuer above, which is correct for a publicly resolvable IdP.
+  # SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
+  # T3-2: the dead OTEL_EXPORTER_OTLP_ENDPOINT was removed from the base values and every overlay —
+  # no service has an OTLP exporter and no collector is deployed. See Documentation/RUNBOOK_MONITORING.md.
 
 # Prefer External Secrets Operator pulling from AWS Secrets Manager: set
 # create:false and provision <release>-credentials. Placeholders shown for
@@ -53,6 +70,19 @@ secrets:
     GMEPAY_RBAC_SECRET: REPLACE_FROM_SECRETS_MANAGER
     GMEPAY_INTERNAL_AUTH_SECRET: REPLACE_FROM_SECRETS_MANAGER
     GMEPAY_WEBHOOK_SIGNING_SECRET: REPLACE_FROM_SECRETS_MANAGER
+    # T0-6: HS256 signing key for auth-identity's capability tokens. auth-identity refuses to start
+    # on a placeholder, so this MUST be substituted from Secrets Manager before deploy.
+    GME_AUTH_JWT_SIGNING_SECRET: REPLACE_FROM_SECRETS_MANAGER
+    # T0-6 rotation: previously active JWT keys, accepted for verification only while their tokens
+    # expire — `<secret>@<ISO-8601 demoted-at>`, `;`-separated. EMPTY is the steady state; populate
+    # it from Secrets Manager only for the duration of a rotation window, then empty it again.
+    # A REPLACE_* placeholder would be REJECTED as key material, so this is empty by design.
+    # Procedure: docs/runbooks/JWT_KEY_ROTATION.md
+    GME_AUTH_JWT_PREVIOUS_KEYS: ""
+    GMEPAY_SCHEME_NEPAL_TOKEN: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NEPAL_KEY: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM: REPLACE_FROM_SECRET_STORE
+    GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM: REPLACE_FROM_SECRET_STORE
 
 ingress:
   enabled: true
@@ -69,6 +99,24 @@ ingress:
       paths: [{ path: /, pathType: Prefix, service: admin-ui, port: 3000 }]
     - host: partner.gmepay.example.com
       paths: [{ path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }]
+
+# 9Pay IPN edge (gap T5-7). OFF until 9Pay's IPN egress ranges are in hand: with
+# enabled=true and an empty sourceRanges the template FAILS by design, because this
+# allowlist is the only compensating control for T5-6 (9Pay does not sign the IPN
+# `code` field). sourceRanges is PARTNER DATA — ask 9Pay in writing; do not copy it
+# from a document. On ALB the ranges render as inbound-cidrs, and note the ALB itself
+# must also be reachable only on 443 from those CIDRs at the security-group level:
+# inbound-cidrs configures the SG the controller manages, so do not attach a second
+# SG that re-opens 0.0.0.0/0.
+ipnIngress:
+  enabled: false
+  controller: alb
+  className: alb
+  host: ipn.gmepay.example.com
+  sourceRanges: []
+  extraAnnotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:123456789012:certificate/REPLACE
 
 # DB-per-service -> point each at its RDS instance/database (placeholders).
 services:
@@ -88,14 +136,25 @@ services:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-settlement.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/settlement }
   revenue-ledger:
     env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-ledger.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/ledger }
+  # ops-partner-bff owns a small database as of 2026-07-30: ops_alerts + operator_action_audit +
+  # shedlock. Without this it falls back to an in-memory H2 and the alerts list, the alert ids and the
+  # operator ACKs go back to differing per replica — the ceiling this closed. A small instance is
+  # enough (low write volume, 90-day retention), but it must be a real one.
+  ops-partner-bff:
+    env: { SPRING_DATASOURCE_URL: jdbc:postgresql://gmepay-bff.xxxxx.ap-northeast-2.rds.amazonaws.com:5432/bff }
+  # One realm (`gmepay`), one client id per SPA, and the SAME issuer string the
+  # resource servers expect (abi.OIDC_ISSUER_URI above) — see docker/keycloak/README.md.
+  # BFF_PROXY_TARGET is server-side only; NEXT_PUBLIC_BFF_BASE_URL is intentionally
+  # unset (it would make the browser call the BFF cross-origin, which has no CORS).
   admin-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
       NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: admin-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
   partner-portal-ui:
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: https://api.gmepay.example.com
-      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay-partners
-      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: https://auth.gmepay.example.com/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: partner-portal-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

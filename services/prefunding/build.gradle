@@ -16,6 +16,12 @@ dependencies {
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     implementation project(':libs:lib-prefunding')
     implementation project(':libs:lib-errors')
+    // Gap T5-1 / CISO §9: partner float movement is a high-risk operation that was NOT audited —
+    // ledger_entry (V002) records the amount but no actor, no reason and no IP, so an unattributed
+    // credit or an unexplained credit-limit push could not be attributed to anyone. lib-audit
+    // supplies the ADR-007 tier-1 hash-chained audit_log writer (DbAuditPublisher) plus the
+    // AuditActors vocabulary that makes the bare "system" literal unmintable.
+    implementation project(':libs:lib-audit')
     // Slice 5 (5B.1): canonical BalanceView/BalanceAlertView wire DTOs + the
     // transactional-Outbox event contracts (DomainEvent/EventPublisher) for
     // tier alerts on topic gmepay.prefunding.alert (ADR-001).

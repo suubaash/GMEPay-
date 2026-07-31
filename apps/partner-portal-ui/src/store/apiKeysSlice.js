@@ -9,13 +9,22 @@ import { portalApi } from '@/api/client';
  *   Array<ApiKeyView>
  *     {
  *       keyId: string,
- *       name: string,
+ *       name: null,                  // always null — api_keys has no name column
  *       prefix: string,
- *       scopes: string[],
+ *       scopes: [],                  // always empty — per-key scopes aren't modelled
  *       createdAt: string,           // ISO instant
- *       lastUsedAt: string | null,   // ISO instant
- *       status: 'ACTIVE' | 'ROTATING' | 'REVOKED'
+ *       lastUsedAt: null,            // always null — key usage isn't recorded
+ *       status: 'ACTIVE' | 'PENDING_EXPIRY' | 'REVOKED',
+ *       environment: 'SANDBOX' | 'PRODUCTION',
+ *       expiresAt: string | null     // ISO instant or null (no expiry configured)
  *     }
+ *
+ * Gap register T1-3: these are the partner's REAL credentials from auth-identity's
+ * api_keys registry. The page used to render two fabricated keys per partner
+ * (gpk_live_<hash> prefixes, PRIMARY/ROTATING statuses, invented scopes and a
+ * last-used time) because the BFF had no rest client. The three fields marked
+ * "always" above have no source in the platform and render as an em dash — they
+ * are deliberately NOT back-filled.
  *
  * Phase 1 is READ-ONLY: there is no rotate/revoke action yet. The page shows
  * a banner pointing operators at Ops/Admin (or auth-identity self-service)

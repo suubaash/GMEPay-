@@ -9,6 +9,8 @@ import com.gme.pay.settlement.builder.DetailBuildContext;
 import com.gme.pay.settlement.builder.ZP0061RequestBuilder;
 import com.gme.pay.settlement.builder.ZP0065PaymentDetailBuilder;
 import com.gme.pay.settlement.builder.ZP0066RefundDetailBuilder;
+import com.gme.pay.settlement.calendar.BusinessCalendar;
+import com.gme.pay.settlement.calendar.BusinessDayVerdict;
 import com.gme.pay.settlement.model.TransactionRecord;
 import com.gme.pay.settlement.outbox.OutboxAppender;
 import com.gme.pay.settlement.outbox.SettlementCompletedEvent;
@@ -22,6 +24,8 @@ import com.gme.pay.settlement.port.RefundedTransactionPort;
 import com.gme.pay.settlement.port.RegistrationStatusPort;
 import com.gme.pay.settlement.port.RefundedTransactionPort.RefundLeg;
 import com.gme.pay.settlement.port.TransactionQueryPort;
+import com.gme.pay.settlement.transmission.SettlementTransmissionChannelRegistry;
+import com.gme.pay.settlement.transmission.SettlementTransmissionRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -106,6 +110,24 @@ public class SettlementBatchJobService {
     private final LocalTime morningCutoff;
     private final LocalTime afternoonCutoff;
 
+    /**
+     * T3-4: the configured business-day calendar. Consulted HERE, not only in the scheduler, so no caller —
+     * scheduler, operator re-run, or a future direct one — can generate a settlement file for a date the
+     * calendar declares closed. Defaults to {@link BusinessCalendar#empty()} in the legacy constructors,
+     * which classifies every date UNVERIFIED (fail-open) and so preserves existing behaviour exactly.
+     */
+    private final BusinessCalendar calendar;
+
+    /**
+     * T4-5: stamps every freshly GENERATED batch with the most advanced transmission state this
+     * deployment can actually reach, plus the reason. With no channel configured — which is every
+     * environment today — that is {@code NOT_TRANSMITTED_CHANNEL_UNAVAILABLE}, recorded on the row
+     * itself so no reader has to infer "never sent" from a null timestamp. The legacy constructors
+     * default it to a recorder over {@link SettlementTransmissionChannelRegistry#noChannelConfigured()},
+     * which is the honest state of the platform, not a convenience.
+     */
+    private final SettlementTransmissionRecorder transmissionRecorder;
+
     @org.springframework.beans.factory.annotation.Autowired
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -116,6 +138,8 @@ public class SettlementBatchJobService {
                                      @Qualifier(OutboxAppender.BEAN_NAME) EventPublisher outbox,
                                      RefundedTransactionPort refundedPort,
                                      RegistrationStatusPort registrationPort,
+                                     BusinessCalendar calendar,
+                                     SettlementTransmissionRecorder transmissionRecorder,
                                      @Value("${settlement.morning-cutoff:04:30}") String morningCutoff,
                                      @Value("${settlement.afternoon-cutoff:13:30}") String afternoonCutoff) {
         this.txnPort = txnPort;
@@ -127,6 +151,10 @@ public class SettlementBatchJobService {
         this.outbox = outbox;
         this.refundedPort = refundedPort;
         this.registrationPort = registrationPort;
+        this.calendar = calendar == null ? BusinessCalendar.empty() : calendar;
+        this.transmissionRecorder = transmissionRecorder != null ? transmissionRecorder
+                : new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo);
         this.morningCutoff = parseCutoff(morningCutoff, "morning-cutoff");
         this.afternoonCutoff = parseCutoff(afternoonCutoff, "afternoon-cutoff");
     }
@@ -136,6 +164,13 @@ public class SettlementBatchJobService {
      * in-process {@link FixtureRefundedTransactionAdapter} no-op and a permissive registration
      * status). Kept so existing call sites/tests compile unchanged; production DI uses the full
      * constructor above.
+     *
+     * <p><b>Calendar (T3-4):</b> defaults to {@link BusinessCalendar#empty()}, which is the honest
+     * meaning of "this caller supplied no calendar". An empty calendar has no data, so it answers
+     * {@link BusinessDayVerdict#UNVERIFIED} for every date and is fail-open — it therefore asserts
+     * nothing about which days are KRW banking days (it does <em>not</em> claim every day is open) and
+     * blocks nothing, so existing call sites keep their exact previous behaviour. Inventing a
+     * business-day default here is precisely what this gap forbids.
      */
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -149,12 +184,16 @@ public class SettlementBatchJobService {
         this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
                 new FixtureRefundedTransactionAdapter(),
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                BusinessCalendar.empty(),
+                new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo),
                 morningCutoff, afternoonCutoff);
     }
 
     /**
      * Backwards-compatible constructor with the refund-date port but a permissive registration
-     * status (pre-gate call sites/tests).
+     * status (pre-gate call sites/tests). Calendar defaults to {@link BusinessCalendar#empty()} for the
+     * same reason as the constructor above.
      */
     public SettlementBatchJobService(TransactionQueryPort txnPort,
                                      PartnerConfigPort partnerConfigPort,
@@ -169,14 +208,49 @@ public class SettlementBatchJobService {
         this(txnPort, partnerConfigPort, booking, batchFactory, batchRepo, lineRepo, outbox,
                 refundedPort,
                 date -> RegistrationStatusPort.RegistrationStatus.allowed(),
+                BusinessCalendar.empty(),
+                new SettlementTransmissionRecorder(
+                        SettlementTransmissionChannelRegistry.noChannelConfigured(), batchRepo),
                 morningCutoff, afternoonCutoff);
     }
 
-    /** @param fileType "ZP0061" (morning) or "ZP0063" (afternoon); @param window e.g. "MORNING"/"AFTERNOON". */
+    /**
+     * Run today's (KST) window — the scheduled entry point.
+     *
+     * @param fileType "ZP0061" (morning) or "ZP0063" (afternoon)
+     * @param window   e.g. "MORNING"/"AFTERNOON"
+     */
     @Transactional
     public SettlementBatchEntity runWindow(String fileType, String window) {
+        return runWindow(fileType, window, LocalDate.now(KST));
+    }
+
+    /**
+     * Run a window for an EXPLICIT business date.
+     *
+     * <p>Split out for T3-4's operator re-run tooling: the business date used to be
+     * {@code LocalDate.now(KST)} deep inside this method, which meant nothing could re-run a window for
+     * <em>yesterday</em> — the single most likely thing an operator needs after a failed 22:00. Every
+     * date-dependent step below (batch identity, the transaction query, the window cutoff, the cross-date
+     * claw-back, the file header) already keyed off this one local, so parameterising it changes no
+     * behaviour for the scheduled path, which passes today.
+     *
+     * <p>Still idempotent per {@code (fileType, businessDate, window)}: {@code createOrGet} plus the
+     * PENDING-only guard mean a second invocation for the same coordinates is a no-op that returns the
+     * existing batch rather than producing a second file.
+     */
+    @Transactional
+    public SettlementBatchEntity runWindow(String fileType, String window, LocalDate date) {
         requireRequestFile(fileType);
-        LocalDate date = LocalDate.now(KST);
+
+        // T3-4 business-day gate, checked HERE rather than only in the scheduler so that no caller —
+        // scheduler, operator re-run, or a future direct one — can generate a settlement file for a date
+        // the configured calendar declares closed. Throws NonBusinessDayException (which BatchRunExecutor
+        // records as SKIPPED_NON_BUSINESS_DAY, not FAILED) before anything is persisted, so a blocked
+        // window leaves no partial batch. An EMPTY calendar — the shipped default — classifies every date
+        // UNVERIFIED and does not block; the run is still stamped UNVERIFIED on its batch_runs row and
+        // raises BATCH_CALENDAR_UNVERIFIED, so "we never checked" is visible rather than assumed away.
+        BusinessDayVerdict verdict = calendar.gate(date, fileType + "/" + window);
 
         // §8.2 prerequisite (tickets 9.1-T18/T19): the settlement REQUEST may not be generated
         // until the date's payment registration completed both legs — ZP0011 transmitted AND
@@ -206,6 +280,11 @@ public class SettlementBatchJobService {
         // (KST). A txn approved after the morning cutoff is left for the afternoon batch; a txn with no
         // approval timestamp fails OPEN (included) so we never silently drop settle-able volume.
         Instant cutoff = windowCutoff(date, window);
+        // The cutoff decides which day's volume this file carries, so the business-day verdict for that
+        // date belongs in the same log line: a cutoff computed for an UNVERIFIED date is a settlement
+        // boundary nobody has confirmed is a KRW banking day.
+        log.info("settlement batch {} window {} cutoff={} businessDate={} calendarVerdict={}",
+                fileType, window, cutoff, date, verdict);
 
         List<TransactionRecord> txns = txnPort.findUnbatchedApproved(date).stream()
                 .filter(TransactionRecord::isApproved)
@@ -330,6 +409,9 @@ public class SettlementBatchJobService {
         batch.setTotalAmount(netTotal);
         batch.setTotalCurrency(SETTLE_CCY);
         transition(batch, SettlementBatchStatus.GENERATED);
+        // T4-5: the file now exists on disk; record on the row whether it can ever be SENT, and why not.
+        // Generated is not transmitted, and this is where that stops being an inference.
+        transmissionRecorder.stampReachableState(batch);
         batchRepo.save(batch);
 
         outbox.publish(new SettlementCompletedEvent(
@@ -366,9 +448,20 @@ public class SettlementBatchJobService {
      */
     @Transactional
     public SettlementBatchEntity runDetailWindow(String fileType) {
+        return runDetailWindow(fileType, LocalDate.now(KST));
+    }
+
+    /**
+     * Detail-file generation for an EXPLICIT business date — the re-runnable entry point (T3-4). Same
+     * rationale and same idempotency as {@link #runWindow(String, String, LocalDate)}.
+     */
+    @Transactional
+    public SettlementBatchEntity runDetailWindow(String fileType, LocalDate date) {
         requireDetailFile(fileType);
-        LocalDate date = LocalDate.now(KST);
         String window = "DETAIL";
+        // Same T3-4 gate as runWindow — the detail files describe the same business date, so they must
+        // obey the same calendar verdict.
+        calendar.gate(date, fileType + "/" + window);
         SettlementBatchEntity batch = batchFactory.createOrGet(fileType, date, window);
 
         if (!SettlementBatchStatus.PENDING.name().equals(batch.getStatus())) {
@@ -412,6 +505,9 @@ public class SettlementBatchJobService {
         batch.setTotalAmount(file.trailerTotal());
         batch.setTotalCurrency(SETTLE_CCY);
         transition(batch, SettlementBatchStatus.GENERATED);
+        // T4-5: the file now exists on disk; record on the row whether it can ever be SENT, and why not.
+        // Generated is not transmitted, and this is where that stops being an inference.
+        transmissionRecorder.stampReachableState(batch);
         batchRepo.save(batch);
 
         outbox.publish(new SettlementCompletedEvent(
@@ -527,7 +623,11 @@ public class SettlementBatchJobService {
             if (!isCrossDateClawbackEligible(leg)) {
                 continue;
             }
-            BigDecimal amount = krw(leg.refundAmountKrw());
+            // T2-6: claw back only the portion not already netted. The leg's refundAmountKrw is the
+            // CUMULATIVE refunded total, so on a second partial refund of the same transaction this is the
+            // increment; a boolean already-clawed-back gate (what this used to be) would have netted the
+            // first refund and silently dropped every later one.
+            BigDecimal amount = krw(leg.refundAmountKrw()).subtract(alreadyClawedBack(leg.refundTxnRef()));
             if (amount.signum() <= 0) {
                 continue;
             }
@@ -606,11 +706,20 @@ public class SettlementBatchJobService {
             log.debug("cross-date refund {} original {} not previously settled — nets to zero", refundRef, original);
             return false;
         }
-        if (lineRepo.existsByTxnRefAndAmountLessThan(refundRef, BigDecimal.ZERO)) {
-            log.debug("cross-date refund {} already clawed back — skipping (idempotent)", refundRef);
-            return false;
-        }
+        // T2-6: idempotency is now enforced by AMOUNT, not by presence (see foldCrossDateRefunds). A leg whose
+        // cumulative refunded total is fully netted yields a zero delta and is skipped there; a leg that has
+        // been refunded FURTHER since the last window yields the increment and is netted. Keying on presence
+        // here would have made every refund after the first invisible to settlement.
         return true;
+    }
+
+    /**
+     * The magnitude already netted for this refund leg across all batches, never null (T2-6). Kept as a tiny
+     * seam so the delta arithmetic in {@link #foldCrossDateRefunds} reads as one line.
+     */
+    private BigDecimal alreadyClawedBack(String refundTxnRef) {
+        BigDecimal sum = lineRepo.sumClawedBackByTxnRef(refundTxnRef);
+        return sum == null ? BigDecimal.ZERO : sum;
     }
 
     /** (merchantId, settlementType) grouping key — one settlement row per merchant per type. */

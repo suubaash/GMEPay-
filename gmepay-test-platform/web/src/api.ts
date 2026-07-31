@@ -1,4 +1,13 @@
-export type Status = 'PASS' | 'FAIL' | 'BLOCKED' | 'NOT_AUTOMATED' | 'RUNNING' | 'IDLE';
+// NOTE: these types mirror src/shared/types.ts. The dashboard is bundled separately
+// from the API, so it cannot import across that boundary — keep the two in sync.
+export type Status =
+  | 'PASS'
+  | 'FAIL'
+  | 'BLOCKED'
+  | 'UNSUPPORTED'
+  | 'NOT_AUTOMATED'
+  | 'RUNNING'
+  | 'IDLE';
 
 export interface Step {
   t: number;
@@ -26,6 +35,11 @@ export interface UseCaseMeta {
   services: string[];
   intent: string;
   automated: boolean;
+  kind?: 'use-case' | 'feature';
+  /** Credentials this case must present against the default-deny platform. */
+  credentials?: string[];
+  /** Set when the asserted capability was deliberately withdrawn from the platform. */
+  unsupportedReason?: string;
 }
 
 export interface ServiceHealth {

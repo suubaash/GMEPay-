@@ -7,6 +7,8 @@ import com.gme.pay.bff.client.TransactionMgmtClient;
 import com.gme.pay.bff.client.TransactionMgmtClient.SearchQuery;
 import com.gme.pay.bff.client.TransactionMgmtClient.TransactionSummary;
 import com.gme.pay.bff.client.stub.StubOperatorActionAuditClient;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -54,6 +56,11 @@ class OpsTransactionControllerTest {
                 .build();
     }
 
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
+
     @Test
     void search_proxiesMappedResults() throws Exception {
         TransactionSummary row = TransactionSummary.of("TXN-1001", "P_A", "UNCERTAIN",
@@ -79,19 +86,20 @@ class OpsTransactionControllerTest {
 
     @Test
     void txnViewCanSearch_butCannotResolve() throws Exception {
-        // A support agent presents txn.view but NOT ops:operate.
+        // A support agent's TOKEN carries txn.view but NOT ops:operate.
         when(transactions.search(any(SearchQuery.class)))
                 .thenReturn(new TransactionMgmtClient.Page<>(List.of(), 0, 20, 0));
+        TestTokens.hubOperator("txn.view");
 
         // CAN search with txn.view (fail-closed guard passes on txn.view).
         mvc.perform(get("/v1/admin/transactions/search")
-                        .param("q", "TXN-1001")
-                        .header("X-Gme-Permissions", "txn.view"))
+                        .param("q", "TXN-1001"))
                 .andExpect(status().isOk());
 
-        // CANNOT force-resolve — that still requires ops:operate → 403.
+        // CANNOT force-resolve — that still requires ops:operate → 403, and a forged
+        // X-Gme-Permissions header cannot buy it (T0-3).
         mvc.perform(post("/v1/admin/transactions/TXN-1001/resolve")
-                        .header("X-Gme-Permissions", "txn.view")
+                        .header("X-Gme-Permissions", "ops:operate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"resolution\":\"FORCE_APPROVE\"}"))
                 .andExpect(status().isForbidden());

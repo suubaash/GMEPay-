@@ -3,7 +3,11 @@ package com.gme.pay.ledger.persistence;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -18,14 +22,32 @@ import java.util.Objects;
  *
  * <p>Only rounding-residual journals write here; revenue-capture / fee-share / reversal journals
  * carrying the same {@code reference} on other accounts are unaffected.
+ *
+ * <h2>Why {@link Persistable} (gap T2-9)</h2>
+ *
+ * <p>The {@code reference} is an <b>assigned</b> identifier, so Spring Data's default
+ * {@code isNew() == (id == null)} rule classified every save as an <em>update</em> and issued
+ * {@code EntityManager.merge(…)}. Merge on an existing row is a SELECT + UPDATE: the documented
+ * "second concurrent rounding post fails on the PK constraint" never happened — instead the guard row was
+ * silently re-pointed at the newer journal, which is how a reversing journal that mirrored a
+ * {@code REVENUE_ROUNDING} line could corrupt (rather than merely duplicate) the residual guard.
+ * Declaring the row {@link #isNew() always new} until it has been loaded or persisted forces a real
+ * {@code INSERT}, so the primary key is once again the backstop the migration comment claims it is.
  */
 @Entity
 @Table(name = "rounding_residual_keys")
-public class RoundingResidualKeyEntity {
+public class RoundingResidualKeyEntity implements Persistable<String> {
 
     @Id
     @Column(name = "reference", length = 64, nullable = false)
     private String reference;
+
+    /**
+     * False once this instance represents a row that is already in the database (loaded via
+     * {@code findById}, or just inserted). Not mapped — see the class javadoc.
+     */
+    @Transient
+    private boolean persisted;
 
     @Column(name = "journal_id", length = 64, nullable = false)
     private String journalId;
@@ -65,5 +87,23 @@ public class RoundingResidualKeyEntity {
 
     public void setPostedAt(Instant postedAt) {
         this.postedAt = postedAt;
+    }
+
+    // --- Persistable: force INSERT so the PK is a real concurrency backstop (T2-9) ---
+
+    @Override
+    public String getId() {
+        return reference;
+    }
+
+    @Override
+    public boolean isNew() {
+        return !persisted;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markPersisted() {
+        this.persisted = true;
     }
 }

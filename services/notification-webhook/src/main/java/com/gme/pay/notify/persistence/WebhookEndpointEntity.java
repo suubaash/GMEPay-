@@ -10,7 +10,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 
 /**
- * JPA entity mapping the {@code webhook_endpoint} table (V003 + V004).
+ * JPA entity mapping the {@code webhook_endpoint} table (V003 + V004 + V007).
  *
  * <p>One row per registered partner webhook endpoint per environment
  * ({@code SANDBOX} | {@code LIVE}, V004). {@link #eventTypesCsv} is a
@@ -54,6 +54,24 @@ public class WebhookEndpointEntity {
      */
     @Column(name = "signing_secret_hash", length = 64)
     private String signingSecretHash;
+
+    /**
+     * Rotation counter (V007, T5-4) — part of the HKDF {@code info} string, so each
+     * generation is an independent secret. 1 = never rotated.
+     */
+    @Column(name = "secret_generation", nullable = false)
+    private int secretGeneration = 1;
+
+    /**
+     * Digest of the previous generation's secret, kept only for the rotation overlap
+     * window; NULL when no overlap is in force (V007, T5-4).
+     */
+    @Column(name = "previous_secret_hash", length = 64)
+    private String previousSecretHash;
+
+    /** End of the rotation overlap window; past it only the current generation signs. */
+    @Column(name = "previous_secret_expires_at")
+    private Instant previousSecretExpiresAt;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -119,6 +137,30 @@ public class WebhookEndpointEntity {
 
     public void setSigningSecretHash(String signingSecretHash) {
         this.signingSecretHash = signingSecretHash;
+    }
+
+    public int getSecretGeneration() {
+        return secretGeneration;
+    }
+
+    public void setSecretGeneration(int secretGeneration) {
+        this.secretGeneration = secretGeneration;
+    }
+
+    public String getPreviousSecretHash() {
+        return previousSecretHash;
+    }
+
+    public void setPreviousSecretHash(String previousSecretHash) {
+        this.previousSecretHash = previousSecretHash;
+    }
+
+    public Instant getPreviousSecretExpiresAt() {
+        return previousSecretExpiresAt;
+    }
+
+    public void setPreviousSecretExpiresAt(Instant previousSecretExpiresAt) {
+        this.previousSecretExpiresAt = previousSecretExpiresAt;
     }
 
     public Instant getCreatedAt() {

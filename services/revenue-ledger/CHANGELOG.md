@@ -2,6 +2,240 @@
 
 All notable changes to the revenue-ledger service. Newest first.
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-31 (T2-10 RESOLVED: the partner commission carve is on the books)
+
+### Added - the partner-side leg of the two-sided commission split is journalled
+The owner's ruling is a principle, not a preference: *"if it's our income then it should be booked as
+revenue; if this is payout cost of partner then it is payable expense."* The money flow decides which,
+and the code says the carve is a **cost**:
+
+- **GME collects the whole merchant fee.** GME bills the merchant directly and then shares a cut with the
+  scheme (`Documentation/SETTLEMENT_FLOW_SPEC.md` D11). Nobody else collects any part of it; the wallet
+  partner never bills the merchant.
+- **The carve is computed off GME's own cut** — `partner = gme × partner_share_pct` (V032 header;
+  `CommissionSplitCalculator` split 2). It only exists once GME's entitlement is established, and with no
+  partner row configured the default is "GME keeps 100% of its cut" (`EffectiveCommissionView`).
+- **The receivable is NOT net of it.** The `net` debited to `RECEIVABLE_PARTNER` is `netMerchantFeeKrw`
+  = gross − VAN, i.e. net of the *VAN intermediary fee only*; 1800 = gmeGross 1260 + scheme 540, and the
+  378 carve sits inside that 1260. GME's booked claim includes the carve, so GME does bill and collect it.
+  The VAN fee is what a genuinely netted-off deduction looks like here — subtracted before the split and
+  never journalled at all.
+- **Nothing nets or pays the carve anywhere else.** No commission logic exists in `prefunding` or
+  `settlement-reconciliation`; the only readers of `partner_share_krw` are the record, this
+  reconciliation report and the day-close quote.
+
+So it is **payable + expense**, not contra-revenue. Gross revenue is unchanged — it was always right —
+and retained commission now reads as `REVENUE_GME_FEE_SHARE − EXPENSE_PARTNER_COMMISSION` = `gmeNet`.
+
+- `LedgerPostingService.postPartnerCommissionCarveJournal(reference, partnerShareKrw)` posts
+  `DEBIT EXPENSE_PARTNER_COMMISSION / CREDIT PAYABLE_PARTNER` in KRW. Called by
+  `CommissionSplitRecordService` inside the SAME transaction as the `commission_splits` row.
+- **TWO new account codes** (`ChartOfAccounts`): `EXPENSE_PARTNER_COMMISSION` and `PAYABLE_PARTNER`.
+  `PAYABLE_SCHEME` could not be reused (different counterparty), and crediting the existing
+  `RECEIVABLE_PARTNER` was rejected because netting a liability into an asset contradicts the word
+  "payable" in the ruling and would understate both sides of the balance sheet. `PAYABLE_PARTNER` is the
+  exact mirror of `PAYABLE_SCHEME`. **No migration**: `ledger_entries.account` is a plain `VARCHAR(64)`
+  with no constraint, so next free Flyway version here remains **V008** and there are no vendor dirs.
+- **A separate journal, not extra lines on the scheme leg** — deliberately, so it back-fills
+  independently: a split journalled before this change already has the `REVENUE_GME_FEE_SHARE` credit that
+  satisfies the scheme leg's idempotency probe, so a shared probe would have left those rows permanently
+  unbooked. Idempotent on `txnRef` via a CREDIT to `PAYABLE_PARTNER` (only an original carve credits it; a
+  reversal mirrors the sides and debits it). A zero carve (`partner_share_pct = 0`) posts nothing.
+
+### Changed - the self-check now clears only for money actually booked
+- `unmappedComponents[PARTNER_COMMISSION_SHARE]` no longer reports the period's whole recorded carve; it
+  reports the carve that is **still unbooked** — splits with a carve and no `PAYABLE_PARTNER` credit
+  (pre-T2-10 rows not yet replayed), summed over the exception rows rather than derived as
+  recorded-minus-journalled, so a reversal's mirroring DEBIT can never make a booked carve look unbooked.
+  Zero therefore means booked, and `clean` reflects reality in both directions.
+- New tie-out stream `PARTNER_COMMISSION_CARVE` (`PAYABLE_PARTNER`, KRW): recorded `partner_share_krw` vs
+  what the journal credited. Only present when the period has a carve.
+- 21 new tests (141 total, 0 failures): the worked example's exact amounts (378 DR expense / 378 CR
+  payable, gross revenue still 1260, 1260 − 378 = 882 = `gmeNetShareKrw`), balanced KRW across both legs,
+  independent idempotency + back-fill for a scheme-leg-only row, zero carve posts nothing, a negative
+  carve is refused, the trial balance still sums to zero with the two new accounts, and a reversal unwinds
+  the carve to zero on both of them.
+
+### Interaction with T2-11 (still open, not touched here)
+`RevenueReversalService` mirrors every non-rounding line, so a reversal unwinds this journal automatically
+and neither new line is a `REVENUE_*` debit, so it neither trips nor is tripped by that service's
+already-reversed probe. But that mirror is **not pro-rated**, so a PARTIAL refund unwinds the whole carve
+exactly as it unwinds the whole revenue — the carve inherits T2-11's open question rather than adding a new
+one. Whatever pro-rating factor T2-11 chooses must be applied to this leg too; because the carve is a fixed
+fraction of `gmeGross`, the same factor preserves the split invariant. T2-11(b)'s `RECEIVABLE_PARTNER`
+double-relief is untouched — this change posts no `RECEIVABLE_PARTNER` line.
+
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (Kafka listener concurrency is actually readable: T3-11 defect 4 follow-up)
+
+### Fixed - `spring.kafka.listener.concurrency` was UNREADABLE on this service's consumer factory
+`RevenueLedgerKafkaConsumerConfig` hand-builds its `ConcurrentKafkaListenerContainerFactory` (to pin
+MANUAL ack mode and the DLT error handler) and never called `setConcurrency(..)`. Spring Boot binds
+that property only onto its **auto-configured** factory, so the value here was not merely unset — an
+operator could set it, watch it resolve in `/actuator/env`, and change nothing at all. That is worse
+than a bad default, because it looks like a lever, and the Helm ABI advertises
+`SPRING_KAFKA_LISTENER_CONCURRENCY` as one.
+
+The factory now reads it (default **3**, matching `KAFKA_NUM_PARTITIONS` in `docker-compose.yml` and
+the Helm ABI ConfigMap), clamped at 1 so a `0` from a config typo cannot silently stop revenue capture.
+Concurrency is still capped by partitions, not by this number — three threads against a 1-partition
+topic leaves two idle, which is the same reason extra replicas gained nothing. Ordering is unaffected:
+the producer keys by aggregate id, so every event for one payment lands on one partition and is still
+handled in order by one thread.
+
+### Tests
+`RevenueLedgerKafkaConcurrencyTest` reads the concurrency back **off the built factory**, which is the
+only way to tell "unset" and "unreadable" apart. A fleet-wide source-scan guard in
+`libs/lib-events-kafka` (`KafkaListenerConcurrencyWiringGuardTest`) fails if any service's hand-built
+factory omits the call, so a fifth one cannot silently appear.
+
+## 2026-07-28 — ShedLock on the outbox publisher: the last unlocked scheduler in the fleet (T3-11 defect 3, feat/exec-gap-closure-2026-07-28)
+
+Flyway **V007** (additive `CREATE TABLE IF NOT EXISTS shedlock`). No behaviour change on a single
+replica; no posting, account code or amount is affected.
+
+### Fixed
+- **`OutboxPublisher#publishPending` had no distributed lock**, and after the T3-11 pass locked
+  payment-executor (V011), settlement-reconciliation (V014), notification-webhook (V008) and
+  scheme-adapter-zeropay (V005), revenue-ledger was the **only** service in the fleet still running
+  `@Scheduled` work unguarded. It was skipped there because this module was concurrently owned.
+  - **What a second replica did.** The 1-second tick selects unpublished outbox rows and stamps
+    `published_at` only *after* `EventPublisher.publish(..)` returns, so the read-to-stamp window is
+    wide open. Two replicas ticking a second apart both select the same batch and both publish it —
+    every revenue-ledger domain event delivered once per replica. Consumers are contractually
+    idempotent (the class documents at-least-once), but "at least once" bounds redelivery of the same
+    event; it is not a licence to multiply publishes by the replica count, and these are the events
+    reporting and reconciliation aggregate.
+  - **Fixed with the identical pattern, deliberately not a variant.** Same ShedLock coordinates
+    (`shedlock-spring` + `shedlock-provider-jdbc-template` 5.16.0), same `JdbcTemplateLockProvider`
+    with `usingDbTime()` so lock expiry follows the *database* clock rather than each pod's, same
+    canonical table shape. Three subtly different lock implementations across one fleet is how one of
+    them ends up wrong.
+  - `lockAtMostFor = PT5M` is a crash safety net, not a runtime budget — a batch of 100 publishes
+    takes milliseconds, so five minutes only elapses if the holder died. Sizing it *short* is the
+    dangerous direction: an early expiry admits the concurrent drain the lock exists to prevent.
+    `lockAtLeastFor = PT0S` because the queue must drain as fast as it fills.
+
+### Added
+- `config/ShedLockConfig` (`@EnableSchedulerLock`, `@ConditionalOnMissingBean` provider so a slice can
+  substitute an in-memory one without dropping the annotation and silently disabling locking).
+- `db/migration/V007__create_shedlock.sql` — next free version in this module (V001–V006 existed).
+  This module has no `db/vendor/{h2,postgresql}` overlay (only config-registry does), so there was
+  nothing to mirror.
+- `spring.task.scheduling.pool.size=2` (T3-11 defect 2's follow-up for this service). Spring's silent
+  default is **one** thread for every `@Scheduled` method in the context, and lib-errors'
+  `SchedulerLagProbe` registers a second fixed-rate task on the same registrar. At pool size 1 a slow
+  outbox tick starves the probe — i.e. the one signal that would reveal the stall goes quiet exactly
+  when it matters. 2 = job count + heartbeat.
+- `config/ShedLockTest` — the same two enforcement tests the other four services got: a reflection
+  guard over every `@Scheduled` method that fails when one lacks a uniquely-named `@SchedulerLock`
+  (precisely how this service came to be the last unlocked one), and a real H2 + **full Flyway
+  migration set** test proving V007 applies on top of V001–V006, that the lock row lands in the table
+  it created, and that a second holder is refused then admitted after release. Plus a check that the
+  shipped pool size still covers the job count.
+
+## 2026-07-28 — both `/v1/journals` POSTs returned 406 on every call (T3-12, feat/exec-gap-closure-2026-07-28)
+
+No schema change, no Flyway migration, no behaviour change to any posting. The JSON wire shape is
+unchanged — only the Java type used to produce it.
+
+### Fixed
+- **`POST /v1/journals/rounding-residual` and `POST /v1/journals/reversal` returned HTTP 406 Not
+  Acceptable on every successful post**, so the rounding-residual journal (the ₩500-class remainder)
+  and the refund/cancel reversal journal were **never written**. Found by the T3-5 footprint run over
+  200 real payments: `payment-executor.revenue_posting_failures` grew by exactly 1.00 rows/payment
+  because `RestRevenueLedgerClient` swallows posting failures by design (T2-1) and diverted every
+  residual to the replay queue. Nobody noticed and the whole suite stayed green.
+  - **Root cause: the controller returned the domain `Journal`.** `Journal` and `LedgerEntry` are plain
+    final classes with record-*style* accessors (`journalId()`, `entries()`, `amount()`) and are not
+    Java records, so Jackson discovers **zero** properties. With default `FAIL_ON_EMPTY_BEANS`,
+    `ObjectMapper.canSerialize(Journal.class)` is `false` ⇒ `MappingJackson2HttpMessageConverter.canWrite`
+    is `false` ⇒ Spring MVC finds no converter able to produce a representation and raises
+    `HttpMediaTypeNotAcceptableException`. It is a **406, not a 500**, because the failure is in converter
+    *selection*, before serialization is ever attempted.
+  - **Fix: new `JournalResponse` web DTO** (a record — natively introspectable) returned by both POSTs.
+    Content negotiation was **not** loosened and `FAIL_ON_EMPTY_BEANS` was **not** disabled: that would
+    have turned the 406 into a silently-empty `{}` body, which is the same defect wearing a 200. It also
+    keeps the domain model off the wire, like `RevenueCaptureResponse` and `JournalView` already do.
+  - **The client was correct and is unchanged** — it sends `Content-Type: application/json` and no
+    `Accept` (= `*/*`). Nothing in `payment-executor` was touched. settlement-reconciliation's per-batch
+    `RestRoundingResidualClient` was hitting the same 406 and is cured by this server-side fix alone.
+
+### Tests
+- **New `RevenueLedgerHttpContractTest` — a `@WebMvcTest` slice, not another standalone MockMvc test.**
+  It runs against the real Boot-configured message converters and real content negotiation, and covers
+  all four endpoints the cross-service clients post to (`/v1/journals/rounding-residual`,
+  `/v1/journals/reversal`, `/v1/revenue/capture`, `/v1/revenue/commission-split`), asserting response
+  **bodies** rather than just statuses, plus the no-`Accept`-header request shape the real client sends
+  and the 204/400 branches. Against the pre-fix controller the three journal cases fail with
+  `Status expected:<200> but was:<406>`.
+- The gap existed because the two `/v1/journals` POSTs **had no HTTP-level test at all** — they were
+  covered only at service level (`RoundingResidualTest`, `RevenueReversalRoundingResidualTest`), which
+  never goes through a message converter. `/v1/revenue/capture` and `/v1/revenue/commission-split` were
+  verified over real HTTP here and were always fine.
+
+## 2026-07-28 — the main P&L now reaches the double-entry journal (T2-4, feat/exec-gap-closure-2026-07-28)
+
+Additive. **No schema change** — no new table or column was needed, so no Flyway migration was added
+(next free version in this module remains `V007`; there are no vendor-specific migration dirs here).
+
+### Fixed
+- **Revenue capture now posts a balanced journal.** `RevenueCaptureService.capture` is `@Transactional`
+  and calls the new `LedgerPostingService.postCapturedRevenueJournal` in the SAME transaction as the
+  `revenue_records` insert, so the record and its journal commit together or not at all. Before this the
+  class documented itself as "Not double-entry" and `LedgerPostingService.postRevenueCapture` /
+  `postFeeShareSplit` had **zero production callers** — journals received only rounding residuals and
+  cancel/refund reversals, so `RECEIVABLE_PARTNER` was credited by reversals that were never debited by a
+  capture and no trial balance was possible (CFO#7).
+  - `DEBIT RECEIVABLE_PARTNER / CREDIT REVENUE_FX_MARGIN` (USD) and
+    `DEBIT RECEIVABLE_PARTNER / CREDIT REVENUE_SERVICE_CHARGE` (service-charge ccy) — the same accounts
+    and sides `postRevenueCapture` always used. **No account code and no accounting policy was invented.**
+  - Idempotent on `txnRef`: a CREDIT to an income account is only ever produced by an original capture
+    (a reversal mirrors the sides), so a replay/Kafka redelivery adds nothing. DB backstop is the existing
+    `UNIQUE(revenue_records.txn_ref)`, since both writes share one transaction.
+  - Zero-revenue transactions post **nothing** rather than the nominal zero journal `postRevenueCapture`
+    emits (CFO#14) — they are reported as `zeroAmount` by the reconciliation self-check instead.
+  - A replay also **back-fills** a journal for a record that has none, so pre-T2-4 rows are repairable by
+    re-posting the capture.
+- **The commission split is no longer record-only** (CFO#4). `CommissionSplitRecordService.recordIfAbsent`
+  posts the scheme-side leg via the new `LedgerPostingService.postCommissionSplitJournal`, in its existing
+  transaction, from the amounts already stored on the record (so journal and record cannot drift):
+  `DEBIT RECEIVABLE_PARTNER net / CREDIT REVENUE_GME_FEE_SHARE gmeGross / CREDIT PAYABLE_SCHEME scheme` —
+  again the exact shape `postFeeShareSplit` used. An input that does not satisfy
+  `gmeGross + scheme == net` is **refused**, never silently balanced.
+
+### Added
+- **`GET /v1/journals/trial-balance?startDate=&endDate=[&strict=true]`** → per `(account, currency)`
+  debit/credit totals, plus per-currency whole-book totals with `difference` and a top-level `balanced`
+  flag and an `imbalances` list. An imbalance logs at ERROR and is reported explicitly; `strict=true`
+  additionally returns **409** so an automated day-close check cannot ignore it. This is the artifact that
+  was impossible before: every `Journal` is validated balanced before storage, so a non-zero difference
+  means ledger rows exist that no balanced journal produced.
+- **`GET /v1/revenue/journal-reconciliation?startDate=&endDate=[&strict=true]`** → the finance-team
+  self-check: per-table coverage (`total` / `journalled` / `notJournalled` + the offending `txnRef`s,
+  capped at 100 with an honest `truncated` flag / `zeroAmount`), per-stream recorded-vs-journalled
+  `tieOuts` with a signed `variance`, and `unmappedComponents` — money that is recorded but cannot be
+  journalled for want of an account code. Tie-outs are scoped by **reference set**, not journal post date,
+  so business-date vs post-date skew cannot masquerade as a variance; they compare gross CREDITs, since a
+  revenue record is never reversed while a reversal DEBITs the income account.
+- `TrialBalanceService`, `RevenueJournalReconciliationService`, DTOs `TrialBalanceView` /
+  `RevenueJournalReconciliationView`, and additive date-ranged finders on
+  `LedgerEntryEntityRepository` (`trialBalanceRows`), `RevenueRecordJpaRepository` and
+  `CommissionSplitRecordRepository`.
+- 29 tests (114 total, 0 failures): balanced lines per revenue type, idempotent replay, journal back-fill,
+  record+journal rollback atomicity (induced by the real `NUMERIC(20,8)` vs `NUMERIC(20,4)` column
+  mismatch, not a mock), trial balance zero over a fixture period **and** a deliberate orphan-debit
+  imbalance reported with the exact difference, recorded-but-not-journalled rows surfacing in the
+  self-check, and the HTTP contracts including the `strict` 409.
+
+### Known gap — awaiting a finance-owner decision (deliberately NOT invented) — **RESOLVED 2026-07-31, see T2-10 above**
+- The **partner-side leg of the two-sided commission split** (`commission_splits.partner_share_krw`, the
+  wallet partner's carve out of GME's gross commission) has **no account code in this module**, so it is
+  not journalled. `REVENUE_GME_FEE_SHARE` therefore carries GME's **gross** commission and overstates
+  retained commission by exactly that amount. Rather than adding a plausible account, the amount is
+  reported per period as `unmappedComponents[PARTNER_COMMISSION_SHARE]` and keeps the reconciliation's
+  `clean` flag **false** while it carries money. `CommissionSplitJournalTest` asserts its absence on
+  purpose, so deciding the account forces the mapping in rather than letting the gap be forgotten.
+
 ## 2026-07-03 — journal view read API (feat/journal-view-be)
 
 Additive, read-only. No new dependency, no schema change.

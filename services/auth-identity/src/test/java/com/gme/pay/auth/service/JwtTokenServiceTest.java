@@ -7,6 +7,7 @@ import com.gme.pay.auth.domain.JwtHelper;
 import com.gme.pay.auth.dto.IssueTokenRequest;
 import com.gme.pay.auth.dto.IssueTokenResponse;
 import com.gme.pay.auth.dto.VerifyTokenResponse;
+import com.gme.pay.auth.testsupport.RecordingAuditTrail;
 import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -21,9 +22,17 @@ class JwtTokenServiceTest {
 
     private static final String SECRET = "unit-test-signing-secret-at-least-32-chars!!";
 
+    /**
+     * Recording audit trail shared by the service under test. T5-1 added an
+     * {@link com.gme.pay.auth.audit.AuthAuditTrail} dependency; the durable/hash-chained
+     * behaviour is covered in {@code AuthAuditTrailDbTest} and the emitted-event contract in
+     * {@code JwtTokenServiceAuditTest} — here it is just a sink so these stay pure unit tests.
+     */
+    private final RecordingAuditTrail audit = new RecordingAuditTrail();
+
     /** Service with default TTL 1800s, max 3600s. */
     private JwtTokenService service(long defaultTtl, long maxTtl) {
-        return new JwtTokenService(new JwtHelper(SECRET, defaultTtl), defaultTtl, maxTtl);
+        return new JwtTokenService(new JwtHelper(SECRET, defaultTtl), defaultTtl, maxTtl, audit);
     }
 
     @Test
@@ -48,9 +57,17 @@ class JwtTokenServiceTest {
     void verify_tamperedSignature_isRejectedAsInvalid() {
         JwtTokenService svc = service(1800, 3600);
         String token = svc.issue(new IssueTokenRequest("svc:x", null, null)).token();
-        // Flip the last character of the signature segment.
-        String tampered = token.substring(0, token.length() - 1)
-                + (token.endsWith("A") ? "B" : "A");
+        // Flip the FIRST character of the signature segment, not the last. An HS256 signature is 32
+        // bytes = 43 base64url characters, and only 2 of the final character's 6 bits are
+        // significant — so flipping the last character (e.g. 'A'→'B') often decodes to the identical
+        // byte array and the "tampered" token verifies fine. That made this test intermittently
+        // fail depending on the random jti/iat in the payload. The first character of the segment
+        // always carries 6 significant bits, so this mutation is always a real one.
+        int sigStart = token.lastIndexOf('.') + 1;
+        char first = token.charAt(sigStart);
+        String tampered = token.substring(0, sigStart)
+                + (first == 'A' ? 'B' : 'A')
+                + token.substring(sigStart + 1);
 
         VerifyTokenResponse verified = svc.verify(tampered);
         assertThat(verified.valid()).isFalse();
@@ -64,14 +81,15 @@ class JwtTokenServiceTest {
         String token = issuer.issue(new IssueTokenRequest("svc:x", null, null)).token();
 
         JwtTokenService otherVerifier = new JwtTokenService(
-                new JwtHelper("a-totally-different-secret-also-32-chars-long", 1800), 1800, 3600);
+                new JwtHelper("a-totally-different-secret-also-32-chars-long", 1800), 1800, 3600,
+                audit);
         assertThat(otherVerifier.verify(token).errorCode()).isEqualTo("INVALID_TOKEN");
     }
 
     @Test
     void verify_expiredToken_isRejectedAsExpired() {
         // Negative default TTL → exp is already in the past at issue time.
-        JwtTokenService svc = new JwtTokenService(new JwtHelper(SECRET, -10), -10, 3600);
+        JwtTokenService svc = new JwtTokenService(new JwtHelper(SECRET, -10), -10, 3600, audit);
         String token = svc.issue(new IssueTokenRequest("svc:x", null, null)).token();
 
         VerifyTokenResponse verified = svc.verify(token);

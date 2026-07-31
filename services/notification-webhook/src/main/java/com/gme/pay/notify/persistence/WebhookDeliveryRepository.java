@@ -2,6 +2,8 @@ package com.gme.pay.notify.persistence;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +38,33 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
      * heap. Oldest-first (createdAt) so no row is starved under a steady backlog.
      */
     List<WebhookDeliveryEntity> findByStatusOrderByCreatedAtAsc(String status, Pageable pageable);
+
+    /**
+     * The endpoints that currently have work in {@code status} — the first half of per-endpoint fair
+     * selection (T3-11 defect 5, the design half).
+     *
+     * <p>May contain {@code null}: rows written before Flyway V009 carry no {@code partner_id} and are
+     * handled as one unattributed group rather than dropped. Bounded by the number of registered
+     * partners, not by the backlog, and served by
+     * {@code idx_webhook_delivery_log_status_partner_created}.
+     */
+    @Query("SELECT DISTINCT d.partnerId FROM WebhookDeliveryEntity d WHERE d.status = :status")
+    List<Long> findDistinctPartnerIdsByStatus(@Param("status") String status);
+
+    /**
+     * The oldest rows in {@code status} <b>for one partner</b>, capped by {@code pageable}.
+     *
+     * <p>This is what replaces the single global {@code ORDER BY created_at}: the drain asks each
+     * endpoint with work for its own share, so a partner with a 10 000-row backlog can no longer fill
+     * the whole batch and leave a healthy partner's three rows unselected. Oldest-first within the
+     * partner, so nothing is starved inside a share either.
+     */
+    List<WebhookDeliveryEntity> findByStatusAndPartnerIdOrderByCreatedAtAsc(
+            String status, Long partnerId, Pageable pageable);
+
+    /** The same read for the unattributed (pre-V009 / no-partnerId) group; {@code = NULL} matches nothing. */
+    List<WebhookDeliveryEntity> findByStatusAndPartnerIdIsNullOrderByCreatedAtAsc(
+            String status, Pageable pageable);
 
     /**
      * Idempotency probe for the Kafka consumer (at-least-once delivery): {@code true}

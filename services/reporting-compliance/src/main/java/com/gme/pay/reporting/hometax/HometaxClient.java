@@ -4,10 +4,15 @@ package com.gme.pay.reporting.hometax;
  * Port for the NTS (National Tax Service) Hometax e-tax-invoice submission API.
  *
  * <p>In production this will be implemented as an mTLS HTTP client calling the
- * NTS Hometax API with the GME issuer certificate. In Phase-1 and tests the
- * default implementation is {@link StubHometaxClient}, which returns a fake
- * {@code invoiceId} and {@code ntsConfirmation} without making any real network
- * call — no NTS credentials are available locally.
+ * NTS Hometax API with the GME issuer certificate. No such implementation exists yet
+ * (NTS mTLS onboarding externally gated, OI-02), so the wired implementation everywhere
+ * today is {@link StubHometaxClient}, which makes no network call and returns
+ * {@link HometaxInvoiceResponse#notFiled(String)} — status
+ * {@code NOT_FILED_CHANNEL_UNAVAILABLE}, no invoice id, no confirmation number.
+ *
+ * <p><b>Contract for any future implementation:</b> {@code invoiceId} and
+ * {@code ntsConfirmation} may only be populated with values actually issued by NTS.
+ * A response must never carry a success status for a submission that did not occur.
  *
  * <p>Configuration keys consumed by the production implementation:
  * <ul>

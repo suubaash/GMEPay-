@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
@@ -39,12 +40,17 @@ class RestPrefundingClientTest {
     }
 
     @Test
-    @DisplayName("deduct: happy path returns deducted amount and balance after")
+    @DisplayName("deduct: speaks prefunding's REAL wire shape ({txnRef,amount} -> {partnerId,balance})")
     void deduct_parsesResponse() {
+        // Request field is `amount` (prefunding's PrefundingController.DeductRequest) and the
+        // answer is its BalanceResponse {partnerId, balance}. The old fantasy shape
+        // ({amountUsd} / {deductedUsd,balanceAfter}) made every real deduct fail 400
+        // "amount must be positive" — caught by the SENDMN hub-through E2E.
         server.expect(requestTo("http://prefunding:8080/v1/prefunding/42/deduct"))
                 .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("{\"txnRef\":\"txn_001\",\"amount\":37.015197}"))
                 .andRespond(withSuccess(
-                        "{\"deductedUsd\":37.015197,\"balanceAfter\":962.985}",
+                        "{\"partnerId\":\"42\",\"balance\":962.985}",
                         MediaType.APPLICATION_JSON));
 
         PrefundingClient.DeductionResult result =

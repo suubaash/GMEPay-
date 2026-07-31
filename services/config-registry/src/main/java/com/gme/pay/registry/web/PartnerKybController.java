@@ -1,8 +1,11 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.KybCommand;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.registry.kyb.KybService;
+import com.gme.pay.registry.kyb.ManualAttestationCommand;
+import com.gme.pay.registry.kyb.ScreeningProvenanceView;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -48,7 +51,7 @@ public class PartnerKybController {
     @PatchMapping("/draft/{partnerCode}/step-3")
     public KybView patchDraftStep3(@PathVariable String partnerCode,
                                    @RequestBody KybCommand.UpdateStep3 req,
-                                   @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                   @AuditActorHeader String actor) {
         return kybService.upsertStep3(partnerCode, req, actor);
     }
 
@@ -73,7 +76,7 @@ public class PartnerKybController {
      */
     @PostMapping("/{id}/kyb/screen")
     public KybView runScreening(@PathVariable String id,
-                                @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                @AuditActorHeader String actor) {
         return kybService.runScreening(id, actor);
     }
 
@@ -91,10 +94,50 @@ public class PartnerKybController {
     @PostMapping("/{id}/kyb/verify")
     public KybView runVerification(@PathVariable String id,
                                    @RequestBody(required = false) VerifyRequest req,
-                                   @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                   @AuditActorHeader String actor) {
         List<String> docs = req == null ? null : req.suppliedDocuments();
         boolean force = req != null && Boolean.TRUE.equals(req.force());
         return kybService.runVerification(id, docs, force, actor);
+    }
+
+    /**
+     * Record a MANUAL sanctions/PEP screening attestation for {@code id} — the interim screening
+     * authority the owner chose for gap T1-4 (2026-07-28): compliance signs a written procedure, a
+     * named human performs it, and the platform records that attestation as a real authority
+     * instead of waiting for the ADR-014 vendor or using the non-production
+     * {@code allow-unscreened-kyb} hatch.
+     *
+     * <p><b>Privileged.</b> The attester is never taken from the body — it is the actor the request
+     * proves — and this endpoint requires that actor to be a VERIFIED HUMAN, so a caller must
+     * present the internal-auth token and forward the human principal. 403 otherwise. See
+     * {@link KybService#recordManualScreeningAttestation} for why this one path fails closed while
+     * the rest of the service records unproven claims visibly.
+     *
+     * <p>Returns 200 with the updated {@link KybView} (a clean outcome reads as
+     * {@code CLEAR_MANUAL_ATTESTATION}, never a bare {@code CLEAR}); 404 unknown partner; 400 on a
+     * missing SOP reference / version / sources or a missing typed assertion; 403 unverified actor.
+     */
+    @PostMapping("/{id}/kyb/manual-screening-attestation")
+    public KybView recordManualScreeningAttestation(
+            @PathVariable String id,
+            @RequestBody(required = false) ManualAttestationCommand req,
+            @AuditActorHeader String actor) {
+        return kybService.recordManualScreeningAttestation(id, req, actor);
+    }
+
+    /**
+     * Full screening PROVENANCE for {@code id} — who produced the stored verdict, whether they are
+     * an authority, and, for a manual run, the attestation behind it (attester, instant, SOP
+     * document + version, sources consulted) plus whether the row satisfies activation.
+     *
+     * <p>Exists because {@code KybView} cannot carry these fields (it lives in
+     * {@code lib-api-contracts}, not owned by this change). The status VALUE already keeps a manual
+     * clearance distinguishable from a vendor one everywhere; this endpoint is the detail a
+     * reviewer needs once they can see the difference. 404 unknown partner or no KYB row.
+     */
+    @GetMapping("/{id}/kyb/screening-provenance")
+    public ScreeningProvenanceView getScreeningProvenance(@PathVariable String id) {
+        return kybService.currentScreeningProvenance(id);
     }
 
     /**

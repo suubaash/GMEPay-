@@ -1,5 +1,6 @@
 package com.gme.pay.registry.credential;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.IssuedCredentialBundle;
 import com.gme.pay.contracts.PartnerCredentialView;
 import com.gme.pay.registry.audit.AuditLogService;
@@ -80,7 +81,7 @@ public class PartnerCredentialService {
     static final int VALIDITY_MONTHS = 12;
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerCredentialRepository credentialRepository;
     private final PartnerRepository partnerRepository;

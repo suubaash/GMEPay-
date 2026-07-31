@@ -2,6 +2,40 @@
 
 All notable changes to the config-registry service. Newest first.
 
+## 2026-07-28 — Partner activation issues REAL credentials (gap T1-1)
+
+Behavioural. Partner activation used to hand operators fabricated credentials in every
+deployed environment. Both REST clients existed and were correct; nothing selected them.
+
+### Changed
+- **Client selectors inverted.** `RestAuthIdentityClient` and `RestNotificationWebhookClient`
+  now carry `matchIfMissing = true`, so an absent selector yields the REAL transport.
+  `StubAuthIdentityClient` (previously an unconditional `@Component`) and
+  `StubNotificationWebhookClient` (previously `matchIfMissing = true`) are now opt-in via
+  `gmepay.{auth-identity,notification-webhook}.client=stub` and log a startup WARN saying the
+  material they issue cannot be verified. An unrecognised selector value leaves no bean, so the
+  service refuses to boot rather than issuing dead credentials.
+  Root cause: `GMEPAY_AUTH_IDENTITY_CLIENT=rest` was set for ops-partner-bff (docker-compose.yml,
+  deploy/helm/gmepay/values.yaml) but never for config-registry, and
+  `GMEPAY_NOTIFICATION_WEBHOOK_CLIENT` was set nowhere at all. Result: API keys with no
+  `api_keys` row (`/internal/auth/keys/resolve` → `found=false`), a `whsec_` secret
+  notification-webhook had never seen, and a no-op `revokeKey()`.
+- **`RestNotificationWebhookClient` default base-url** `http://notification-webhook:8085` →
+  `:8080` — 8085 is only that service's standalone `application.properties` default; inside
+  compose/Kubernetes every service listens on 8080 via `SERVER_PORT`.
+- **`application.properties`** now declares `gmepay.auth-identity.{client,base-url}` and
+  `gmepay.notification-webhook.{client,base-url}` explicitly (env-overridable, default `rest`)
+  so the transport a deployment gets is readable without opening the client classes.
+
+### Added
+- `CredentialClientSelectionTest` — `ApplicationContextRunner` matrix pinning the defaults
+  (absent → rest, `rest` → rest, `stub` → stub, unknown → no bean, case-insensitive).
+- `RestAuthIdentityClientTest` — `MockRestServiceServer` wire contract: all 7 request field
+  names, auth-identity's real 6-field response body, 400-verbatim/5xx→502 mapping, idempotent
+  revoke.
+- `WebhookProvisioningServiceTest.sha256Hex_matchesTheNotificationWebhookSideVector` — fixed
+  SHA-256 vector shared with notification-webhook's copy of the helper.
+
 ## 2026-07-03 — Generic platform-settings store (feat/platform-settings-be)
 
 Additive. A single generic key/value store so operators can change platform tunables from

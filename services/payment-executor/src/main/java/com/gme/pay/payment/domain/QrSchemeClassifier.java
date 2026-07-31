@@ -34,6 +34,9 @@ public final class QrSchemeClassifier {
     /** Sentinel network id for a payload we could not classify. */
     public static final String UNKNOWN_NETWORK = "UNKNOWN";
 
+    /** QPay's EMVCo RID prefix (lower-cased sub-tag-00 form), e.g. GUID A000000843000101. */
+    private static final String QPAY_RID = "a000000843";
+
     private QrSchemeClassifier() {
     }
 
@@ -77,10 +80,25 @@ public final class QrSchemeClassifier {
     private static Classification classifyEmvco(String payload) {
         String country = upper(readTag(payload, "58"));
         String network = readNetworkIdentifier(payload);
+        if (network != null && network.startsWith(QPAY_RID)) {
+            // QPay (Mongolia, SendMN-fronted) EMVCo AID — RID A000000843, as emitted by
+            // QPay MPM QRs (and sim-sendmn's seeded QRs, GUID A000000843000101). Normalise
+            // to the canonical "qpay" network id used by the routing roster; the raw AID
+            // itself resolves to no candidate. Still a placeholder family pending SendMN's
+            // confirmed sample QR (QR scheme plan Phase 2 / open issue).
+            network = "qpay";
+        }
         if (network == null) {
             // Fall back to substring markers for payloads whose sub-tag 00 we could not
             // cleanly parse but which still carry a recognisable network domain/AID.
             network = fallbackMarker(payload);
+        }
+        if (network == null && "MN".equals(country)) {
+            // SendMN placeholder (QR scheme plan Phase 2): the real QPay EMVCo AID/GUID
+            // (mn.qpay...) is pending a sample QR from SendMN, so until it is confirmed any
+            // Mongolian (tag58=MN) merchant QR without a recognised sub-tag-00 network
+            // classifies to the synthetic SendMN network id.
+            network = "sendmn";
         }
         return new Classification(network != null ? network : UNKNOWN_NETWORK, country, PaymentMode.MPM);
     }
@@ -152,6 +170,11 @@ public final class QrSchemeClassifier {
         if (q.contains("fonepay.com")) return "fonepay.com";
         if (q.contains("nepalpay") || q.contains("npqr")) return "nepalpay";
         if (q.contains("khalti")) return "khalti";
+        // SendMN (Mongolia) — QPay-fronted. PLACEHOLDER identifiers: the real QPay EMVCo
+        // AID/GUID (believed mn.qpay...) is pending a sample QR from SendMN (QR scheme
+        // plan Phase 2 note); mn.qpay/qpay/sendmn all route to the SENDMN candidate.
+        if (q.contains("mn.qpay") || q.contains("qpay")) return "qpay";
+        if (q.contains("sendmn")) return "sendmn";
         return null;
     }
 

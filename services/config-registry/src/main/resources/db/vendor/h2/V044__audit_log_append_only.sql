@@ -1,0 +1,39 @@
+-- V044 (H2 VENDOR VARIANT): audit_log append-only guard — DELIBERATELY A NO-OP ON H2.
+--
+-- ENGINE SPLIT (same mechanism as V004 / V023, but a genuine capability gap this time)
+-- ----------------------------------------------------------------------------------
+-- This file is the H2 twin of db/vendor/postgresql/V044__audit_log_append_only.sql, which
+-- installs BEFORE UPDATE / DELETE / TRUNCATE triggers that refuse the statement, so an
+-- audit row cannot be edited even by someone holding the connection string.
+--
+-- H2 CANNOT EXPRESS THAT. H2's `CREATE TRIGGER` requires either `CALL <java.class.Name>`
+-- (a compiled org.h2.api.Trigger implementation on the classpath) or an `AS $$ ... $$`
+-- block of *Java source*, not SQL. Writing either would mean shipping H2-specific Java
+-- into production code paths to protect a database H2 is never used for.
+--
+-- WHY THAT IS ACCEPTABLE — AND WHERE IT IS NOT
+-- -------------------------------------------
+-- H2 is the dev/unit-slice datasource only (application.properties: the H2 URL is the
+-- DEFAULT that SPRING_DATASOURCE_URL overrides; every deployed environment is
+-- PostgreSQL 16). An append-only guarantee on an in-memory database that is destroyed at
+-- JVM exit protects nothing.
+--
+-- The consequence to be aware of, stated plainly rather than left to be discovered:
+--   * A test running on H2 CAN UPDATE audit_log. AuditChainTamperTest relies on exactly
+--     that — it mutates a row in place to prove the verifier catches it. That test would
+--     be impossible to write against the PostgreSQL trigger, which is the point of the
+--     trigger.
+--   * Therefore "the append-only trigger works" is NOT covered by any H2 test. It is
+--     covered by the Testcontainers PostgreSQL integration slice (@Tag("docker"),
+--     CI-only) — see AuditLogAppendOnlyIT. If that IT is skipped, the trigger is
+--     unverified, not absent.
+--
+-- Flyway requires a file at this version for the H2 location (the two vendor locations are
+-- alternatives, not a union — Spring substitutes {vendor} from the datasource, so only one
+-- is ever scanned). An empty file would still record a V044 row in
+-- flyway_schema_history with a different checksum than the PostgreSQL variant, which is
+-- expected and harmless: the two histories belong to two different databases and are never
+-- compared. This statement is a no-op that keeps the file non-empty and self-describing.
+
+SELECT 'audit_log append-only guard is PostgreSQL-only; see the header of this file'
+    AS v044_h2_no_op;

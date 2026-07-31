@@ -1,9 +1,15 @@
 package com.gme.pay.prefunding.api;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.gme.pay.contracts.BalanceDeductionEntry;
 import com.gme.pay.contracts.PrefundingDeductionHistoryView;
+import com.gme.pay.errors.ApiException;
+import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.prefunding.service.PrefundingService;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -143,6 +149,107 @@ public class PrefundingController {
                 .toList();
         return new PrefundingDeductionHistoryView(code, entries, capped);
     }
+
+    /**
+     * <b>Date-ranged float movements</b> for {@code code} — the finance/reconciliation read surface
+     * (GAP T2-8). Answers "everything that moved this partner's float between these two instants",
+     * completely and provably.
+     *
+     * <p>It exists because {@link #deductions} cannot answer that question: that endpoint was built
+     * for a "recent activity" widget, so it has no date filter, clamps at 500 rows and shows DEBITs
+     * only. A control that windows it client-side is silently incomplete on a busy day and blind to
+     * reversals. {@code /deductions} is left exactly as it was — other callers bind it.
+     *
+     * <p><b>Window:</b> {@code from} <b>inclusive</b>, {@code to} <b>exclusive</b> — half-open
+     * {@code [from, to)}. Both are required ISO-8601 instants (e.g.
+     * {@code 2026-07-28T15:00:00Z}); the caller owns the timezone decision, so a KST business day is
+     * {@code from=} its 00:00 KST instant and {@code to=} the next day's. Consecutive days therefore
+     * tile the timeline exactly once: a movement stamped at a boundary is counted by one day only.
+     *
+     * <p><b>No silent cap.</b> {@code size} bounds a single page (default
+     * {@value com.gme.pay.prefunding.service.PrefundingService#MOVEMENTS_DEFAULT_PAGE_SIZE}, max
+     * {@value com.gme.pay.prefunding.service.PrefundingService#MOVEMENTS_MAX_PAGE_SIZE}); the
+     * response carries {@code totalElements} and {@code hasNext}, so a caller walks
+     * {@code page=0,1,2,…} until {@code hasNext=false} and knows it read everything. A truncated read
+     * is not representable.
+     *
+     * <p><b>Reversals are visible.</b> Every entry type is included by default, each carrying its raw
+     * {@code entryType}, a {@code direction} and a signed {@code balanceDeltaUsd} (negative = float
+     * consumed, positive = float returned, zero = a hold or AML counter that never touched the
+     * balance). A deduct and its reversal therefore net to zero for a consumer that simply sums the
+     * deltas. Pass {@code types=DEBIT,CREDIT,CAPTURE} for balance-moving entries only; an unknown
+     * type is a 400 rather than an empty page.
+     *
+     * <p>Money is emitted as decimal strings per docs/MONEY_CONVENTION.md. An unknown partner yields
+     * an empty page with {@code totalElements=0}, not an error — same contract as {@link #deductions}.
+     */
+    @GetMapping("/{code}/movements")
+    public MovementsResponse movements(
+            @PathVariable String code,
+            @RequestParam(name = "from") String from,
+            @RequestParam(name = "to") String to,
+            @RequestParam(name = "types", required = false) List<String> types,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "200") int size) {
+        Instant fromAt = parseInstant(from, "from");
+        Instant toAt = parseInstant(to, "to");
+        PrefundingService.MovementPage result =
+                service.movements(code, fromAt, toAt, types, page, size);
+        List<MovementView> movements = result.rows().stream()
+                .map(r -> new MovementView(r.ledgerEntryId(), r.txnRef(), r.entryType(), r.amountUsd(),
+                        r.balanceDeltaUsd(), r.direction(), r.currency(), r.at()))
+                .toList();
+        return new MovementsResponse(code, fromAt, toAt, result.page(), result.size(),
+                result.totalElements(), result.totalPages(), result.hasNext(), movements);
+    }
+
+    /**
+     * Strict ISO-8601 instant parsing. A malformed bound is a 400 with the offending value named —
+     * never a defaulted or "best effort" window, because a query whose range silently differed from
+     * what the caller asked for would under-report movements.
+     */
+    private static Instant parseInstant(String raw, String field) {
+        if (raw == null || raw.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, field + " is required");
+        }
+        try {
+            return Instant.parse(raw.trim());
+        } catch (DateTimeParseException e) {
+            try {
+                return OffsetDateTime.parse(raw.trim()).toInstant();
+            } catch (DateTimeParseException e2) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR, field + " ('" + raw
+                        + "') is not an ISO-8601 instant, e.g. 2026-07-28T15:00:00Z");
+            }
+        }
+    }
+
+    /**
+     * One page of float movements. {@code from}/{@code to} echo the window actually applied (half-open
+     * {@code [from, to)}) so a response can be audited without the request beside it, and
+     * {@code totalElements}/{@code hasNext} make completeness explicit rather than inferred from the
+     * row count.
+     */
+    public record MovementsResponse(String partnerCode, Instant from, Instant to, int page, int size,
+                                    long totalElements, int totalPages, boolean hasNext,
+                                    List<MovementView> movements) { }
+
+    /**
+     * Wire shape of one float movement.
+     *
+     * <p>Money is serialized as a decimal STRING per docs/MONEY_CONVENTION.md — the same discipline
+     * as {@link BalanceDeductionEntry} — so an 8-dp USD amount survives a JavaScript or float-typed
+     * consumer intact. {@code balanceDeltaUsd} is <b>signed</b>: negative = float consumed by this
+     * entry, positive = float returned (a reversal or a top-up), zero = the entry recorded a hold or
+     * an AML counter and never moved the balance. Summing it over a reference is therefore the net
+     * float effect, with no need to know prefunding's entry-type vocabulary.
+     *
+     * @see PrefundingService.MovementRow for the field-by-field semantics
+     */
+    public record MovementView(Long ledgerEntryId, String txnRef, String entryType,
+                               @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal amountUsd,
+                               @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal balanceDeltaUsd,
+                               String direction, String currency, Instant at) { }
 
     public record DeductRequest(String txnRef, BigDecimal amount) { }
 

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect } from 'react';
 import {
+  Alert,
+  AlertTitle,
   Box,
   Button,
   Chip,
@@ -30,6 +32,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAppDispatch, useAppSelector } from '@/store';
 import {
   fetchComplianceOverview,
+  fetchFilingChannels,
   fetchRegulatoryConfig,
   fetchPartnerKyb,
   fetchAuditLog,
@@ -45,7 +48,9 @@ import {
   clearOverviewError,
   clearAuditError,
 } from '@/store/complianceSlice';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 import ErrorAlert from '@/components/ErrorAlert';
+import FilingChannelBoard from '@/components/FilingChannelBoard';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 import EmptyState from '@/components/EmptyState';
 import StatusChip from '@/components/StatusChip';
@@ -77,23 +82,26 @@ export function toKst(iso) {
   }
 }
 
-/** Map KYB/sanctions/lifecycle status strings to MUI Chip colors. */
+/**
+ * Map the BFF's derived `kybStatus` to a MUI Chip colour.
+ *
+ * GAP T1-4: two arms are new and both exist to stop this board reading better than the truth.
+ * `APPROVED_MANUAL_ATTESTATION` is a real screening but a HUMAN one under an SOP, so it is `info`
+ * rather than green — a compliance reviewer looking at this board is specifically there to see
+ * which partners rest on the manual control. `NOT_SCREENED` is `warning`: it used to arrive as
+ * `PENDING` (amber, reading "not finished yet") when in fact a run completed and screened nothing.
+ * An unrecognised value is `warning`, never resolved upward.
+ */
 function kybColor(status) {
   switch (status) {
     case 'APPROVED': return 'success';
+    case 'APPROVED_MANUAL_ATTESTATION': return 'info';
     case 'PENDING': return 'warning';
     case 'REVIEW': return 'info';
     case 'HIT': return 'error';
-    default: return 'default';
-  }
-}
-
-function sanctionsColor(status) {
-  switch (status) {
-    case 'CLEAR': return 'success';
-    case 'NEEDS_REVIEW': return 'warning';
-    case 'HIT': return 'error';
-    default: return 'default';
+    case 'NOT_SCREENED': return 'warning';
+    case 'UNKNOWN': return 'warning';
+    default: return 'warning';
   }
 }
 
@@ -107,14 +115,30 @@ function lifecycleColor(status) {
   }
 }
 
-/** Compact boolean badge: set / not set */
-function SetBadge({ set }) {
+/**
+ * Per-lane CONFIG badge (GAP T5-2).
+ *
+ * This was `SetBadge`: a green "Set" tick on `bokSet`/`hometaxSet`/`kofiuSet`. Green
+ * plus a lane name reads as "this lane is live", when the flag only ever meant "somebody
+ * typed a value into the per-partner regulatory config" — and, until the BFF fix, was
+ * even true for the shipped placeholders `stub-cert-id` and `TODO_OI03`.
+ *
+ * So: no success colour here. "Configured" is a neutral fact; whether the lane can file
+ * is the separate channel board above the table, and whether anything WAS filed is a
+ * third fact (nothing has been). The boolean is rendered exactly as the BFF reports it —
+ * nothing is re-derived from cert ids or codes in the UI.
+ */
+function ConfigBadge({ set, lane }) {
+  const label = set ? 'Configured' : 'Not configured';
+  const tip = set
+    ? `${lane}: per-partner config entered. This does NOT mean the lane can file — see the `
+      + 'filing channel status above; no filing has taken place.'
+    : `${lane}: no per-partner config entered (placeholder values such as stub-cert-id or `
+      + 'TODO_OI03 do not count as configured).';
   return (
-    <Chip
-      size="small"
-      label={set ? 'Set' : 'Missing'}
-      color={set ? 'success' : 'warning'}
-    />
+    <Tooltip title={tip}>
+      <Chip size="small" variant="outlined" color={set ? 'default' : 'warning'} label={label} />
+    </Tooltip>
   );
 }
 
@@ -125,6 +149,9 @@ export default function CompliancePage() {
     overview,
     overviewLoading,
     overviewError,
+    filingChannels,
+    filingChannelReason,
+    filingChannelsError,
     selectedPartnerCode,
     kybFilter,
     sanctionsFilter,
@@ -144,6 +171,8 @@ export default function CompliancePage() {
   // ---- initial loads ----
   const loadOverview = useCallback(() => {
     dispatch(fetchComplianceOverview());
+    // The readiness board is only honest alongside the filing-channel truth.
+    dispatch(fetchFilingChannels());
   }, [dispatch]);
 
   const loadAudit = useCallback(() => {
@@ -189,6 +218,10 @@ export default function CompliancePage() {
   }, [dispatch]);
 
   // ---- filtered rows ----
+  // Only the backend can say a lane is live; an absent board stays "unknown".
+  const anyChannelLive =
+    Array.isArray(filingChannels) && filingChannels.some((c) => c.channelLive === true);
+
   const rows = Array.isArray(overview) ? overview : [];
   const filteredRows = rows.filter((r) => {
     if (kybFilter !== 'ALL' && r.kybStatus !== kybFilter) return false;
@@ -217,6 +250,37 @@ export default function CompliancePage() {
             Partner compliance overview
           </Typography>
 
+          {/*
+            GAP T5-2: the table below reports CONFIG only. State the other two facts —
+            can a lane transmit, and has anything been filed — before an operator or
+            auditor reads a row of "Configured" as a live regulatory lane.
+          */}
+          <Alert
+            severity={anyChannelLive ? 'info' : 'warning'}
+            sx={{ mb: 2 }}
+            data-testid="filing-channel-status"
+          >
+            <AlertTitle>
+              {anyChannelLive
+                ? 'Regulatory filing channels'
+                : 'No regulatory filing channel is live — nothing has been filed'}
+            </AlertTitle>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Three separate facts: a lane can be <strong>configured</strong> (a value entered
+              per partner, shown in the table), it can have a <strong>filing channel
+              available</strong> (a real transmission path, shown here), and a report can have
+              been <strong>filed</strong> (an authority received it — see the Reports page).
+              Configuration alone files nothing.
+            </Typography>
+            <FilingChannelBoard channels={filingChannels} reason={filingChannelReason} />
+            {filingChannelsError && (
+              <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.75 }}>
+                Filing channel status could not be loaded ({filingChannelsError}) — treat it as
+                unknown, not as available.
+              </Typography>
+            )}
+          </Alert>
+
           {/* Filters */}
           <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
             <FormControl size="small" sx={{ minWidth: 150 }}>
@@ -229,10 +293,14 @@ export default function CompliancePage() {
                 inputProps={{ 'aria-label': 'Filter by KYB status' }}
               >
                 <MenuItem value="ALL">All</MenuItem>
-                <MenuItem value="APPROVED">Approved</MenuItem>
+                <MenuItem value="APPROVED">Approved (vendor screening)</MenuItem>
+                <MenuItem value="APPROVED_MANUAL_ATTESTATION">
+                  Approved (manual SOP attestation)
+                </MenuItem>
                 <MenuItem value="PENDING">Pending</MenuItem>
                 <MenuItem value="REVIEW">Review</MenuItem>
                 <MenuItem value="HIT">Hit</MenuItem>
+                <MenuItem value="NOT_SCREENED">Not screened</MenuItem>
               </Select>
             </FormControl>
 
@@ -246,9 +314,13 @@ export default function CompliancePage() {
                 inputProps={{ 'aria-label': 'Filter by sanctions result' }}
               >
                 <MenuItem value="ALL">All</MenuItem>
-                <MenuItem value="CLEAR">Clear</MenuItem>
+                <MenuItem value="CLEAR">Clear — vendor screening</MenuItem>
+                <MenuItem value="CLEAR_MANUAL_ATTESTATION">
+                  Clear — manual SOP attestation
+                </MenuItem>
                 <MenuItem value="NEEDS_REVIEW">Needs review</MenuItem>
                 <MenuItem value="HIT">Hit</MenuItem>
+                <MenuItem value="NOT_SCREENED_NO_PROVIDER">Not screened</MenuItem>
               </Select>
             </FormControl>
 
@@ -294,10 +366,11 @@ export default function CompliancePage() {
                     <TableCell>Name</TableCell>
                     <TableCell>KYB status</TableCell>
                     <TableCell>Sanctions</TableCell>
-                    <TableCell>BOK</TableCell>
-                    <TableCell>Hometax</TableCell>
-                    <TableCell>KoFIU</TableCell>
-                    <TableCell>Travel Rule</TableCell>
+                    {/* Config-only columns — filing capability is the board above. */}
+                    <TableCell>BOK config</TableCell>
+                    <TableCell>Hometax config</TableCell>
+                    <TableCell>KoFIU config</TableCell>
+                    <TableCell>Travel Rule config</TableCell>
                     <TableCell>Lifecycle</TableCell>
                   </TableRow>
                 </TableHead>
@@ -331,23 +404,41 @@ export default function CompliancePage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Chip
-                          size="small"
-                          label={row.sanctionsResult ?? '—'}
-                          color={sanctionsColor(row.sanctionsResult)}
-                        />
+                        {/*
+                          GAP T1-4: the raw status string with a three-value colour map used to be
+                          printed here, so CLEAR_MANUAL_ATTESTATION and NOT_SCREENED_NO_PROVIDER
+                          would both have rendered grey with the enum name showing. The shared
+                          vocabulary keeps a vendor clearance, a human attestation and "nothing was
+                          screened" visibly different on the board a reviewer reads.
+                        */}
+                        <Tooltip title={screeningStatusMeta(row.sanctionsResult).description}>
+                          <Chip
+                            size="small"
+                            label={
+                              row.sanctionsResult == null
+                                ? '—'
+                                : screeningStatusMeta(row.sanctionsResult).label
+                            }
+                            color={
+                              row.sanctionsResult == null
+                                ? 'default'
+                                : screeningStatusMeta(row.sanctionsResult).color
+                            }
+                            variant={screeningStatusMeta(row.sanctionsResult).variant}
+                          />
+                        </Tooltip>
                       </TableCell>
                       <TableCell>
-                        <SetBadge set={row.regulatoryConfig?.bokSet} />
+                        <ConfigBadge set={row.regulatoryConfig?.bokSet} lane="BOK" />
                       </TableCell>
                       <TableCell>
-                        <SetBadge set={row.regulatoryConfig?.hometaxSet} />
+                        <ConfigBadge set={row.regulatoryConfig?.hometaxSet} lane="Hometax" />
                       </TableCell>
                       <TableCell>
-                        <SetBadge set={row.regulatoryConfig?.kofiuSet} />
+                        <ConfigBadge set={row.regulatoryConfig?.kofiuSet} lane="KoFIU" />
                       </TableCell>
                       <TableCell>
-                        <SetBadge set={row.regulatoryConfig?.travelRuleSet} />
+                        <ConfigBadge set={row.regulatoryConfig?.travelRuleSet} lane="Travel Rule" />
                       </TableCell>
                       <TableCell>
                         <Chip

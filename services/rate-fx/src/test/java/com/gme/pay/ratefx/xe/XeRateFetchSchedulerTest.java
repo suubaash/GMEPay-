@@ -1,5 +1,6 @@
 package com.gme.pay.ratefx.xe;
 
+import com.gme.pay.ratefx.audit.RateAuditor;
 import com.gme.pay.ratefx.persistence.RateSnapshotEntity;
 import com.gme.pay.ratefx.persistence.RateSnapshotRepository;
 import org.junit.jupiter.api.Test;
@@ -30,7 +31,7 @@ class XeRateFetchSchedulerTest {
         when(client.fetchUsdRates()).thenReturn(fakeResp);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        XeRateFetchScheduler scheduler = new XeRateFetchScheduler(client, repo);
+        XeRateFetchScheduler scheduler = new XeRateFetchScheduler(client, repo, mock(RateAuditor.class));
         scheduler.fetchAndUpsert();
 
         ArgumentCaptor<RateSnapshotEntity> captor =
@@ -50,7 +51,7 @@ class XeRateFetchSchedulerTest {
 
         when(client.fetchUsdRates()).thenReturn(null);
 
-        XeRateFetchScheduler scheduler = new XeRateFetchScheduler(client, repo);
+        XeRateFetchScheduler scheduler = new XeRateFetchScheduler(client, repo, mock(RateAuditor.class));
         // Must not throw — the service must survive a down sim
         scheduler.fetchAndUpsert();
 

@@ -1,5 +1,12 @@
 # GMEPay+ — QR Hub Growth Flywheel ("the loop")
 
+> **This is a STRATEGY document — an intended trajectory, not a description of a running
+> business.** The starting point it assumes does not exist yet: no corridor has moved real money,
+> the ZeroPay real-time path runs against a simulator and is uncertified (T4-3), the Nepal
+> corridor **refuses every payment** until an owner supplies its FX margin and service fee (T4-1),
+> and SENDMN runs on placeholder credentials (T4-6). Authority on current state:
+> `Documentation/GAP_REGISTER.md`.
+
 **Goal:** grow GMEPay+ from a Korea↔Nepal remittance-anchored QR hub into an Alipay+-class
 cross-border acceptance network.
 **Companion docs:** `MASTER_PLAN.md` (build readiness), `docs/SERVICE_MAP.md` (architecture),
@@ -45,11 +52,13 @@ Each maps to services we already have — the loop is an operating strategy for 
 architecture, not a new build.
 
 ### A. Adapter-factory loop (supply side)
-`scheme-adapter-zeropay` + `scheme-adapter-nepal` → after the second adapter is certified,
+`scheme-adapter-zeropay` + `scheme-adapter-nepal` → after the second adapter is certified
+(**no adapter has been certified by any scheme yet** — T4-3, so this loop has not started),
 extract a **Scheme Adapter SDK + certification kit** (shared EMVCo/CPM handling from
 `qr-service`, code-mapping tables, recon-file harness from `settlement-reconciliation`,
 simulator template from `simulators/`). Every adapter built makes the next one cheaper.
-**KPI: adapter time-to-live** — target 2 quarters → 1 quarter → 6 weeks.
+**KPI: adapter time-to-live** — target 2 quarters → 1 quarter → 6 weeks. *No baseline exists: no
+adapter has ever gone live, so the first value of this KPI is still unmeasured.*
 
 ### B. Partner self-service loop (demand side)
 `partner-portal-ui` + `kyb-adapter` + `auth-identity` + `gmepay-test-platform`/`simulators` →

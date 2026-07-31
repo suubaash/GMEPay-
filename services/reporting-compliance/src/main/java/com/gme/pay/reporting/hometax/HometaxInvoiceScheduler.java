@@ -1,9 +1,12 @@
 package com.gme.pay.reporting.hometax;
 
+import com.gme.pay.reporting.persistence.ReportFiling;
+import com.gme.pay.reporting.persistence.ReportFilingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -56,23 +59,41 @@ public class HometaxInvoiceScheduler {
     private final BigDecimal feeRate;
     private final String certId;
 
+    /** Owned-datastore filing register; null when running without a DB (unit tests). */
+    @Nullable
+    private final ReportFilingService filingService;
+
     /**
-     * Spring constructor. {@code @Autowired} declared explicitly for defensive style
-     * (safe if a second constructor is added later). Tests may call this constructor
-     * directly — {@code @Value} annotations on parameters are just Spring metadata.
+     * Spring constructor. {@code @Autowired} declared explicitly because this
+     * {@code @Component} has more than one constructor (Spring 6 requires it).
      */
     @Autowired
     public HometaxInvoiceScheduler(
             HometaxInvoiceService invoiceService,
+            ReportFilingService filingService,
             @Value("${gmepay.reporting.hometax.enabled:false}") boolean enabled,
             @Value("${gmepay.reporting.hometax.partner-code:GMEREMIT}") String partnerCode,
             @Value("${gmepay.reporting.hometax.fee-rate:0.0150}") BigDecimal feeRate,
             @Value("${gmepay.hometax.cert-id:stub-cert-id}") String certId) {
         this.invoiceService = invoiceService;
+        this.filingService = filingService;
         this.enabled = enabled;
         this.partnerCode = partnerCode;
         this.feeRate = feeRate;
         this.certId = certId;
+    }
+
+    /**
+     * Constructor for unit tests that exercise only aggregation/submission behaviour
+     * (no filing register). {@code @Value} metadata is not enforced at instantiation.
+     */
+    public HometaxInvoiceScheduler(
+            HometaxInvoiceService invoiceService,
+            boolean enabled,
+            String partnerCode,
+            BigDecimal feeRate,
+            String certId) {
+        this(invoiceService, null, enabled, partnerCode, feeRate, certId);
     }
 
     /**
@@ -99,14 +120,46 @@ public class HometaxInvoiceScheduler {
             HometaxInvoiceResponse response = invoiceService.submitInvoicesForPeriod(
                     period, feeRate, partnerCode, certId);
 
-            log.info("Hometax invoice submitted: period={} invoiceId={} ntsConfirmation={} status={}",
-                    period,
-                    response.getInvoiceId(),
-                    response.getNtsConfirmation(),
-                    response.getStatus());
+            if (response.isFiled()) {
+                log.info("Hometax invoice FILED with NTS: period={} invoiceId={} "
+                                + "ntsConfirmation={} status={}",
+                        period, response.getInvoiceId(), response.getNtsConfirmation(),
+                        response.getStatus());
+            } else {
+                // Normal path today: the invoice was aggregated but no NTS channel exists.
+                log.warn("Hometax invoice AGGREGATED BUT NOT FILED: period={} status={} reason={}",
+                        period, response.getStatus(), response.getChannelUnavailableReason());
+            }
+            recordFiling(period, response);
         } catch (Exception ex) {
             log.error("Hometax monthly invoice job failed for period={}: {}", period, ex.getMessage(), ex);
             // Do not rethrow — scheduler must survive individual-run failures
+        }
+    }
+
+    /**
+     * Writes the HOMETAX lane's row into the {@code report_filing} register so the register
+     * reflects reality: GENERATED for the aggregation that really happened, then settled
+     * against the channel — {@code NOT_FILED_CHANNEL_UNAVAILABLE} while OI-02 is open.
+     * Best-effort: a persistence failure must not abort the run.
+     */
+    private void recordFiling(YearMonth period, HometaxInvoiceResponse response) {
+        if (filingService == null) {
+            return;
+        }
+        try {
+            ReportFiling filing = filingService.openFiling(
+                    ReportFiling.Lane.HOMETAX, "ETAX", period.atEndOfMonth());
+            filingService.recordGenerated(filing.getId(), 1, null);
+            if (response.isFiled()) {
+                filingService.recordTransmission(filing.getId(), response.getNtsConfirmation());
+            } else {
+                filingService.recordChannelUnavailable(
+                        filing.getId(), response.getChannelUnavailableReason());
+            }
+        } catch (Exception e) {
+            log.error("Hometax filing-register write failed for period={}: {}",
+                    period, e.getMessage(), e);
         }
     }
 }

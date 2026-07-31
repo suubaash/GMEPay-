@@ -49,8 +49,19 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
     // (same trap RestAuditTrailClient / the BFF RestConfigRegistryClient hit earlier).
     @Autowired
     public RestConfigRegistryClient(
+            WebClient.Builder builder,
             @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
-        this(WebClient.builder().baseUrl(baseUrl).build());
+        // T3-11 defect 1, reactive half: this was the STATIC WebClient.builder(), which returns a fresh
+        // builder that no WebClientCustomizer has touched — so lib-errors'
+        // WebClientTimeoutAutoConfiguration never reached it and this call had no connect timeout and no
+        // response timeout of any kind. `builder` is the injected BEAN and carries both.
+        //
+        // The consequence here is worse than a slow request. This runs inside a GlobalFilter on a Netty
+        // EVENT LOOP, and the IP-allowlist decision gates an authenticated partner request. Unbounded,
+        // an unresponsive config-registry did not fail open or closed — the fail-open flag below never
+        // got to decide, because the Mono never terminated, so the request neither completed nor was
+        // rejected and the loop slot was held.
+        this(builder.baseUrl(baseUrl).build());
     }
 
     /** Package-private constructor for tests to inject a pre-built WebClient. */

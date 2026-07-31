@@ -62,6 +62,8 @@ public class GmeremitPaymentService {
     private final boolean devSynthMerchant;
     @Nullable private final TransactionClient transactionClient;
     @Nullable private final RevenueLedgerClient revenueLedgerClient;
+    /** T4-2: per-txn + cumulative regulatory limit gate. Never null (see {@link WalletLimitGate#disabled()}). */
+    private final WalletLimitGate limitGate;
 
     /**
      * Production constructor.
@@ -80,13 +82,15 @@ public class GmeremitPaymentService {
             ExecutionAttemptRepository attemptRepository,
             @Value("${gmepay.payment.dev-synth-merchant:false}") boolean devSynthMerchant,
             @Nullable TransactionClient transactionClient,
-            @Nullable RevenueLedgerClient revenueLedgerClient) {
+            @Nullable RevenueLedgerClient revenueLedgerClient,
+            @Nullable WalletLimitGate limitGate) {
         this.qrClient = qrClient;
         this.schemeClient = schemeClient;
         this.attemptRepository = attemptRepository;
         this.devSynthMerchant = devSynthMerchant;
         this.transactionClient = transactionClient;
         this.revenueLedgerClient = revenueLedgerClient;
+        this.limitGate = limitGate != null ? limitGate : WalletLimitGate.disabled();
     }
 
     /**
@@ -97,7 +101,16 @@ public class GmeremitPaymentService {
                            SchemeClient schemeClient,
                            ExecutionAttemptRepository attemptRepository,
                            boolean devSynthMerchant) {
-        this(qrClient, schemeClient, attemptRepository, devSynthMerchant, null, null);
+        this(qrClient, schemeClient, attemptRepository, devSynthMerchant, null, null, null);
+    }
+
+    /** Test constructor with the T4-2 limit gate wired. */
+    GmeremitPaymentService(QrClient qrClient,
+                           SchemeClient schemeClient,
+                           ExecutionAttemptRepository attemptRepository,
+                           boolean devSynthMerchant,
+                           @Nullable WalletLimitGate limitGate) {
+        this(qrClient, schemeClient, attemptRepository, devSynthMerchant, null, null, limitGate);
     }
 
     /**
@@ -109,6 +122,18 @@ public class GmeremitPaymentService {
      * @return result — check {@link WalletResult#approved()} before reading scheme fields
      */
     public WalletResult pay(String qrPayload, BigDecimal amountKrw, String userRef) {
+        // Back-compat overload: the domestic corridor's limit subject is always the GMEREMIT wallet
+        // partner, so the default ref keeps the T4-2 gate ACTIVE for every existing caller (a
+        // signature-compatibility shim must not re-open the hole).
+        return pay(qrPayload, amountKrw, userRef, WalletPartnerRef.GMEREMIT);
+    }
+
+    /**
+     * As {@link #pay(String, BigDecimal, String)} but with an explicit limit subject — the partner
+     * whose {@code partner_limits} row (V020) governs this payment (T4-2).
+     */
+    public WalletResult pay(String qrPayload, BigDecimal amountKrw, String userRef,
+                            WalletPartnerRef partner) {
 
         // Step 1: Resolve merchant from QR. STRICT (default, non-dev) is the only safe behavior — a
         // lookup miss/unreachable HARD-FAILS with MERCHANT_NOT_FOUND (404). Synthesizing a placeholder
@@ -142,8 +167,26 @@ public class GmeremitPaymentService {
             return WalletResult.declined(merchant.merchantName(), "MERCHANT_INACTIVE");
         }
 
-        // Step 3: Submit to ZeroPay
         String partnerTxnRef = "GMEREMIT-" + UUID.randomUUID();
+
+        // Step 2b (T4-2 regulatory gate): per-transaction min/max USD + cumulative daily/monthly/
+        // annual USD + the daily velocity count, from the partner's V020 partner_limits row. The
+        // domestic corridor is KRW-denominated and moves no prefunding float, so the USD basis comes
+        // from the platform's single USD/KRW source (UsdAmountBasis — the same live rate + fallback
+        // the SENDMN prefunding deduction uses); no second rate source is introduced. Runs BEFORE the
+        // ZeroPay submit, so a breach never reaches the scheme.
+        WalletLimitGate.LimitCharge limitCharge;
+        try {
+            limitCharge = limitGate.enforce(partner, partnerTxnRef, amountKrw, "KRW");
+        } catch (TransactionLimitExceededException | CumulativeLimitExceededException
+                 | LimitCheckUnavailableException ex) {
+            log.warn("GMEREMIT limit gate refused partner={} ref={} amountKrw={}: {}",
+                    partner.code(), partnerTxnRef, amountKrw, ex.getMessage());
+            persistAttempt(partnerTxnRef, merchant.merchantId(), amountKrw, PaymentStatus.FAILED, null);
+            throw ex;
+        }
+
+        // Step 3: Submit to ZeroPay
         SchemeClient.MpmSubmitResponse schemeResp;
         try {
             schemeResp = schemeClient.submitMpm(
@@ -158,6 +201,8 @@ public class GmeremitPaymentService {
             );
         } catch (SchemeDeclinedException ex) {
             log.warn("Scheme declined payment for merchant {}: {}", merchant.merchantId(), ex.getMessage());
+            // T4-2: a declined payment must not permanently consume cumulative cap.
+            limitGate.reverse(limitCharge);
             persistAttempt(partnerTxnRef, merchant.merchantId(), amountKrw, PaymentStatus.FAILED, null);
             return WalletResult.declined(merchant.merchantName(), ex.schemeErrorCode());
         }
@@ -174,7 +219,13 @@ public class GmeremitPaymentService {
                                 0L, partnerTxnRef, SCHEME_ID, "DOMESTIC", "MPM",
                                 amountKrw, "KRW", amountKrw, "KRW",
                                 merchant.merchantId(), null,
-                                null));  // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
+                                null,   // domestic wallet uses a flat FEE_KRW, not the rate-based merchant fee
+                                // T4-4: persist the name merchant-qr-data just gave us, so the receipt
+                                // read shows it. realOrNull filters the dev-synth "Unknown Merchant"
+                                // placeholder — the WalletResult below still surfaces it to the caller
+                                // (it explains WHY the merchant is unnamed), but storing it would make
+                                // an un-looked-up merchant indistinguishable from a real named one.
+                                MerchantNames.realOrNull(merchant.merchantName())));
                 txnRef = created.txnRef();
                 transactionClient.commitStatus(txnRef,
                         new TransactionClient.StatusPatch(
@@ -297,6 +348,31 @@ public class GmeremitPaymentService {
             return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
                     payAmount, feeAmount, chargedAmount, committedAt, null,
                     null, null, null, payCurrency);
+        }
+
+        /**
+         * Factory for a cross-border approved result that BOTH applied FX and executed in a non-KRW
+         * payout currency — the Nepal KRW→NPR corridor (T4-1).
+         *
+         * <p>Distinct from {@link #approvedInCurrency} (which carries no rate, because it was the
+         * no-FX pass-through) and from {@link #approvedFx} (which predates the {@code payCurrency}
+         * field and therefore reads as MNT-only). The KRW leg rides {@code payAmountKrw} /
+         * {@code feeKrw} / {@code chargedKrw}; the foreign payout rides {@code payAmount} +
+         * {@code payCurrency}, with {@code fxRate} the offer rate actually applied.
+         */
+        public static WalletResult approvedFxInCurrency(String txnRef,
+                                                        String schemeTxnRef,
+                                                        String merchantName,
+                                                        BigDecimal payAmountKrw,
+                                                        BigDecimal feeKrw,
+                                                        BigDecimal chargedKrw,
+                                                        String committedAt,
+                                                        BigDecimal fxRate,
+                                                        BigDecimal payAmount,
+                                                        String payCurrency) {
+            return new WalletResult(true, txnRef, schemeTxnRef, merchantName,
+                    payAmountKrw, feeKrw, chargedKrw, committedAt, null,
+                    true, fxRate, payAmount, payCurrency);
         }
 
         /** Factory for FX (overseas) approved results. */

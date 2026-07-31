@@ -214,6 +214,14 @@ public interface TransactionMgmtClient {
             String schemeApprovalCode,
             /** Merchant terminal/store id from the QR scheme. */
             String merchantId,
+            /**
+             * T4-4: merchant DISPLAY NAME as captured at payment time
+             * ({@code transactions.merchant_name}, V012). Null means NOT KNOWN — a legacy row, or a
+             * corridor with no way to resolve a name — and consumers must render it as an em dash;
+             * falling back to {@link #merchantId()} would put a terminal id under a "merchant name"
+             * label, which is the fabrication this field exists to remove.
+             */
+            String merchantName,
             /** UTC instant the scheme approved the payment. Null until APPROVED. */
             Instant approvedAt,
             // --- CS support-read additive fields (from transaction-mgmt) ---
@@ -235,7 +243,7 @@ public interface TransactionMgmtClient {
                 BigDecimal amount, String currency, Instant committedAt) {
             return new TransactionSummary(txnId, partnerId, state, amount, currency, committedAt,
                     null, null, null, null, null, null, null,
-                    null, null, null, null,
+                    null, null, null, null, null,
                     null, null, null, null);
         }
     }

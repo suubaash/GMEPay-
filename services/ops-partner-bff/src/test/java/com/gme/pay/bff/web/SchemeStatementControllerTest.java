@@ -49,7 +49,7 @@ class SchemeStatementControllerTest {
         return new TransactionSummary(id, partnerId, state, new BigDecimal(amt), ccy,
                 Instant.parse(at),
                 "ZEROPAY", null, null, null, null, null, null,
-                null, null, merchantId, null,
+                null, null, merchantId, null, null,
                 null, null, null, null);
     }
 

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +16,11 @@ import org.junit.jupiter.api.Test;
  * Pins the deterministic decision rules of {@link StubKybAdapter} (ADR-009 /
  * ADR-014 dev default): trigger words, HIT precedence, providerRef stability,
  * and the MICROS truncation discipline on {@code screenedAt}.
+ *
+ * <p>T1-4 additions: the clean branch reports
+ * {@link ScreeningResult.Status#NOT_SCREENED_NO_PROVIDER} (never CLEAR), every
+ * result carries non-authoritative {@link ScreeningProvenance}, and the full-KYB
+ * registry flags are false because no register was consulted.
  */
 class StubKybAdapterTest {
 
@@ -29,14 +35,63 @@ class StubKybAdapterTest {
     }
 
     @Test
-    void cleanSubject_isClear_withNoHits() {
+    void cleanSubject_isNotScreened_notClear_withNoHits() {
         ScreeningResult result = adapter.screen(
                 subject("지엠이송금", "GME Remit Co Ltd", List.of(ubo("Hong Gil Dong"))));
 
-        assertEquals(ScreeningResult.Status.CLEAR, result.status());
+        // The whole point of T1-4: no trigger word does NOT mean "clear".
+        assertEquals(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER, result.status());
+        assertNotEquals(ScreeningResult.Status.CLEAR, result.status());
         assertTrue(result.hits().isEmpty());
         assertNotNull(result.screenedAt());
         assertTrue(result.providerRef().startsWith("stub-"));
+    }
+
+    @Test
+    void everyStubResult_carriesNonAuthoritativeProvenance_withACaveat() {
+        ScreeningResult clean = adapter.screen(subject("A", "Alpha Corp", List.of()));
+        ScreeningResult hit = adapter.screen(subject("B", "Sanctioned Corp", List.of()));
+        ScreeningResult review = adapter.screen(subject("C", "Review Corp", List.of()));
+
+        for (ScreeningResult r : List.of(clean, hit, review)) {
+            assertEquals(ScreeningProvenance.STUB_PROVIDER_ID, r.provenance().providerId());
+            assertFalse(r.authoritative(), "a stub run is never authoritative");
+            assertFalse(r.screeningPerformed(), "the stub screens nothing");
+            assertEquals(ScreeningProvenance.STUB_CAVEAT, r.caveat());
+        }
+    }
+
+    @Test
+    void stubProvenance_cannotClaimAuthority() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ScreeningProvenance(ScreeningProvenance.STUB_PROVIDER_ID, true, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> ScreeningProvenance.vendor(ScreeningProvenance.STUB_PROVIDER_ID));
+    }
+
+    @Test
+    void nonAuthoritativeClear_isCoercedToNotScreened_evenIfHandConstructed() {
+        // A hand-built (or deserialised) CLEAR from a non-authoritative producer
+        // must be impossible to hold — this is the structural guarantee the
+        // activation gate and every persisted row rely on.
+        ScreeningResult stubClear = new ScreeningResult(ScreeningResult.Status.CLEAR,
+                List.of(), java.time.Instant.now(), "stub-abc", ScreeningProvenance.stub());
+        assertEquals(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER, stubClear.status());
+
+        // Absent provenance (an older producer's JSON) is not authority either.
+        ScreeningResult provenanceless = new ScreeningResult(ScreeningResult.Status.CLEAR,
+                List.of(), java.time.Instant.now(), "who-knows");
+        assertEquals(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER, provenanceless.status());
+        assertEquals(ScreeningProvenance.UNKNOWN_PROVIDER_ID,
+                provenanceless.provenance().providerId());
+
+        // A real provider CAN report CLEAR — the coercion is about provenance,
+        // not about forbidding clean results.
+        ScreeningResult vendorClear = new ScreeningResult(ScreeningResult.Status.CLEAR,
+                List.of(), java.time.Instant.now(), "octa-1", ScreeningProvenance.vendor("octa"));
+        assertEquals(ScreeningResult.Status.CLEAR, vendorClear.status());
+        assertTrue(vendorClear.screeningPerformed());
+        assertNull(vendorClear.caveat());
     }
 
     @Test
@@ -99,13 +154,15 @@ class StubKybAdapterTest {
     }
 
     @Test
-    void runFullKyb_embedsScreening_andDerivesRegistryChecks() {
-        KybRunResult clear = adapter.runFullKyb(subject("클린", "Clean Corp", List.of()));
-        assertEquals(ScreeningResult.Status.CLEAR, clear.screening().status());
-        assertTrue(clear.licenseVerified());
-        assertTrue(clear.uboVerified());
-        assertTrue(clear.registryVerified());
-        assertTrue(clear.providerRef().endsWith("-full"));
+    void runFullKyb_embedsScreening_andVerifiesNothing() {
+        KybRunResult clean = adapter.runFullKyb(subject("클린", "Clean Corp", List.of()));
+        assertEquals(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER, clean.screening().status());
+        // No register was contacted, so nothing is verified (T1-4): these used to
+        // read true off a CLEAR the stub can no longer produce.
+        assertFalse(clean.licenseVerified());
+        assertFalse(clean.uboVerified());
+        assertFalse(clean.registryVerified());
+        assertTrue(clean.providerRef().endsWith("-full"));
 
         KybRunResult hit = adapter.runFullKyb(subject("X", "Sanctioned Corp", List.of()));
         assertEquals(ScreeningResult.Status.HIT, hit.screening().status());
@@ -122,6 +179,6 @@ class StubKybAdapterTest {
     @Test
     void nullUboList_isTreatedAsEmpty() {
         ScreeningResult result = adapter.screen(subject("A", "Alpha Corp", null));
-        assertEquals(ScreeningResult.Status.CLEAR, result.status());
+        assertEquals(ScreeningResult.Status.NOT_SCREENED_NO_PROVIDER, result.status());
     }
 }

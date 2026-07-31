@@ -9,6 +9,7 @@ import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.QuoteAmountMismatchException;
 import com.gme.pay.payment.domain.SchemeBalanceUnavailableException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.client.PrefundingClient;
 import com.gme.pay.payment.domain.client.QrClient;
 import com.gme.pay.payment.domain.client.RateClient;
@@ -322,6 +323,78 @@ class PaymentOrchestratorTest {
     }
 
     // ======================================================================
+    // T4-2: a LOCAL partner's configured caps are enforced too. The cumulative
+    // charge used to live INSIDE the `if (partnerType == OVERSEAS)` branch, so a
+    // LOCAL partner was silently uncapped. partner_limits (V020) has no
+    // partner-type discrimination — the caps belong to the LICENCE, not the
+    // funding model — so the charge now runs for every type, while the float
+    // RESERVE stays OVERSEAS-only (LOCAL partners hold no float).
+    // ======================================================================
+
+    @Test
+    @DisplayName("T4-2: LOCAL partner cumulative cap is enforced (charged without a float reserve)")
+    void authorize_localPartner_cumulativeCapEnforced() {
+        PrefundingClient localPrefund = new PrefundingClient() {
+            @Override
+            public DeductionResult deduct(long p, String t, BigDecimal a) {
+                throw new AssertionError("deduct must not be called");
+            }
+            @Override
+            public ReverseResult reverse(long p, String t) {
+                return new ReverseResult(BigDecimal.ZERO, null);
+            }
+            @Override
+            public ReservationResult reserve(long p, String t, BigDecimal a) {
+                throw new AssertionError("a LOCAL partner must NOT reserve float");
+            }
+            @Override
+            public void chargeCumulative(long p, String t, BigDecimal amt,
+                                         BigDecimal d, BigDecimal m, BigDecimal y, Integer cnt) {
+                callLog.add("PREFUND:CHARGE_CUM");
+                throw new com.gme.pay.payment.domain.CumulativeLimitExceededException("daily cap breached");
+            }
+            @Override
+            public ReleaseResult release(long p, String t) {
+                throw new AssertionError("a LOCAL partner holds no float to release");
+            }
+        };
+        SchemeClient schemeMustNotBeTouched = new SchemeClient() {
+            @Override
+            public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new AssertionError("scheme submit must NOT happen on a cumulative breach");
+            }
+            @Override public void cancelPayment(String s, String r) { }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) { return null; }
+            @Override
+            public BalanceCheckResult checkBalance(String s, BigDecimal a, String c) {
+                throw new AssertionError("scheme balance-check must NOT happen on a cumulative breach");
+            }
+        };
+        com.gme.pay.payment.domain.client.PartnerConfigClient dailyCapConfig =
+                new com.gme.pay.payment.domain.client.PartnerConfigClient() {
+            @Override
+            public PartnerConfigView loadPartner(String id) {
+                return new PartnerConfigView(id, "LOCAL", "KRW", java.math.RoundingMode.HALF_UP);
+            }
+            @Override
+            public java.util.Optional<TxnLimits> resolveLimits(String partnerCode) {
+                return java.util.Optional.of(new TxnLimits(
+                        null, null, new BigDecimal("1000"), null, null, "SOAEK_HAEOEMONG"));
+            }
+        };
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, localPrefund, fakeQr, schemeMustNotBeTouched, fakeTxn,
+                null, null, dailyCapConfig);
+
+        assertThrows(com.gme.pay.payment.domain.CumulativeLimitExceededException.class,
+                () -> orchestrator.authorizeMpm(sampleCommand, PartnerType.LOCAL));
+
+        assertPresent("PREFUND:CHARGE_CUM");           // the cap WAS evaluated for a LOCAL partner
+        assertPresent("TXN:COMMIT:FAILED");            // and the orphan PENDING txn was failed
+        assertAbsent("PREFUND:RESERVE", "LOCAL partners hold no float");
+    }
+
+    // ======================================================================
     // Test 5: OVERSEAS cancel records the REAL reversed USD + posts a reversal journal (P1-2)
     // ======================================================================
 
@@ -356,6 +429,99 @@ class PaymentOrchestratorTest {
         assertEquals("txn_1", revRef.get(), "reversal journal keyed by txnRef");
         assertEquals(0, revAmt.get().compareTo(new BigDecimal("125.50")));
         assertEquals("USD", revCcy.get());
+    }
+
+    // ======================================================================
+    // T2-7: cancel/refund is scheme-routed. A corridor with no scheme cancel raises a
+    // structured SCHEME_OPERATION_UNSUPPORTED BEFORE any money or status is touched —
+    // it must never be answered by ZeroPay, and must never half-apply the reversal.
+    // ======================================================================
+
+    @Test
+    @DisplayName("T2-7: cancel carries the scheme code through to the scheme client")
+    void cancel_threadsSchemeCodeToSchemeClient() {
+        java.util.concurrent.atomic.AtomicReference<SchemeClient.CancelRequest> seen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        SchemeClient capturingScheme = new SchemeClient() {
+            @Override public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+            @Override public void cancelPayment(String schemeTxnRef, String reason) { }
+            @Override public void cancelPayment(CancelRequest request) { seen.set(request); }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, fakePrefunding, fakeQr, capturingScheme, fakeTxn, null, null);
+
+        orchestrator.cancelPayment("pay_smn", "SMN-PAYMENT-1", PartnerType.OVERSEAS, 42L,
+                "txn_smn", "CUSTOMER_REQUEST", "SENDMN");
+
+        assertEquals("SENDMN", seen.get().schemeId(),
+                "the scheme code must reach the scheme client so the router can dispatch it");
+        assertEquals("SMN-PAYMENT-1", seen.get().schemeTxnRef());
+    }
+
+    @Test
+    @DisplayName("T2-7: an unsupported scheme cancel surfaces the error and reverses NOTHING")
+    void cancel_unsupportedScheme_surfacesErrorAndTouchesNothing() {
+        SchemeClient unsupportedScheme = new SchemeClient() {
+            @Override public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+            @Override public void cancelPayment(String schemeTxnRef, String reason) {
+                callLog.add("SCHEME:CANCEL_UNSUPPORTED");
+                throw new SchemeOperationNotSupportedException("SENDMN", "cancelPayment",
+                        "SENDMN Confirm is single-shot");
+            }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, fakePrefunding, fakeQr, unsupportedScheme, fakeTxn, null, null);
+
+        SchemeOperationNotSupportedException ex = assertThrows(
+                SchemeOperationNotSupportedException.class,
+                () -> orchestrator.cancelPayment("pay_smn", "SMN-PAYMENT-1", PartnerType.OVERSEAS,
+                        42L, "txn_smn", "CUSTOMER_REQUEST", "SENDMN"));
+
+        assertEquals("SCHEME_OPERATION_UNSUPPORTED", ex.code());
+        assertPresent("SCHEME:CANCEL_UNSUPPORTED");
+        // The scheme call is the FIRST step, so nothing downstream ran: no float credited back,
+        // no REVERSED status written. The transaction is exactly as it was.
+        assertAbsent("PREFUND:REVERSE", "an unsupported cancel must not credit the float back");
+        assertAbsent("TXN:COMMIT:REVERSED", "an unsupported cancel must not move the txn status");
+    }
+
+    @Test
+    @DisplayName("T2-7: an unsupported scheme refund surfaces the error and reverses NOTHING")
+    void refund_unsupportedScheme_surfacesErrorAndTouchesNothing() {
+        SchemeClient unsupportedScheme = new SchemeClient() {
+            @Override public MpmSubmitResponse submitMpm(MpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+            @Override public void cancelPayment(String schemeTxnRef, String reason) {
+                throw new SchemeOperationNotSupportedException("NEPAL", "cancelPayment",
+                        "NEPAL is single-phase");
+            }
+            @Override public CpmSubmitResponse submitCpm(CpmSubmitRequest req) {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        PaymentOrchestrator orchestrator = new PaymentOrchestrator(
+                fakeRate, fakePrefunding, fakeQr, unsupportedScheme, fakeTxn, null, null);
+
+        assertThrows(SchemeOperationNotSupportedException.class,
+                () -> orchestrator.refundPayment("pay_np", "NP-777", PartnerType.OVERSEAS,
+                        42L, "txn_np", "CUSTOMER_REQUEST", "NEPAL"));
+
+        assertAbsent("PREFUND:REVERSE", "an unsupported refund must not credit the float back");
+        assertAbsent("TXN:COMMIT:REFUNDED", "an unsupported refund must not move the txn status");
     }
 
     // ======================================================================

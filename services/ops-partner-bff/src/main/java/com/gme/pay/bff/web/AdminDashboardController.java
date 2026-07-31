@@ -271,9 +271,8 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/transactions/recent")
-    public List<TransactionMgmtClient.TransactionSummary> recentTransactions(
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+    public List<TransactionMgmtClient.TransactionSummary> recentTransactions() {
+        rbac.requireTxnView();
         return transactions.recent(null, RECENT_LIMIT);
     }
 
@@ -285,9 +284,8 @@ public class AdminDashboardController {
             @RequestParam(required = false) LocalDate fromDate,
             @RequestParam(required = false) LocalDate toDate,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @RequestParam(defaultValue = "20") int size) {
+        rbac.requireTxnView();
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size <= 0 ? DEFAULT_PAGE_SIZE : size), MAX_PAGE_SIZE);
         TransactionMgmtClient.Page<TransactionMgmtClient.TransactionSummary> upstream =
@@ -298,9 +296,8 @@ public class AdminDashboardController {
 
     @GetMapping("/transactions/{txnId}")
     public TransactionDetail transactionDetail(
-            @PathVariable String txnId,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireTxnView(permissions);
+            @PathVariable String txnId) {
+        rbac.requireTxnView();
         TransactionMgmtClient.TransactionSummary summary = transactions.getTransaction(txnId);
         if (summary == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -373,6 +370,30 @@ public class AdminDashboardController {
         return settlement.recent(null, RECENT_LIMIT);
     }
 
+    /**
+     * Persisted settlement batches over a business-date window (GAP T4-5). Previously impossible:
+     * the only upstream read covered a single date, so {@code /settlement/recent} was the whole
+     * surface. Rows carry the real lifecycle status and an honest transmission state.
+     */
+    @GetMapping("/settlement/batches")
+    public List<SettlementClient.SettlementBatchSummary> settlementBatches(
+            @RequestParam(required = false) String partnerId,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to,
+            @RequestParam(required = false, defaultValue = "0") int limit) {
+        return settlement.range(partnerId, from, to, limit);
+    }
+
+    /**
+     * Whether settlement-reconciliation can transmit a settlement file to the scheme at all (T4-5).
+     * The counterpart of {@code GET /v1/admin/compliance/…}'s filing-channel board: an operator must
+     * be able to see that generated ≠ sent, and why, without reading a batch row.
+     */
+    @GetMapping("/settlement/transmission-channel")
+    public SettlementClient.TransmissionChannel settlementTransmissionChannel() {
+        return settlement.transmissionChannel();
+    }
+
     @GetMapping("/settlement/{batchId}")
     public SettlementBatchDetail settlementDetail(@PathVariable String batchId) {
         SettlementClient.SettlementBatchDetail upstream = settlement.detail(batchId);
@@ -380,7 +401,8 @@ public class AdminDashboardController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "no settlement batch with id " + batchId);
         }
-        return new SettlementBatchDetail(upstream.batch(), upstream.lines());
+        return new SettlementBatchDetail(upstream.batch(), upstream.lines(),
+                upstream.matchedCount(), upstream.openCount());
     }
 
     @GetMapping("/revenue/summary")
@@ -405,8 +427,9 @@ public class AdminDashboardController {
     /**
      * Builds the {@link TransactionDetail} from the read-side summary using the REAL values that
      * transaction-mgmt's {@code GET /v1/transactions/{id}} now carries — the scheme txn ref, approval
-     * code, merchant id and scheme-approval instant are the genuine evidence the QR scheme paid the
-     * merchant (not the former {@code "SCH-"/"AP-"} placeholders). Settlement booking (booked amount +
+     * code, merchant id, merchant NAME (T4-4) and scheme-approval instant are the genuine evidence the
+     * QR scheme paid the merchant (not the former {@code "SCH-"/"AP-"} placeholders, and not a
+     * hardcoded null for the name). Settlement booking (booked amount +
      * residual) is locked at settlement time, not at payment time, so it is left null on a freshly
      * approved txn rather than derived from the amount; the partner's configured rounding mode is real.
      */
@@ -425,7 +448,11 @@ public class AdminDashboardController {
                 mode,
                 null,   // roundingResidual — locked at settlement time
                 summary.merchantId(),
-                null,   // merchantName — not persisted on the txn yet (wallet response carries it)
+                // T4-4: the REAL merchant name, now persisted at payment time (V012). This was a
+                // hardcoded null while the corridors already knew the name, so the drawer showed an
+                // em dash on every transaction ever. Null still passes through untouched when the
+                // corridor could not resolve a name — the UI's em dash then means what it says.
+                summary.merchantName(),
                 summary.statusHistory(),   // CS: ordered status history from transaction-mgmt (null-safe)
                 summary.failureReason(),   // CS: null-safe on older txns
                 summary.statusLabel(),     // CS: plain-language status label (null-safe)

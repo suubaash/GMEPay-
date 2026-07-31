@@ -268,8 +268,17 @@ public class ReconDiffEngine {
     /**
      * Move the batch forward after a recon run: all-clean → RECONCILED, any open exception → RECEIVED
      * (the file was received but holds discrepancies for ops). Transition is via the legal-state machine
-     * — a batch still at GENERATED is first taken to RECEIVED. A batch already at/after RECONCILED is a
+     * — a batch still at GENERATED is taken straight to RECEIVED. A batch already at/after RECONCILED is a
      * no-op (recon already closed). The status is never moved backwards or through an illegal edge.
+     *
+     * <p><b>GAP T4-5: this no longer walks through TRANSMITTED.</b> It used to
+     * ({@code moveForward(TRANSMITTED); moveForward(RECEIVED);}) purely because GENERATED → RECEIVED was
+     * not a legal edge — a bookkeeping hop that had no evidence behind it and left every reconciled
+     * batch reading as though GME had sent the request file. It never had: the only
+     * {@code SftpTransport} bean writes to a local temp directory. GENERATED → RECEIVED is now legal,
+     * and whether the file was actually sent is recorded separately and honestly on
+     * {@code transmission_state} — which this method deliberately does not touch, because reconciling
+     * an inbound file says nothing about our own outbound transmission.
      */
     private void advanceBatchStatus(SettlementBatchEntity batch, long exceptionCount) {
         SettlementBatchStatus current;
@@ -282,8 +291,7 @@ public class ReconDiffEngine {
         if (current == SettlementBatchStatus.RECONCILED) {
             return;   // recon already closed; idempotent no-op
         }
-        // Walk forward to RECEIVED if not there yet (GENERATED -> TRANSMITTED -> RECEIVED).
-        moveForward(batch, SettlementBatchStatus.TRANSMITTED);
+        // Walk forward to RECEIVED if not there yet. Directly — never via TRANSMITTED (see javadoc).
         moveForward(batch, SettlementBatchStatus.RECEIVED);
         if (exceptionCount == 0) {
             moveForward(batch, SettlementBatchStatus.RECONCILED);

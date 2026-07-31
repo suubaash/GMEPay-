@@ -1,7 +1,6 @@
 package com.gme.pay.notify.alert;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gme.pay.notify.domain.WebhookPayloads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -46,6 +45,12 @@ public class WebhookAlertService {
     public static final String TYPE_DLQ = "WEBHOOK_DLQ";
     public static final String TYPE_QUEUE_DEPTH = "WEBHOOK_QUEUE_DEPTH";
 
+    /**
+     * A partner endpoint's circuit breaker opened: its deliveries are being skipped so the shared
+     * workers stay available to other partners (T3-11 defect 5, per-endpoint fairness).
+     */
+    public static final String TYPE_ENDPOINT_CIRCUIT_OPEN = "WEBHOOK_ENDPOINT_CIRCUIT_OPEN";
+
     /** Sentinel partner id for a global (non-partner-attributable) queue-depth breach. */
     static final long GLOBAL_PARTNER_ID = 0L;
 
@@ -53,7 +58,6 @@ public class WebhookAlertService {
 
     private final AlertEventRepository alertRepository;
     private final Clock clock;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public WebhookAlertService(AlertEventRepository alertRepository, Clock clock) {
         this.alertRepository = Objects.requireNonNull(alertRepository);
@@ -73,33 +77,13 @@ public class WebhookAlertService {
 
     /**
      * Reads a numeric {@code partnerId} from the event payload; null if absent/non-numeric.
-     * Accepts both a flat top-level {@code partnerId} and the canonical outbox envelope
-     * where event fields are nested under {@code payload}.
+     *
+     * <p>Delegates to {@link WebhookPayloads}: the same parse also decides which partner's fair share
+     * a row is selected under and which endpoint it is signed for, and three copies of that rule is how
+     * one of them ends up disagreeing. Kept as a method here because it is the alert path's entry point.
      */
     Long extractPartnerId(String payload) {
-        if (payload == null || payload.isBlank()) {
-            return null;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(payload);
-            JsonNode node = root.get("partnerId");
-            if (node == null || node.isNull()) {
-                node = root.path("payload").get("partnerId");
-            }
-            if (node == null || node.isNull()) {
-                return null;
-            }
-            if (node.isNumber()) {
-                return node.asLong();
-            }
-            String text = node.asText();
-            return (text == null || text.isBlank()) ? null : Long.parseLong(text.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        } catch (Exception e) {
-            log.debug("could not parse webhook payload for partnerId: {}", e.getMessage());
-            return null;
-        }
+        return WebhookPayloads.partnerId(payload);
     }
 
     /**
@@ -156,6 +140,49 @@ public class WebhookAlertService {
         } catch (RuntimeException e) {
             log.error("failed to record WEBHOOK_QUEUE_DEPTH alert (pending={}): {}",
                     pendingCount, e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Records a P2 alert that one partner endpoint has been short-circuited, deduped per partner over
+     * {@link #DEDUP_WINDOW} exactly like the queue-depth alert.
+     *
+     * <p>This exists because the fairness fix <b>deliberately stops attempting deliveries</b> to a
+     * failing endpoint. Skipping work quietly would trade one invisible failure (everyone stalled
+     * behind one dead partner) for another (one partner silently not being delivered to), so the
+     * suppression has to announce itself. The row's own attempt counter is untouched while the breaker
+     * is open, so this alert is the only immediate signal that the endpoint is being skipped — the DLQ
+     * and backlog alerts follow later if it stays down.
+     *
+     * @param partnerId          the endpoint's partner; {@code null} for the unattributed group
+     * @param consecutiveFailures how many failures in a row tripped it
+     * @param openFor            how long deliveries will be skipped before a half-open probe
+     * @return the persisted alert, or empty when suppressed by dedup or when persistence failed
+     */
+    @Transactional
+    public Optional<AlertEventEntity> fireEndpointCircuitOpenAlert(Long partnerId,
+                                                                   int consecutiveFailures,
+                                                                   Duration openFor) {
+        long scopeId = partnerId == null ? GLOBAL_PARTNER_ID : partnerId;
+        Instant cutoff = Instant.now(clock).minus(DEDUP_WINDOW);
+        try {
+            if (alertRepository.existsByPartnerIdAndAlertTypeAndAcknowledgedAtIsNullAndFiredAtAfter(
+                    scopeId, TYPE_ENDPOINT_CIRCUIT_OPEN, cutoff)) {
+                log.debug("endpoint-circuit alert suppressed (recent unacknowledged): partner={}",
+                        scopeId);
+                return Optional.empty();
+            }
+            String message = "Webhook endpoint circuit opened for partner " + scopeId + " after "
+                    + consecutiveFailures + " consecutive failed deliveries; its deliveries are"
+                    + " skipped for " + openFor + " so other partners keep the shared workers."
+                    + " Rows stay PENDING with their attempt counters untouched.";
+            String context = "{\"consecutiveFailures\":" + consecutiveFailures
+                    + ",\"openForSeconds\":" + openFor.toSeconds() + "}";
+            return Optional.of(insert(TYPE_ENDPOINT_CIRCUIT_OPEN, scopeId, message, context));
+        } catch (RuntimeException e) {
+            log.error("failed to record WEBHOOK_ENDPOINT_CIRCUIT_OPEN alert (partner={}): {}",
+                    scopeId, e.getMessage(), e);
             return Optional.empty();
         }
     }

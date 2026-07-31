@@ -1,14 +1,24 @@
 package com.gme.pay.payment.web;
 
+import com.gme.pay.kyb.PaymentParty;
+import com.gme.pay.kyb.PaymentScreeningSubject;
 import com.gme.pay.payment.alert.DeclineSpikeMonitor;
+import com.gme.pay.payment.domain.CorridorPricingUnavailableException;
+import com.gme.pay.payment.domain.CumulativeLimitExceededException;
 import com.gme.pay.payment.domain.FailoverPaymentRouter;
 import com.gme.pay.payment.domain.GmeremitPaymentService;
 import com.gme.pay.payment.domain.GmeremitPaymentService.WalletResult;
+import com.gme.pay.payment.domain.LimitCheckUnavailableException;
 import com.gme.pay.payment.domain.OperationalGate;
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.PaymentStatus;
 import com.gme.pay.payment.domain.QrSchemeClassifier;
 import com.gme.pay.payment.domain.QrSchemeClassifier.Classification;
+import com.gme.pay.payment.domain.RefundAmountInvalidException;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SendmnPaymentService;
+import com.gme.pay.payment.domain.TransactionLimitExceededException;
+import com.gme.pay.payment.domain.WalletPartnerRef;
 import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
@@ -30,6 +40,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import com.gme.pay.payment.metrics.PaymentSliMetrics;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -39,6 +50,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -69,7 +81,12 @@ import java.util.Optional;
  * scheme routed via {@link FailoverPaymentRouter} (e.g. Nepal Fonepay) the amount is executed in
  * {@code currency} (NPR) rather than assumed KRW; the response then carries {@code payCurrency} +
  * {@code payAmount}. The ZeroPay/GMEREMIT domestic KRW path (currency absent or {@code KRW}) is
- * unchanged, keeping the ₩500 fee. No KRW→foreign FX happens here.
+ * unchanged, keeping the ₩500 fee.
+ *
+ * <p><b>T4-1.</b> The NEPAL corridor is priced by the hub: {@link FailoverPaymentRouter} delegates it
+ * to {@code NepalPaymentService}, which applies the configured KRW→NPR FX margin and service fee,
+ * debits USD prefunding and books revenue. {@code currency} selects the quoted leg (KRW = collection,
+ * the default; NPR = merchant payout). Other schemes are still dispatched without hub-side FX.
  */
 @RestController
 @RequestMapping("/v1/pay")
@@ -142,6 +159,27 @@ public class WalletPayController {
         this.objectMapper = objectMapper;
     }
 
+
+    /**
+     * Payment-path SLIs (T3-5). Injected by SETTER rather than through the constructor, and
+     * optional: every existing unit slice builds this controller directly, and widening a
+     * constructor that many tests call — on the payment path — to add a measurement concern is a
+     * worse trade than a nullable field. Absent registry or absent bean simply means the entry
+     * point is not measured; it can never change what the endpoint returns.
+     */
+    @Nullable private PaymentSliMetrics paymentSli;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPaymentSli(PaymentSliMetrics paymentSli) {
+        this.paymentSli = paymentSli;
+    }
+
+    /** Times {@code call} as {@code entry} when the SLI bean is present; otherwise just runs it. */
+    private <R extends org.springframework.http.ResponseEntity<?>> R sli(
+            String entry, java.util.function.Supplier<R> call) {
+        return paymentSli == null ? call.get() : paymentSli.record(entry, call);
+    }
+
     /** Backwards-compatible 2-arg constructor used by existing tests (no failover routing). */
     WalletPayController(GmeremitPaymentService gmeremitPaymentService,
                         SendmnPaymentService sendmnPaymentService) {
@@ -182,14 +220,19 @@ public class WalletPayController {
             @RequestBody WalletPaymentRequest req,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(name = "X-Idempotency-Key", required = false) String idempotencyKeyAlt) {
-        req.validate();
+        // Measured OUTSIDE validation and the idempotency claim on purpose: the SLI must describe
+        // what the caller actually waited for, which includes a replayed response and a rejected
+        // payload. Timing only the happy inner path would report a latency no client experienced.
+        return sli(PaymentSliMetrics.ENTRY_WALLET_PAY, () -> {
+            req.validate();
 
-        String key = firstNonBlank(idempotencyKey, idempotencyKeyAlt);
-        // No key (or store unavailable) → unchanged legacy path, full back-compat.
-        if (key == null || idempotencyRepository == null || objectMapper == null) {
-            return execute(req);
-        }
-        return payIdempotent(req, key.trim());
+            String key = firstNonBlank(idempotencyKey, idempotencyKeyAlt);
+            // No key (or store unavailable) → unchanged legacy path, full back-compat.
+            if (key == null || idempotencyRepository == null || objectMapper == null) {
+                return execute(req);
+            }
+            return payIdempotent(req, key.trim());
+        });
     }
 
     /**
@@ -289,17 +332,7 @@ public class WalletPayController {
         BigDecimal amountKrw = new BigDecimal(req.amountKrw());
         WalletResult result;
 
-        // Operations operational gate: refuse NEW payments while the platform is paused / in
-        // maintenance, or when THIS payment's partner alias / classified network (route) is suspended.
-        // Runs at the START, before any merchant lookup / scheme submit, so nothing irreversible fires
-        // on a rejected payment. Confirm/refund of an in-flight txn does not enter this controller.
         Classification gateQr = QrSchemeClassifier.classify(req.qrPayload());
-        if (operationalGate != null) {
-            operationalGate.checkNewAuthorization(
-                    req.partner(),
-                    null,
-                    gateQr.isKnown() ? gateQr.networkIdentifier() : null);
-        }
 
         // ADR-016: route the scanned MPM QR by its OWN network identifier, not by partner. A
         // non-ZeroPay network (Fonepay/NepalPay/Khalti…) arrives as partner=GMEREMIT but must NOT
@@ -310,26 +343,89 @@ public class WalletPayController {
         // candidate. ZeroPay QRs (com.zeropay / 5802KR) keep the unchanged GMEREMIT/SENDMN paths
         // so their merchant validation + fee behaviour is preserved exactly.
         Classification qr = gateQr;
+        // partner=SENDMN is an EXPLICIT corridor selection: the wallet already ran
+        // /v1/pay/classify, learned the QR resolves to SENDMN, and is paying a KRW amount
+        // through the KRW→MNT FX corridor (SendmnPaymentService: FX + ₩500 fee + USD
+        // prefunding). Routing that request through the failover pass-through would treat
+        // the KRW amount as MNT and skip fee/prefunding — so an explicit SENDMN partner
+        // always dispatches to its documented corridor below (a QPay/MN QR would otherwise
+        // classify as a known non-ZeroPay network and be hijacked here).
         boolean routeViaFailover = failoverPaymentRouter != null
                 && qr.isKnown()
-                && !isZeroPayNetwork(qr.networkIdentifier());
+                && !isZeroPayNetwork(qr.networkIdentifier())
+                && !PARTNER_SENDMN.equalsIgnoreCase(req.partner());
 
-        if (routeViaFailover) {
-            // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
-            // The wallet-supplied pay currency (default KRW when absent) is authoritative: a Fonepay
-            // scan arrives as NPR and is executed in NPR, not mis-treated as KRW. The hub does NOT do
-            // KRW→foreign FX — `amountKrw` is the amount already in `currency`.
-            result = failoverPaymentRouter.pay(
-                    req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency());
-        } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
-            result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
-                    req.userRef(), SENDMN_PARTNER_ID);
-        } else if (PARTNER_GMEREMIT.equalsIgnoreCase(req.partner())) {
-            result = gmeremitPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
-        } else {
-            throw new IllegalArgumentException(
-                    "Unsupported partner: " + req.partner()
-                            + ". Supported: GMEREMIT, SENDMN");
+        // Operations operational gate: refuse NEW payments while the platform is paused / in
+        // maintenance, or when THIS payment's partner alias / classified network (route) is suspended.
+        // Runs at the START, before any merchant lookup / scheme submit, so nothing irreversible fires
+        // on a rejected payment. Confirm/refund of an in-flight txn does not enter this controller.
+        //
+        // T3-6: the same call now also enforces the scheme's SEEDED OPERATING WINDOW
+        // (scheme_operating_hours, V024) — the wallet entry point gets it from the same gate as the
+        // orchestrated authorize path, so the two cannot drift the way limit enforcement did in T4-2.
+        // The scheme reference passed here is the one this request is ACTUALLY dispatched to and is
+        // never guessed from the QR's network: the two direct corridors are known statically, and the
+        // failover branch is gated per RESOLVED candidate inside FailoverPaymentRouter (which knows the
+        // real scheme ids and can skip a closed candidate rather than failing the whole payment).
+        //
+        // T5-3: the same call also runs the counterparty sanctions/PEP screening seam. The payer
+        // subject is `userRef` — a wallet account id / user UUID, i.e. an OPAQUE handle. No name, date
+        // of birth or nationality is transmitted on POST /v1/pay, so the subject is not screenable and
+        // the gate records NO_SUBJECT_IDENTITY. That is deliberate and is the actual finding: on the
+        // busiest entry point the platform has, the originator's identity never reaches this service, so
+        // wiring a name-matching vendor would still screen nobody here until the wallet contract carries
+        // it. The merchant/beneficiary is resolved further down (inside the corridor services, after
+        // this gate), so it is not offered here either rather than being guessed from the QR.
+        // No payment reference exists at this point either — the wallet supplies none — so the coverage
+        // row's evidence anchor is null for this path; also recorded in the fix report.
+        if (operationalGate != null) {
+            operationalGate.checkNewAuthorization(
+                    req.partner(),
+                    routeViaFailover ? null : directCorridorSchemeRef(req.partner()),
+                    gateQr.isKnown() ? gateQr.networkIdentifier() : null,
+                    null,
+                    List.of(PaymentScreeningSubject.byReferenceOnly(PaymentParty.PAYER, req.userRef())));
+        }
+
+        // T4-2: the regulatory limit subject is the WALLET partner (the issuer charging the customer),
+        // whose alias IS its config-registry partner code — that is the licence whose per-txn /
+        // cumulative caps apply, not the receiving partner a QR routes to.
+        WalletPartnerRef limitSubject =
+                WalletPartnerRef.of(req.partner(), resolvePartnerId(req.partner()));
+
+        try {
+            if (routeViaFailover) {
+                // Non-ZeroPay networks routed via failover are cross-border (OVERSEAS) in this sandbox.
+                // The wallet-supplied currency (default KRW when absent) says which currency `amountKrw`
+                // is denominated in.
+                //
+                // T4-1: for the NEPAL corridor the router delegates to NepalPaymentService, which DOES do
+                // KRW→NPR FX (configured margin + fee + USD prefunding + revenue). `currency` then picks
+                // the quoted leg: KRW = the collection, NPR = the merchant payout. For every other scheme
+                // the router stays a dispatcher and the amount is submitted in `currency` as-is.
+                result = failoverPaymentRouter.pay(
+                        req.qrPayload(), amountKrw, req.userRef(), "OVERSEAS", req.payCurrency(),
+                        limitSubject);
+            } else if (PARTNER_SENDMN.equalsIgnoreCase(req.partner())) {
+                result = sendmnPaymentService.pay(req.qrPayload(), amountKrw,
+                        req.userRef(), SENDMN_PARTNER_ID);
+            } else if (PARTNER_GMEREMIT.equalsIgnoreCase(req.partner())) {
+                result = gmeremitPaymentService.pay(req.qrPayload(), amountKrw, req.userRef());
+            } else {
+                throw new IllegalArgumentException(
+                        "Unsupported partner: " + req.partner()
+                                + ". Supported: GMEREMIT, SENDMN");
+            }
+        } catch (TransactionLimitExceededException | CumulativeLimitExceededException
+                 | LimitCheckUnavailableException | CorridorPricingUnavailableException ex) {
+            // A limit refusal — and, since T4-1, an unpriceable-corridor refusal — IS a decline: feed the
+            // DECLINE_SPIKE monitor before the structured error leaves the controller, so a burst of cap
+            // rejections or a corridor that has lost its pricing is as visible as a scheme decline.
+            if (declineSpikeMonitor != null) {
+                declineSpikeMonitor.record(req.partner(),
+                        qr.isKnown() ? qr.networkIdentifier() : null, false);
+            }
+            throw ex;
         }
 
         // DECLINE_SPIKE monitor (defect #5): record the outcome per partner + classified network so a
@@ -356,9 +452,14 @@ public class WalletPayController {
                 result.payAmountMnt() != null ? result.payAmountMnt().toPlainString() : null,
                 // Cross-border pay currency + amount (e.g. NPR) so the wallet shows the right figures;
                 // null (omitted) for the domestic KRW path, leaving that response shape unchanged.
+                //
+                // T4-1: when FX was applied the foreign payout is the FX'd figure (payAmountMnt — the
+                // generic "amount in the merchant's currency" slot), NOT the KRW leg. Before Nepal had
+                // FX, payAmountKrw WAS the foreign amount (pass-through), so it was correct then and
+                // would now report KRW under an NPR label. Non-FX cross-border schemes keep the old
+                // mapping.
                 result.payCurrency(),
-                result.payCurrency() != null && result.payAmountKrw() != null
-                        ? result.payAmountKrw().toPlainString() : null
+                payAmountFor(result)
         );
 
         HttpStatus status = result.approved() ? HttpStatus.CREATED : HttpStatus.UNPROCESSABLE_ENTITY;
@@ -390,13 +491,49 @@ public class WalletPayController {
         // country. Still GMEPay+-sourced — the wallet must not hardcode it.
         Classification c = QrSchemeClassifier.classify(req.qrPayload());
         String currency = "NP".equalsIgnoreCase(c.country()) ? "NPR"
+                : "MN".equalsIgnoreCase(c.country()) ? "MNT"
                 : "KR".equalsIgnoreCase(c.country()) ? "KRW" : null;
         return ResponseEntity.ok(new FailoverPaymentRouter.QrClassification(
                 c.isKnown(), c.networkIdentifier(), c.country(), currency,
                 c.isKnown() ? c.mode().name() : null, null));
     }
 
+    /**
+     * The {@code payAmount} field: the amount in {@code payCurrency}. When the corridor applied FX
+     * (Nepal KRW→NPR) that is the FX'd payout; otherwise the amount as submitted. Null for the
+     * domestic KRW path, which omits both fields.
+     */
+    @Nullable
+    private static String payAmountFor(WalletResult result) {
+        if (result.payCurrency() == null) {
+            return null;
+        }
+        BigDecimal amount = Boolean.TRUE.equals(result.fxApplied()) && result.payAmountMnt() != null
+                ? result.payAmountMnt()
+                : result.payAmountKrw();
+        return amount == null ? null : amount.toPlainString();
+    }
+
     /** True when the classified QR network is ZeroPay (domestic path stays on the existing services). */
+    /**
+     * T3-6: the scheme a NON-failover wallet payment is actually dispatched to, for the operating-hours
+     * gate. Both direct corridors are statically known — {@code partner=SENDMN} is an explicit corridor
+     * selection dispatched to {@link SendmnPaymentService} (scheme {@code SENDMN}) and
+     * {@code partner=GMEREMIT} is the ZeroPay domestic path ({@code ZEROPAY}) — so no scheme code is
+     * ever inferred from the QR's network identifier here. Any other partner value is rejected below as
+     * unsupported, so it asserts no scheme.
+     */
+    @Nullable
+    private static String directCorridorSchemeRef(String partner) {
+        if (PARTNER_SENDMN.equalsIgnoreCase(partner)) {
+            return "SENDMN";
+        }
+        if (PARTNER_GMEREMIT.equalsIgnoreCase(partner)) {
+            return "ZEROPAY";
+        }
+        return null;
+    }
+
     private static boolean isZeroPayNetwork(String networkIdentifier) {
         return networkIdentifier != null
                 && networkIdentifier.toLowerCase(java.util.Locale.ROOT).contains("zeropay");
@@ -485,6 +622,30 @@ public class WalletPayController {
      *
      * <p>Response: 200 OK with {@link WalletRefundResponse}.
      * 422 if the scheme declines the refund (already refunded, etc.).
+     *
+     * <p>T2-7: the optional {@code schemeId} body field routes the scheme-side refund to the adapter the
+     * payment was actually executed on. A cross-border corridor with no scheme refund path (SENDMN /
+     * NEPAL — both single-shot) now answers 422 with the structured
+     * {@code errorCode=SCHEME_OPERATION_UNSUPPORTED} — an explicit "this cannot be refunded at the
+     * scheme, escalate to the manual reversal process" — instead of the ZeroPay decline the scheme-less
+     * cancel used to produce. Nothing downstream (transaction status, revenue-ledger) is touched on that
+     * path, so no half-applied refund is recorded.
+     *
+     * <h2>T2-6 — this path was recording the wrong thing twice</h2>
+     * <ol>
+     *   <li>It patched the transaction to <b>{@code REVERSED}</b>, not {@code REFUNDED}. {@code refundedAt}
+     *       is stamped only on entry to {@code REFUNDED}, so every wallet refund was invisible to
+     *       {@code GET /v1/transactions/refunded} — and therefore to settlement's cross-date claw-back. It
+     *       now patches {@code REFUNDED}, which is also what emits the {@code payment.reversed} event that
+     *       runs revenue reversal and notifies the partner.</li>
+     *   <li>It posted a <b>ZERO rounding residual</b> ({@code postRoundingResidual(ref + "-REFUND", 0, KRW)})
+     *       — an amount of nothing, in the wrong account, under a reference no other posting uses. Nothing
+     *       was booked. It now posts a real reversal journal for the refunded amount via the existing
+     *       {@code REVENUE_REVERSAL} / {@code RECEIVABLE_PARTNER} pair.</li>
+     * </ol>
+     * The refunded amount comes from the request, or from the original payment when the request omits it.
+     * When neither is available nothing is journalled and the response carries no amount — an honest blank
+     * rather than a zero that reads as "booked".
      */
     @PostMapping("/{schemeTxnRef}/refund")
     public ResponseEntity<WalletRefundResponse> refund(
@@ -497,41 +658,82 @@ public class WalletPayController {
                 ? req.authId()
                 : schemeTxnRef;
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_REFUND";
+        String schemeId = (req != null && req.schemeId() != null && !req.schemeId().isBlank())
+                ? req.schemeId()
+                : null;
+        java.math.BigDecimal requestedAmount = req != null ? req.amount() : null;
+        String requestedCurrency = req != null ? req.currency() : null;
 
         if (schemeClient == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
-                            null, "Scheme client not configured"));
+                            null, "Scheme client not configured", "SCHEME_CLIENT_UNCONFIGURED"));
+        }
+
+        // T2-6: resolve the original payment BEFORE the scheme call so an over-refund is refused without
+        // touching the scheme. A basis we cannot read only blocks a PARTIAL refund (see WalletRefundBasis).
+        WalletRefundBasis basis;
+        try {
+            basis = resolveWalletRefundBasis(schemeTxnRef, requestedAmount, requestedCurrency);
+        } catch (RefundAmountInvalidException ex) {
+            log.warn("Wallet refund of {} rejected ({}): {}", schemeTxnRef, ex.code(), ex.getMessage());
+            return ResponseEntity.status(ex.retryable()
+                            ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
         }
 
         try {
-            schemeClient.cancelPayment(authId, reason);
+            schemeClient.cancelPayment(new SchemeClient.CancelRequest(
+                    authId, reason, schemeId, basis.schemePartialAmount(), basis.currency()));
+        } catch (SchemeOperationNotSupportedException ex) {
+            // NOT a decline: the corridor has no scheme refund round-trip at all. Surface it verbatim
+            // with its stable code so the caller stops retrying and escalates.
+            log.warn("Refund unsupported by scheme {} for schemeTxnRef={} authId={}: {}",
+                    ex.schemeId(), schemeTxnRef, authId, ex.getMessage());
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
+        } catch (PartialRefundNotSupportedException ex) {
+            // The adapter cannot express a partial refund; a full cancel would over-refund at the scheme.
+            log.warn("Partial refund unsupported by scheme {} for schemeTxnRef={}: {}",
+                    ex.schemeId(), schemeTxnRef, ex.getMessage());
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
+                            null, ex.getMessage(), ex.code()));
         } catch (RuntimeException ex) {
             log.warn("Refund failed for schemeTxnRef={} authId={}: {}", schemeTxnRef, authId, ex.getMessage());
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                     .body(new WalletRefundResponse("FAILED", schemeTxnRef, null,
-                            null, ex.getMessage()));
+                            null, ex.getMessage(), "SCHEME_REFUND_FAILED"));
         }
 
-        // Record the reversal in transaction-mgmt (resilient)
+        // Record the refund in transaction-mgmt (resilient) — REFUNDED, carrying the cumulative refunded
+        // KRW so refundedAt is stamped, findRefundedOn finds it, the claw-back has a magnitude, and the
+        // payment.reversed event fires.
         if (transactionClient != null) {
             try {
                 transactionClient.commitStatus(schemeTxnRef,
-                        new TransactionClient.StatusPatch(
-                                PaymentStatus.REVERSED, schemeTxnRef, authId, null, null));
+                        TransactionClient.StatusPatch.refund(
+                                PaymentStatus.REFUNDED, schemeTxnRef, authId, null,
+                                basis.cumulativeRefundedKrw()));
             } catch (RuntimeException ex) {
-                log.warn("transaction-mgmt REVERSED update failed for {}: {}", schemeTxnRef, ex.getMessage());
+                log.warn("transaction-mgmt REFUNDED update failed for {}: {}", schemeTxnRef, ex.getMessage());
             }
         }
 
-        // Reverse revenue-ledger entry (resilient)
-        if (revenueLedgerClient != null) {
+        // Book a REAL reversal for the refunded amount (was: a zero rounding residual).
+        if (revenueLedgerClient != null && basis.amount() != null && basis.amount().signum() > 0
+                && basis.currency() != null) {
             try {
-                revenueLedgerClient.postRoundingResidual(schemeTxnRef + "-REFUND",
-                        java.math.BigDecimal.ZERO, "KRW");
+                revenueLedgerClient.postReversalJournal(schemeTxnRef, basis.amount(), basis.currency());
             } catch (RuntimeException ex) {
                 log.warn("revenue-ledger refund post failed for {}: {}", schemeTxnRef, ex.getMessage());
             }
+        } else if (revenueLedgerClient != null) {
+            log.warn("wallet refund of {} booked NO reversal journal: the refunded amount is unknown "
+                    + "(request carried none and the original payment was unreadable). Nothing is posted "
+                    + "rather than a zero that would read as booked.", schemeTxnRef);
         }
 
         return ResponseEntity.ok(new WalletRefundResponse(
@@ -539,7 +741,89 @@ public class WalletPayController {
                 schemeTxnRef,
                 authId,
                 Instant.now().toString(),
-                null
+                null,
+                null,
+                basis.amount(),
+                basis.currency()
         ));
+    }
+
+    /**
+     * Resolves and validates the wallet refund's amount against the original payment (T2-6).
+     *
+     * <p>Mirrors {@code PaymentOrchestrator.planRefund}'s rules on the wallet path, which has its own
+     * (pre-orchestrator) refund flow: cumulative refunds may not exceed the original, the currency may not
+     * differ from the collection currency, and an unreadable original blocks a PARTIAL refund but not a full
+     * one. It deliberately does NOT move float — the wallet path never did, and adding a float leg here would
+     * be a second, divergent money path rather than a fix.
+     */
+    private WalletRefundBasis resolveWalletRefundBasis(String txnRef,
+                                                       java.math.BigDecimal requestedAmount,
+                                                       String requestedCurrency) {
+        TransactionClient.RefundBasis basis = transactionClient == null
+                ? null
+                : transactionClient.findRefundBasis(txnRef).orElse(null);
+
+        if (basis == null || basis.collectionAmount() == null) {
+            if (requestedAmount != null) {
+                throw RefundAmountInvalidException.basisUnavailable(txnRef,
+                        "the original wallet payment could not be read, so a partial refund cannot be "
+                                + "validated");
+            }
+            return new WalletRefundBasis(null, null, null, true);
+        }
+
+        java.math.BigDecimal original = basis.collectionAmount();
+        String currency = basis.collectionCurrency();
+        java.math.BigDecimal already = basis.alreadyRefunded();
+
+        if (requestedAmount == null) {
+            java.math.BigDecimal remaining = original.subtract(already);
+            if (remaining.signum() <= 0) {
+                throw RefundAmountInvalidException.exceedsOriginal(txnRef,
+                        java.math.BigDecimal.ZERO, already, original, currency);
+            }
+            return new WalletRefundBasis(remaining, currency, original, true);
+        }
+
+        if (requestedAmount.signum() <= 0) {
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "the refund amount must be positive, got " + requestedAmount.toPlainString());
+        }
+        if (requestedCurrency != null && currency != null
+                && !requestedCurrency.equalsIgnoreCase(currency)) {
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "refund currency " + requestedCurrency + " is not the original collection currency "
+                            + currency);
+        }
+        java.math.BigDecimal cumulative = already.add(requestedAmount);
+        if (cumulative.compareTo(original) > 0) {
+            throw RefundAmountInvalidException.exceedsOriginal(txnRef, requestedAmount, already,
+                    original, currency);
+        }
+        return new WalletRefundBasis(requestedAmount, currency, cumulative,
+                cumulative.compareTo(original) == 0);
+    }
+
+    /**
+     * The validated wallet refund amounts.
+     *
+     * @param amount     this refund's amount, or null when it could not be determined
+     * @param currency   the original collection currency
+     * @param cumulative total refunded including this refund
+     * @param full       true when this refund completes the transaction
+     */
+    private record WalletRefundBasis(java.math.BigDecimal amount, String currency,
+                                     java.math.BigDecimal cumulative, boolean full) {
+
+        /** Set ONLY for a partial refund, so an adapter that cannot express one refuses it. */
+        java.math.BigDecimal schemePartialAmount() {
+            return full ? null : amount;
+        }
+
+        /** Cumulative refunded amount, but only when it really is KRW (see the orchestrator's note). */
+        java.math.BigDecimal cumulativeRefundedKrw() {
+            return "KRW".equalsIgnoreCase(currency) ? cumulative : null;
+        }
     }
 }

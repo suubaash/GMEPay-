@@ -33,8 +33,15 @@ import org.springframework.web.bind.annotation.RestController;
  * </ul>
  *
  * <p>Both return the resulting balance + the ledger entry id so transaction-mgmt can record the
- * concrete ledger reference against its own transaction row. This path is internal-network only
- * (not routed via the public gateway); network-level policy is the trust boundary.
+ * concrete ledger reference against its own transaction row.
+ *
+ * <p><b>Authentication (T0-5 / CISO#6):</b> this path is internal-network only (not routed via the
+ * public gateway), but network policy is <em>not</em> the trust boundary — there is no mesh/mTLS.
+ * Every request here must carry the shared service-to-service token in the
+ * {@code X-Gme-Internal} header ({@code com.gme.pay.internalauth}); anything else is refused
+ * {@code 401} by the {@code InternalAuthFilter} before this controller is reached. The gate is
+ * armed unconditionally and the service refuses to start without the secret — see
+ * {@code com.gme.pay.prefunding.config.InternalAuthEnforcedConfig}.
  */
 @RestController
 @RequestMapping("/internal/v1/prefunding")

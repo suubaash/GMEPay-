@@ -1,5 +1,6 @@
 package com.gme.pay.registry.partner;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.changerequest.ChangeRequestState;
 import com.gme.pay.contracts.AddressCommand;
 import com.gme.pay.contracts.AddressView;
@@ -91,7 +92,7 @@ public class PartnerDraftService {
      * so wizard drafts work end-to-end until the Keycloak slice lands and we
      * resolve a real {@code sub} claim into the actor field.
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerStore partnerStore;
     private final PartnerRepository partnerRepository;
@@ -388,7 +389,12 @@ public class PartnerDraftService {
                 e.getStatus(),
                 e.getValidFrom(),
                 e.getValidTo(),
-                e.getRecordedAt());
+                e.getRecordedAt(),
+                // V025 partners.go_live_at — the real first-activation instant. NULL until the
+                // partner's first UAT -> LIVE transition; consumers (Partner Portal profile
+                // "onboardedAt") must render that NULL as "not yet live", never fall back to a
+                // bitemporal stamp, which moves on every edit.
+                e.getGoLiveAt());
     }
 
     private static AddressView addressView(String s1, String s2, String city, String state,

@@ -21,6 +21,8 @@ import com.gme.pay.bff.client.stub.StubPrefundingClient;
 import com.gme.pay.bff.client.stub.StubRevenueLedgerClient;
 import com.gme.pay.bff.client.stub.StubSettlementClient;
 import com.gme.pay.bff.client.stub.StubTransactionMgmtClient;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +59,11 @@ class TransactionsControllerTest {
         MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter(om);
 
         mvc = standaloneSetup(controller).setMessageConverters(converter).build();
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
     }
 
     @Test
@@ -121,7 +128,7 @@ class TransactionsControllerTest {
         TransactionMgmtClient.TransactionSummary summary = new TransactionMgmtClient.TransactionSummary(
                 "TXN-FAIL", "partner_test_001", "FAILED",
                 new BigDecimal("10.00"), "USD", Instant.parse("2026-06-09T10:15:30Z"),
-                null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null,
                 "SCHEME_DECLINED", "Declined", "Insufficient funds at issuer",
                 List.of(
                         TransactionMgmtClient.StatusEntry.of("CREATED", Instant.parse("2026-06-09T10:15:30Z")),
@@ -166,12 +173,14 @@ class TransactionsControllerTest {
         MockMvc local = standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om)).build();
 
-        // txn.view (support agent, no ops:operate) CAN read the detail.
+        // A token carrying txn.view (support agent, no ops:operate) CAN read the detail.
+        TestTokens.hubOperator("txn.view");
+        local.perform(get("/v1/admin/transactions/{id}", "TXN-1001"))
+                .andExpect(status().isOk());
+        // No permission in the token → denied, even with a forged permissions header (T0-3).
+        TestTokens.hubOperator();
         local.perform(get("/v1/admin/transactions/{id}", "TXN-1001")
                         .header("X-Gme-Permissions", "txn.view"))
-                .andExpect(status().isOk());
-        // No permission presented → denied.
-        local.perform(get("/v1/admin/transactions/{id}", "TXN-1001"))
                 .andExpect(status().isForbidden());
     }
 }

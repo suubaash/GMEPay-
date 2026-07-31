@@ -18,6 +18,8 @@ import com.gme.pay.bff.web.dto.PlatformSettingView;
 import com.gme.pay.rbac.RbacHeaders;
 import java.time.Instant;
 import java.util.List;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -51,6 +53,11 @@ class PlatformSettingsControllerTest {
                 .build();
     }
 
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
+
     @Test
     void listProxiesToClient() throws Exception {
         when(client.list()).thenReturn(List.of(
@@ -79,19 +86,20 @@ class PlatformSettingsControllerTest {
     }
 
     @Test
-    void putProxiesToClientAndForwardsPrincipal() throws Exception {
+    void putProxiesToClientAndForwardsTokenSubject() throws Exception {
         when(client.update(eq("prefunding.alert.tier1.pct"), eq("90"), eq("alice")))
                 .thenReturn(view("prefunding.alert.tier1.pct", "90"));
 
+        // The verified TOKEN identifies the operator + carries the permission (T0-3).
+        TestTokens.authenticate("alice", null, "ops:operate");
         mvc.perform(put("/v1/admin/settings/prefunding.alert.tier1.pct")
-                        .header(RbacHeaders.PRINCIPAL_ID, "alice")
-                        .header(RbacHeaders.PERMISSIONS, "ops:operate")
+                        .header(RbacHeaders.PRINCIPAL_ID, "not-alice")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"value\":\"90\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.value").value("90"));
 
-        // principal forwarded as updatedBy; value passed straight through.
+        // token subject forwarded as updatedBy (NOT the header); value passed straight through.
         verify(client).update("prefunding.alert.tier1.pct", "90", "alice");
     }
 }

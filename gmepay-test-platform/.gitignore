@@ -3,3 +3,10 @@ dist-web/
 runs/
 *.log
 .DS_Store
+
+# Local credentials for the GMEPay+ fleet. NEVER commit this — see .env.example for
+# the variable names. The tester reads every credential from the environment and
+# ships no secret defaults.
+.env
+.env.*
+!.env.example

@@ -44,11 +44,12 @@ describe('api/oidc (partner-portal-ui)', () => {
   // Config helpers
   // -----------------------------------------------------------------------
   describe('keycloakBaseUrl()', () => {
-    it('returns the partners-realm default when no env is set', () => {
+    // T1-2 contract lock: realm `gmepay` on host port 8097 — the ONLY realm any
+    // seed file, compose file or Helm chart provisions. The previous default
+    // (realm `gmepay-partners` on :8090) existed nowhere, so authorize 404'd.
+    it('defaults to the seeded gmepay realm on the compose Keycloak port', () => {
       delete process.env.NEXT_PUBLIC_KEYCLOAK_URL;
-      expect(keycloakBaseUrl()).toBe(
-        'http://localhost:8090/realms/gmepay-partners'
-      );
+      expect(keycloakBaseUrl()).toBe('http://localhost:8097/realms/gmepay');
     });
 
     it('honours NEXT_PUBLIC_KEYCLOAK_URL', () => {
@@ -61,9 +62,10 @@ describe('api/oidc (partner-portal-ui)', () => {
   });
 
   describe('keycloakClientId()', () => {
-    it('returns the default partner client id', () => {
+    // Must equal the clientId in docker/keycloak/realm-gmepay.json.
+    it('returns the seeded partner client id', () => {
       delete process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID;
-      expect(keycloakClientId()).toBe('gmepay-partner-ui');
+      expect(keycloakClientId()).toBe('partner-portal-ui');
     });
 
     it('honours NEXT_PUBLIC_KEYCLOAK_CLIENT_ID', () => {
@@ -200,6 +202,12 @@ describe('api/oidc (partner-portal-ui)', () => {
       );
 
       const result = await exchangeCode({ code: 'auth-code-xyz', state });
+
+      // T1-2: PUBLIC client — PKCE, never a client_secret in a browser bundle.
+      const body = globalThis.fetch.mock.calls[0][1].body;
+      expect(body).toContain('code_verifier=');
+      expect(body).toContain('client_id=partner-portal-ui');
+      expect(body).not.toContain('client_secret');
 
       expect(result.access_token).toBe('access.partner.jwt');
       expect(result.refresh_token).toBe('refresh.partner.jwt');
@@ -345,7 +353,7 @@ describe('api/oidc (partner-portal-ui)', () => {
       expect(url).toContain('/protocol/openid-connect/logout');
       expect(url).toContain('id_token_hint=id.token.here');
       expect(url).toContain('post_logout_redirect_uri=');
-      expect(url).toContain('client_id=gmepay-partner-ui');
+      expect(url).toContain('client_id=partner-portal-ui');
     });
 
     it('omits id_token_hint when not supplied', () => {

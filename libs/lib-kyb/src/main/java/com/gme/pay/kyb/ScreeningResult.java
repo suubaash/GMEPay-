@@ -15,29 +15,108 @@ import java.util.List;
  *   <li>{@code status} — {@link Status#CLEAR} (no matches),
  *       {@link Status#HIT} (at least one list match above the provider's
  *       confidence threshold), {@link Status#NEEDS_REVIEW} (fuzzy / partial
- *       matches an analyst must disposition).</li>
+ *       matches an analyst must disposition), or
+ *       {@link Status#NOT_SCREENED_NO_PROVIDER} (no authoritative provider ran —
+ *       nothing was screened).</li>
  *   <li>{@code hits} — the individual list matches; empty on CLEAR.</li>
  *   <li>{@code screenedAt} — provider-side completion instant (UTC). Persisted
  *       to a TIMESTAMP column downstream, so providers should truncate to
  *       microseconds (see {@code PartnerStore.save} discipline).</li>
  *   <li>{@code providerRef} — the vendor's reference for this run (audit /
  *       support correlation; {@code "stub-<hash>"} for {@link StubKybAdapter}).</li>
+ *   <li>{@code provenance} — WHO produced this and whether they are an authority
+ *       ({@link ScreeningProvenance}). Never {@code null}: an absent provenance
+ *       is normalised to {@link ScreeningProvenance#unknown()}, which is
+ *       non-authoritative.</li>
  * </ul>
+ *
+ * <h2>A non-authoritative CLEAR cannot exist (gap T1-4)</h2>
+ *
+ * <p>The compact constructor <b>coerces</b> {@link Status#CLEAR} to
+ * {@link Status#NOT_SCREENED_NO_PROVIDER} whenever the provenance is not
+ * authoritative. Coercion rather than rejection because this type is also a
+ * wire DTO: a payload from an older / mis-wired producer must be made honest,
+ * not turned into a 500 that hides it. The consequence is the point of the fix —
+ * no database column, API response, event or screen can ever receive a "clear
+ * sanctions screening" that no screening provider produced. Conservative
+ * dispositions ({@link Status#HIT}, {@link Status#NEEDS_REVIEW}) are preserved
+ * as-is: they fail closed already, and a stub-staged HIT is useful in demos.
+ *
+ * <h2>A manual screening never flattens to a bare CLEAR (gap T1-4, owner decision)</h2>
+ *
+ * <p>The second coercion is the mirror image of the first and exists for the same reason. When the
+ * provenance is an attested manual screening ({@link ScreeningProvenance#manuallyAttested()}), a
+ * {@link Status#CLEAR} is coerced <b>up</b> to {@link Status#CLEAR_MANUAL_ATTESTATION}. So the
+ * distinction between "a vendor screened this against sanctions lists" and "a compliance officer
+ * screened it by hand under SOP X v3" survives every hop that only carries the status string — the
+ * database column, the wire DTO, the compliance board, the wizard chip — without any consumer
+ * having to remember to look at a provenance field. Conversely a
+ * {@code CLEAR_MANUAL_ATTESTATION} whose provenance is NOT an attested manual screening is coerced
+ * <b>down</b> to {@link Status#NOT_SCREENED_NO_PROVIDER}: the honest status cannot be borrowed by a
+ * producer that has no attestation to back it.
  */
 public record ScreeningResult(
         Status status,
         List<Hit> hits,
         Instant screenedAt,
-        String providerRef) {
+        String providerRef,
+        ScreeningProvenance provenance) {
 
     /** Screening disposition roster — mirrors the {@code partner_kyb.screening_status} CHECK. */
     public enum Status {
-        /** No matches on any screened list. */
+        /**
+         * No matches on any screened list. Reachable ONLY with authoritative
+         * provenance — see the class javadoc.
+         */
         CLEAR,
+        /**
+         * No matches were found by a MANUAL screening a named human performed under a
+         * compliance-signed SOP (gap T1-4). A satisfied sanctions pre-condition — and
+         * deliberately a DIFFERENT value from {@link #CLEAR} so that "a vendor screened this"
+         * and "a person screened this by hand" are never the same string anywhere downstream.
+         *
+         * <p>Reachable ONLY with {@link ScreeningProvenance#manuallyAttested()} provenance; any
+         * other producer using this value is coerced to {@link #NOT_SCREENED_NO_PROVIDER}.
+         */
+        CLEAR_MANUAL_ATTESTATION,
         /** At least one confident list match — compliance must review before any activation. */
         HIT,
         /** Fuzzy / partial matches requiring analyst disposition. */
-        NEEDS_REVIEW
+        NEEDS_REVIEW,
+        /**
+         * NOTHING WAS SCREENED: no authoritative provider produced this result.
+         * The terminal honest state while ADR-014's vendor is unavailable — it is
+         * NOT a clean result and must never be read as one. An activation
+         * pre-condition is not satisfied by it.
+         */
+        NOT_SCREENED_NO_PROVIDER
+    }
+
+    public ScreeningResult {
+        // Absence of provenance is never authority.
+        if (provenance == null) {
+            provenance = ScreeningProvenance.unknown();
+        }
+        if (status == Status.CLEAR && !provenance.authoritative()) {
+            status = Status.NOT_SCREENED_NO_PROVIDER;
+        }
+        // T1-4 manual authority: keep the provenance visible in the status itself, in both
+        // directions. Order matters — the coercion above runs first, so a non-authoritative CLEAR
+        // is already honest and cannot be promoted here.
+        if (status == Status.CLEAR && provenance.manuallyAttested()) {
+            status = Status.CLEAR_MANUAL_ATTESTATION;
+        } else if (status == Status.CLEAR_MANUAL_ATTESTATION && !provenance.manuallyAttested()) {
+            status = Status.NOT_SCREENED_NO_PROVIDER;
+        }
+    }
+
+    /**
+     * Provenance-less legacy form — retained so historical call shapes keep
+     * compiling; the run is recorded as {@link ScreeningProvenance#unknown()}
+     * and therefore cannot report CLEAR.
+     */
+    public ScreeningResult(Status status, List<Hit> hits, Instant screenedAt, String providerRef) {
+        this(status, hits, screenedAt, providerRef, ScreeningProvenance.unknown());
     }
 
     /**
@@ -59,5 +138,39 @@ public record ScreeningResult(
     /** Null-safe accessor: an absent hit list reads as empty, never {@code null}. */
     public List<Hit> hitList() {
         return hits == null ? List.of() : hits;
+    }
+
+    /** {@code true} only when a real screening provider produced this result. */
+    public boolean authoritative() {
+        return provenance != null && provenance.authoritative();
+    }
+
+    /**
+     * {@code true} when this run actually screened the subject. Callers gating on
+     * "has this partner been screened" must test this (or {@link #authoritative()}),
+     * never merely {@code status != HIT}.
+     */
+    public boolean screeningPerformed() {
+        return authoritative() && status != Status.NOT_SCREENED_NO_PROVIDER;
+    }
+
+    /** The provenance caveat, or {@code null} on an authoritative run. */
+    public String caveat() {
+        return provenance == null ? ScreeningProvenance.UNKNOWN_CAVEAT : provenance.caveat();
+    }
+
+    /**
+     * {@code true} when this verdict rests on an attested MANUAL screening (T1-4) rather than a
+     * vendor. Consumers that must present the two differently should key off this (or off
+     * {@link Status#CLEAR_MANUAL_ATTESTATION}) — never off {@link #authoritative()} alone, which
+     * is true for both.
+     */
+    public boolean manuallyAttested() {
+        return provenance != null && provenance.manuallyAttested();
+    }
+
+    /** The human attestation backing a manual run, or {@code null} for every other producer. */
+    public ManualScreeningAttestation attestation() {
+        return provenance == null ? null : provenance.attestation();
     }
 }

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerMtlsCertView;
 import com.gme.pay.registry.credential.PartnerMtlsCertService;
@@ -48,7 +49,7 @@ public class PartnerMtlsCertController {
     public PartnerMtlsCertView uploadCert(
             @PathVariable("partnerCode") String partnerCode,
             @RequestBody PartnerCommand.UploadMtlsCert body,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (body == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "request body is required");

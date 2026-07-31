@@ -34,7 +34,9 @@ import java.util.List;
  *   <li>Row snapshot: fixed key sequence {@code id, riskRating, riskRationale,
  *       nextReviewDate, licenseType, licenseNumber, licenseAuthority,
  *       licenseExpiry, uboSet, cbddqDocId, screeningStatus,
- *       screeningProviderRef, screenedAt}. Bitemporal stamps are excluded —
+ *       screeningProviderRef, screenedAt}, then the append-only tails added by
+ *       V036 (verify verdict), V042 (screening provenance) and V045 (manual-SOP
+ *       attestation). Bitemporal stamps are excluded —
  *       they describe storage history, not the KYB fact (same exclusion as
  *       ContactJson).</li>
  * </ul>
@@ -129,7 +131,36 @@ final class KybJson {
         sb.append("\"verificationDecision\":")
                 .append(jsonString(k.getVerificationDecision())).append(',');
         sb.append("\"verificationDecisionReason\":")
-                .append(jsonString(k.getVerificationDecisionReason()));
+                .append(jsonString(k.getVerificationDecisionReason())).append(',');
+        // T1-4 (V042) screening provenance — appended so the audit AFTER snapshot
+        // seals WHO produced the verdict, not only what it was. Same append-only
+        // discipline as the V036 verify fields above: existing sealed snapshots
+        // keep their bytes, new writes carry the provenance.
+        sb.append("\"screeningProviderId\":")
+                .append(jsonString(k.getScreeningProviderId())).append(',');
+        sb.append("\"screeningAuthoritative\":")
+                .append(k.getScreeningAuthoritative() == null
+                        ? "null" : k.getScreeningAuthoritative().toString()).append(',');
+        sb.append("\"screeningCaveat\":")
+                .append(jsonString(k.getScreeningCaveat())).append(',');
+        // T1-4 owner decision (V045) manual-SOP attestation — appended so the audit
+        // AFTER snapshot seals WHO attested, WHEN, under WHICH SOP version and WHAT
+        // they checked. This is the half of the record a human is personally
+        // accountable for, so it is the half that most needs to be tamper-evident:
+        // editing the attester or the SOP version in place now breaks the chain.
+        // Same append-only discipline as V036/V042 — existing sealed snapshots keep
+        // their bytes and only new writes carry these keys.
+        sb.append("\"manualAttesterActorId\":")
+                .append(jsonString(k.getManualAttesterActorId())).append(',');
+        sb.append("\"manualAttestedAt\":").append(jsonString(
+                k.getManualAttestedAt() == null ? null : k.getManualAttestedAt().toString()))
+                .append(',');
+        sb.append("\"manualSopDocumentRef\":")
+                .append(jsonString(k.getManualSopDocumentRef())).append(',');
+        sb.append("\"manualSopVersion\":")
+                .append(jsonString(k.getManualSopVersion())).append(',');
+        sb.append("\"manualSourcesConsulted\":")
+                .append(jsonString(k.getManualSourcesConsulted()));
         sb.append('}');
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }

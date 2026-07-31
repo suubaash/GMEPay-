@@ -20,6 +20,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.gme.pay.prefunding.testsupport.TestInternalAuth;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * MockMvc test for {@code GET /v1/prefunding/{code}/deductions?limit=N} (IR-pe-2). Verifies the
@@ -35,6 +38,16 @@ class PrefundingDeductionHistoryApiTest {
     private static final String PARTNER = "HIST_P1";
 
     @Autowired private MockMvc mvc;
+
+    /**
+     * Every prefunding endpoint sits behind the internal-auth gate (T0-5), so these tests call as a
+     * trusted in-cluster service. The gate itself (missing/wrong token → 401) is proved in
+     * {@link com.gme.pay.prefunding.api.InternalAuthGateTest}.
+     */
+    private ResultActions call(MockHttpServletRequestBuilder rb) throws Exception {
+        return mvc.perform(TestInternalAuth.authed(rb));
+    }
+
     @Autowired private PartnerBalanceRepository balances;
     @Autowired private LedgerEntryRepository ledger;
     @Autowired private BalanceAlertRepository alerts;
@@ -48,7 +61,7 @@ class PrefundingDeductionHistoryApiTest {
                 new BigDecimal("1000.00000000"), new BigDecimal("100.00000000"), Instant.now()));
         // Three deductions, in order T-1, T-2, T-3.
         for (int i = 1; i <= 3; i++) {
-            mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+            call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"idempotencyKey\":\"T-" + i + "\",\"amountUsd\":\"" + (i * 10) + ".00\"}"))
                     .andExpect(status().isOk());
@@ -58,7 +71,7 @@ class PrefundingDeductionHistoryApiTest {
     @Test
     @DisplayName("GET /deductions: most-recent-first, capped at limit, canonical view shape")
     void deductions_recentFirst_bounded() throws Exception {
-        mvc.perform(get("/v1/prefunding/{c}/deductions", PARTNER).param("limit", "2"))
+        call(get("/v1/prefunding/{c}/deductions", PARTNER).param("limit", "2"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.partnerCode").value(PARTNER))
                 .andExpect(jsonPath("$.limit").value(2))
@@ -73,7 +86,7 @@ class PrefundingDeductionHistoryApiTest {
     @Test
     @DisplayName("GET /deductions: default limit returns all, newest first")
     void deductions_defaultLimit() throws Exception {
-        mvc.perform(get("/v1/prefunding/{c}/deductions", PARTNER))
+        call(get("/v1/prefunding/{c}/deductions", PARTNER))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.entries.length()").value(3))
                 .andExpect(jsonPath("$.entries[0].txnRef").value("T-3"))
@@ -83,7 +96,7 @@ class PrefundingDeductionHistoryApiTest {
     @Test
     @DisplayName("GET /deductions: unknown partner → empty list, not an error")
     void deductions_unknownPartner_empty() throws Exception {
-        mvc.perform(get("/v1/prefunding/{c}/deductions", "NOPE"))
+        call(get("/v1/prefunding/{c}/deductions", "NOPE"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.entries.length()").value(0));
     }

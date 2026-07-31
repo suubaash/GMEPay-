@@ -139,6 +139,21 @@ public class PartnerStore {
      */
     @Transactional
     public Partner save(Partner partner) {
+        return save(partner, null);
+    }
+
+    /**
+     * As {@link #save(Partner)}, but with an explicit audit actor for callers that have no HTTP
+     * request in scope — a seeder, a scheduler, a startup runner. Such a caller must name itself
+     * (e.g. {@code AuditActors.system("partner-seeder")}) rather than let the write land as
+     * {@code unattributed}: "the platform did this, and here is which part of it" is a usable
+     * audit row, "nobody knows" is not. Gap T5-1.
+     *
+     * @param explicitActor an {@link com.gme.pay.audit.AuditActors} principal, or {@code null} to
+     *                      use the identity resolved for the current request.
+     */
+    @Transactional
+    public Partner save(Partner partner, String explicitActor) {
         // One transaction-time instant shared by both halves of the paired write —
         // this keeps as-of reads unambiguous (the prior row's superseded_at == the
         // new row's recorded_at, so any T in (prior.recorded_at, new.recorded_at]
@@ -232,7 +247,7 @@ public class PartnerStore {
         // silently; production wiring always supplies the bean.
         AuditLogService auditLog = auditLogProvider.getIfAvailable();
         if (auditLog != null) {
-            String actorId = currentActorId();
+            String actorId = currentActorId(explicitActor);
             String actorIp = currentActorIp();
             auditLog.publish(
                     "partner",
@@ -328,7 +343,7 @@ public class PartnerStore {
             auditLog.publish(
                     "partner",
                     partnerCode,
-                    currentActorId(),
+                    currentActorId(null),
                     currentActorIp(),
                     "PARTNER_CURRENCY_SPLIT_SET",
                     before == null ? null : canonicalPartner(before),
@@ -339,24 +354,40 @@ public class PartnerStore {
     }
 
     /**
-     * Resolve the actor (the operator who proposed/approved the write) from the
-     * Slice 1 auth context. Until Slice 1B.4 wires Keycloak into config-registry
-     * the only available principal is the BFF service account, so we record the
-     * literal {@code "system"} which the 4-eyes CHECK constraint honours via the
-     * ADR-008 carve-out. Slice 1B.4 replaces this with a Spring Security
-     * {@code SecurityContextHolder} lookup.
+     * Resolve the actor for this write.
+     *
+     * <h3>What this used to be (gap T5-1)</h3>
+     *
+     * <p>{@code private static String currentActorId() { return "system"; }} — with a javadoc
+     * explaining it was a placeholder until "Slice 1B.4 wires Keycloak". The consequence was that
+     * <b>every</b> partner write in the platform was audited as the bare {@code "system"} literal:
+     * the same literal that was the silent default for a missing {@code X-Actor} header and the
+     * blanket carve-out in the 4-eyes CHECK. Partner creation — the write that brings a
+     * counterparty onto the platform — had no attributable actor at all.
+     *
+     * <p>Now: an explicit actor supplied by the caller wins (background jobs and seeders name
+     * themselves, e.g. {@code AuditActors.system("partner-seeder")}); otherwise the identity
+     * resolved once per request by {@link ActorAttestationFilter} is used, which is the same value
+     * an {@link com.gme.pay.registry.actor.AuditActorHeader} parameter would receive on that
+     * request; off-request with no explicit actor it is {@code AuditActors.UNATTRIBUTED} — never
+     * {@code "system"}, which {@code AuditEvent.newEvent} would refuse anyway.
      */
-    private static String currentActorId() {
-        return "system";
+    private static String currentActorId(String explicitActor) {
+        if (explicitActor != null && !explicitActor.isBlank()) {
+            return explicitActor;
+        }
+        return com.gme.pay.registry.actor.AuditActorResolver.currentRequestActor();
     }
 
     /**
-     * Client IP at the BFF (PROXY-protocol-aware). The same Slice 1B.4 wire-up
-     * fills this; for now we record {@code null} so the actor_ip column is
-     * deliberately empty rather than carrying a placeholder.
+     * Client IP for the audit row: the transport peer address of the request being served, or
+     * {@code null} off-request. Not the client-supplied {@code X-Forwarded-For} — see
+     * {@link com.gme.pay.registry.actor.AuditActorIp}. From
+     * {@link com.gme.pay.audit.HashChain#CHAIN_V2} on this value is inside the row digest, so it
+     * cannot be rewritten after the fact either.
      */
     private static String currentActorIp() {
-        return null;
+        return com.gme.pay.registry.actor.AuditActorResolver.currentRequestIp();
     }
 
     /**

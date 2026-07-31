@@ -70,6 +70,63 @@ public interface PartnerConfigClient {
     }
 
     /**
+     * Resolves a partner's CURRENT FX configuration from config-registry's
+     * {@code GET /v1/partners/{code}/fx-config} ({@code partner_fx_config}, V019 — the Slice 6
+     * commercial-terms surface): the FX margin in basis points plus the reference-rate source the
+     * partner's corridors must price off.
+     *
+     * <p><b>Consumed by the cross-border wallet corridors (T4-1)</b> so an FX margin is never a
+     * constant in code. Returns {@link java.util.Optional#empty()} when no FX config row exists (404)
+     * or config-registry is unreachable — and unlike {@link #resolveMerchantFeeRate}, an empty result
+     * here is <b>not</b> benign: the corridor has no margin, so it must refuse the payment
+     * ({@link com.gme.pay.payment.domain.CorridorPricingUnavailableException}) rather than invent one.
+     * Keeping the client fail-soft and the DECISION at the call site preserves the existing
+     * "a client never fails a payment by itself" contract.
+     *
+     * @param partnerCode the partner business code (e.g. {@code "GMEREMIT"})
+     */
+    default java.util.Optional<FxTerms> resolveFxConfig(String partnerCode) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * The partner's FX pricing terms ({@code partner_fx_config}). {@code marginBps} is basis points
+     * (NUMERIC(7,4)); {@code referenceRateSource} is the V019 roster
+     * ({@code SEOUL_FX_BROKER} / {@code PARTNER_PROVIDED} / {@code MID_MARKET}).
+     */
+    record FxTerms(java.math.BigDecimal marginBps, String referenceRateSource) {
+
+        /** The margin as a decimal fraction ({@code 200 bps → 0.0200}), or null when unset. */
+        public java.math.BigDecimal marginFraction() {
+            return marginBps == null
+                    ? null
+                    : marginBps.divide(new java.math.BigDecimal("10000"), 8,
+                            java.math.RoundingMode.HALF_UP);
+        }
+    }
+
+    /**
+     * Resolves the effective GME→partner SERVICE FEE in USD for a
+     * ({@code partnerCode}, {@code schemeId}, {@code direction}, {@code amountUsd}) from
+     * config-registry's {@code GET /v1/partners/{code}/fee-schedules/effective}
+     * ({@code partner_fee_schedule}, V018 — fixed + bps + volume tiers, most-specific match).
+     *
+     * <p><b>Consumed by the cross-border wallet corridors (T4-1)</b> so a service fee is never a
+     * constant in code. Same contract as {@link #resolveFxConfig}: fail-soft here
+     * ({@link java.util.Optional#empty()} on {@code resolved=false} / no row / unreachable), and the
+     * corridor turns an empty result into a clean refusal.
+     *
+     * @param partnerCode the partner business code
+     * @param schemeId    the scheme code the payment executes on (e.g. {@code "NEPAL"})
+     * @param direction   corridor direction (e.g. {@code "OVERSEAS"}), or null for the wildcard row
+     * @param amountUsd   the USD volume the tiered/bps component is charged on
+     */
+    default java.util.Optional<java.math.BigDecimal> resolveServiceFeeUsd(
+            String partnerCode, String schemeId, String direction, java.math.BigDecimal amountUsd) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Resolves a partner's configured transaction limits from config-registry's
      * {@code GET /v1/partners/{code}/limits} (V020 partner_limits). The authorize path enforces the
      * per-transaction min/max as a pre-side-effect gate (the statutory 소액해외송금업 ceiling among them).

@@ -158,6 +158,44 @@ public class TransactionService {
                                                   BigDecimal costRatePay,
                                                   BigDecimal payoutUsdCost,
                                                   String userRef) {
+        return createFromPaymentExecutor(partnerId, partnerTxnRef, schemeId, direction, paymentMode,
+                targetPayout, payoutCurrency, collectionAmount, collectionCurrency, merchantId,
+                quoteId, merchantFeeRate, collectionMarginUsd, payoutMarginUsd, collectionUsd,
+                costRateColl, costRatePay, payoutUsdCost, userRef, null);
+    }
+
+    /**
+     * T4-4 create overload: additionally captures {@code merchantName} — the merchant DISPLAY NAME
+     * the calling corridor resolved at payment time — so every later receipt / transaction-detail
+     * read carries it. Before this the name existed only on the synchronous wallet response and was
+     * lost the instant it was returned, leaving the portal to render an em dash forever.
+     *
+     * <p>{@code merchantName} is nullable and null is PRESERVED, not defaulted: a corridor that
+     * cannot resolve a name (CPM has no QR decode) stores null and the UI shows "—". This method
+     * deliberately does no fallback to {@code merchantId} and no placeholder substitution — the
+     * caller's null is the honest answer and inventing a name here would forge a receipt field.
+     */
+    @Transactional
+    public Transaction createFromPaymentExecutor(Long partnerId,
+                                                  String partnerTxnRef,
+                                                  String schemeId,
+                                                  String direction,
+                                                  String paymentMode,
+                                                  BigDecimal targetPayout,
+                                                  String payoutCurrency,
+                                                  BigDecimal collectionAmount,
+                                                  String collectionCurrency,
+                                                  String merchantId,
+                                                  String quoteId,
+                                                  BigDecimal merchantFeeRate,
+                                                  BigDecimal collectionMarginUsd,
+                                                  BigDecimal payoutMarginUsd,
+                                                  BigDecimal collectionUsd,
+                                                  BigDecimal costRateColl,
+                                                  BigDecimal costRatePay,
+                                                  BigDecimal payoutUsdCost,
+                                                  String userRef,
+                                                  String merchantName) {
         if (collectionAmount == null || collectionAmount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "collectionAmount must be > 0");
         }
@@ -191,6 +229,9 @@ public class TransactionService {
                 costRateColl, costRatePay, payoutUsdCost);
         // CS quick-wins (V011): capture the end-customer / wallet identifier for support lookup.
         txn.applyUserRef(userRef);
+        // T4-4 (V012): snapshot the merchant display name the corridor resolved. Stored verbatim,
+        // including null — the read path turns null into "—" rather than guessing a name.
+        txn.applyMerchantName(blankToNull(merchantName));
         return repository.save(txn);
     }
 
@@ -227,6 +268,48 @@ public class TransactionService {
                                    BigDecimal collectionUsd,
                                    BigDecimal costRateColl,
                                    BigDecimal costRatePay) {
+        return patchStatus(txnRef, newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd,
+                approvedAt, bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                collectionMarginUsd, payoutMarginUsd, collectionUsd, costRateColl, costRatePay, null);
+    }
+
+    /**
+     * T2-6 overload: additionally records {@code refundAmountKrw} — the CUMULATIVE KRW magnitude refunded
+     * for this transaction — so {@code GET /v1/transactions/refunded} carries a real claw-back amount.
+     *
+     * <p>Applied BEFORE the FSM transition, for two reasons that both matter:
+     * <ul>
+     *   <li>the {@code REFUNDED} transition re-stamps the refund enrichment fields from the aggregate, so a
+     *       value applied afterwards would be overwritten by the null it replaced;</li>
+     *   <li>the {@code payment.reversed} event the transition emits reads the refunded amount off the
+     *       aggregate, so the event and the row cannot disagree.</li>
+     * </ul>
+     *
+     * <p>{@code originalPaymentTxnRef} is defaulted to {@code txnRef} on a refund that does not already
+     * carry one. Today a refund is recorded ON the original transaction row (there is no separate refund-leg
+     * entity), so the refund leg's "original payment" IS itself — and settlement's
+     * {@code isCrossDateClawbackEligible} rejects any leg whose original ref is blank, which is the second
+     * reason the claw-back netted nothing even where an amount existed.
+     *
+     * <p>Null-skipped: a patch with a null {@code refundAmountKrw} never clears a previously recorded
+     * amount, so retries and non-refund patches are unaffected.
+     */
+    @Transactional
+    public Transaction patchStatus(String txnRef,
+                                   String newStatus,
+                                   String schemeTxnRef,
+                                   String schemeApprovalCode,
+                                   BigDecimal prefundDeductedUsd,
+                                   Instant approvedAt,
+                                   BigDecimal bookedSettlementAmount,
+                                   String settlementRoundingMode,
+                                   BigDecimal roundingResidual,
+                                   BigDecimal collectionMarginUsd,
+                                   BigDecimal payoutMarginUsd,
+                                   BigDecimal collectionUsd,
+                                   BigDecimal costRateColl,
+                                   BigDecimal costRatePay,
+                                   BigDecimal refundAmountKrw) {
         Transaction txn = getByTxnRef(txnRef);
 
         // Apply the lock fields — incl. the Wave-3 rate-lock pool (margins, collectionUsd, cost
@@ -242,6 +325,16 @@ public class TransactionService {
         // re-asserts the same status (idempotent retry) must still apply the lock fields, but
         // a self-edge is not legal in the FSM and would raise TransitionBlockedException.
         TransactionStatus target = mapPaymentStatus(newStatus);
+
+        // T2-6: record the refund magnitude + the netting key before the transition (see javadoc).
+        if (refundAmountKrw != null) {
+            txn.applyRefundEnrichment(
+                    refundAmountKrw,
+                    txn.qrCodeId(),
+                    txn.refundedAt(),
+                    txn.originalPaymentTxnRef() != null ? txn.originalPaymentTxnRef() : txn.txnRef());
+        }
+
         if (target != null && target != txn.status()) {
             stateMachine.transition(txn, target);
         }
@@ -698,5 +791,14 @@ public class TransactionService {
             default -> throw new ApiException(ErrorCode.VALIDATION_ERROR,
                     "resolution must be COMPLETED or REVERSED, was: " + resolution);
         };
+    }
+
+    /**
+     * Normalises an absent/blank optional string to null. Used for the T4-4 merchant name so a
+     * caller sending {@code ""} is stored as "unknown" (null → em dash on the receipt) rather than
+     * as an empty name that reads like a real, blank-named merchant.
+     */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 }

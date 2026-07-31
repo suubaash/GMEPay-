@@ -59,6 +59,16 @@ public class NepalSchemeApiClient {
             @Value("${gmepay.scheme.nepal.base-url:http://localhost:9103}") String baseUrl,
             @Value("${gmepay.scheme.nepal.token:sim-token}") String token,
             @Value("${gmepay.scheme.nepal.key:sim-key}") String key) {
+        // T3-11: the outbound read timeout is deliberately NOT installed here. It comes from the
+        // shared RestClient.Builder, which com.gme.pay.http.HttpClientTimeoutAutoConfiguration bounds
+        // fleet-wide and which this adapter tightens to 4s via gmepay.http.client.read-timeout in its
+        // own config file, where the number and its nesting inside payment-executor's 5s hub->adapter
+        // budget are explained.
+        //
+        // Setting it on this builder instead would be actively harmful in one specific way worth
+        // recording: MockRestServiceServer.bindTo(builder) works by INSTALLING A REQUEST FACTORY, so a
+        // client that overwrites the factory after binding silently detaches from the mock and starts
+        // opening real sockets. Configuration bounds the socket without disturbing that seam.
         this.restClient = builder.baseUrl(baseUrl).build();
         this.signer = signer;
         this.mapper = mapper;
@@ -66,9 +76,19 @@ public class NepalSchemeApiClient {
         this.key = key;
     }
 
-    /** Package-private test constructor — accepts a pre-built RestClient + collaborators. */
-    NepalSchemeApiClient(RestClient restClient, NepalRequestSigner signer, ObjectMapper mapper,
-                         String token, String key) {
+    /**
+     * Test constructor — accepts a pre-built {@link RestClient} + collaborators.
+     *
+     * <p>Public rather than package-private since T3-11, and the reason is a trap worth naming: the
+     * production constructor above installs its own request factory, which <b>replaces</b> the one
+     * {@code MockRestServiceServer.bindTo(builder)} installs. A test that binds a mock server to a
+     * builder and then hands that builder to the production constructor silently stops asserting
+     * against the mock and starts trying to open a real socket. Passing an already-built
+     * {@code RestClient} here is the only construction that keeps a bound mock intact, so tests
+     * outside this package need to be able to reach it.
+     */
+    public NepalSchemeApiClient(RestClient restClient, NepalRequestSigner signer, ObjectMapper mapper,
+                                String token, String key) {
         this.restClient = restClient;
         this.signer = signer;
         this.mapper = mapper;

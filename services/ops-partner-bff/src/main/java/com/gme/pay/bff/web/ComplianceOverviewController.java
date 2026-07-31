@@ -27,7 +27,9 @@ import java.util.List;
  * partner never 500s the whole board.
  *
  * <p>Reflects only what was CONFIGURED, not that any real filing channel exists — the BOK/Hometax/KoFIU
- * submission lanes remain OI-02/OI-03 gated (gov file formats, SFTP endpoints, mTLS certs).
+ * submission lanes remain OI-02/OI-03 gated (gov file formats, SFTP endpoints, mTLS certs). And
+ * "configured" now excludes placeholders: a lane holding {@code stub-cert-id} or {@code TODO_OI03}
+ * reports {@code false}, see {@link com.gme.pay.bff.compliance.ConfiguredValues} (GAP T5-2).
  */
 @RestController
 @RequestMapping("/v1/admin/compliance")
@@ -90,16 +92,38 @@ public class ComplianceOverviewController {
         return p.partnerCode();
     }
 
-    /** Map the KYB sanctions-screening verdict (CLEAR/NEEDS_REVIEW/HIT/null) to the UI kybStatus enum. */
+    /**
+     * Map the KYB sanctions-screening verdict to the UI {@code kybStatus} enum.
+     *
+     * <h2>Two honesty rules, both from gap T1-4</h2>
+     *
+     * <p><b>{@code NOT_SCREENED_NO_PROVIDER} gets its own value.</b> It used to fall into the
+     * {@code default -> "PENDING"} arm, which reads as "the screening has not finished yet" — but
+     * nothing is pending: a producer that consults no list ran to completion and screened nothing,
+     * and no amount of waiting changes it. The board must say so.
+     *
+     * <p><b>A manual clearance is not spelled the same way as a vendor one.</b>
+     * {@code CLEAR_MANUAL_ATTESTATION} maps to {@code APPROVED_MANUAL_ATTESTATION}, not to
+     * {@code APPROVED}. Both are real screenings and both satisfy activation, but on a compliance
+     * board the difference between "a vendor screened this partner against list feeds" and "an
+     * officer screened it by hand under SOP X v3, with no ongoing rescreening" is exactly the thing
+     * a reviewer is there to see. Flattening them here would defeat the distinction the status value
+     * was made distinct to preserve.
+     *
+     * <p>Anything unrecognised stays {@code UNKNOWN} rather than {@code APPROVED}: a value this
+     * service does not understand is never resolved in the reassuring direction.
+     */
     private static String kybStatus(String screeningStatus) {
         if (screeningStatus == null) {
             return "PENDING";
         }
         return switch (screeningStatus) {
             case "CLEAR" -> "APPROVED";
+            case "CLEAR_MANUAL_ATTESTATION" -> "APPROVED_MANUAL_ATTESTATION";
             case "NEEDS_REVIEW" -> "REVIEW";
             case "HIT" -> "HIT";
-            default -> "PENDING";
+            case "NOT_SCREENED_NO_PROVIDER" -> "NOT_SCREENED";
+            default -> "UNKNOWN";
         };
     }
 }

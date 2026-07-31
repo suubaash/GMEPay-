@@ -1,6 +1,12 @@
 package com.gme.pay.payment.client.rest;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -10,9 +16,11 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import com.gme.pay.payment.persistence.RevenuePostingFailureStore;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -163,6 +171,78 @@ class RestRevenueLedgerClientTest {
                 "TXN-CS-5XX", 42L, 0L, java.time.LocalDate.of(2026, 6, 15),
                 50000L, new BigDecimal("0.0080"), new BigDecimal("0.0008"),
                 new BigDecimal("0.70"), new BigDecimal("0.30")));
+        server.verify();
+    }
+
+    // =========================================================================
+    // T2-1 durability: the client swallows every failure BY DESIGN (the commit path must not fail),
+    // which is exactly why the swallowed posting has to be persisted for replay. Without this the
+    // "log and continue" policy silently destroys revenue during a revenue-ledger outage.
+    // =========================================================================
+
+    @Test
+    void serverError_persistsTheSwallowedPostingForReplay() {
+        RevenuePostingFailureStore failureStore = mock(RevenuePostingFailureStore.class);
+        RestRevenueLedgerClient durableClient = new RestRevenueLedgerClient(
+                RestClient.builder()
+                        .baseUrl("http://revenue-ledger:8080")
+                        .requestFactory(restTemplate.getRequestFactory())
+                        .build(),
+                failureStore);
+
+        server.expect(requestTo("http://revenue-ledger:8080/v1/revenue/capture"))
+              .andRespond(withServerError());
+
+        assertDoesNotThrow(() -> durableClient.postRevenueCapture(
+                "TXN-DURABLE", 42L, 9L, java.time.LocalDate.of(2026, 7, 28),
+                BigDecimal.ZERO, new BigDecimal("0.1481"),
+                new BigDecimal("500"), "KRW", BigDecimal.ZERO));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> payload =
+                ArgumentCaptor.forClass(java.util.Map.class);
+        verify(failureStore).record(
+                eq("TXN-DURABLE"),
+                eq(RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE),
+                payload.capture(),
+                anyString());
+        // The persisted payload IS the request body, so a replay is a straight re-POST.
+        assertEquals("TXN-DURABLE", payload.getValue().get("txnRef"));
+        assertEquals("KRW", payload.getValue().get("serviceChargeCcy"));
+        server.verify();
+    }
+
+    @Test
+    void connectFailureOnResidual_persistsTheSwallowedPostingForReplay() {
+        RevenuePostingFailureStore failureStore = mock(RevenuePostingFailureStore.class);
+        RestRevenueLedgerClient durableClient = new RestRevenueLedgerClient(
+                RestClient.builder()
+                        .baseUrl("http://revenue-ledger:8080")
+                        .requestFactory(restTemplate.getRequestFactory())
+                        .build(),
+                failureStore);
+
+        server.expect(requestTo("http://revenue-ledger:8080/v1/journals/rounding-residual"))
+              .andRespond(withStatus(HttpStatus.BAD_REQUEST));
+
+        assertDoesNotThrow(() -> durableClient.postRoundingResidual(
+                "TXN-RES-4XX", new BigDecimal("0.007"), "USD"));
+
+        verify(failureStore).record(
+                eq("TXN-RES-4XX"),
+                eq(RevenuePostingFailureStore.TYPE_ROUNDING_RESIDUAL),
+                any(),
+                anyString());
+        server.verify();
+    }
+
+    @Test
+    void withoutAFailureStore_theClientBehavesExactlyAsBefore() {
+        // Back-compat: a client with no durable sink still swallows and continues.
+        server.expect(requestTo("http://revenue-ledger:8080/v1/journals/reversal"))
+              .andRespond(withServerError());
+        assertDoesNotThrow(() -> client.postReversalJournal(
+                "TXN-NOSTORE", new BigDecimal("125.50"), "USD"));
         server.verify();
     }
 }

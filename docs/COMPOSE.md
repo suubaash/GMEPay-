@@ -13,11 +13,11 @@ flag — a bare `docker compose up` starts nothing.
 
 | Profile | Contents |
 |---|---|
-| `core` | All infrastructure (9× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry, Keycloak) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff |
-| `full` | Everything in `core` plus: api-gateway, auth-identity, smart-router, reporting-compliance |
+| `core` | All infrastructure (9× PostgreSQL, MongoDB, Redis, ZooKeeper, Kafka, Schema Registry, Keycloak) + the money-path services: config-registry, rate-fx, prefunding, qr-service, transaction-mgmt, payment-executor, revenue-ledger, settlement-reconciliation, merchant-qr-data, scheme-adapter-zeropay, notification-webhook, ops-partner-bff, **auth-identity** (promoted `full` → `core` by gap T1-1: partner activation issues real credentials through it) |
+| `full` | Everything in `core` plus: api-gateway, smart-router, reporting-compliance |
 
 Infrastructure and money-path services are tagged with *both* profiles
-(`["core", "full"]`); the four extra services are tagged `["full"]` only, so a
+(`["core", "full"]`); the extra services are tagged `["full"]` only, so a
 single `--profile full` boots the entire platform.
 
 ```bash
@@ -30,6 +30,175 @@ docker compose --profile full up --build
 # tear down (drops the postgres/mongo volumes too)
 docker compose --profile full down -v
 ```
+
+## Internal-auth secret (`GMEPAY_INTERNAL_AUTH_SECRET`)
+
+### What an operator must export before starting anything
+
+```bash
+export GMEPAY_INTERNAL_AUTH_SECRET="$(openssl rand -hex 32)"   # any shared/tunnelled host: REQUIRED
+export GMEPAY_RBAC_SECRET="$(openssl rand -hex 32)"            # same discipline, gateway RBAC stamp
+export KC_PUBLIC_URL=https://auth.example.com                  # only if Keycloak is not on localhost
+```
+
+For the host fleet instead of compose (`.\run-fleet.ps1`), the same variable plus the OIDC issuer:
+
+```powershell
+$env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+$env:OIDC_ISSUER_URI             = 'http://localhost:8097/realms/gmepay'   # default, set explicitly to be sure
+```
+
+Both compose and `run-fleet.ps1` fall back to the clearly-non-production literal
+`dev-internal-svc-secret-not-for-prod` so a bare local boot still works. In compose that fallback
+lives in **exactly one place** — the top-level `x-internal-auth-secret` anchor — and every service
+block references it, so removing the checked-in default (gap-register item **T0-6**) is a one-line
+change rather than an eleven-site sweep. **Never** ship that literal to a shared, tunnelled or
+production environment. Helm never carries a working default at all: the value comes from
+`secrets.data.GMEPAY_INTERNAL_AUTH_SECRET`, a `CHANGE_ME_…` / `REPLACE_FROM_SECRETS_MANAGER` /
+`REPLACE_FROM_KEY_VAULT` / `REPLACE_WITH_INTERNAL_SECRET` placeholder per overlay.
+
+### Why it is not optional
+
+The `X-Gme-Internal` gate (`com.gme.pay.internalauth`, issue #90) is **fail-closed** since gaps
+T0-2 / T0-5. Four services **refuse to boot** without a secret, and every caller that omits it is
+answered **401** — never allowed through. So the same value must be present on *both* sides of every
+gated edge. One secret, eleven services:
+
+| Service | Why it needs the secret | Missing ⇒ |
+|---|---|---|
+| `auth-identity` | gates `/internal/auth/**` (JWT minting, API-key issuance), `/v1/rbac/**`, `/v1/approvals/**` | **refuses to start** |
+| `prefunding` | gates all 18 money-moving / float-reading routes (`/internal/**`, `/v1/prefunding/**`) | **refuses to start** |
+| `scheme-adapter-zeropay` | gates `/internal/scheme/zeropay/**` (real KFTC authorize/commit) + `registration-status` | **refuses to start** |
+| `rate-fx` | gates `POST /v1/rates/snapshots` (treasury-rate override that re-prices every later quote) | **refuses to start** |
+| `payment-executor` | caller → prefunding debit + ZeroPay authorize/commit; also gates its own `GET /v1/balance` | boots, but **every payment declines** |
+| `config-registry` | caller → auth-identity key issuance + prefunding credit-limit push | activation 502s / credit-limit push 401s |
+| `qr-service` | caller → prefunding CPM `reserve`/`release` | **CPM issuance declines** |
+| `ops-partner-bff` | caller → auth-identity RBAC/approvals/sandbox-keys + prefunding balance/alerts | RBAC + balance panels 401 |
+| `settlement-reconciliation` | caller → the ZeroPay registration-status prerequisite | fails CLOSED ⇒ **settlement generation blocked** |
+| `api-gateway` | caller → auth-identity `/v1/rbac/resolve` | RBAC claim resolution fails |
+| `transaction-mgmt` | gates `/actuator/metrics` + `/v3/api-docs`; **required** if `GMEPAY_DEVTOOLS_ENABLED=true` | introspection stays anonymous |
+
+### Where it is wired
+
+| Surface | Mechanism |
+|---|---|
+| `docker-compose.yml` | `GMEPAY_INTERNAL_AUTH_SECRET: *internal-auth-secret` in each of the 11 service blocks (single top-level anchor) |
+| `deploy/helm/gmepay/values.yaml` | `envSecretKeys: [… GMEPAY_INTERNAL_AUTH_SECRET]` per service, sourced from the chart's credentials `Secret` |
+| `values-onprem/aws/azure.yaml` | inherited — the overlays override only `env` (datasource URLs), never `envSecretKeys` |
+| `run-fleet.ps1` | one `$env:GMEPAY_INTERNAL_AUTH_SECRET` assignment; `Start-Process` children inherit it |
+| `e2e-tests` | `SchemeFleet.INTERNAL_AUTH_ENV` injected into every launched JVM; the HTTP helpers add the header |
+
+Do **not** set `GMEPAY_DEVTOOLS_ENABLED` or `GMEPAY_SANDBOX_E2E_ENABLED` anywhere shared: they
+expose table dumps / a real "spend money" runner. `GMEPAY_INTERNAL_AUTH_ENABLED` is **no longer read
+by any service** — the gate is pinned on and cannot be switched off from config.
+
+Verify the whole matrix statically, with no Docker and no servers:
+
+```bash
+python scripts/check_internal_auth_wiring.py     # derives the requirement from the code, then
+                                                 # asserts compose + all 4 Helm values + run-fleet
+                                                 # (also covers the T0-6 secrets — section below)
+node docker/keycloak/check-topology.mjs          # OIDC realm/client/issuer/port agreement
+```
+
+## Secrets an operator must supply (T0-6)
+
+Every value below has **no working default in the shipped images** any more. The compose file keeps a
+clearly-non-production `${VAR:-dev-…}` fallback so a bare local boot still works, and each fallback
+literal lives in **exactly one** top-level anchor (never inlined per service). Helm carries only
+`CHANGE_ME_…` / `REPLACE_*` placeholders, so an un-substituted chart fails closed rather than running
+on a checked-in credential.
+
+| Variable | What it protects | Compose anchor | Missing / left at the placeholder ⇒ |
+|---|---|---|---|
+| `GMEPAY_INTERNAL_AUTH_SECRET` | the `X-Gme-Internal` gate on every `/internal/**` surface (matrix above) | `x-internal-auth-secret` | 5 services **refuse to start**; callers 401 |
+| `GME_AUTH_JWT_SIGNING_SECRET` | the **HS256 key auth-identity signs platform capability tokens with**. Symmetric — whoever holds it can forge any token. Must be ≥ 32 chars | `x-auth-jwt-signing-secret` | `auth-identity` **refuses to start** |
+| `GMEPAY_RBAC_SECRET` | the gateway's `X-Gme-*` claim-provenance signature; downstream services verify with the same value | `x-rbac-edge-secret` | RBAC claim bundles are refused as unsigned |
+| `GMEPAY_WEBHOOK_SIGNING_SECRET` | outbound partner webhook signatures | (inline, single site) | deliveries stay `PENDING` (fails closed) |
+| `GMEPAY_LOCAL_PG_PASSWORD` | the 14 **local dev** Postgres containers + the 14 service blocks that connect to them. Not used by Kubernetes at all | `x-pg-password` | dev DBs use the `gmepay` dev literal on host ports 5433-5446 |
+| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | the **dev-only** Keycloak admin console on host port 8097. Not deployed by the chart | (inline, single site) | `admin`/`admin` on a published port |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | the **dev-only** object store | (inline, single site) | dev literals on published ports |
+
+```bash
+# compose — any shared, tunnelled or CI-visible host: all REQUIRED, not optional
+export GMEPAY_INTERNAL_AUTH_SECRET="$(openssl rand -hex 32)"
+export GME_AUTH_JWT_SIGNING_SECRET="$(openssl rand -hex 32)"   # >= 32 chars; forgeable tokens if weak
+export GMEPAY_RBAC_SECRET="$(openssl rand -hex 32)"
+export GMEPAY_WEBHOOK_SIGNING_SECRET="$(openssl rand -hex 32)"
+export GMEPAY_LOCAL_PG_PASSWORD="$(openssl rand -hex 24)"
+export KEYCLOAK_ADMIN=<user> KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+export MINIO_ROOT_PASSWORD="$(openssl rand -hex 24)"
+export KC_PUBLIC_URL=https://auth.example.com                  # only if Keycloak is not on localhost
+docker compose --profile core up --build
+```
+
+```powershell
+# host fleet — run-fleet.ps1 supplies the same dev fallbacks, with a yellow warning per variable
+$env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+$env:GME_AUTH_JWT_SIGNING_SECRET = '<random 32+ chars>'
+$env:OIDC_ISSUER_URI             = 'http://localhost:8097/realms/gmepay'
+.\run-fleet.ps1
+```
+
+### Rotating the JWT signing key (T0-6, rotation half)
+
+`GME_AUTH_JWT_SIGNING_SECRET` is now the **ACTIVE** member of a versioned key set rather than a lone
+value. Tokens carry a derived `kid`, verification selects the key by it, and previously active keys
+stay accepted until the tokens they signed expire — so rotating is an operation with an overlap
+window instead of a cutover that kills every live session.
+
+| Variable | Compose anchor | Meaning |
+|---|---|---|
+| `GME_AUTH_JWT_PREVIOUS_KEYS` | `x-auth-jwt-previous-keys` | previously active keys, **verification only**, as `<secret>@<ISO-8601 demoted-at>` separated by `;`. Empty is the steady state |
+| `GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT` | `x-auth-jwt-activated-at` | when the active key started signing. Inside one max-TTL with an **empty** previous list ⇒ `auth-identity` **refuses to start** (that is a rotation that dropped the outgoing key in the same step) |
+| `GME_AUTH_JWT_ALLOW_HARD_CUTOVER` | `x-auth-jwt-allow-hard-cutover` | declares that losing every live token is intended. `true` in dev/first-install only |
+
+Every key in the set — accepted ones included — must clear the same T0-6 bar (≥ 32 bytes, not
+placeholder-shaped, never a value published in this repo), because an accepted key is live signing
+material for as long as it is accepted.
+
+Verify a rotation with `GET /internal/auth/token/keys` (behind `X-Gme-Internal`): it reports the
+`activeKid` the **process** is signing with, so a replica that missed the rollout is visible as a
+different value.
+
+**Full procedure — including the compromise response — is `docs/runbooks/JWT_KEY_ROTATION.md`.** It
+also states, per secret, which other credentials this does *not* cover (`GMEPAY_INTERNAL_AUTH_SECRET`
+and `GMEPAY_WEBHOOK_SIGNING_SECRET` are materially different rotation problems, and Keycloak's OIDC
+tokens are a separate trust path that rotates itself).
+
+**Still committed, and NOT closed by the above** — see gap register T0-6:
+`docker/keycloak/realm-gmepay.json` (confidential-client secrets `admin-ui-dev-secret` /
+`partner-portal-ui-dev-secret`, plus the `admin`/`demo` and `partner-demo`/`demo` users);
+`services/qr-service`'s `changeme-internal-token` (which nothing verifies, so it authenticates
+nothing); `libs/lib-vault`'s `VaultProperties` dev defaults; and the vendor SQL Server login in
+`Octa Solution AML external partner/appsettings.json`, which has been removed from the working tree
+but **remains in git history and must be rotated at the database**.
+
+## Partner API credentials (T0-7)
+
+The `api-gateway` partner edge no longer authenticates against the stub keys that were published in
+this repository (`pk_test_abc`/`sk_test_xyz`) — that bean is deleted and `source: stub` now makes the
+gateway **refuse to start**. A default-configured gateway therefore answers **401** to every partner
+request until an operator supplies, per live partner:
+
+```yaml
+gateway:
+  partner-credentials:
+    source: config                      # the only accepted value
+    verify-with-auth-identity: true     # every key must also be ACTIVE in auth-identity's api_keys
+    partners:
+      - api-key: ${ACME_API_KEY}            # the pk_… identifier auth-identity issued
+        partner-id: ACME                    # config-registry partner CODE (the allowlist key)
+        hmac-secret: ${ACME_HMAC_SECRET}    # the ONE-TIME sk_… plaintext from issuance
+        ip-cidr-ranges: ["203.0.113.0/24"]
+        mtls-cert-fingerprint: ${ACME_MTLS_FINGERPRINT}   # optional
+```
+
+Two supporting variables are already wired on all three surfaces and are on the hot path for every
+partner request: `GMEPAY_AUTH_IDENTITY_BASE_URL` + `GMEPAY_INTERNAL_AUTH_SECRET` (the lifecycle
+lookup — without them the gateway answers **503**, never a bypass), and
+`GMEPAY_CONFIG_REGISTRY_CLIENT=rest` (the IP allowlist — the fallback client returns nothing, so
+without it every partner request is **403 IP_NOT_ALLOWED**).
 
 ## Port map
 
@@ -46,18 +215,22 @@ precedence). Host ports fan out as follows:
 | 8083 | prefunding | core+full | |
 | 8084 | smart-router | full | |
 | 8085 | qr-service | core+full | |
-| 8086 | auth-identity | full | |
+| 8086 | auth-identity | core+full | |
 | 8087 | transaction-mgmt | core+full | |
 | 8088 | payment-executor | core+full | |
 | 8089 | merchant-qr-data | core+full | boots on in-memory repo (Mongo autoconfig excluded in module) |
 | 8090 | scheme-adapter-zeropay | core+full | |
 | 8091 | notification-webhook | core+full | |
-| 8092 | settlement-reconciliation | core+full | |
+| 8092 | scheme-adapter-nepal | full | |
 | 8093 | revenue-ledger | core+full | |
 | 8094 | reporting-compliance | full | |
 | 8095 | ops-partner-bff | core+full | |
 | 8096 | **config-registry** | core+full | **moved from 8081** to free the SR port |
 | 8097 | **keycloak** | core+full | human IdP (ADR-011); see below |
+| 8098 | scheme-adapter-sendmn | full | |
+| 8099 | scheme-adapter-ninepay | full | |
+| 8100 | settlement-reconciliation | core+full | **moved from 8092**, which scheme-adapter-nepal already published — the `full` profile could never start both. Nepal kept 8092 (its port is in the E2E harness and its README) |
+| 9104 | **kyb-adapter** | core+full | gap T1-4: added 2026-07-28. The `8080..8099` band was full and `9103/9106/9107` are the scheme simulators, so it sits at 9104. **Screens nothing** while `gmepay.kyb.provider=stub` — `GET /v1/kyb/health` reports `authoritative=false`; the rest of `/v1/kyb/**` requires `X-Gme-Internal` |
 | 5433–5440 | postgres-{config,txn,prefunding,ledger,settlement,notify,authid,scheme} | core+full | one PostgreSQL per stateful service |
 | 5446 | postgres-keycloak | core+full | Keycloak's own datastore (separate from authid) |
 | 6379 | redis | core+full | used by api-gateway (replay protection + health) |
@@ -162,7 +335,8 @@ the rationale.
 | Start command | `start-dev --import-realm` (dev mode — no HTTPS required) |
 | Datastore | `postgres-keycloak` (Postgres 16, host port **5446**, db/user/password = `keycloak`) |
 | Master-realm admin | `admin / admin` (env vars `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`) |
-| Realm seed | `docker/keycloak/realm-gmepay.json` mounted read-only at `/opt/keycloak/data/import` |
+| Realm seed | `docker/keycloak/realm-gmepay.json` mounted read-only as `/opt/keycloak/data/import/realm-gmepay.json` (the FILE, not the directory, so `docker/keycloak/README.md` can sit beside it) |
+| Browser-facing base URL | `KC_HOSTNAME_URL` = `${KC_PUBLIC_URL:-http://localhost:8097}` — pins the `iss` claim; one knob also drives every resource server's `OIDC_ISSUER_URI` |
 | Healthcheck | TCP probe on 8080 (the `/health` endpoint lives on the management port, which is off in dev mode) |
 
 ### Seeded realm `gmepay`
@@ -172,12 +346,22 @@ skips re-import when the realm already exists). It seeds:
 
 | Kind | Name | Purpose |
 |---|---|---|
-| Client | `admin-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3000/*`, dev secret `admin-ui-dev-secret` |
-| Client | `partner-portal-ui` | confidential OIDC, PKCE S256, redirect `http://localhost:3001/*`, dev secret `partner-portal-ui-dev-secret` |
+| Client | `admin-ui` | **public** OIDC, auth-code + PKCE S256, redirect `http://localhost:3000/auth/callback` — **no secret** |
+| Client | `partner-portal-ui` | **public** OIDC, auth-code + PKCE S256, redirect `http://localhost:3001/auth/callback` — **no secret** |
+| Mapper (both clients) | `permissions` | multivalued user attribute → `permissions` claim; `ops-partner-bff` authorizes from this (`TokenClaims`) |
+| Mapper (both clients) | `partner_id` | user attribute → `partner_id` claim; scopes `/v1/portal/{partnerId}/**` |
 | Realm role | `OPERATOR` | back-office user; gates `/v1/admin/**` at the BFF |
 | Realm role | `PARTNER_USER` | partner-portal-ui human; per-partner scoping enforced at the BFF |
-| User | `admin / demo` | OPERATOR — replaces the legacy `password=demo` flow in admin-ui |
-| User | `partner-demo / demo` | PARTNER_USER — partner-portal-ui smoke-test login |
+| User | `admin / demo` | OPERATOR, full hub `permissions` — replaces the deleted `password=demo` BFF login |
+| User | `operator-readonly / demo` | OPERATOR with read-only permissions (admin writes 403) |
+| User | `partner-demo / demo` | PARTNER_USER, `partner_id=GMEREMIT` |
+| User | `partner-sendmn / demo` | PARTNER_USER, `partner_id=SENDMN` |
+
+Both clients were confidential with committed dev secrets until gap **T1-2**: a
+browser SPA cannot present a `client_secret`, so every token exchange returned
+`invalid_client`. They are public + PKCE now — see `docker/keycloak/README.md` for the
+canonical realm/client/issuer/port table per environment and
+`node docker/keycloak/check-topology.mjs` to verify every file still agrees.
 
 The richer `PARTNER_ADMIN` / `PARTNER_VIEWER` split mentioned in ADR-011
 §Consequences lands in **Slice 8** alongside per-partner self-service users.

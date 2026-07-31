@@ -16,6 +16,28 @@ spring:
         dialect: org.hibernate.dialect.H2Dialect
   flyway:
     enabled: true
+  # ---- scheduler pool (gap T3-11 defect 2) ----------------------------------
+  # Three @Scheduled jobs, and until now ONE thread (Spring's default when this is unset), which is
+  # the worst pairing in the fleet on the numbers:
+  #   BokReportScheduler        cron 0 0 2 * * ?  Asia/Seoul   (daily, 02:00:00)
+  #   KofiuFeedScheduler        cron 0 0 2 * * *  Asia/Seoul   (daily, 02:00:00 — the SAME SECOND)
+  #   HometaxInvoiceScheduler   cron 0 0 2 L * ?  Asia/Seoul   (month-end, 02:00:00 — also the same)
+  # Two of the three do not merely risk contending, they contend BY CONSTRUCTION every single day, and
+  # on the last day of the month all three do. On one thread the second and third simply do not start
+  # until the first finishes — and each one generates a regulatory file over a date-range query against
+  # transaction-mgmt, so "finishes" depends on a business day's row count and a remote service. A
+  # regulatory filing that silently did not run is the failure mode, and nothing about it looks like an
+  # error: the job just never fired.
+  #
+  # 4 = 3 jobs + 1, and the +1 is not slack. lib-errors' SchedulerLagProbe registers its heartbeat on
+  # this same pool, so at pool == jobs the probe is the first thing a stall starves, and a probe that
+  # cannot get a thread reports NO lag — the metric added to make starvation visible would be exactly
+  # what starvation hid. Enforced fleet-wide by SchedulerPoolSizeWiringGuardTest (pool > job count,
+  # strictly), so a fourth job added here fails the build rather than quietly re-creating the queue.
+  task:
+    scheduling:
+      pool:
+        size: 4
 
 server:
   port: 8087
@@ -60,13 +82,34 @@ gmepay:
     # Hometax NTS API base URL — used by the production HometaxClient.
     base-url: https://api.hometax.go.kr
     # lib-vault document id of the NTS mTLS issuer certificate.
+    # 'stub-cert-id' is a PLACEHOLDER, not a credential: FilingChannelRegistry treats it as
+    # "no Hometax channel", so no invoice can be reported as filed. Replace with the real
+    # vault id only when the NTS mTLS certificate is actually installed (OI-02).
     cert-id: stub-cert-id
   reporting:
+    # ---------------------------------------------------------------------------
+    # Filing channels (GAP T5-2). A lane can only report a filing as TRANSMITTED /
+    # ACKNOWLEDGED when its channel below is configured; otherwise every filing
+    # terminates at NOT_FILED_CHANNEL_UNAVAILABLE and the reason is recorded in
+    # report_filing, returned by GET /v1/reports + /v1/reports/filing-channels, and
+    # logged at startup by FilingChannelRegistry.
+    #
+    # All three are intentionally BLANK — no lane has ever transmitted to a regulator.
+    #   bok.channel.endpoint    — BOK SFTP endpoint            (blocked: OI-03)
+    #   kofiu.channel.endpoint  — KoFIU electronic feed endpoint (blocked: OI-03)
+    #   gmepay.hometax.cert-id  — NTS mTLS cert; 'stub-cert-id' counts as NOT configured
+    #                             (blocked: OI-02)
+    # ---------------------------------------------------------------------------
     # --- BOK FX reporting (Lane A, UC-04-03) ---
     bok:
       # Set to true in production to enable daily BOK FX1014/FX1015 file generation.
       # Default false so tests and local boots are clean (no scheduler fires).
       enabled: false
+      channel:
+        # BOK SFTP endpoint. Blank = no transmission channel; files are generated and
+        # never sent. Setting this alone does not create a channel — a real SFTP client
+        # implementation is still required (OI-03).
+        endpoint: ""
       # Directory where BOK output files are written. Created if absent.
       outbound-dir: ./build/bok-out
       # GME entity identifier sent in col 3 of every BOK record line.
@@ -87,3 +130,7 @@ gmepay:
       output-dir: ./build/kofiu-out
       # Fallback KoFIU reporting entity identifier (overridden per-partner from V029).
       entity-id: GME_KR_KOFIU
+      channel:
+        # KoFIU electronic reporting endpoint. Blank = no transmission channel; the daily
+        # CTR/STR feed is generated and never sent (endpoint + credentials unconfirmed).
+        endpoint: ""

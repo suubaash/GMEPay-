@@ -95,6 +95,24 @@ public class WebhookSender {
                                                  byte[] payload,
                                                  String secret,
                                                  int attempt) {
+        return sendWithAttempt(eventId, eventType, targetUrl, payload, secret, null, attempt);
+    }
+
+    /**
+     * Rotation-aware variant (gap T5-4): when {@code secondarySecret} is non-null the
+     * {@code X-GME-Webhook-Signature} header carries BOTH signatures (comma-separated),
+     * so a partner mid-cutover can verify with either the new or the retired secret.
+     *
+     * @param secondarySecret the retired secret while its overlap window is open, else
+     *                        {@code null} (then the header is exactly as before)
+     */
+    public WebhookDeliveryResult sendWithAttempt(String eventId,
+                                                 String eventType,
+                                                 String targetUrl,
+                                                 byte[] payload,
+                                                 String secret,
+                                                 String secondarySecret,
+                                                 int attempt) {
         Objects.requireNonNull(eventId, "eventId must not be null");
         Objects.requireNonNull(targetUrl, "targetUrl must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
@@ -107,7 +125,7 @@ public class WebhookSender {
 
         Instant timestamp = Instant.now(clock);
         String timestampHeader = timestamp.toString();
-        String signature = signingService.sign(payload, secret);
+        String signature = signingService.signatureHeader(payload, secret, secondarySecret);
 
         WebhookRequest request = new WebhookRequest(
                 targetUrl,

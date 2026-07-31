@@ -15,6 +15,18 @@ dependencies {
     // JSON assertions on the wire payloads. Pinned to the Jackson line that ships with
     // Spring Boot 3.3.x so the harness speaks the same JSON the services emit.
     testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+
+    // H2 JDBC driver, for the T3-5 footprint harness only (PerTxnFootprintE2ETest).
+    //
+    // That test starts the fleet with each service's SPRING_DATASOURCE_URL pointed at a
+    // file-backed H2 carrying AUTO_SERVER=TRUE, then opens the SAME database from this JVM to
+    // count the rows a payment really writes. Without a driver here the test process cannot
+    // read what the services wrote, and the whole measurement would be a false zero.
+    //
+    // Pinned to the version Spring Boot 3.3.x manages (the services already run on it via
+    // `runtimeOnly 'com.h2database:h2'`), so the harness and the fleet speak the same on-disk
+    // format — a mismatched driver would fail to open the service's file.
+    testImplementation 'com.h2database:h2:2.2.224'
 }
 
 // Build the service boot jars this test launches. These are part of the root multi-project
@@ -34,5 +46,58 @@ tasks.named('e2eTest') {
               ':services:auth-identity:bootJar',
               ':services:prefunding:bootJar',
               // Nepal corridor leg (adapter; sim-nepal-qr builds on demand like sim-scheme)
-              ':services:scheme-adapter-nepal:bootJar'
+              ':services:scheme-adapter-nepal:bootJar',
+              // QR scheme accommodation Phase-4 pairs (SendmnAdapterSimE2ETest /
+              // NinepayPayoutE2ETest; sim-sendmn + sim-ninepay build on demand)
+              ':services:scheme-adapter-sendmn:bootJar',
+              ':services:scheme-adapter-ninepay:bootJar'
+
+    // Sample size for the T3-5 footprint harness (PerTxnFootprintE2ETest). Gradle test JVMs do
+    // not inherit the launcher's -D, so without this the only reachable value is the code
+    // default. Forwarded only when set, so the default stays the single source of truth:
+    //   gradlew :e2e-tests:e2eTest --tests *PerTxnFootprintE2ETest* -Dgmepay.footprint.payments=200
+    String footprintPayments = System.getProperty('gmepay.footprint.payments')
+    if (footprintPayments) {
+        systemProperty 'gmepay.footprint.payments', footprintPayments
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Load / soak harness (gap register T3-5) — com.gme.pay.e2e.load.LoadHarness.
+//
+// Deliberately a JavaExec `main`, NOT a JUnit test, for three reasons:
+//
+//   1. It must never run in CI. There is no tag to include and no test class to
+//      discover, so `gradlew build`, `integrationTest` and `:e2e-tests:e2eTest`
+//      (the three things .github/workflows/ci.yml runs) cannot reach it. Only an
+//      explicit `:e2e-tests:loadTest` invocation does.
+//   2. It takes real arguments (--rate, --concurrency, --duration, the target
+//      URLs). Threading those through a Test task means system properties and a
+//      second layer of parsing.
+//   3. It has an exit code that means something (5 = a declared SLO was missed),
+//      which a wrapper script can gate on.
+//
+// It does NOT depend on any bootJar: the harness never starts the fleet. Start
+// the fleet yourself (run-fleet.ps1) — the harness preflights it and refuses with
+// that instruction if it is not up.
+//
+// The guard logic IS unit-tested in the ordinary `test` task
+// (LoadTargetGuardTest, SloTargetsTest, LoadMetricsTest are untagged), so every
+// `gradlew build` re-proves that the harness refuses a non-local target.
+//
+// See Documentation/RUNBOOK_LOAD_AND_CAPACITY.md.
+tasks.register('loadTest', JavaExec) {
+    description = 'Load/soak harness for the money path (T3-5). Requires an ALREADY-RUNNING local fleet ' +
+            'and --i-know-this-is-not-prod. Never runs in CI.'
+    group = 'verification'
+    mainClass = 'com.gme.pay.e2e.load.LoadHarness'
+    classpath = sourceSets.test.runtimeClasspath
+    // Relative defaults (Documentation/SLO_TARGETS.properties, e2e-tests/build/load-results)
+    // resolve from the repo root regardless of where gradle was invoked.
+    workingDir = rootProject.projectDir
+    // With no --args the task prints usage and exits 0, rather than firing a default-shaped run
+    // at whatever happens to be listening. Gradle applies the CLI `--args` option AFTER this
+    // configuration block, so a real invocation overrides it.
+    args = ['--help']
+    // Deliberately NOT wired into `check` or `build`.
 }

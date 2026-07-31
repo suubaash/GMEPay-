@@ -43,8 +43,9 @@ public class RestKybVerifyClient implements KybVerifyClient {
 
     @Autowired
     public RestKybVerifyClient(
-            @Value("${gmepay.kyb-adapter.base-url:http://kyb-adapter:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            @Value("${gmepay.kyb-adapter.base-url:http://kyb-adapter:8080}") String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        this(KybInternalAuth.gated(baseUrl, internalSecret, RestKybVerifyClient.class));
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

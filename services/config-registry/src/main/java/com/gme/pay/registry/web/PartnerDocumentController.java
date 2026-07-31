@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.DocumentView;
 import com.gme.pay.registry.document.PartnerDocumentService;
 import java.io.IOException;
@@ -63,7 +64,7 @@ public class PartnerDocumentController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("docType") String docType,
             @RequestParam(name = "expiryDate", required = false) String expiryDate,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "file is required and must not be empty");

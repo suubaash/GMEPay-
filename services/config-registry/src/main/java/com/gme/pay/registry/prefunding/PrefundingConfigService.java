@@ -1,5 +1,6 @@
 package com.gme.pay.registry.prefunding;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.contracts.PrefundingConfigView;
@@ -88,7 +89,7 @@ public class PrefundingConfigService {
     static final int MONEY_MAX_INTEGER_DIGITS = 15;
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PrefundingConfigRepository configRepository;
     private final BankAccountRepository bankAccountRepository;

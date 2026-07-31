@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.SettlementConfigView;
 import com.gme.pay.contracts.SettlementPreview;
@@ -54,7 +55,7 @@ public class PartnerSettlementController {
     public SettlementConfigView patchDraftStep4Settlement(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep4Settlement req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return settlementService.upsertStep4Settlement(partnerCode, req, actor);
     }
 

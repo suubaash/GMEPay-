@@ -53,7 +53,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
     -- Plain TIMESTAMP (not TIMESTAMPTZ): H2 PostgreSQL-mode compatibility.
     recorded_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT pk_audit_log PRIMARY KEY (id)
+    -- Which digest sealed this row (gap T5-1). 1 = the original five-field digest
+    -- (event_type | actor_id | recorded_at | before | after), which left aggregate_type,
+    -- aggregate_id and actor_ip OUTSIDE the hash and therefore rewritable in place.
+    -- 2 = the current digest, which seals those three plus the version number itself so a
+    -- v2 row cannot be downgraded to v2-verifies-as-v1 by editing this column.
+    -- DEFAULT 1 is deliberate and applies only to rows that pre-date the column: every
+    -- writer sets this explicitly, so a row arriving with the default is a row written by
+    -- code that does not know about chain versions and must be verified under v1.
+    -- See libs/lib-audit/HashChain for why historical rows are NOT re-sealed.
+    chain_version   SMALLINT     NOT NULL DEFAULT 1,
+
+    CONSTRAINT pk_audit_log PRIMARY KEY (id),
+
+    -- Reject a version this build cannot canonicalise at INSERT rather than at the next
+    -- verification sweep (where it would surface as "unverifiable", i.e. as suspicion).
+    CONSTRAINT chk_audit_log_chain_version CHECK (chain_version IN (1, 2))
 );
 
 -- Per-aggregate index: chain verification walks id-ascending for (aggregate_type, aggregate_id).

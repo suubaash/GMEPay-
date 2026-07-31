@@ -1,5 +1,6 @@
 package com.gme.pay.registry.lifecycle;
 
+import com.gme.pay.audit.AuditActors;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -60,7 +61,7 @@ public class PartnerLifecycleService {
             PartnerLifecycleChangeRequestApplier.AGGREGATE_TYPE;
 
     /** Pre-Keycloak default actor (Slice 1B.4 carve-out, same as PartnerDraftService). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerRepository partnerRepository;
     private final ChangeRequestRepository changeRequestRepository;
@@ -121,7 +122,11 @@ public class PartnerLifecycleService {
      * @param reason      SUSPEND: a {@link SuspensionReason} name (required);
      *                    TERMINATE: free text ≤500 (required); else ignored.
      * @param notes       SUSPEND only: optional free text ≤500.
-     * @param actor       X-Actor header; {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @throws ResponseStatusException 404 unknown partner; 400 bad/missing
      *         reason or notes; 422 the current status does not permit the
      *         action; 409 self-approval.

@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.RuleView;
 import java.util.List;
@@ -58,7 +59,7 @@ public class PartnerRuleController {
     public List<RuleView> patchDraftStep6Rules(
             @PathVariable String partnerCode,
             @RequestBody PartnerCommand.UpdateStep6Rules req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
         }

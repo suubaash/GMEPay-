@@ -44,7 +44,7 @@ class DeliveryOverviewControllerTest {
         return new PartnerView(
                 null, code, com.gme.pay.domain.PartnerType.LOCAL, "KRW", RoundingMode.HALF_UP,
                 "KRW", "KRW", null, null, null, null, null, null, null, null, null,
-                PartnerStatus.LIVE, onboardedAt, null, onboardedAt);
+                PartnerStatus.LIVE, onboardedAt, null, onboardedAt, onboardedAt);
     }
 
     @BeforeEach

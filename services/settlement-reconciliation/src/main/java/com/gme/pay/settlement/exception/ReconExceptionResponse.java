@@ -70,7 +70,23 @@ public record ReconExceptionResponse(
         Instant resolvedAt,
 
         /** UTC instant this exception row was created by the diff engine. */
-        Instant createdAt
+        Instant createdAt,
+
+        /**
+         * Recon lane that raised the break: {@code SENDMN}, {@code ZEROPAY}, … Null on ZeroPay
+         * file-recon rows (their lane is implied by the {@code batchId} prefix). Additive field —
+         * existing consumers that ignore it are unaffected.
+         */
+        String scheme,
+
+        /**
+         * Transaction the break belongs to, on transaction-level cross-border breaks (the hub
+         * partner reference). Null on the merchant-level ZeroPay file recon.
+         *
+         * <p>On these rows {@code gmeAmount} / {@code schemeAmount} / {@code discrepancyAmount} are
+         * <b>USD</b> — the corridor's settlement currency — not KRW.
+         */
+        String txnRef
 ) {
 
     /** Map a JPA entity to the wire DTO. */
@@ -88,6 +104,8 @@ public record ReconExceptionResponse(
                 e.getResolutionNote(),
                 e.getResolutionAction(),
                 e.getResolvedAt(),
-                e.getCreatedAt());
+                e.getCreatedAt(),
+                e.getScheme(),
+                e.getTxnRef());
     }
 }

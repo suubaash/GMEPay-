@@ -43,11 +43,19 @@ class RbacAdminServiceSliceTest {
     private RbacResolutionService resolution;
     private RbacAdminService admin;
 
+    /**
+     * T5-1: every mutation here now writes an audit row. This slice keeps using a recording fake
+     * (the DB-backed, hash-chained behaviour is proved in {@code AuthAuditTrailDbTest}, and the
+     * emitted-event contract in {@code RbacAdminServiceAuditTest}).
+     */
+    private com.gme.pay.auth.testsupport.RecordingAuditTrail audit;
+
     @BeforeEach
     void setUp() {
         resolution = new RbacResolutionService(principals, roles, userRoles, rolePermissions, permissions, constraints);
+        audit = new com.gme.pay.auth.testsupport.RecordingAuditTrail();
         admin = new RbacAdminService(permissions, roles, rolePermissions, userRoles,
-                constraints, principals, resolution);
+                constraints, principals, resolution, audit);
     }
 
     @Test

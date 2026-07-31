@@ -36,6 +36,18 @@ import java.time.Instant;
  *   <li>{@code costRatePay}             – payout-leg cost rate (nullable)</li>
  * </ul>
  *
+ * <h2>Refund field (gap T2-6)</h2>
+ *
+ * <p>{@code refundAmountKrw} — the <b>cumulative</b> KRW amount refunded for this transaction, carried on
+ * the {@code REFUNDED} commit. Before this field existed the refund path re-sent the row's existing
+ * (always {@code null}) value, so {@code transactions.refund_amount_krw} was never populated and
+ * settlement's cross-date claw-back read a null magnitude and netted nothing
+ * ({@code SettlementBatchJobService.foldCrossDateRefunds}). Nullable and null-skipped: a patch that omits
+ * it leaves any previously recorded refund amount intact, so no existing caller changes behaviour.
+ * Cumulative rather than per-refund because a partially refunded transaction may be refunded again and the
+ * claw-back needs the total owed back, and because the transaction row is the only refund record that
+ * exists today (there is no refund-leg entity).
+ *
  * <p>Note: payment-executor sends {@code newStatus} as {@code PaymentStatus} enum (PENDING,
  * APPROVED, FAILED, UNCERTAIN, CANCELLED, REVERSED, REFUNDED). We accept as String and
  * map to {@link com.gme.pay.txn.domain.model.TransactionStatus} in the service layer so
@@ -54,7 +66,8 @@ public record StatusPatchRequest(
         BigDecimal payoutMarginUsd,
         BigDecimal collectionUsd,
         BigDecimal costRateColl,
-        BigDecimal costRatePay
+        BigDecimal costRatePay,
+        BigDecimal refundAmountKrw
 ) {
     /** Backwards-compatible 8-arg constructor (pre-Wave-3 shape); margin fields default null. */
     public StatusPatchRequest(
@@ -69,5 +82,25 @@ public record StatusPatchRequest(
         this(newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
                 bookedSettlementAmount, settlementRoundingMode, roundingResidual,
                 null, null, null, null, null);
+    }
+
+    /** Backwards-compatible 13-arg constructor (pre-T2-6 shape); {@code refundAmountKrw} defaults null. */
+    public StatusPatchRequest(
+            String newStatus,
+            String schemeTxnRef,
+            String schemeApprovalCode,
+            BigDecimal prefundDeductedUsd,
+            Instant approvedAt,
+            BigDecimal bookedSettlementAmount,
+            String settlementRoundingMode,
+            BigDecimal roundingResidual,
+            BigDecimal collectionMarginUsd,
+            BigDecimal payoutMarginUsd,
+            BigDecimal collectionUsd,
+            BigDecimal costRateColl,
+            BigDecimal costRatePay) {
+        this(newStatus, schemeTxnRef, schemeApprovalCode, prefundDeductedUsd, approvedAt,
+                bookedSettlementAmount, settlementRoundingMode, roundingResidual,
+                collectionMarginUsd, payoutMarginUsd, collectionUsd, costRateColl, costRatePay, null);
     }
 }

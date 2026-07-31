@@ -84,7 +84,11 @@ class HashChainTest {
                 bytes("{\"silently\":\"rewritten\"}"),
                 middle.prevHash(),
                 middle.rowHash(),
-                middle.recordedAt());
+                middle.recordedAt(),
+                // Same chain version as the row we are impersonating: a tamperer who also
+                // flipped the version would be caught by the version being inside the v2
+                // digest, which is a different test (see chainVersionIsSealedIntoTheDigest).
+                middle.chainVersion());
         chain.set(2, tampered);
         int firstBad = HashChain.verify(chain);
         assertEquals(2, firstBad,
@@ -115,7 +119,7 @@ class HashChainTest {
     void rowHashRejectsPrevHashOfWrongLength() {
         AuditEvent stub = new AuditEvent(
                 null, "partner", "1", "alice", null, "PARTNER_SAVED",
-                null, null, null, null, T0);
+                null, null, null, null, T0, HashChain.CURRENT_CHAIN_VERSION);
         assertThrows(IllegalArgumentException.class,
                 () -> HashChain.rowHash(new byte[16], stub));
     }

@@ -20,6 +20,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.gme.pay.prefunding.testsupport.TestInternalAuth;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * MockMvc tests for the Phase-2 CPM reserve/release surface on {@link PrefundingInternalController}
@@ -36,6 +39,16 @@ class PrefundingCpmReserveApiTest {
     private static final String PARTNER = "CPM_P1";
 
     @Autowired private MockMvc mvc;
+
+    /**
+     * Every prefunding endpoint sits behind the internal-auth gate (T0-5), so these tests call as a
+     * trusted in-cluster service. The gate itself (missing/wrong token → 401) is proved in
+     * {@link com.gme.pay.prefunding.api.InternalAuthGateTest}.
+     */
+    private ResultActions call(MockHttpServletRequestBuilder rb) throws Exception {
+        return mvc.perform(TestInternalAuth.authed(rb));
+    }
+
     @Autowired private PartnerBalanceRepository balances;
     @Autowired private LedgerEntryRepository ledger;
     @Autowired private BalanceAlertRepository alerts;
@@ -55,7 +68,7 @@ class PrefundingCpmReserveApiTest {
     void reserve_holdsAndIsIdempotent() throws Exception {
         String body = "{\"partnerId\":42,\"amountUsd\":\"300.00\",\"idempotencyKey\":\"CPM-1\",\"txnRef\":\"T-1\"}";
 
-        String resp = mvc.perform(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
+        String resp = call(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.partnerId").value(42))
@@ -68,7 +81,7 @@ class PrefundingCpmReserveApiTest {
         String reservationId = resp.replaceAll(".*\"reservationId\":\"([^\"]+)\".*", "$1");
 
         // Replay same key: no new hold, same reservationId, reserved still 300.
-        mvc.perform(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reservationId").value(reservationId))
@@ -82,12 +95,12 @@ class PrefundingCpmReserveApiTest {
     @Test
     @DisplayName("POST /release: restores available; second release is a 0 no-op")
     void release_restoresAndIsIdempotent() throws Exception {
-        mvc.perform(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerId\":42,\"amountUsd\":\"300.00\",\"idempotencyKey\":\"CPM-R\"}"))
                 .andExpect(status().isOk());
 
-        mvc.perform(post("/internal/v1/prefunding/{p}/release", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/release", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerId\":42,\"idempotencyKey\":\"CPM-R\",\"reason\":\"expiry\"}"))
                 .andExpect(status().isOk())
@@ -96,7 +109,7 @@ class PrefundingCpmReserveApiTest {
                 .andExpect(jsonPath("$.balance").value(1000.0));
 
         // Second release: idempotent 0 no-op.
-        mvc.perform(post("/internal/v1/prefunding/{p}/release", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/release", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerId\":42,\"idempotencyKey\":\"CPM-R\"}"))
                 .andExpect(status().isOk())
@@ -108,7 +121,7 @@ class PrefundingCpmReserveApiTest {
     @Test
     @DisplayName("POST /reserve: a hold beyond available → 402 INSUFFICIENT_PREFUNDING, nothing held")
     void reserve_overdraw_402() throws Exception {
-        mvc.perform(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerId\":42,\"amountUsd\":\"5000.00\",\"idempotencyKey\":\"CPM-BIG\"}"))
                 .andExpect(status().isPaymentRequired())
@@ -120,21 +133,21 @@ class PrefundingCpmReserveApiTest {
     @DisplayName("reserve + deduct interaction: a deduct against the remaining balance never goes negative")
     void reserveThenDeduct_nonNegative() throws Exception {
         // Hold 700 of 1000; available is now 300.
-        mvc.perform(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/reserve", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"partnerId\":42,\"amountUsd\":\"700.00\",\"idempotencyKey\":\"CPM-D\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.availableUsd").value("300.00000000"));
 
         // A 300 deduct still fits available; balance → 700, reserved stays 700 → available 0.
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"idempotencyKey\":\"DBT-1\",\"amountUsd\":\"300.00\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balance").value(700.0));
 
         // A further deduct that would push available below zero is rejected; nothing moves.
-        mvc.perform(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
+        call(post("/internal/v1/prefunding/{p}/deduct", PARTNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"idempotencyKey\":\"DBT-2\",\"amountUsd\":\"100.00\"}"))
                 .andExpect(status().isPaymentRequired())

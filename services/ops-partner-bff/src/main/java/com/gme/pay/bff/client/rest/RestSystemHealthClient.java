@@ -51,7 +51,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.system-health.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.system-health.client", havingValue = "rest", matchIfMissing = true)
 public class RestSystemHealthClient implements SystemHealthClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestSystemHealthClient.class);

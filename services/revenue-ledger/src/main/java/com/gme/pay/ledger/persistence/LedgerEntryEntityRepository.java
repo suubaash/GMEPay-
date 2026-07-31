@@ -57,4 +57,30 @@ public interface LedgerEntryEntityRepository extends JpaRepository<LedgerEntryEn
                                                                @Param("currency") String currency,
                                                                @Param("start") Instant start,
                                                                @Param("end") Instant end);
+
+    /**
+     * <b>Trial balance</b> aggregate (T2-4): per {@code (account, currency)}, the total DEBITs, total
+     * CREDITs and line count for journals posted in {@code [start, end)} (end-exclusive instant).
+     *
+     * <p>Each row is {@code Object[]{ account:String, currency:String, debit:BigDecimal,
+     * credit:BigDecimal, lineCount:Long }}, ordered by currency then account so the report is stable.
+     * Joined to {@code journals} for the time filter because the post date lives on the journal head.
+     *
+     * <p>The caller ({@link TrialBalanceService}) sums the debit and credit columns per currency; a
+     * non-zero difference means the book does not balance and is reported as an imbalance rather than
+     * hidden. Amounts are grouped, never rounded — the raw {@code NUMERIC(20,8)} sums come back.
+     */
+    @Query("""
+            SELECT e.account, e.currency,
+                   COALESCE(SUM(CASE WHEN e.entryType = 'DEBIT'  THEN e.amount ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN e.entryType = 'CREDIT' THEN e.amount ELSE 0 END), 0),
+                   COUNT(e)
+            FROM LedgerEntryEntity e, JournalEntity j
+            WHERE e.journalId = j.journalId
+              AND j.postedAt >= :start
+              AND j.postedAt < :end
+            GROUP BY e.account, e.currency
+            ORDER BY e.currency ASC, e.account ASC
+            """)
+    List<Object[]> trialBalanceRows(@Param("start") Instant start, @Param("end") Instant end);
 }

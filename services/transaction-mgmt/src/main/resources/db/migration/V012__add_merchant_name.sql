@@ -1,0 +1,25 @@
+-- V012 (T4-4) — merchant display name captured at payment time.
+--
+-- Until now the transaction row carried merchant_id and merchant_fee_rate but NO merchant name, so
+-- every receipt / transaction-detail read rendered an em dash: the name the corridor resolved at
+-- payment time (merchant-qr-data for GMEREMIT/ZeroPay, the SendMN adapter's verify-qr for SENDMN,
+-- the Nepal adapter's decode for NEPAL) existed only on the synchronous wallet response and was
+-- dropped the moment that response was returned.
+--
+-- Nullable BY DESIGN, in two distinct cases — both of which must read as "unknown", never as a guess:
+--   1. HISTORICAL ROWS. Deliberately NOT back-filled. The name was never captured for these
+--      payments, so there is nothing to write; substituting merchant_id or a synthesised label
+--      would turn "we do not know" into a fabricated receipt value.
+--   2. CORRIDORS THAT CANNOT RESOLVE A NAME (e.g. the CPM path, which has no QR decode). The
+--      create contract sends null and the read path returns null; the UI renders "—".
+--
+-- Also note: payment-executor's lenient / dev-synth merchant fallbacks produce the placeholder
+-- literal "Unknown Merchant". That string is filtered out on the create path (MerchantNames) and
+-- is never stored here — a placeholder persisted as a merchant name is indistinguishable from a
+-- real merchant called "Unknown Merchant".
+--
+-- Width 200 matches qr-service's merchant_name columns (qr_parse_cache / merchant_resolution_cache),
+-- the upstream sources of the value, so a name that survives parsing cannot be truncated here.
+-- Additive only — new migration, no in-place edit. H2 (PostgreSQL mode) needs one ALTER per column.
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS merchant_name VARCHAR(200);

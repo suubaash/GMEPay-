@@ -2,6 +2,80 @@
 
 All notable changes to the auth-identity service. Newest first.
 
+## 2026-07-28 — JWT signing key is VERSIONED and rotatable (T0-6, rotation half)
+
+### Added
+- **`domain/JwtKeySet`** — the signing key is now the ACTIVE member of a key *set*: one key that
+  signs, plus previously active keys accepted for **verification only** until the tokens they signed
+  expire. The `kid` is **derived** from the secret (truncated, domain-separated SHA-256,
+  `gmek_<16 hex>`), never operator-chosen, so a label can never point at the wrong material and the
+  same key yields the same id on every replica. Carries no key material — it is already in the
+  header of every token.
+- **`GET /internal/auth/token/keys`** (`dto/JwtKeySetStatusResponse`) — the active `kid`, each
+  accepted predecessor, and the instant each becomes safe to remove, read from the **live** signing
+  helper. This is how an operator confirms a rotation reached every pod. No key material returned.
+- **`docs/runbooks/JWT_KEY_ROTATION.md`** — add → overlap ≥ one max token TTL → retire, how to
+  verify, and the compromise response (which is deliberately a *hard cutover*, since a graceful
+  rotation leaves forged tokens valid for the whole window).
+- Tests: `JwtKeySetTest`, `JwtHelperKeyRotationTest`, `JwtKeySetEnforcedConfigTest`,
+  `JwtTokenServiceRotationTest`.
+
+### Changed
+- **`domain/JwtHelper`** stamps `kid` into every token header and selects the verification key by
+  it. An **unknown `kid` is rejected outright** (`Outcome.UNKNOWN_KID`) — never by trying the other
+  keys, which would make the `kid` advisory and let an unauthenticated caller cost one HMAC per
+  configured key per bad token. A token with **no `kid` is rejected** (pinned; the upgrade therefore
+  costs one max-TTL window in which pre-upgrade tokens are refused). `alg` is now validated
+  explicitly.
+- **`config/JwtSigningKeyEnforcedConfig` was EXTENDED, not relaxed.** Every key in the set —
+  accepted ones included — must still clear the length / not-placeholder / never-published bar, and
+  a set with no active key still refuses to boot. New refusals: an undated or unparseable
+  `previous-keys` entry, a demotion timestamp in the future, the same secret twice, and an
+  **undeclared hard cutover** (active key promoted within one max TTL with an empty accepted set —
+  i.e. a rotation that silently killed every live token; requires
+  `GME_AUTH_JWT_ALLOW_HARD_CUTOVER=true`). A key kept a full extra TTL past safe is WARNed about,
+  not refused.
+- `JwtTokenService` audits `UNKNOWN_KID` as its own `reason` (a key retired too early) distinctly
+  from `INVALID_TOKEN` (a forgery attempt), while both stay `INVALID_TOKEN` on the wire.
+
+### Deployment
+- New: `GME_AUTH_JWT_PREVIOUS_KEYS` (secret; ships **empty** everywhere — empty is the steady state
+  and a `CHANGE_ME_` placeholder would be rejected *as a key*), `GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT`
+  and `GME_AUTH_JWT_ALLOW_HARD_CUTOVER` (neither is secret). Wired in `docker-compose.yml` (three new
+  single-use anchors), all four Helm values files and `run-fleet.ps1`.
+
+## 2026-07-28 — JWT signing key is required from config and fails closed (T0-6)
+
+### Changed
+- **`gme.auth.jwt.signing-secret` has NO default any more.** It defaulted to the literal
+  `changeme-at-least-32-chars-long!!` in *two* places (`application.yml` and the `@Value` in
+  `config/AuthConfig`) while `GME_AUTH_JWT_SIGNING_SECRET` was set in **zero** files — not
+  `docker-compose.yml`, not any of the four Helm values files, not `run-fleet.ps1`. HS256 is
+  symmetric and the literal was sized to clear the 32-char check, so every environment signed real
+  platform capability tokens with a key readable from the repository: token forgery, failing open and
+  silently.
+
+### Added
+- **`config/JwtSigningKeyEnforcedConfig`** — the service now **refuses to start** when the key is
+  blank, shorter than 32 bytes, placeholder-shaped (`changeme`, `CHANGE_ME_`, `REPLACE_*`,
+  `your-secret`, `TODO`), or **any literal ever published in this repo** (rejected by value, so
+  re-adding one is a boot failure). Mirrors `prefunding`'s `InternalAuthEnforcedConfig` — same shape,
+  same `refuses to start` message prefix, asserted through `InitializingBean#afterPropertiesSet`.
+- **`JwtSigningKeyEnforcedConfigTest`** — one case per rejection path, plus an assertion over the
+  **shipped `application.yml`** so the regression cannot return unnoticed.
+
+### Deployment
+- `GME_AUTH_JWT_SIGNING_SECRET` is now wired on all three surfaces: `docker-compose.yml` (single
+  `x-auth-jwt-signing-secret` anchor with a clearly-non-production dev fallback),
+  `deploy/helm/gmepay` (`secrets.data` + `auth-identity.envSecretKeys`; `CHANGE_ME_…` base and
+  `REPLACE_*` per overlay — no working value at any layer), `run-fleet.ps1` (one export + warning).
+  Operator instructions: `docs/COMPOSE.md` §"Secrets an operator must supply (T0-6)".
+- Test contexts get the fixture key from `src/test/resources/application-test.properties`.
+
+### Not done
+- **No rotation and no `kid`/key-versioning window.** Rotating this key is still a fleet-wide cutover
+  that invalidates every live token. Recorded as a T0-6 residual rather than half-built.
+
 ## 2026-07-03 — self-serve SANDBOX key read-back + issue-response enrichment (feat/sandbox-keys-live)
 
 Additive. Lets ops-partner-bff's Partner-Portal "Get Started" flow issue and list

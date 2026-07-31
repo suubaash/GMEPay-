@@ -1,5 +1,27 @@
 # prefunding — CHANGELOG
 
+## [feat/exec-gap-closure-2026-07-28] - 2026-07-28 (Kafka listener concurrency is actually readable: T3-11 defect 4 follow-up)
+
+### Fixed - `spring.kafka.listener.concurrency` was UNREADABLE on this service's consumer factory
+`PrefundingKafkaConsumerConfig` hand-builds its `ConcurrentKafkaListenerContainerFactory` and never
+called `setConcurrency(..)`. Boot binds that property only onto its **auto-configured** factory, so the
+value here was not merely unset — an operator could set it, see it resolved in `/actuator/env`, and
+change nothing. That is worse than a bad default, because it looks like a lever.
+
+What sits behind this listener is why it is worth fixing: it releases partner float on
+`payment.reversed`. A single consumer thread that falls behind does not lose money, it **holds** it —
+reserved against reversals that already happened.
+
+Now reads the property (default **3**, matching `KAFKA_NUM_PARTITIONS` and the Helm ABI), clamped at 1
+so a `0` cannot silently stop float being released. Still capped by partitions, not by this number.
+Ordering is unaffected: the producer keys by aggregate id, and a release is scoped to its own
+authorization.
+
+### Tests
+`PrefundingKafkaConcurrencyTest` reads the concurrency back off the built factory (the only way to
+tell "unset" and "unreadable" apart), plus the fleet-wide source-scan guard in `libs/lib-events-kafka`
+(`KafkaListenerConcurrencyWiringGuardTest`) so a fifth bare factory cannot silently appear.
+
 ## 2026-07-03 (feat/platform-settings-be — tier boundaries from config-registry)
 
 ### Changed — TierAlertEvaluator reads float alert tiers from config-registry (owner Goal #3)

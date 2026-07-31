@@ -18,6 +18,8 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +39,22 @@ class PartnerPortalControllerTest {
     private static final String PARTNER = "p1";
 
     private MockMvc mvc;
+
+    /**
+     * Portal endpoints are tenant-scoped against the verified token (T0-4). These tests exercise
+     * portal FUNCTIONALITY, so they authenticate as a platform operator holding the explicit
+     * cross-partner read permission; the scope rules themselves are covered by
+     * {@link PartnerPortalScopeTest}.
+     */
+    @BeforeEach
+    void authenticateAsCrossReadingOperator() {
+        TestTokens.hubOperator("partner.view");
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
+    }
 
     @BeforeEach
     void setUp() {
@@ -80,10 +98,15 @@ class PartnerPortalControllerTest {
         SettlementClient settlement = new SettlementClient() {
             @Override
             public List<SettlementBatchSummary> recent(String partnerId, int limit) {
+                // T4-5: a real batch id, a real lifecycle status, and NOT_TRANSMITTED — the fixture
+                // must not be able to say "COMPLETED" or imply the file reached the scheme.
                 return List.of(new SettlementBatchSummary(
-                        "BATCH-20260608-001", PARTNER,
+                        "ZP0061-20260608-MORNING", PARTNER,
                         LocalDate.of(2026, 6, 8), "USD",
-                        new BigDecimal("9876.54"), "COMPLETED"));
+                        new BigDecimal("9876.54"), "RECONCILED",
+                        com.gme.pay.bff.settlement.SettlementStatuses.NOT_TRANSMITTED_CHANNEL_UNAVAILABLE,
+                        "no settlement transmission channel is configured",
+                        null));
             }
 
             @Override
@@ -126,7 +149,9 @@ class PartnerPortalControllerTest {
                 new PartnerPortalController(transactions, prefunding, settlement, configRegistry,
                         partnerId -> java.util.List.of(),
                         new com.gme.pay.bff.client.stub.StubSandboxKeyClient(),
-                        (partnerId, from, to) -> new byte[0]);
+                        (partnerId, from, to) -> new byte[0],
+                        partnerId -> java.util.List.of(),
+                        new OpsRbacGuard(true));
 
         // Configure Jackson with JavaTimeModule + ISO strings for Instant/LocalDate (not arrays of numbers).
         ObjectMapper om = new ObjectMapper()

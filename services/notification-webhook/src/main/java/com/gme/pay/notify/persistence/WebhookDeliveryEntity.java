@@ -55,6 +55,18 @@ public class WebhookDeliveryEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /**
+     * The partner this delivery belongs to (V009), read out of the payload at enqueue time.
+     *
+     * <p>Exists so the drain can select rows <b>per endpoint</b> rather than in one global
+     * {@code ORDER BY created_at} across all partners — the coupling that let one partner's dead
+     * endpoint fill the batch and starve everyone else. NULL on rows written before V009, and on a
+     * payload that carries no numeric {@code partnerId}; the drain treats those as one unattributed
+     * group and falls back to parsing the payload for them.
+     */
+    @Column(name = "partner_id")
+    private Long partnerId;
+
     public WebhookDeliveryEntity() {
         // JPA
     }
@@ -137,5 +149,13 @@ public class WebhookDeliveryEntity {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Long getPartnerId() {
+        return partnerId;
+    }
+
+    public void setPartnerId(Long partnerId) {
+        this.partnerId = partnerId;
     }
 }

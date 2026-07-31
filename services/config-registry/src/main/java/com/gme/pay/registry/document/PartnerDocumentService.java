@@ -1,5 +1,6 @@
 package com.gme.pay.registry.document;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.DocumentView;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.registry.audit.AuditLogService;
@@ -78,7 +79,7 @@ public class PartnerDocumentService {
      * Default actor until the Keycloak {@code sub} claim is threaded through
      * the BFF (same Slice 1B.4 carve-out as {@code PartnerDraftService}).
      */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final DocumentRepository documentRepository;
     private final PartnerRepository partnerRepository;
@@ -107,7 +108,11 @@ public class PartnerDocumentService {
      * @param contentType MIME type; {@code null}/blank falls back to
      *                    {@code application/octet-stream}.
      * @param content     the bytes; fully consumed, not closed.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the fresh current row as canonical {@link DocumentView}.
      * @throws ResponseStatusException 404 unknown partner; 409 partner not in
      *         {@code ONBOARDING}; 400 validation failure; 502 vault unreachable.

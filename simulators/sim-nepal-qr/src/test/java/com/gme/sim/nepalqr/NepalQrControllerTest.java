@@ -38,7 +38,7 @@ class NepalQrControllerTest {
 
     private static final String FONEPAY_QR =
             "00020101021126350011fonepay.com071640897200000017835204541253035245802NP"
-          + "5914SudanMerchant6015AathraiTriveni62060702316304d60f";
+          + "5914SudanMerchant6015AathraiTriveni6206070231630421f2";
 
     private String signedBody(Map<String, Object> payload) throws Exception {
         String json = mapper.writeValueAsString(payload);

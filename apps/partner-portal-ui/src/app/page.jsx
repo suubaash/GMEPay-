@@ -51,7 +51,9 @@ export default function OverviewPage() {
   if (!partnerId) {
     return (
       <Alert severity="warning">
-        No partner id available. Sign in or set <code>NEXT_PUBLIC_PARTNER_ID</code>.
+        No partner id in your session. Sign in again, or ask a GMEPay+ operator to
+        set the <code>partner_id</code> attribute on your Keycloak account to your
+        partner code.
       </Alert>
     );
   }

@@ -7,7 +7,7 @@ This governs how every service in `SERVICE_MAP.md` is built so the pieces integr
 1. **One service = one repo/module + its own datastore.** A service owns its tables/collections. No other service reads or writes them directly.
 2. **No shared database.** If service A needs data owned by service B, it calls **B's API** (or consumes B's event) — never B's DB.
 3. **No in-process coupling across services.** Cross-service interaction is over the network only:
-   - **Sync REST/JSON** for request/response in the live payment path (must be fast, p95 targets in NFR-10).
+   - **Sync REST/JSON** for request/response in the live payment path (must be fast). *NFR-10's p95 targets are not in force: `Documentation/SLO_TARGETS.properties` ships with every value blank on purpose — the targets are a business decision — and the load harness has never been run, so no latency figure has ever been measured (T3-5).*
    - **Async Kafka events** (via the transactional Outbox) for notifications, settlement, reporting — decoupled, retryable, DLQ.
 4. **`shared-libs` is build-time contracts/utilities ONLY** — it must NOT contain business entities tied to a DB or any cross-service data access. Allowed: `lib-money` (BigDecimal/currency), `lib-errors` (error envelope), `lib-events` (event **schemas**), `lib-api-contracts` (OpenAPI-generated **DTOs/clients**). A consumer of another service uses that service's generated client/DTO from `lib-api-contracts`, not a shared entity.
 5. **Service-owned domain models stay private.** e.g. the `Rule`/`Partner`/`Scheme` JPA entities live inside **config-registry**; other services receive them as DTOs from config-registry's API, not by importing its entities.

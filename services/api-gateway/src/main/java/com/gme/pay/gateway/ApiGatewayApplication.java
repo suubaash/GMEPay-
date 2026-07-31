@@ -2,6 +2,7 @@ package com.gme.pay.gateway;
 
 import com.gme.pay.gateway.partner.ConfigPartnerCredentialProperties;
 import com.gme.pay.gateway.ratelimit.RateLimitProperties;
+import com.gme.pay.gateway.replay.ReplayProtectionProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,7 +16,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * verified traffic to downstream microservices via Spring Cloud Gateway.
  */
 @SpringBootApplication
-@EnableConfigurationProperties({RateLimitProperties.class, ConfigPartnerCredentialProperties.class})
+@EnableConfigurationProperties({
+        RateLimitProperties.class,
+        ReplayProtectionProperties.class,
+        ConfigPartnerCredentialProperties.class})
 public class ApiGatewayApplication {
 
     public static void main(String[] args) {

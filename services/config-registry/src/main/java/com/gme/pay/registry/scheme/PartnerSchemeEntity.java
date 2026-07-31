@@ -150,6 +150,11 @@ public class PartnerSchemeEntity {
         if ("NEPAL".equals(schemeId)) {
             return "fonepay.com,nepalpay,khalti,mobank,unionpay,smartqr";
         }
+        if ("SENDMN".equals(schemeId)) {
+            // Placeholder QPay identifiers (mirrors the V041 back-fill): the real QPay
+            // EMVCo AID/GUID is pending a sample QR from SendMN (QR scheme plan Phase 2).
+            return "qpay,sendmn";
+        }
         return null;
     }
 

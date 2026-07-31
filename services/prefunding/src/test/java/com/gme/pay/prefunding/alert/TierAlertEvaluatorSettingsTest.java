@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gme.pay.prefunding.audit.PrefundingAuditor;
 import com.gme.pay.prefunding.client.ConfigRegistryClient;
 import com.gme.pay.prefunding.outbox.OutboxWriter;
 import com.gme.pay.prefunding.persistence.BalanceAlertEntity;
@@ -53,7 +54,11 @@ class TierAlertEvaluatorSettingsTest {
         when(alerts.findTopByPartnerCodeAndTierOrderByIdDesc(anyString(), anyString()))
                 .thenReturn(Optional.empty());
         when(alerts.save(any(BalanceAlertEntity.class))).thenAnswer(i -> i.getArgument(0));
-        return new TierAlertEvaluator(alerts, outbox, cfg, new ObjectMapper());
+        // Gap T5-1: the evaluator now audits the breach auto-suspend proposal. This slice is about
+        // boundary RESOLUTION and never breaches (balances stay positive), so a mock auditor keeps
+        // the test DB-free; the audit row itself is asserted in PrefundingAuditTrailTest.
+        return new TierAlertEvaluator(alerts, outbox, cfg, new ObjectMapper(),
+                mock(PrefundingAuditor.class));
     }
 
     @Test

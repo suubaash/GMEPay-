@@ -1,6 +1,8 @@
 package com.gme.pay.payment.web;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gme.pay.kyb.PaymentParty;
+import com.gme.pay.kyb.PaymentScreeningSubject;
 import com.gme.pay.payment.domain.PartnerType;
 import com.gme.pay.payment.domain.PaymentOrchestrator;
 import com.gme.pay.payment.domain.PaymentOrchestrator.CancelResult;
@@ -37,6 +39,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import com.gme.pay.payment.metrics.PaymentSliMetrics;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -45,6 +48,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -108,6 +112,23 @@ public class PaymentController {
     }
 
     /**
+     * Payment-path SLIs (T3-5). Injected by SETTER and optional, so the many unit slices that
+     * construct this controller directly keep compiling and a missing registry simply means
+     * "not measured" — a measurement concern must never be able to fail a payment.
+     */
+    @org.springframework.lang.Nullable private PaymentSliMetrics paymentSli;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPaymentSli(PaymentSliMetrics paymentSli) {
+        this.paymentSli = paymentSli;
+    }
+
+    /** Times {@code call} as {@code entry} when the SLI bean is present; otherwise just runs it. */
+    private <R extends ResponseEntity<?>> R sli(String entry, java.util.function.Supplier<R> call) {
+        return paymentSli == null ? call.get() : paymentSli.record(entry, call);
+    }
+
+    /**
      * POST /v1/payments/authorize — Phase 1 of the two-phase MPM flow (SETTLEMENT_FLOW_SPEC §4/§7.1).
      *
      * <p>Validates + agreement-checks the quote, resolves the merchant, creates the PENDING txn, and
@@ -123,6 +144,18 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Code", required = false) String partnerCode,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader) {
+        // Thin measured wrapper (T3-5). The implementation is untouched below; splitting it this
+        // way keeps the SLI out of the money-path logic and leaves every existing direct-call
+        // unit test working against the same public signature.
+        return sli(PaymentSliMetrics.ENTRY_AUTHORIZE,
+                () -> doAuthorizePayment(req, partnerId, partnerCode, partnerTypeHeader));
+    }
+
+    private ResponseEntity<AuthorizeResponse> doAuthorizePayment(
+            MpmPaymentRequest req,
+            long partnerId,
+            String partnerCode,
+            String partnerTypeHeader) {
 
         req.validate();
 
@@ -139,7 +172,18 @@ public class PaymentController {
         // maintenance, or when the resolved partner / scheme is suspended. Runs before any side effect
         // (quote agreement-check, merchant resolve, float reserve). Confirm/cancel/refund of an
         // existing authorization never reaches here.
-        operationalGate.checkNewAuthorization(partnerCode, req.schemeId(), req.direction());
+        //
+        // T5-3: the same call now also runs the counterparty sanctions/PEP screening seam. The subject
+        // we can offer is the honest one and it is DELIBERATELY thin: `customer_ref` is an opaque
+        // partner-side handle, so this subject is NOT screenable (no name, no DOB, no nationality) and
+        // the gate records it as NO_SUBJECT_IDENTITY rather than pretending a reference was screened.
+        // That is the finding, not a workaround — API-05's authorize contract carries no originator
+        // identity at all, so no vendor purchase alone can produce screening coverage on this path.
+        // The beneficiary is likewise unavailable HERE: the merchant is resolved inside the
+        // orchestrator's step 2, after this gate. Both are recorded in the fix report as required work.
+        operationalGate.checkNewAuthorization(partnerCode, req.schemeId(), req.direction(),
+                req.partnerTxnRef(),
+                List.of(PaymentScreeningSubject.byReferenceOnly(PaymentParty.PAYER, req.customerRef())));
 
         PartnerType partnerType = resolvePartnerType(partnerCode, partnerTypeHeader);
         MpmPaymentCommand cmd = new MpmPaymentCommand(
@@ -174,6 +218,13 @@ public class PaymentController {
     public ResponseEntity<MpmPaymentResponse> confirmPayment(
             @PathVariable("authId") String authId,
             @RequestBody(required = false) ConfirmPaymentRequest req) {
+        // See authorizePayment: thin measured wrapper, implementation unchanged.
+        return sli(PaymentSliMetrics.ENTRY_CONFIRM, () -> doConfirmPayment(authId, req));
+    }
+
+    private ResponseEntity<MpmPaymentResponse> doConfirmPayment(
+            String authId,
+            ConfirmPaymentRequest req) {
 
         PaymentAuthorizationEntity auth = authorizationRepository.findById(authId)
                 .orElseThrow(() -> new IllegalArgumentException("unknown authorization: " + authId));
@@ -334,6 +385,11 @@ public class PaymentController {
      *
      * <p>Only APPROVED or PENDING payments on the same calendar day (KST) may be cancelled.
      * For OVERSEAS partners the prefunding deduction is reversed.
+     *
+     * <p>T2-7: {@code X-Scheme-Id} (optional) carries the scheme CODE the payment was executed on so
+     * the scheme cancel is dispatched to THAT adapter. Absent → the ZeroPay default (unchanged legacy
+     * behaviour). A scheme with no cancel round-trip (NEPAL / SENDMN) answers
+     * {@code 422 SCHEME_OPERATION_UNSUPPORTED} and nothing is mutated.
      */
     @PostMapping("/{id}/cancel")
     public ResponseEntity<CancelPaymentResponse> cancelPayment(
@@ -342,15 +398,18 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader,
             @RequestHeader(value = "X-Txn-Ref", required = false) String txnRef,
-            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef) {
+            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef,
+            @RequestHeader(value = "X-Scheme-Id", required = false) String schemeIdHeader) {
 
         PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_INITIATED";
         String resolvedTxnRef = txnRef != null ? txnRef : paymentId;
         String resolvedSchemeTxnRef = schemeTxnRef != null ? schemeTxnRef : paymentId;
+        String resolvedSchemeId = resolveSchemeId(schemeIdHeader, req);
 
         CancelResult result = orchestrator.cancelPayment(
-                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
+                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason,
+                resolvedSchemeId);
 
         eventPublisher.publish(new PaymentEvents.PaymentCancelled(
                 result.paymentId(), Instant.now(), partnerId, reason, result.prefundReturnedUsd()));
@@ -368,6 +427,15 @@ public class PaymentController {
      * locked rate, SETTLEMENT_FLOW_SPEC). Distinct from /cancel (a same-day void): a refund reverses
      * an already-settled txn → REFUNDED. For OVERSEAS partners the captured prefund USD is credited
      * back; a reversal journal is booked on revenue-ledger.
+     *
+     * <p>T2-7: {@code X-Scheme-Id} routes the scheme-side refund the same way {@code /cancel} does.
+     *
+     * <p>T2-6: the optional body {@code amount} (+ {@code currency}) makes this a PARTIAL refund. It is
+     * validated against the original payment and everything already refunded for it, so cumulative partial
+     * refunds cannot exceed the original ({@code 422 REFUND_AMOUNT_EXCEEDS_ORIGINAL}); the float is credited
+     * back pro-rata at the ORIGINAL locked rate; the cumulative refunded amount is persisted so settlement's
+     * claw-back nets it; and the REFUNDED commit now emits {@code payment.reversed}, so revenue reversal runs
+     * and the partner receives a refund webhook. Omitting {@code amount} is a full refund — unchanged.
      */
     @PostMapping("/{id}/refund")
     public ResponseEntity<RefundPaymentResponse> refundPayment(
@@ -376,22 +444,46 @@ public class PaymentController {
             @RequestHeader(value = "X-Partner-Id", defaultValue = "1") long partnerId,
             @RequestHeader(value = "X-Partner-Type", defaultValue = "OVERSEAS") String partnerTypeHeader,
             @RequestHeader(value = "X-Txn-Ref", required = false) String txnRef,
-            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef) {
+            @RequestHeader(value = "X-Scheme-Txn-Ref", required = false) String schemeTxnRef,
+            @RequestHeader(value = "X-Scheme-Id", required = false) String schemeIdHeader) {
 
         PartnerType partnerType = PartnerType.valueOf(partnerTypeHeader.toUpperCase());
         String reason = (req != null && req.reason() != null) ? req.reason() : "PARTNER_INITIATED";
         String resolvedTxnRef = txnRef != null ? txnRef : paymentId;
         String resolvedSchemeTxnRef = schemeTxnRef != null ? schemeTxnRef : paymentId;
+        String resolvedSchemeId = resolveSchemeId(schemeIdHeader, req);
 
         PaymentOrchestrator.RefundResult result = orchestrator.refundPayment(
-                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason);
+                paymentId, resolvedSchemeTxnRef, partnerType, partnerId, resolvedTxnRef, reason,
+                resolvedSchemeId,
+                req != null ? req.amount() : null,
+                req != null ? req.currency() : null);
 
         return ResponseEntity.ok(new RefundPaymentResponse(
                 result.paymentId(),
                 "refunded",
                 result.refundedAt(),
-                result.prefundReturnedUsd()
+                result.prefundReturnedUsd(),
+                result.refundedAmount(),
+                result.refundedCurrency(),
+                result.cumulativeRefundedAmount(),
+                result.fullyRefunded()
         ));
+    }
+
+    /**
+     * T2-7 scheme resolution for cancel/refund: the {@code X-Scheme-Id} header wins, then the optional
+     * {@code schemeId} body field, else null (ZeroPay default). Null/blank is preserved as null so the
+     * router's legacy fallback is unchanged.
+     */
+    private static String resolveSchemeId(String schemeIdHeader, CancelPaymentRequest req) {
+        if (schemeIdHeader != null && !schemeIdHeader.isBlank()) {
+            return schemeIdHeader;
+        }
+        if (req != null && req.schemeId() != null && !req.schemeId().isBlank()) {
+            return req.schemeId();
+        }
+        return null;
     }
 
     /**

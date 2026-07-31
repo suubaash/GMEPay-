@@ -46,6 +46,8 @@ public final class TransactionEntityMapper {
         e.setCollectionAmount(txn.collectionAmount());
         e.setCollectionCurrency(txn.collectionCurrency());
         e.setMerchantId(txn.merchantId());
+        // T4-4 (V012): merchant display name captured at payment time (null when not resolvable).
+        e.setMerchantName(txn.merchantName());
         e.setMerchantFeeRate(txn.merchantFeeRate());
         e.setQuoteId(txn.quoteId());
         e.setPaymentId(txn.paymentId());
@@ -118,6 +120,9 @@ public final class TransactionEntityMapper {
                 e.getFailureReason());
         // V005: snapshot field has no constructor slot — replay it post-construction.
         txn.applyMerchantFeeRate(e.getMerchantFeeRate());
+        // T4-4 (V012): merchant display name — replayed post-construction (no updatedAt bump).
+        // A null column stays null: legacy rows were never back-filled, by design.
+        txn.applyMerchantName(e.getMerchantName());
         // V011 (CS): end-customer / wallet identifier — replayed post-construction (no updatedAt bump).
         txn.applyUserRef(e.getUserRef());
         // V007: committed-FX projection + refund enrichment — replayed post-construction.

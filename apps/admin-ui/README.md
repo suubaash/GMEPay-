@@ -35,21 +35,34 @@ it (e.g. `gradlew :services:bff:bootRun`) on port 8095 BEFORE running
 host/port:
 
 ```bash
-NEXT_PUBLIC_BFF_BASE_URL=https://ops.dev.gmepay.internal npm run dev
+BFF_PROXY_TARGET=https://ops.dev.gmepay.internal npm run dev
 ```
 
-### Login
+(`BFF_PROXY_TARGET` is server-side only — the browser always calls the
+same-origin `/api/*` path. Do not use `NEXT_PUBLIC_BFF_BASE_URL`: it is burned
+into the browser bundle and turns those calls cross-origin, which the BFF cannot
+serve because it configures no CORS.)
 
-Visit http://localhost:3000 — the AuthGate will bounce you to `/login` if no
-token is stored. Dev credentials:
+### Login (Keycloak OIDC only)
 
-- **Username:** `admin`
-- **Password:** `demo`
+Visit http://localhost:3000 — `AuthGate` sends you to `/login`, whose single
+affordance starts an OIDC authorization-code + PKCE (S256) flow against realm
+`gmepay`, client `admin-ui` (canonical table: `docker/keycloak/README.md`).
+Seeded dev operators:
 
-A successful login stores the JWT under the `gmepay.adminToken` localStorage
-key; every subsequent fetch through `src/api/client.ts` attaches
-`Authorization: Bearer <token>`. Click the "Logout" button in the top app
-bar to clear the token and return to `/login`.
+| username | password | permissions claim |
+|---|---|---|
+| `admin` | `demo` | full hub set (`ops:operate`, `partner.activate`, `rbac.manage`, …) |
+| `operator-readonly` | `demo` | `partner.view`, `txn.view`, `report.generate` (admin writes 403) |
+
+The `password=demo` form that POSTed to `POST /v1/auth/login` is **gone** — that
+endpoint was deleted from `ops-partner-bff` (gap T0-1) and the unsigned token it
+minted is rejected by the resource server. Keycloak's `access_token` is stored
+under the `gmepay.adminToken` localStorage key and attached as
+`Authorization: Bearer <token>` by `src/api/client.js`; a 401 triggers one silent
+`refresh_token` exchange. Authorization comes from the token's `permissions`
+claim, so the `X-Gme-Permissions` header is no longer sent (gap T0-3). "Logout"
+clears local state and ends the Keycloak SSO session.
 
 ## Build & test
 
@@ -61,9 +74,9 @@ npm run build
 
 ## Key features wired
 
-- **Login** (`/login`) — username/password form (RHF + Yup) calling
-  `POST /v1/auth/login`. Token persisted to localStorage; `AuthGate`
-  redirects unauthenticated users.
+- **Login** (`/login`) — "Sign in with Keycloak" (OIDC auth-code + PKCE, see
+  `src/api/oidc.js`); `/auth/callback` exchanges the code. `AuthGate` redirects
+  unauthenticated users straight to the realm.
 - **Dashboard** (`/`) — 4 MUI cards backed by `GET /v1/admin/dashboard` with
   Skeleton / ErrorAlert / EmptyState (Lottie) UX states.
 - **Partners**

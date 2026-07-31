@@ -5,15 +5,20 @@
  * `${NEXT_PUBLIC_BFF_BASE_URL}/...` (see next.config.mjs). In tests / SSR the
  * env var is read directly. All non-2xx responses throw {@link ApiError}.
  *
- * Authorization: when a JWT is present in localStorage under
- * `gmepay.adminToken` (see ./auth.js), every request automatically carries
- * `Authorization: Bearer <token>`. A 401 from the BFF clears the token and
- * the AuthGate then bounces the user to /login on the next render.
+ * Authorization: the Keycloak access token in localStorage under
+ * `gmepay.adminToken` (see ./auth.js) is attached as
+ * `Authorization: Bearer <token>` on every request. The BFF is an OAuth2
+ * resource server (default deny) and derives permissions from the token's own
+ * claims, so no `X-Gme-*` header carries authority any more.
+ *
+ * On 401 we try ONE silent refresh_token exchange and replay the request; if that
+ * fails the token is cleared and AuthGate bounces the operator to /login (which
+ * offers Keycloak SSO — there is no password endpoint).
  *
  * NOTE: keep this file free of TS — JS only. Field names matching the BFF
  * are documented inline via JSDoc.
  */
-import { TOKEN_KEY } from './auth';
+import { TOKEN_KEY, refreshSession } from './auth';
 import { startRequest, endRequest } from './requestLog';
 
 /**
@@ -94,6 +99,13 @@ async function multipartRequest(path, formData) {
   return _doFetch(url, { method: 'POST', body: formData, headers });
 }
 
+/**
+ * Replace the Authorization header on a copy of `init`.
+ */
+function withBearer(init, token) {
+  return { ...init, headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${token}` } };
+}
+
 async function _doFetch(url, init) {
   // Record into requestLog so the role-gated RequestInspector overlay can show
   // the live request/response (see ./requestLog.js + components/RequestInspector).
@@ -111,6 +123,16 @@ async function _doFetch(url, init) {
     endRequest(logId, { status: 0, error: msg || 'network error', durationMs: Date.now() - startedAt });
     throw new ApiError(0, url, msg || 'network error');
   }
+  if (res.status === 401 && typeof window !== 'undefined' && !init?.__retried) {
+    // Access token expired (or the issuer rotated keys): try ONE silent refresh
+    // and replay. `__retried` guards against a refresh that itself yields 401.
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      endRequest(logId, { status: 401, error: 'token refreshed, retrying', durationMs: Date.now() - startedAt });
+      return _doFetch(url, { ...withBearer(init, refreshed), __retried: true });
+    }
+  }
+
   if (!res.ok) {
     if (res.status === 401 && typeof window !== 'undefined') {
       try {
@@ -156,23 +178,10 @@ async function _doFetch(url, init) {
  */
 export const adminApi = {
   // ---------- Auth ----------
-  /**
-   * POST /v1/auth/login  body { username, password }
-   * Returns { token, expiresAt, role }.
-   */
-  login: (body) =>
-    request('/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  /**
-   * POST /v1/auth/refresh body { token } -> { token, expiresAt, role }
-   */
-  refreshToken: (token) =>
-    request('/v1/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    }),
+  // Nothing here on purpose. `POST /v1/auth/login` and `POST /v1/auth/refresh`
+  // were DELETED from ops-partner-bff (gap T0-1): login now happens against
+  // Keycloak (api/oidc.js) and token renewal goes through
+  // `auth.refreshSession()` (refresh_token grant), not through the BFF.
 
   // ---------- Dashboard ----------
   /**
@@ -360,9 +369,14 @@ export const adminApi = {
    * KybView: { partnerCode, riskRating, riskRationale, nextReviewDate,
    *   licenseType, licenseNumber, licenseAuthority, licenseExpiry,
    *   uboList:[{name,ownershipPct,isPep,country}], cbddqDocId,
-   *   screeningStatus:'CLEAR'|'NEEDS_REVIEW'|'HIT'|null,
+   *   screeningStatus:'CLEAR'|'CLEAR_MANUAL_ATTESTATION'|'NEEDS_REVIEW'|'HIT'
+   *     |'NOT_SCREENED_NO_PROVIDER'|null,
    *   screeningProviderRef:string|null, screenedAt:ISO|null,
    *   screeningHits:[{name,matchScore,matchType,source}]|null }
+   *
+   * `CLEAR` and `CLEAR_MANUAL_ATTESTATION` are distinct on purpose (GAP T1-4) — vendor
+   * screening vs. a human's attested manual screening under a compliance-signed SOP. Render
+   * both through `screeningStatusMeta` in `@/api/screeningStatus`, never as a bare "Clear".
    */
   getKyb: (partnerCode) =>
     request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb`),
@@ -370,12 +384,56 @@ export const adminApi = {
   /**
    * POST /v1/admin/partners/{code}/kyb/screen -> KybView (refreshed)
    * Triggers AML/PEP screening via the KybProvider port (ADR-009).
-   * Stubbed until Octa Solution sandbox creds arrive (ADR-014).
+   * No vendor is connected (ADR-014, Octa sandbox creds pending), so a clean run comes back as
+   * `NOT_SCREENED_NO_PROVIDER` — nothing was screened. Returns 409 when the partner already
+   * carries a manual attestation this run would replace with "nothing was screened".
    */
   runKybScreening: (partnerCode) =>
     request(
       `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screen`,
       { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  /**
+   * POST /v1/admin/partners/{code}/kyb/manual-screening-attestation -> KybView (refreshed)
+   *
+   * Records a MANUAL sanctions/PEP screening attestation (GAP T1-4, owner decision
+   * 2026-07-28): a named compliance officer certifies that they performed the screening by hand
+   * under a compliance-signed SOP. That attestation is the platform's interim screening
+   * AUTHORITY — it satisfies the activation sanctions pre-condition, and a clean outcome is
+   * stored as `CLEAR_MANUAL_ATTESTATION` so it stays distinguishable from a vendor `CLEAR`.
+   *
+   * Body: { outcome:'CLEAR'|'HIT'|'NEEDS_REVIEW', sopDocumentRef, sopVersion,
+   *         sourcesConsulted, attestation }
+   *
+   * The attester is NOT sent — it is the verified token subject, derived server-side, so an
+   * operator cannot attest in someone else's name. `attestation` must be the exact assertion
+   * sentence (see MANUAL_ATTESTATION_ASSERTION below): the operator has to send what they are
+   * asserting, so a client cannot default it.
+   *
+   * 400 on a missing SOP reference / version / sources / assertion; 403 when the caller's
+   * identity is not verified or lacks `ops:operate`; 404 unknown partner.
+   */
+  recordKybManualAttestation: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/manual-screening-attestation`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * GET /v1/admin/partners/{code}/kyb/screening-provenance -> KybScreeningProvenance
+   *
+   * { screeningStatus, providerId, authoritative, caveat, screenedAt, providerRef,
+   *   manuallyAttested, satisfiesActivation, interpretation,
+   *   manualAttestation: { attesterActorId, attestedAt, sopDocumentRef, sopVersion,
+   *                        sourcesConsulted, complete } | null }
+   *
+   * The detail behind the screening status: which authority produced it and, for a manual run,
+   * who attested under which SOP version. Exists because `KybView` cannot carry these fields.
+   */
+  getKybScreeningProvenance: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screening-provenance`,
     ),
 
   // ---------- Schemes ----------
@@ -430,12 +488,45 @@ export const adminApi = {
   // ---------- Settlement ----------
   /**
    * GET /v1/admin/settlement/recent -> SettlementBatchSummary[]
-   * { batchId, partnerId, settlementDate (LocalDate), currency, amount, status }
+   * { batchId, partnerId, settlementDate (LocalDate), currency, amount, status,
+   *   transmissionState, transmissionReason, transmittedAt }
+   *
+   * GAP T4-5: `status` is the LIFECYCLE axis (PENDING|GENERATED|TRANSMITTED|RECEIVED|
+   * RECONCILED|ERROR|UNKNOWN) and answers how far reconciliation got. It does NOT answer
+   * "did the file leave?" — `transmissionState` (NOT_TRANSMITTED|
+   * NOT_TRANSMITTED_CHANNEL_UNAVAILABLE|TRANSMISSION_FAILED|TRANSMITTED|UNKNOWN) is the
+   * only field that does. Render both through `@/api/settlementStatus`; never colour a
+   * lifecycle value as success. `transmittedAt` is null for every batch today.
    */
   listSettlements: () => request('/v1/admin/settlement/recent'),
   /**
+   * GET /v1/admin/settlement/batches?partnerId&from&to&limit -> SettlementBatchSummary[]
+   *
+   * Date-RANGED persisted batches, newest first (T4-5). `/settlement/recent` covers only
+   * the newest batches with no window at all; this is the endpoint to use whenever the
+   * operator picks a period. `limit=0` means every batch in the window. Either bound may
+   * be omitted — upstream anchors the window (neither bound = last 30 days) and rejects a
+   * window wider than 400 days or an inverted one with a 400.
+   */
+  listSettlementBatches: (filters) =>
+    request(`/v1/admin/settlement/batches${qs(filters)}`),
+  /**
+   * GET /v1/admin/settlement/transmission-channel -> TransmissionChannel
+   * { live: boolean, reachableState: string, reason: string|null }
+   *
+   * Whether settlement-reconciliation can transmit a settlement file to a scheme at all
+   * (T4-5) — the settlement counterpart of the regulatory filing-channel board. `live` is
+   * false in every environment today (the only transport writes to a local directory, and
+   * a local directory is explicitly not a channel). Read it rather than hardcoding the
+   * gap, so the UI's "nothing has been sent" banner disappears by itself if a real channel
+   * is ever configured.
+   */
+  getSettlementTransmissionChannel: () =>
+    request('/v1/admin/settlement/transmission-channel'),
+  /**
    * GET /v1/admin/settlement/{batchId} -> SettlementBatchDetail
-   * { batch: SettlementBatchSummary, lines: [{ txnRef, amount, currency, matched }] }
+   * { batch: SettlementBatchSummary, lines: [{ txnRef, amount, currency, matched }],
+   *   matchedCount, openCount }
    */
   getSettlement: (batchId) =>
     request(`/v1/admin/settlement/${encodeURIComponent(batchId)}`),
@@ -1100,6 +1191,38 @@ export const adminApi = {
     request(
       `/v1/admin/partners/${encodeURIComponent(partnerCode)}/credentials/rotate`,
       { method: 'POST', body: JSON.stringify({ credentialId }) },
+    ),
+
+  // ---------- Webhook endpoint signing secrets (gap T5-8) ----------
+  /**
+   * GET /v1/admin/webhooks/endpoints?partnerCode=
+   * -> EndpointSigningHealth[] {
+   *      endpointId, partnerId, environment, webhookUrl, secretGeneration,
+   *      status: 'SIGNABLE'|'SECRET_NOT_DERIVABLE'|'NO_SECRET_DIGEST'|'ROOT_KEY_MISSING',
+   *      deliverable, fixableByRotation, detail,
+   *      rotationOverlapExpiresAt, createdAt, updatedAt }
+   *
+   * `deliverable: false` means this partner is receiving NO webhooks right now. Endpoints
+   * registered before per-endpoint signing secrets existed cannot sign at all — their secret
+   * can never be re-derived — and rotation is the only fix. Carries no secret material.
+   */
+  getWebhookEndpointHealth: (partnerCode) =>
+    request(`/v1/admin/webhooks/endpoints${qs({ partnerCode })}`),
+
+  /**
+   * POST /v1/admin/webhooks/endpoints/{endpointId}/rotate-secret
+   * body: { reason?, overlapMinutes? }
+   * -> { endpointId, signingSecretPlaintext, secretGeneration, previousSecretExpiresAt }
+   *
+   * signingSecretPlaintext is shown ONCE and is unrecoverable afterwards — the platform stores
+   * only its digest. Never log or persist it. Requires the `ops:operate` permission.
+   * `overlapMinutes` keeps the retired secret riding along as a second signature so the partner
+   * can redeploy on their own schedule; 0 cuts over immediately.
+   */
+  rotateWebhookEndpointSecret: (endpointId, { reason, overlapMinutes } = {}) =>
+    request(
+      `/v1/admin/webhooks/endpoints/${encodeURIComponent(endpointId)}/rotate-secret`,
+      { method: 'POST', body: JSON.stringify({ reason, overlapMinutes }) },
     ),
 
   /**

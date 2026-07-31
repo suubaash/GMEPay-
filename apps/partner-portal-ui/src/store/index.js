@@ -8,11 +8,13 @@ import webhooksReducer from './webhooksSlice';
 import profileReducer from './profileSlice';
 import apiKeysReducer from './apiKeysSlice';
 import statementReducer from './statementSlice';
+import settlementsReducer from './settlementsSlice';
 import uiReducer from './uiSlice';
 
 /**
  * The Partner Portal store is split into one focused slice per BFF resource
- * (overview, balance, transactions, webhooks, profile, apiKeys, statement)
+ * (overview, balance, transactions, webhooks, profile, apiKeys, statement,
+ * settlements)
  * plus auth state and a UI-prefs slice (dark mode).
  *
  * Each slice owns its own { data, status, error } shape so pages subscribe to
@@ -28,6 +30,7 @@ export const store = configureStore({
     profile: profileReducer,
     apiKeys: apiKeysReducer,
     statement: statementReducer,
+    settlements: settlementsReducer,
     ui: uiReducer
   },
   middleware: (getDefault) =>

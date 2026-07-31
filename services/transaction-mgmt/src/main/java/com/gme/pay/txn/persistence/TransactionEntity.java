@@ -98,6 +98,14 @@ public class TransactionEntity {
     @Column(name = "quote_id", length = 128)
     private String quoteId;
 
+    /**
+     * T4-4 (V012): merchant DISPLAY NAME as the corridor resolved it at payment time. Nullable —
+     * null means "not known", which is exactly what the receipt/detail read must show (an em dash),
+     * never the merchant id or a synthesised label. Legacy rows are null (V012 back-fills nothing).
+     */
+    @Column(name = "merchant_name", length = 200)
+    private String merchantName;
+
     // --- V003: status-patch lock fields ---
 
     @Column(name = "scheme_txn_ref", length = 128)
@@ -266,6 +274,9 @@ public class TransactionEntity {
 
     public String getQuoteId() { return quoteId; }
     public void setQuoteId(String quoteId) { this.quoteId = quoteId; }
+
+    public String getMerchantName() { return merchantName; }
+    public void setMerchantName(String merchantName) { this.merchantName = merchantName; }
 
     public String getSchemeTxnRef() { return schemeTxnRef; }
     public void setSchemeTxnRef(String schemeTxnRef) { this.schemeTxnRef = schemeTxnRef; }

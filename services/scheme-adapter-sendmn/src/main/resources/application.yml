@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: scheme-adapter-sendmn
+
+# 8095 (the planning doc's suggestion) is already taken by ops-partner-bff; 8093 is the
+# first free port in the services 809x band (8090/8091 zeropay, 8092 nepal, 8098 kyb).
+server:
+  port: 8093
+
+# Actuator (feat/actuator-health): health + liveness/readiness probes + metrics on the app port.
+# Only health/info/metrics exposed; env/beans/heapdump/shutdown stay off; show-details=never.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+# SendMN (Mongolia, QPay-fronted) QR scheme — ALL VALUES ARE PLACEHOLDERS.
+# The API doc publishes no base URLs and no sandbox credentials (open issue O1);
+# real values come from SendMN onboarding (incl. egress IP whitelisting, error S216).
+# Default base-url targets the future sim-sendmn (:9106, Phase 4 of the QR scheme plan).
+sendmn:
+  base-url: http://localhost:9106
+  username: sendmn-username-placeholder
+  agent-code: sendmn-agentcode-placeholder
+  auth-key: sendmn-authkey-placeholder
+  token:
+    # Token is valid 90 minutes; refresh proactively at 80.
+    refresh-after-minutes: 80
+  envelope:
+    # plain = base64(JSON) envelope for local dev / sim (default).
+    # rsa   = best-effort RSA-4096-OAEP-wrapped AES-256-GCM hybrid (exact wire spec
+    #         pending SendMN clarification — open issue O2). Requires the keys below.
+    mode: plain
+    rsa:
+      # base64 DER X.509 SubjectPublicKeyInfo — SendMN's public key (encrypts requests)
+      sendmn-public-key: ""
+      # base64 DER PKCS#8 — our private key (decrypts responses)
+      partner-private-key: ""
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    disable-swagger-default-url: true

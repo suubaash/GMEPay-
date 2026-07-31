@@ -100,12 +100,12 @@ was received at `GET http://localhost:9103/sim/nepal-qr/records`.
 # Validate a Fonepay QR
 curl -s http://localhost:9103/api/qr/validate/ \
   -H 'Authorization: Token demo' -H 'Content-Type: application/json' \
-  -d '{"qr":"00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni62060702316304d60f"}'
+  -d '{"qr":"00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni6206070231630421f2"}'
 
 # Parse (raw body — parse is not encrypted)
 curl -s http://localhost:9103/qrscan-thirdparty/parse/ \
   -H 'Content-Type: application/json' \
-  -d '{"qs":"00020101021126350011fonepay.com...6304d60f"}'
+  -d '{"qs":"00020101021126350011fonepay.com...630421f2"}'
 
 # Pay (signed envelope: base64 the JSON payload into "data")
 DATA=$(printf '{"nonce":"1712345678","qs":"00020101...","amount":"1000","mobile":"9800000000","reference":"pay-001","purpose":"ServicePayment","remarks":"NetTV"}' | base64 -w0)

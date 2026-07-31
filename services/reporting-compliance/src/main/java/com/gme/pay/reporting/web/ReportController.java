@@ -1,5 +1,6 @@
 package com.gme.pay.reporting.web;
 
+import com.gme.pay.reporting.channel.FilingChannelStatus;
 import com.gme.pay.reporting.dto.ReportRequest;
 import com.gme.pay.reporting.dto.ReportResponse;
 import com.gme.pay.reporting.dto.ReportType;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * GET /v1/reports — returns BOK FX1014/FX1015 records for the requested period.
@@ -57,5 +59,20 @@ public class ReportController {
 
         ReportResponse response = reportService.buildReport(request);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * GET /v1/reports/filing-channels — the regulatory filing-channel board.
+     *
+     * <p>One entry per lane (BOK, KOFIU, HOMETAX) stating whether a live transmission
+     * channel is configured, the most advanced filing status reachable, and — when no
+     * channel exists — exactly which configuration is missing. Exists so an operator or
+     * auditor can establish at a glance that nothing has been filed (GAP T5-2); the same
+     * board is logged at startup by
+     * {@link com.gme.pay.reporting.channel.FilingChannelRegistry}.
+     */
+    @GetMapping("/filing-channels")
+    public ResponseEntity<List<FilingChannelStatus>> getFilingChannels() {
+        return ResponseEntity.ok(reportService.filingChannels());
     }
 }

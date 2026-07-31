@@ -44,6 +44,12 @@ const initialState = {
   credentialsError: null,
   rotatingId: null,
   rotateResult: null,
+  // Webhook endpoint signing secrets (gap T5-8) — see the thunks below.
+  webhookEndpoints: [],
+  webhookEndpointsLoading: false,
+  webhookEndpointsError: null,
+  rotatingEndpointId: null,
+  webhookRotateResult: null,
   partnerAudit: {},
   lifecycle: {},
 };
@@ -68,6 +74,50 @@ export const rotateCredential = createAsyncThunk(
       return await adminApi.rotatePartnerCredential(partnerCode, credentialId);
     } catch (e) {
       return rejectWithValue(e?.message ?? 'Failed to rotate credential');
+    }
+  },
+);
+
+// ---------- Webhook endpoint signing secrets (gap T5-8) ----------
+
+/**
+ * Which of this partner's webhook endpoints can actually be signed for.
+ *
+ * GET /v1/admin/webhooks/endpoints?partnerCode=
+ * -> EndpointSigningHealth[] (see adminApi.getWebhookEndpointHealth)
+ *
+ * An endpoint registered before per-endpoint signing secrets existed holds a secret that can
+ * never be re-derived, so the platform refuses to sign its deliveries — correct, but it means
+ * the partner silently receives nothing until an operator rotates it.
+ */
+export const fetchWebhookEndpointHealth = createAsyncThunk(
+  'partnerLifecycle/fetchWebhookEndpointHealth',
+  async (partnerCode, { rejectWithValue }) => {
+    try {
+      return await adminApi.getWebhookEndpointHealth(partnerCode);
+    } catch (e) {
+      return rejectWithValue(e?.message ?? 'Failed to load webhook endpoints');
+    }
+  },
+);
+
+/**
+ * Rotate one endpoint's webhook signing secret.
+ *
+ * POST /v1/admin/webhooks/endpoints/{endpointId}/rotate-secret  { reason?, overlapMinutes? }
+ * -> { endpointId, signingSecretPlaintext, secretGeneration, previousSecretExpiresAt }
+ *
+ * The returned plaintext is shown ONCE (WebhookSecretRevealModal) and is unrecoverable after
+ * that — it is never written to the store beyond the modal's lifetime, never logged, and must
+ * be handed to the partner out of band. Requires `ops:operate`; a token without it gets 403.
+ */
+export const rotateWebhookEndpointSecret = createAsyncThunk(
+  'partnerLifecycle/rotateWebhookEndpointSecret',
+  async ({ endpointId, reason, overlapMinutes }, { rejectWithValue }) => {
+    try {
+      return await adminApi.rotateWebhookEndpointSecret(endpointId, { reason, overlapMinutes });
+    } catch (e) {
+      return rejectWithValue(e?.message ?? 'Failed to rotate webhook signing secret');
     }
   },
 );
@@ -135,6 +185,13 @@ const partnerLifecycleSlice = createSlice({
     clearRotateResult(state) {
       state.rotateResult = null;
     },
+    /**
+     * Drop the revealed webhook signing secret. Called when the reveal modal closes — the
+     * plaintext must not outlive the dialog that showed it.
+     */
+    clearWebhookRotateResult(state) {
+      state.webhookRotateResult = null;
+    },
     clearLifecycleError(state, action) {
       const code = action.payload;
       if (code && state.lifecycle[code]) {
@@ -174,6 +231,36 @@ const partnerLifecycleSlice = createSlice({
       })
       .addCase(rotateCredential.rejected, (state) => {
         state.rotatingId = null;
+      });
+
+    // --- fetchWebhookEndpointHealth (T5-8) ---
+    builder
+      .addCase(fetchWebhookEndpointHealth.pending, (state) => {
+        state.webhookEndpointsLoading = true;
+        state.webhookEndpointsError = null;
+      })
+      .addCase(fetchWebhookEndpointHealth.fulfilled, (state, action) => {
+        state.webhookEndpointsLoading = false;
+        state.webhookEndpoints = Array.isArray(action.payload) ? action.payload : [];
+      })
+      .addCase(fetchWebhookEndpointHealth.rejected, (state, action) => {
+        state.webhookEndpointsLoading = false;
+        state.webhookEndpointsError =
+          action.payload ?? action.error?.message ?? 'Failed to load webhook endpoints';
+      });
+
+    // --- rotateWebhookEndpointSecret (T5-8) ---
+    builder
+      .addCase(rotateWebhookEndpointSecret.pending, (state, action) => {
+        state.rotatingEndpointId = action.meta.arg.endpointId;
+        state.webhookRotateResult = null;
+      })
+      .addCase(rotateWebhookEndpointSecret.fulfilled, (state, action) => {
+        state.rotatingEndpointId = null;
+        state.webhookRotateResult = action.payload;
+      })
+      .addCase(rotateWebhookEndpointSecret.rejected, (state) => {
+        state.rotatingEndpointId = null;
       });
 
     // --- fetchPartnerAudit ---
@@ -276,5 +363,6 @@ const partnerLifecycleSlice = createSlice({
   },
 });
 
-export const { clearRotateResult, clearLifecycleError } = partnerLifecycleSlice.actions;
+export const { clearRotateResult, clearWebhookRotateResult, clearLifecycleError } =
+  partnerLifecycleSlice.actions;
 export default partnerLifecycleSlice.reducer;

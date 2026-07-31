@@ -6,6 +6,7 @@ import com.gme.pay.payment.persistence.SandboxE2eStepEntity;
 import com.gme.pay.payment.sandbox.dto.E2eRunDetail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,7 @@ import java.util.Locale;
  * first failed step name.
  */
 @Service
+@ConditionalOnProperty(name = "gmepay.sandbox.e2e.enabled", havingValue = "true")
 public class E2eRunner {
 
     private static final Logger log = LoggerFactory.getLogger(E2eRunner.class);

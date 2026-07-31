@@ -1,5 +1,6 @@
 package com.gme.pay.settlement.persistence;
 
+import com.gme.pay.settlement.transmission.SettlementTransmissionState;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -87,8 +88,36 @@ public class SettlementBatchEntity {
     @Column(name = "record_count")
     private Integer recordCount;
 
+    /**
+     * When the file demonstrably left the platform. Never {@code null} without
+     * {@link #transmissionState} being {@link SettlementTransmissionState#TRANSMITTED}, and vice
+     * versa — enforced by {@link #markTransmitted} being the only writer (and by the V013 CHECK
+     * constraint, so the invariant survives a hand-written UPDATE too). There is deliberately no
+     * public {@code setTransmittedAt}: a bare timestamp setter is how a batch that was never sent
+     * ends up looking sent.
+     */
     @Column(name = "transmitted_at")
-    private Instant transmittedAt;           // set by the SFTP task (later)
+    private Instant transmittedAt;
+
+    /**
+     * GAP T4-5: whether this file actually left, as its own axis independent of {@link #status}.
+     * Stored as a VARCHAR for H2/PG portability, like {@code status}. Defaults to
+     * {@code NOT_TRANSMITTED} for every new row, so a row can never be silently absent an answer.
+     */
+    @Column(name = "transmission_state", length = 40, nullable = false)
+    private String transmissionState = SettlementTransmissionState.NOT_TRANSMITTED.name();
+
+    /** The channel the file went out over. Null whenever {@link #transmissionState} is not TRANSMITTED. */
+    @Column(name = "transmission_channel", length = 64)
+    private String transmissionChannel;
+
+    /**
+     * Why this batch is in its transmission state — for the two non-transmitted states, the reason
+     * an operator or partner reads (e.g. "no channel configured, externally gated"). Kept on the row
+     * rather than derived at read time so the batch carries its own provenance.
+     */
+    @Column(name = "transmission_detail", length = 512)
+    private String transmissionDetail;
 
     @Column(name = "error_detail", length = 1024)
     private String errorDetail;
@@ -220,7 +249,77 @@ public class SettlementBatchEntity {
     public void setRecordCount(Integer recordCount) { this.recordCount = recordCount; }
 
     public Instant getTransmittedAt() { return transmittedAt; }
-    public void setTransmittedAt(Instant transmittedAt) { this.transmittedAt = transmittedAt; }
+
+    /**
+     * The persisted transmission state, resolved to the enum. An unknown/absent value resolves to
+     * {@link SettlementTransmissionState#NOT_TRANSMITTED} — the safe direction: a value we cannot
+     * interpret never means "sent".
+     */
+    public SettlementTransmissionState getTransmissionState() {
+        if (transmissionState == null) {
+            return SettlementTransmissionState.NOT_TRANSMITTED;
+        }
+        try {
+            return SettlementTransmissionState.valueOf(transmissionState);
+        } catch (IllegalArgumentException e) {
+            return SettlementTransmissionState.NOT_TRANSMITTED;
+        }
+    }
+
+    /** The raw persisted value, for reporting an unrecognised state verbatim rather than hiding it. */
+    public String getTransmissionStateRaw() { return transmissionState; }
+
+    public String getTransmissionChannel() { return transmissionChannel; }
+
+    public String getTransmissionDetail() { return transmissionDetail; }
+
+    /**
+     * Record that this batch's file was genuinely handed to the scheme. <b>The only way to set
+     * {@code transmitted_at} or reach {@link SettlementTransmissionState#TRANSMITTED}.</b>
+     *
+     * <p>Not public API for general use: call it through
+     * {@code SettlementTransmissionRecorder#recordTransmitted}, which refuses unless
+     * {@code SettlementTransmissionChannelRegistry} shows a real configured channel. Both arguments
+     * are mandatory — a transmission with no instant or no named channel is not evidence of anything.
+     */
+    public void markTransmitted(Instant at, String channelId) {
+        if (at == null) {
+            throw new IllegalArgumentException(
+                    "transmission instant is required for batch " + batchId
+                            + " — a TRANSMITTED batch with no timestamp is not evidence of a transmission");
+        }
+        if (channelId == null || channelId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "transmission channel id is required for batch " + batchId
+                            + " — a TRANSMITTED batch must name the channel it went out over");
+        }
+        this.transmittedAt = at;
+        this.transmissionChannel = channelId;
+        this.transmissionState = SettlementTransmissionState.TRANSMITTED.name();
+        this.transmissionDetail = null;
+    }
+
+    /**
+     * Record that this batch's file has NOT left — either not yet, or (the standing case) because
+     * this deployment has no transmission channel at all. Clears {@code transmitted_at} and the
+     * channel, so a batch cannot carry a stale send-timestamp alongside a not-sent state.
+     *
+     * @param state  {@link SettlementTransmissionState#NOT_TRANSMITTED},
+     *               {@link SettlementTransmissionState#NOT_TRANSMITTED_CHANNEL_UNAVAILABLE} or
+     *               {@link SettlementTransmissionState#TRANSMISSION_FAILED}
+     * @param detail why — surfaced verbatim to operators and partners
+     */
+    public void markNotTransmitted(SettlementTransmissionState state, String detail) {
+        if (state == null || state.isSent()) {
+            throw new IllegalArgumentException(
+                    "markNotTransmitted requires a non-sent state, got " + state
+                            + " for batch " + batchId + " — use markTransmitted for a real transmission");
+        }
+        this.transmittedAt = null;
+        this.transmissionChannel = null;
+        this.transmissionState = state.name();
+        this.transmissionDetail = detail;
+    }
 
     public String getErrorDetail() { return errorDetail; }
     public void setErrorDetail(String errorDetail) { this.errorDetail = errorDetail; }

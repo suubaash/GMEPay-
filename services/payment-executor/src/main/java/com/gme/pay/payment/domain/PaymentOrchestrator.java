@@ -32,8 +32,26 @@ import java.time.ZoneId;
  *
  * <p>The legacy single-shot deduct-before-submit MPM path was retired (Step 4); CPM still uses the
  * single-shot {@link #executeCpm} until its two-phase rebuild.
+ *
+ * <h2>The "AML gates" in this class are LIMITS, not AML screening (gap T5-3)</h2>
+ * <p>Authorize gate 0 and gate 0b are named after the {@code partner_limits} (V020) and
+ * {@code aml_velocity_*} (V034) columns they read, and that naming has repeatedly been read as evidence
+ * that this platform performs AML checks on a transaction. It does not. Both gates are numeric
+ * comparisons against operator-entered ceilings — per-transaction USD, daily/monthly/annual USD, and a
+ * daily transaction count — enforcing the statutory 소액해외송금업 limits. <b>They screen nobody, consult
+ * no list, and detect no pattern.</b>
+ *
+ * <p>The counterparty sanctions/PEP question is asked separately and earlier, by
+ * {@link PaymentScreeningGate} via {@code OperationalGate}, and today its honest answer is that
+ * <b>nothing is screened</b> — there is no provider configured, and neither payment contract carries an
+ * originator name for one to match on. That absence is counted, alerted and queryable rather than
+ * implied away; see {@link PaymentScreeningGate} and
+ * {@code outputs/agent/fix_t5-aml-seam_2026-07-28.md}.
  */
 public class PaymentOrchestrator {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(PaymentOrchestrator.class);
 
     /** KST — the revenue date booked on a capture is the Korea business-calendar date of the commit. */
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
@@ -43,6 +61,12 @@ public class PaymentOrchestrator {
      * not surfaced by the per-partner aggregate.
      */
     private static final BigDecimal DEFAULT_FEE_SHARE_PCT = new BigDecimal("0.70");
+
+    /**
+     * Decimal places kept when pro-rating a partial refund's USD (T2-6). Matches prefunding's USD ledger
+     * precision, so a refunded slice is representable on the float without a silent re-round on the way in.
+     */
+    private static final int USD_SCALE = 4;
 
     private final RateClient rateClient;
     private final PrefundingClient prefundingClient;
@@ -212,11 +236,12 @@ public class PaymentOrchestrator {
         RateClient.RateQuoteView quote = rateClient.loadQuote(cmd.quoteId(), cmd.partnerId());
         assertQuoteAgreement(cmd.collectionAmount(), cmd.collectionCurrency(), quote);
 
-        // Step 1c (authorize gate 0 — AML/regulatory): resolve the partner's limits ONCE (keyed by partner
+        // Step 1c (authorize gate 0 — regulatory transaction LIMITS, not AML screening; see the T5-3
+        // section of this class's javadoc): resolve the partner's limits ONCE (keyed by partner
         // CODE, like commission-split), then enforce the per-transaction USD cap (the statutory 소액해외송금업
         // ceiling among them) on the USD value of the agreed collection amount, BEFORE any side effect. The
-        // CUMULATIVE daily/monthly/annual cap is charged after the float hold (Step 4) so it rides the
-        // OVERSEAS path + prefunding's atomic per-partner lock.
+        // CUMULATIVE daily/monthly/annual + velocity caps are charged after the float hold (Step 4) so they
+        // ride prefunding's atomic per-partner lock — for EVERY partner type (T4-2), not just OVERSEAS.
         BigDecimal holdUsd = quote.collectionUsd().add(serviceFeeUsd(quote));
         PartnerConfigClient.TxnLimits limits = resolveLimits(cmd.partnerCode());
         TransactionLimitPolicy.enforcePerTransaction(cmd.partnerCode(), holdUsd, limits);
@@ -238,7 +263,11 @@ public class PaymentOrchestrator {
                         // persists real margins (FX1015). Cost rates are not on the quote view → null.
                         quote.offerRateColl(), quote.crossRate(), null, null,
                         quote.collectionUsd(), quote.payoutUsdCost(),
-                        quote.collectionMarginUsd(), quote.payoutMarginUsd()));
+                        quote.collectionMarginUsd(), quote.payoutMarginUsd(),
+                        // T4-4: the merchant name Step 2 just resolved from merchant-qr-data, persisted
+                        // at AUTHORIZE (the earliest moment it is known) so the transaction carries it
+                        // for every later read even if the confirm never happens.
+                        MerchantNames.realOrNull(merchant.merchantName())));
 
         // Step 4: RESERVE the partner float (hold, not debit) for OVERSEAS — authorize gate.
         // SETTLEMENT_FLOW_SPEC §D10/§7.4: the hold must equal payout-cost + FX-margin +
@@ -259,20 +288,34 @@ public class PaymentOrchestrator {
                 safeFailTxn(txn.txnRef());
                 throw ex;
             }
-            // Authorize gate 0b (AML cumulative): now that the hold is placed, charge the partner's
-            // daily/monthly/annual usage (race-free under prefunding's per-partner lock). On breach — or any
-            // error — void the authorization (release the hold + fail the orphan txn) and propagate; the
-            // reverseCumulative inside voidAuthorization is a no-op here since nothing was charged.
-            if (hasCumulativeCap(limits)) {
-                try {
-                    prefundingClient.chargeCumulative(cmd.partnerId(), txn.txnRef(), holdUsd,
-                            limits.dailyCapUsd(), limits.monthlyCapUsd(), limits.annualCapUsd(),
-                            limits.dailyTxnCountLimit());
-                } catch (RuntimeException ex) {
-                    voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
-                    throw ex;
-                }
+        }
+
+        // Authorize gate 0b (CUMULATIVE limits — historically mislabelled "AML"): charge the partner's
+        // daily/monthly/annual usage + the
+        // daily velocity count, race-free under prefunding's per-partner lock. On breach — or any
+        // error — void the authorization (release any hold + fail the orphan txn) and propagate.
+        //
+        // T4-2: this used to sit INSIDE the OVERSEAS branch above, so a LOCAL partner's configured
+        // caps were never evaluated — an implicit, undocumented "LOCAL partners are uncapped" rule.
+        // partner_limits (V020) has no partner-type discrimination and no seeded rows: a LOCAL
+        // partner's row looks exactly like an OVERSEAS one, and the statutory ceilings are a property
+        // of the LICENCE (license_type), not of the funding model. The float RESERVE stays
+        // OVERSEAS-only — that is a genuine funding fact (LOCAL partners hold no float) — but cap
+        // enforcement now applies to EVERY partner type whenever a cap is actually configured. A LOCAL
+        // partner with no caps configured is still unconstrained, now explicitly (null caps) rather
+        // than by branch.
+        if (hasCumulativeCap(limits)) {
+            try {
+                prefundingClient.chargeCumulative(cmd.partnerId(), txn.txnRef(), holdUsd,
+                        limits.dailyCapUsd(), limits.monthlyCapUsd(), limits.annualCapUsd(),
+                        limits.dailyTxnCountLimit());
+            } catch (RuntimeException ex) {
+                voidAuthorization(cmd.partnerId(), txn.txnRef(), partnerType);
+                throw ex;
             }
+        } else if (partnerType == PartnerType.LOCAL) {
+            log.debug("LOCAL partner {} has no cumulative cap configured — authorize proceeds"
+                    + " uncapped by configuration, not by partner type", cmd.partnerCode());
         }
 
         // Step 5 (authorize gate 2): scheme balance-check — does GME hold enough prepaid balance WITH
@@ -307,9 +350,10 @@ public class PaymentOrchestrator {
         } catch (SchemeDeclinedException ex) {
             if (ctx.partnerType() == PartnerType.OVERSEAS) {
                 prefundingClient.release(ctx.partnerId(), ctx.txnRef());
-                // Return the cumulative cap the authorize charged — this txn will not complete (no-op if uncharged).
-                prefundingClient.reverseCumulative(ctx.partnerId(), ctx.txnRef());
             }
+            // Return the cumulative cap the authorize charged — this txn will not complete (no-op if
+            // uncharged). T4-2: outside the OVERSEAS branch, because a LOCAL authorize now charges too.
+            prefundingClient.reverseCumulative(ctx.partnerId(), ctx.txnRef());
             transactionClient.commitStatus(ctx.txnRef(),
                     new TransactionClient.StatusPatch(PaymentStatus.FAILED, null, null, null, null));
             throw ex;
@@ -406,8 +450,10 @@ public class PaymentOrchestrator {
     public void releaseHold(long partnerId, String txnRef, PartnerType partnerType) {
         if (partnerType == PartnerType.OVERSEAS) {
             prefundingClient.release(partnerId, txnRef);
-            prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap for an abandoned authorize
         }
+        // T4-2: the cap reverse is partner-type-independent — a LOCAL authorize charges cap too, so an
+        // abandoned LOCAL authorize must free it. No-op when nothing was charged.
+        prefundingClient.reverseCumulative(partnerId, txnRef);
     }
 
     /**
@@ -419,10 +465,16 @@ public class PaymentOrchestrator {
         if (partnerType == PartnerType.OVERSEAS) {
             try {
                 prefundingClient.release(partnerId, txnRef);
-                prefundingClient.reverseCumulative(partnerId, txnRef);   // free the cap (no-op if uncharged)
             } catch (RuntimeException ignore) {
                 // best-effort; the reservation sweeper / recon will close it otherwise
             }
+        }
+        try {
+            // T4-2: free the cap for EVERY partner type (LOCAL authorizes now charge it). No-op if
+            // uncharged; a failure here leaves cap consumed, which is the fail-safe direction.
+            prefundingClient.reverseCumulative(partnerId, txnRef);
+        } catch (RuntimeException ignore) {
+            // best-effort compensation
         }
         safeFailTxn(txnRef);
     }
@@ -505,7 +557,11 @@ public class PaymentOrchestrator {
                         cmd.merchantId(),
                         null,  // no quoteId for CPM
                         // V032: no merchant lookup on the CPM path → resolve the scheme default rate.
-                        resolveMerchantFeeRate(cmd.schemeId(), null)
+                        resolveMerchantFeeRate(cmd.schemeId(), null),
+                        // T4-4: null merchantName, honestly. CPM has no QR decode and no merchant
+                        // lookup, so the name is genuinely unknown on this path; the detail read shows
+                        // an em dash rather than a value we would have had to invent.
+                        null
                 )
         );
 
@@ -593,7 +649,11 @@ public class PaymentOrchestrator {
                 txn.paymentId(),
                 PaymentStatus.APPROVED,
                 schemeResponse.schemeTxnRef(),
-                cmd.merchantId(),   // merchantName not available without QR decode
+                // T4-4: merchantName is NOT available on the CPM path (no QR decode, no merchant
+                // lookup). This slot used to be filled with the merchant ID, so every CPM response
+                // and stored payment showed a terminal identifier under a "merchant name" label —
+                // a fabricated value, and one that made the gap look closed. Null is the truth.
+                null,
                 cmd.merchantId(),
                 cmd.payoutAmount(),
                 cmd.payoutCurrency(),
@@ -610,14 +670,9 @@ public class PaymentOrchestrator {
     }
 
     /**
-     * Cancels an approved same-day payment.
-     *
-     * @param paymentId     the GMEPay+ payment ID
-     * @param schemeTxnRef  the scheme's own transaction reference
-     * @param partnerType   whether the partner is OVERSEAS (triggers reversal) or LOCAL
-     * @param partnerId     the authenticated partner
-     * @param reason        human-readable cancellation reason
-     * @return cancellation result
+     * Scheme-less cancel — kept for callers that genuinely do not know the scheme. Routes to the
+     * ZeroPay default (unchanged legacy behaviour). Prefer
+     * {@link #cancelPayment(String, String, PartnerType, long, String, String, String)}.
      */
     public CancelResult cancelPayment(String paymentId,
                                       String schemeTxnRef,
@@ -625,8 +680,35 @@ public class PaymentOrchestrator {
                                       long partnerId,
                                       String txnRef,
                                       String reason) {
+        return cancelPayment(paymentId, schemeTxnRef, partnerType, partnerId, txnRef, reason, null);
+    }
 
-        schemeClient.cancelPayment(schemeTxnRef, reason);
+    /**
+     * Cancels an approved same-day payment.
+     *
+     * <p>T2-7: the scheme cancel is dispatched by {@code schemeId} so a Nepal/SendMN cancel reaches its
+     * own adapter. Because the scheme call is the FIRST step, a scheme without a cancel round-trip
+     * raises {@link SchemeOperationNotSupportedException} before any float is reversed or any status is
+     * written — the transaction is left exactly as it was, and the caller sees a structured
+     * {@code SCHEME_OPERATION_UNSUPPORTED} rather than a foreign ZeroPay decline.
+     *
+     * @param paymentId     the GMEPay+ payment ID
+     * @param schemeTxnRef  the scheme's own transaction reference
+     * @param partnerType   whether the partner is OVERSEAS (triggers reversal) or LOCAL
+     * @param partnerId     the authenticated partner
+     * @param reason        human-readable cancellation reason
+     * @param schemeId      scheme CODE the payment was executed on; null/blank = ZeroPay default
+     * @return cancellation result
+     */
+    public CancelResult cancelPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason,
+                                      String schemeId) {
+
+        schemeClient.cancelPayment(new SchemeClient.CancelRequest(schemeTxnRef, reason, schemeId));
 
         BigDecimal returnedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
@@ -667,26 +749,335 @@ public class PaymentOrchestrator {
                                       long partnerId,
                                       String txnRef,
                                       String reason) {
+        return refundPayment(paymentId, schemeTxnRef, partnerType, partnerId, txnRef, reason, null);
+    }
 
-        // Scheme-side refund (ZeroPay: the 결제취소/refund path). Same call the cancel uses.
-        schemeClient.cancelPayment(schemeTxnRef, reason);
+    /**
+     * Scheme-routed refund (T2-7). Same contract as
+     * {@link #refundPayment(String, String, PartnerType, long, String, String)} but the scheme cancel is
+     * dispatched by {@code schemeId}; a single-shot scheme raises
+     * {@link SchemeOperationNotSupportedException} before the float is credited back or the status is
+     * moved to REFUNDED, so a corridor with no scheme refund path never produces a half-applied refund.
+     *
+     * @param schemeId scheme CODE the payment was executed on; null/blank = ZeroPay default
+     */
+    public RefundResult refundPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason,
+                                      String schemeId) {
+        // A null amount means "refund the full refundable remainder" — the behaviour this signature has
+        // always had. All of the work now lives in the amount-carrying overload.
+        return refundPayment(paymentId, schemeTxnRef, partnerType, partnerId, txnRef, reason, schemeId,
+                null, null);
+    }
 
+    /**
+     * Refunds an APPROVED payment, in FULL or in PART (gap T2-6).
+     *
+     * <p><b>What was wrong.</b> Neither the DTOs nor this method carried an amount, so every refund
+     * unconditionally reversed the ENTIRE prefunding hold; {@code refundAmountKrw} was never persisted so
+     * settlement's claw-back netted nothing; and the reversal journal was booked from the float amount only,
+     * meaning a LOCAL partner's refund was booked nowhere at all.
+     *
+     * <p><b>Order of operations, and why.</b> Every refusal happens before anything moves:
+     * <ol>
+     *   <li><b>Resolve + validate the amount</b> against the original payment. A partial refund with no
+     *       readable original is refused ({@code REFUND_BASIS_UNAVAILABLE}); an amount that would push the
+     *       cumulative refunded total past the original is refused
+     *       ({@code REFUND_AMOUNT_EXCEEDS_ORIGINAL}); a non-positive or foreign-currency amount is refused
+     *       ({@code REFUND_AMOUNT_INVALID}). No scheme call, no float, no status.</li>
+     *   <li><b>Scheme leg.</b> A partial refund carries its amount on the {@link SchemeClient.CancelRequest};
+     *       an adapter that cannot express a partial instruction raises
+     *       {@link PartialRefundNotSupportedException} rather than sending a FULL cancel that would
+     *       over-refund the customer at the scheme. A scheme with no cancel round-trip at all still raises
+     *       {@link SchemeOperationNotSupportedException} first (T2-7). Scheme first = a corridor that cannot
+     *       refund never produces a half-applied refund.</li>
+     *   <li><b>Float leg</b> ({@code OVERSEAS} only) — see {@link #restorePartnerFloat}. The refunded USD is
+     *       the original captured USD pro-rated by the refunded fraction, i.e. reversal AT THE ORIGINAL
+     *       LOCKED RATE: no rate is read here, so no rate can have moved since the payment.</li>
+     *   <li><b>Status + refund amount.</b> REFUNDED with the CUMULATIVE refunded KRW, which is what
+     *       transaction-mgmt persists and settlement's claw-back nets on, and which makes the transaction
+     *       discoverable by {@code GET /v1/transactions/refunded}. That commit is also what now emits the
+     *       {@code payment.reversed} domain event, so revenue-ledger's reversal runs and the partner is
+     *       notified.</li>
+     *   <li><b>Reversal journal</b> — for the refunded portion, in the currency the money moved in
+     *       (USD for a float reversal, else the collection currency). Non-fatal, as before.</li>
+     * </ol>
+     *
+     * @param requestedAmount   the amount to refund, in {@code requestedCurrency}. {@code null} = refund the
+     *                          full refundable remainder (the historical behaviour).
+     * @param requestedCurrency ISO currency of {@code requestedAmount}; must be the original collection
+     *                          currency (a refund reverses the original booking — it does not re-price).
+     */
+    public RefundResult refundPayment(String paymentId,
+                                      String schemeTxnRef,
+                                      PartnerType partnerType,
+                                      long partnerId,
+                                      String txnRef,
+                                      String reason,
+                                      String schemeId,
+                                      BigDecimal requestedAmount,
+                                      String requestedCurrency) {
+
+        TransactionClient.RefundBasis basis = transactionClient.findRefundBasis(txnRef).orElse(null);
+        RefundPlan plan = planRefund(txnRef, basis, requestedAmount, requestedCurrency);
+
+        // 1) Scheme-side refund (ZeroPay: the 결제취소/refund path). Same call the cancel uses, plus the
+        //    partial amount when this is a partial refund — an adapter that cannot express it refuses here,
+        //    before any money moves.
+        schemeClient.cancelPayment(new SchemeClient.CancelRequest(
+                schemeTxnRef, reason, schemeId, plan.schemePartialAmount(), plan.currency()));
+
+        // 2) Float leg: credit back exactly the refunded USD at the original locked rate.
         BigDecimal returnedUsd = null;
         if (partnerType == PartnerType.OVERSEAS) {
-            // Credit the partner float back by the captured (locked-rate) USD.
-            PrefundingClient.ReverseResult reversal = prefundingClient.reverse(partnerId, txnRef);
-            returnedUsd = reversal != null ? reversal.reversedUsd() : null;
+            returnedUsd = restorePartnerFloat(partnerId, txnRef, plan);
         }
 
+        // 3) Status + the cumulative refunded KRW (settlement claw-back magnitude + refund-date query key).
         transactionClient.commitStatus(txnRef,
-                new TransactionClient.StatusPatch(
-                        PaymentStatus.REFUNDED, schemeTxnRef, null, returnedUsd, null));
+                TransactionClient.StatusPatch.refund(
+                        PaymentStatus.REFUNDED, schemeTxnRef, null, returnedUsd,
+                        plan.cumulativeRefundedKrw()));
 
-        if (revenueLedgerClient != null && returnedUsd != null && returnedUsd.signum() > 0) {
-            revenueLedgerClient.postReversalJournal(txnRef, returnedUsd, "USD");
+        // 4) Book the reversal for the REFUNDED PORTION. Prefer the USD actually returned to the float; a
+        //    LOCAL partner holds no float, so book it in the collection currency instead of (as before)
+        //    booking nothing at all. Both use the existing REVENUE_REVERSAL / RECEIVABLE_PARTNER pair — no
+        //    account code is introduced here.
+        if (revenueLedgerClient != null) {
+            BigDecimal journalAmount = returnedUsd != null && returnedUsd.signum() > 0
+                    ? returnedUsd : plan.amount();
+            String journalCurrency = returnedUsd != null && returnedUsd.signum() > 0
+                    ? "USD" : plan.currency();
+            if (journalAmount != null && journalAmount.signum() > 0 && journalCurrency != null) {
+                revenueLedgerClient.postReversalJournal(txnRef, journalAmount, journalCurrency);
+            }
         }
 
-        return new RefundResult(paymentId, PaymentStatus.REFUNDED, Instant.now(), returnedUsd);
+        return new RefundResult(paymentId, PaymentStatus.REFUNDED, Instant.now(),
+                returnedUsd != null ? returnedUsd : plan.refundedUsd(),
+                plan.amount(), plan.currency(), plan.cumulativeRefundedAmount(), plan.fullyRefunded());
+    }
+
+    /**
+     * Validates the requested refund against the original payment and computes the locked-rate USD.
+     *
+     * <p>Kept separate from {@link #refundPayment} because it is the whole of the T2-6 arithmetic and every
+     * refusal in it must be provable in isolation. It reads nothing but the basis it is handed.
+     */
+    private RefundPlan planRefund(String txnRef,
+                                  TransactionClient.RefundBasis basis,
+                                  BigDecimal requestedAmount,
+                                  String requestedCurrency) {
+
+        if (basis == null) {
+            // No readable original. A FULL refund needs no validation (it reverses whatever was captured), so
+            // it proceeds exactly as it always has. A PARTIAL refund is refused: we would have to guess both
+            // the ceiling and the locked-rate fraction.
+            if (requestedAmount != null) {
+                throw RefundAmountInvalidException.basisUnavailable(txnRef,
+                        "transaction-mgmt did not return the original payment");
+            }
+            return RefundPlan.fullUnknownBasis();
+        }
+
+        BigDecimal original = basis.collectionAmount();
+        String currency = basis.collectionCurrency();
+        BigDecimal already = basis.alreadyRefunded();
+
+        if (requestedAmount == null) {
+            // Full refund of whatever is left.
+            BigDecimal remaining = original == null ? null : original.subtract(already);
+            if (remaining != null && remaining.signum() <= 0) {
+                throw RefundAmountInvalidException.exceedsOriginal(txnRef, BigDecimal.ZERO, already,
+                        original, currency);
+            }
+            BigDecimal cumulative = original != null ? original : already;
+            return new RefundPlan(remaining, currency, cumulative, true,
+                    remainingUsd(basis, remaining, original), null);
+        }
+
+        if (requestedAmount.signum() <= 0) {
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "the refund amount must be positive, got " + requestedAmount.toPlainString());
+        }
+        if (requestedCurrency != null && currency != null
+                && !requestedCurrency.equalsIgnoreCase(currency)) {
+            // A refund is a reversal of the ORIGINAL booking. Converting here would need a rate, and any
+            // rate we chose would not be the locked one — so this is refused, never converted.
+            throw RefundAmountInvalidException.invalid(txnRef,
+                    "refund currency " + requestedCurrency + " is not the original collection currency "
+                            + currency + "; a refund reverses the original booking and cannot re-price it");
+        }
+        if (original == null) {
+            throw RefundAmountInvalidException.basisUnavailable(txnRef,
+                    "the original payment carries no collection amount to refund against");
+        }
+
+        BigDecimal cumulative = already.add(requestedAmount);
+        if (cumulative.compareTo(original) > 0) {
+            throw RefundAmountInvalidException.exceedsOriginal(txnRef, requestedAmount, already,
+                    original, currency);
+        }
+
+        boolean full = cumulative.compareTo(original) == 0;
+        BigDecimal capturedUsd = basis.prefundDeductedUsd();
+        // Locked-rate pro-rata. A refund that completes the transaction takes the exact remaining USD so a
+        // sequence of partials cannot leave a rounding crumb behind on the float.
+        BigDecimal refundedUsd = null;
+        BigDecimal retainedUsd = null;
+        if (capturedUsd != null && capturedUsd.signum() > 0) {
+            BigDecimal cumulativeUsd = full
+                    ? capturedUsd
+                    : capturedUsd.multiply(cumulative)
+                            .divide(original, USD_SCALE, RoundingMode.HALF_UP);
+            BigDecimal priorUsd = already.signum() == 0
+                    ? BigDecimal.ZERO
+                    : capturedUsd.multiply(already).divide(original, USD_SCALE, RoundingMode.HALF_UP);
+            refundedUsd = cumulativeUsd.subtract(priorUsd);
+            retainedUsd = capturedUsd.subtract(cumulativeUsd);
+            if (retainedUsd.signum() < 0) {
+                retainedUsd = BigDecimal.ZERO;
+            }
+        }
+
+        return new RefundPlan(requestedAmount, currency, cumulative, full, refundedUsd,
+                full ? null : retainedUsd);
+    }
+
+    /** The USD backing a full refund of the remaining amount, at the original locked rate. */
+    private static BigDecimal remainingUsd(TransactionClient.RefundBasis basis,
+                                           BigDecimal remaining,
+                                           BigDecimal original) {
+        BigDecimal capturedUsd = basis.prefundDeductedUsd();
+        if (capturedUsd == null || capturedUsd.signum() <= 0) {
+            return null;
+        }
+        if (original == null || original.signum() == 0 || remaining == null
+                || remaining.compareTo(original) == 0) {
+            return capturedUsd;
+        }
+        return capturedUsd.multiply(remaining).divide(original, USD_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Credits the refunded USD back onto the partner's float, composed from prefunding's two
+     * <em>existing, idempotent</em> primitives — because prefunding has no partial-reverse and is owned
+     * elsewhere:
+     *
+     * <ol>
+     *   <li>{@code reverse(txnRef)} restores the WHOLE original deduction. Idempotent by design: a second
+     *       call reports {@code reversedUsd = 0}, so a later partial refund does not re-credit it.</li>
+     *   <li>{@code reverse(retainedKey(previousCumulative))} gives back whatever a PRIOR partial refund
+     *       re-retained, so cumulative partials compose instead of stacking.</li>
+     *   <li>{@code deduct(retainedKey(newCumulative), retainedUsd)} re-takes the portion that is NOT being
+     *       refunded. Keyed by the cumulative refunded amount, which strictly increases, so each step has a
+     *       distinct idempotency key and a replay is a no-op.</li>
+     * </ol>
+     *
+     * Net float movement is exactly {@code capturedUsd − cumulativeRefundedUsd}, and every step is
+     * individually replay-safe. The re-deduction can never overdraw: it always follows a credit of at least
+     * as much on the same partner. A full refund performs step 1 only, i.e. it is byte-for-byte the
+     * behaviour that existed before T2-6.
+     *
+     * @return the USD credited back for THIS refund (the plan's figure once known), or the raw reversal
+     *         amount on a full refund with no computed basis
+     */
+    private BigDecimal restorePartnerFloat(long partnerId, String txnRef, RefundPlan plan) {
+        PrefundingClient.ReverseResult reversal = prefundingClient.reverse(partnerId, txnRef);
+        BigDecimal fullyReversedUsd = reversal != null ? reversal.reversedUsd() : null;
+
+        BigDecimal priorCumulative = plan.priorCumulativeRefundedAmount();
+        boolean firstRefund = priorCumulative == null || priorCumulative.signum() == 0;
+
+        if (firstRefund && !plan.isPartial()) {
+            // The common full refund: the whole hold goes back on the single reverse this path always did.
+            // Nothing was ever re-retained, so there is nothing to unwind.
+            return fullyReversedUsd != null && fullyReversedUsd.signum() > 0
+                    ? fullyReversedUsd
+                    : plan.refundedUsd();   // idempotent replay: report the intended figure, not zero
+        }
+
+        // Give back what a PREVIOUS partial refund re-retained. This runs for a completing refund too —
+        // otherwise the slice retained by the earlier partial would stay deducted forever, which is exactly
+        // the crumb `partialThenRemainder_leavesNoRoundingCrumb` guards against.
+        if (!firstRefund) {
+            prefundingClient.reverse(partnerId, retainedKey(txnRef, priorCumulative));
+        }
+        // Re-retain the portion that is NOT refunded (nothing, once the payment is fully refunded).
+        BigDecimal retained = plan.retainedUsd();
+        if (retained != null && retained.signum() > 0) {
+            prefundingClient.deduct(partnerId, retainedKey(txnRef, plan.cumulativeRefundedAmount()),
+                    retained);
+        }
+        return plan.refundedUsd();
+    }
+
+    /**
+     * Idempotency key for the "not refunded" slice of a partially refunded payment's float. Keyed by the
+     * cumulative refunded amount (which strictly increases) so every partial refund gets its own key and a
+     * replay of any single step changes nothing.
+     */
+    private static String retainedKey(String txnRef, BigDecimal cumulativeRefunded) {
+        return txnRef + "#REFUND-RETAINED@" + cumulativeRefunded.stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * The validated outcome of {@link #planRefund}: what is being refunded, cumulatively how much has been,
+     * and the locked-rate USD split.
+     *
+     * @param amount                   this refund's amount in {@code currency}; null only when the basis was
+     *                                 unreadable on a full refund (legacy behaviour)
+     * @param currency                 the original collection currency
+     * @param cumulativeRefundedAmount total refunded including this refund
+     * @param fullyRefunded            true when this refund completes the transaction
+     * @param refundedUsd              USD credited back for THIS refund, at the original locked rate
+     * @param retainedUsd              USD that must stay deducted (partial refunds only; null when full)
+     */
+    private record RefundPlan(
+            BigDecimal amount,
+            String currency,
+            BigDecimal cumulativeRefundedAmount,
+            boolean fullyRefunded,
+            BigDecimal refundedUsd,
+            BigDecimal retainedUsd
+    ) {
+        /** Legacy path: no readable original, so a FULL refund proceeds with no amount arithmetic. */
+        static RefundPlan fullUnknownBasis() {
+            return new RefundPlan(null, null, null, true, null, null);
+        }
+
+        boolean isPartial() {
+            return !fullyRefunded;
+        }
+
+        /**
+         * How much had already been refunded BEFORE this refund, or null when the basis was unreadable.
+         * Drives whether a previously re-retained float slice has to be unwound.
+         */
+        BigDecimal priorCumulativeRefundedAmount() {
+            if (cumulativeRefundedAmount == null || amount == null) {
+                return null;
+            }
+            return cumulativeRefundedAmount.subtract(amount);
+        }
+
+        /** The amount to put on the scheme instruction: set ONLY for a partial refund. */
+        BigDecimal schemePartialAmount() {
+            return isPartial() ? amount : null;
+        }
+
+        /**
+         * The cumulative refunded amount to persist as {@code refundAmountKrw} — only when the money really
+         * is KRW. A non-KRW collection currency is left null rather than mislabelled: settlement's claw-back
+         * treats this column as KRW, so writing MNT or VND into it would corrupt the settlement file.
+         */
+        BigDecimal cumulativeRefundedKrw() {
+            return "KRW".equalsIgnoreCase(currency) ? cumulativeRefundedAmount : null;
+        }
     }
 
     // ---- value objects ----
@@ -783,11 +1174,29 @@ public class PaymentOrchestrator {
             BigDecimal prefundReturnedUsd
     ) {}
 
-    /** Outcome of a successful refund (full reversal of an APPROVED txn at the locked rate). */
+    /**
+     * Outcome of a successful refund (full OR partial reversal of an APPROVED txn at the locked rate).
+     *
+     * @param prefundReturnedUsd       USD credited back to the partner float for THIS refund
+     * @param refundedAmount           the amount refunded by THIS request, in {@code refundedCurrency}
+     * @param refundedCurrency         the original collection currency
+     * @param cumulativeRefundedAmount total refunded for the transaction, including this refund
+     * @param fullyRefunded            true when the transaction is now refunded in full
+     */
     public record RefundResult(
             String paymentId,
             PaymentStatus status,
             Instant refundedAt,
-            BigDecimal prefundReturnedUsd
-    ) {}
+            BigDecimal prefundReturnedUsd,
+            BigDecimal refundedAmount,
+            String refundedCurrency,
+            BigDecimal cumulativeRefundedAmount,
+            boolean fullyRefunded
+    ) {
+        /** Pre-T2-6 shape: a full refund with no amount detail. */
+        public RefundResult(String paymentId, PaymentStatus status, Instant refundedAt,
+                            BigDecimal prefundReturnedUsd) {
+            this(paymentId, status, refundedAt, prefundReturnedUsd, null, null, null, true);
+        }
+    }
 }

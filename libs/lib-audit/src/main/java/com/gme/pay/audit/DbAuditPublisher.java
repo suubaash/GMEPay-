@@ -73,8 +73,8 @@ public class DbAuditPublisher implements AuditPublisher {
     static final String INSERT_SQL =
             "INSERT INTO audit_log "
                     + "(aggregate_type, aggregate_id, actor_id, actor_ip, event_type, "
-                    + " before_jsonb, after_jsonb, prev_hash, row_hash, recorded_at) "
-                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + " before_jsonb, after_jsonb, prev_hash, row_hash, recorded_at, chain_version) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     /**
      * Query for the most-recent row_hash for a given (aggregate_type, aggregate_id) —
@@ -97,8 +97,19 @@ public class DbAuditPublisher implements AuditPublisher {
     public void publish(AuditEvent event) {
         Objects.requireNonNull(event, "event");
         if (event.rowHash() == null) {
-            log.warn("audit: event has null rowHash — chain integrity cannot be guaranteed for "
-                    + "aggregateType={} aggregateId={}", event.aggregateType(), event.aggregateId());
+            // Gap T5-1: this used to INSERT 32 zero bytes as the row hash. That produced a
+            // row which satisfied the octet_length = 32 CHECK, looked like a sealed row, and
+            // could never be verified — the single worst outcome available, because it is
+            // indistinguishable from a forged row that an attacker zero-filled. We now SEAL
+            // the event instead of faking its seal: the correct prev_hash is read from the
+            // tail of this aggregate's chain and the digest is computed here.
+            log.warn("audit: event arrived unsealed (null rowHash) for aggregateType={} "
+                            + "aggregateId={} eventType={} — sealing it here rather than storing an "
+                            + "unverifiable zero hash; the caller should use AuditEvent.newEvent",
+                    event.aggregateType(), event.aggregateId(), event.eventType());
+            append(event.aggregateType(), event.aggregateId(), event.actorId(), event.actorIp(),
+                    event.eventType(), event.beforeJsonb(), event.afterJsonb(), event.recordedAt());
+            return;
         }
         Connection conn = DataSourceUtils.getConnection(dataSource);
         boolean releaseAfterUse = !DataSourceUtils.isConnectionTransactional(conn, dataSource);
@@ -113,6 +124,49 @@ public class DbAuditPublisher implements AuditPublisher {
                 DataSourceUtils.releaseConnection(conn, dataSource);
             }
         }
+    }
+
+    /**
+     * Append one <b>correctly chained</b> audit row: read the tail of this aggregate's chain
+     * for the {@code prev_hash}, seal the event under {@link HashChain#CURRENT_CHAIN_VERSION},
+     * and INSERT it. This is the method services without their own JPA audit entity should
+     * call — it is the whole ADR-007 tier-1 write in one hop, and it is the only way to get
+     * the chain right without hand-rolling the read-then-seal dance at every call site.
+     *
+     * <p>Runs on the caller's transaction (via {@link DataSourceUtils#getConnection}) so the
+     * audit row commits if and only if the business write commits. Callers that need the
+     * audit row to survive a rolled-back business transaction (authentication FAILURES are
+     * the canonical example — the login attempt is rolled back but must still be logged)
+     * must invoke this outside the business transaction or in a new one; see
+     * {@code auth-identity}'s {@code AuthAuditService} for that pattern.
+     *
+     * @param actorId who acted, in the {@link AuditActors} vocabulary. The bare {@code
+     *                "system"} literal and blanks are rejected.
+     * @return the sealed event that was written (its {@code id} is not populated — the DB
+     *         assigns it; callers needing the id should read it back).
+     * @throws IllegalArgumentException on an unusable {@code actorId} (gap T5-1). This is a
+     *         programming error in the caller, not backpressure, so unlike a SQL failure it
+     *         is NOT swallowed.
+     */
+    public AuditEvent append(String aggregateType,
+                             String aggregateId,
+                             String actorId,
+                             String actorIp,
+                             String eventType,
+                             byte[] beforeJsonb,
+                             byte[] afterJsonb,
+                             java.time.Instant recordedAt) {
+        byte[] prevHash = latestRowHash(aggregateType, aggregateId);
+        AuditEvent sealed = AuditEvent.newEvent(
+                aggregateType, aggregateId, actorId, actorIp, eventType,
+                beforeJsonb, afterJsonb, prevHash,
+                // MICROS truncation: recorded_at is inside the digest, so the in-memory value
+                // MUST equal what the TIMESTAMP column stores — DB rounding of a nanosecond
+                // Instant would silently break chain verification for that row.
+                (recordedAt == null ? java.time.Instant.now() : recordedAt)
+                        .truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        publish(sealed);
+        return sealed;
     }
 
     /**
@@ -152,11 +206,23 @@ public class DbAuditPublisher implements AuditPublisher {
      * {@link HashChain.AuditEvent} so they can be passed directly to {@link HashChain#verify}.
      */
     public List<HashChain.AuditEvent> loadChain(String aggregateType, String aggregateId) {
+        return loadChainRows(aggregateType, aggregateId).stream()
+                .map(r -> (HashChain.AuditEvent) r)
+                .toList();
+    }
+
+    /**
+     * Same as {@link #loadChain} but keeps the row {@code id}s, so a verifier can name the
+     * first broken link by its primary key rather than by its position in a list. A row
+     * position is useless in an incident ("row 4 of the chain" — of which snapshot?); the
+     * {@code id} is what an investigator selects on.
+     */
+    public List<ChainRow> loadChainRows(String aggregateType, String aggregateId) {
         Connection conn = DataSourceUtils.getConnection(dataSource);
         boolean releaseAfterUse = !DataSourceUtils.isConnectionTransactional(conn, dataSource);
         try {
-            String sql = "SELECT event_type, actor_id, recorded_at, before_jsonb, after_jsonb, "
-                    + "prev_hash, row_hash "
+            String sql = "SELECT id, aggregate_type, aggregate_id, actor_id, actor_ip, event_type, "
+                    + "recorded_at, before_jsonb, after_jsonb, prev_hash, row_hash, chain_version "
                     + "FROM audit_log "
                     + "WHERE aggregate_type = ? AND aggregate_id = ? "
                     + "ORDER BY id ASC";
@@ -164,16 +230,21 @@ public class DbAuditPublisher implements AuditPublisher {
                 ps.setString(1, aggregateType);
                 ps.setString(2, aggregateId);
                 try (var rs = ps.executeQuery()) {
-                    List<HashChain.AuditEvent> rows = new ArrayList<>();
+                    List<ChainRow> rows = new ArrayList<>();
                     while (rs.next()) {
                         rows.add(new ChainRow(
-                                rs.getString(1),
+                                rs.getLong(1),
                                 rs.getString(2),
-                                rs.getTimestamp(3).toInstant(),
-                                rs.getBytes(4),
-                                rs.getBytes(5),
-                                rs.getBytes(6),
-                                rs.getBytes(7)));
+                                rs.getString(3),
+                                rs.getString(4),
+                                rs.getString(5),
+                                rs.getString(6),
+                                rs.getTimestamp(7).toInstant(),
+                                rs.getBytes(8),
+                                rs.getBytes(9),
+                                rs.getBytes(10),
+                                rs.getBytes(11),
+                                rs.getInt(12)));
                     }
                     return List.copyOf(rows);
                 }
@@ -181,6 +252,31 @@ public class DbAuditPublisher implements AuditPublisher {
         } catch (SQLException e) {
             log.error("audit: loadChain failed for aggregateType={} aggregateId={}",
                     aggregateType, aggregateId, e);
+            return List.of();
+        } finally {
+            if (releaseAfterUse) {
+                DataSourceUtils.releaseConnection(conn, dataSource);
+            }
+        }
+    }
+
+    /** Every {@code (aggregate_type, aggregate_id)} pair present in the table, for a full sweep. */
+    public List<String[]> listAggregates() {
+        Connection conn = DataSourceUtils.getConnection(dataSource);
+        boolean releaseAfterUse = !DataSourceUtils.isConnectionTransactional(conn, dataSource);
+        try {
+            String sql = "SELECT DISTINCT aggregate_type, aggregate_id FROM audit_log "
+                    + "ORDER BY aggregate_type, aggregate_id";
+            try (PreparedStatement ps = conn.prepareStatement(sql);
+                 var rs = ps.executeQuery()) {
+                List<String[]> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new String[] {rs.getString(1), rs.getString(2)});
+                }
+                return List.copyOf(out);
+            }
+        } catch (SQLException e) {
+            log.error("audit: listAggregates failed", e);
             return List.of();
         } finally {
             if (releaseAfterUse) {
@@ -207,8 +303,11 @@ public class DbAuditPublisher implements AuditPublisher {
             setBytes(ps, 6, event.beforeJsonb());
             setBytes(ps, 7, event.afterJsonb());
             setBytes(ps, 8, event.prevHash() == null ? HashChain.GENESIS : event.prevHash());
-            setBytes(ps, 9, event.rowHash() == null ? new byte[HashChain.HASH_LEN] : event.rowHash());
+            // No zero-fill fallback: publish() re-seals an unsealed event before it ever
+            // reaches here, so a null rowHash at this point is impossible by construction.
+            setBytes(ps, 9, Objects.requireNonNull(event.rowHash(), "rowHash"));
             ps.setTimestamp(10, Timestamp.from(event.recordedAt()));
+            ps.setInt(11, event.chainVersion());
             ps.executeUpdate();
         }
     }
@@ -224,14 +323,23 @@ public class DbAuditPublisher implements AuditPublisher {
     /**
      * Lightweight read-side row view implementing {@link HashChain.AuditEvent} so that
      * chains loaded via {@link #loadChain} can be passed directly to {@link HashChain#verify}.
+     *
+     * <p>Carries {@code id} and {@code chainVersion} so a verifier can name the offending row
+     * by primary key and canonicalise it under the digest it was actually sealed with. Public
+     * (it was package-private) because the verifier lives outside this class.
      */
-    record ChainRow(
-            String eventType,
+    public record ChainRow(
+            long id,
+            String aggregateType,
+            String aggregateId,
             String actorId,
+            String actorIp,
+            String eventType,
             java.time.Instant recordedAt,
             byte[] beforeJsonb,
             byte[] afterJsonb,
             byte[] prevHash,
-            byte[] rowHash) implements HashChain.AuditEvent {
+            byte[] rowHash,
+            int chainVersion) implements HashChain.AuditEvent {
     }
 }

@@ -39,6 +39,24 @@ adapter:
 
 # ZeroPay scheme simulator + local-dir SFTP stub paths
 gmepay:
+  # ---- business-day calendar (GAP T3-4: "holidays ignored") ----
+  # The six KST batch crons consult this before generating/transmitting anything. Ships EMPTY: there is no
+  # Korean banking-holiday table here and no rule for deriving one (Seollal/Chuseok are lunar, substitute and
+  # temporary holidays are gazetted annually), so a hardcoded table would be wrong for some year and believed
+  # anyway. Firing a ZP00xx file on a KRW bank holiday risks KFTC rejecting it or double-counting it.
+  #
+  # POPULATING THIS IS AN OPERATOR / BUSINESS INPUT, not a code change. See
+  # Documentation/RUNBOOK_BATCH_OPS.md.
+  #
+  # Property names match settlement-reconciliation exactly, so one set of values configures both services.
+  # While empty, every date classifies UNVERIFIED: runs still PROCEED (fail-open), each is stamped
+  # calendar_verdict=UNVERIFIED in zp_batch_runs, and the day's first run raises a BATCH_CALENDAR_UNVERIFIED
+  # WARN ops alert — so the absence of calendar data is visible rather than silently equal to "always open".
+  calendar:
+    non-business-dates: ${GMEPAY_CALENDAR_NON_BUSINESS_DATES:}
+    non-business-days-of-week: ${GMEPAY_CALENDAR_NON_BUSINESS_DAYS_OF_WEEK:}
+    verified-through: ${GMEPAY_CALENDAR_VERIFIED_THROUGH:}
+    fail-closed: ${GMEPAY_CALENDAR_FAIL_CLOSED:false}
   scheme:
     zeropay:
       # sim-scheme :9102 base URL; override with GMEPAY_SCHEME_ZEROPAY_BASE_URL in production

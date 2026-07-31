@@ -10,7 +10,7 @@ import java.time.LocalDate;
 
 /**
  * In-process {@link RegistrationStatusPort} default for dev/test, matching the module's other
- * fixture adapters: when {@code settlement.clients.scheme-adapter-zeropay.enabled} is off there
+ * fixture adapters: when {@code gmepay.clients.scheme-adapter-zeropay.enabled} is off there
  * is no adapter to consult, so the prerequisite gate is PERMISSIVE (settlement generation keeps
  * working exactly as before this gate existed). Production/compose enable the REST client, where
  * the gate is real and fail-closed.

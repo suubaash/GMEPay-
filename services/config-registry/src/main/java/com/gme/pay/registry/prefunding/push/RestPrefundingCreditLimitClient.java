@@ -1,5 +1,8 @@
 package com.gme.pay.registry.prefunding.push;
 
+import com.gme.pay.internalauth.InternalAuthHeaders;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -35,18 +38,47 @@ import org.springframework.web.server.ResponseStatusException;
  *       (no silent swallow at the transport layer — the caller decides whether
  *       to roll its own write back).</li>
  * </ul>
+ *
+ * <p><b>Internal auth (T0-5 / T0-2):</b> prefunding's entire balance API is behind the
+ * service-to-service internal-auth gate ({@code com.gme.pay.internalauth}), so config-registry — a
+ * trusted in-cluster caller — presents the shared secret from {@code gmepay.internal-auth.secret} in
+ * the {@code X-Gme-Internal} header. Without this the credit-limit push 401s against any correctly
+ * deployed prefunding. A blank secret sends no header (local dev against an ungated stub); against a
+ * gated prefunding that yields 401, which is the intended fail-closed outcome of a missing
+ * {@code GMEPAY_INTERNAL_AUTH_SECRET} rather than a silent bypass.
  */
 @Component
 @Primary
 @ConditionalOnProperty(name = "gmepay.prefunding.client", havingValue = "rest")
 public class RestPrefundingCreditLimitClient implements PrefundingCreditLimitClient {
 
+    private static final Logger log = LoggerFactory.getLogger(RestPrefundingCreditLimitClient.class);
+
     private final RestClient restClient;
 
     @Autowired
     public RestPrefundingCreditLimitClient(
-            @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        this(builderFor(baseUrl, internalSecret).build());
+    }
+
+    /**
+     * Builds the {@link RestClient.Builder} the production constructor uses: base URL plus, when a
+     * secret is configured, the {@code X-Gme-Internal} default header. Package-private so a test can
+     * bind a {@code MockRestServiceServer} to the very same builder and assert the header really
+     * goes on the wire (rather than trusting a hand-built client).
+     */
+    static RestClient.Builder builderFor(String baseUrl, String internalSecret) {
+        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        } else {
+            log.warn("gmepay.internal-auth.secret is blank — the credit-limit push to prefunding will "
+                    + "carry no {} header and a gated prefunding will refuse it (401). Set "
+                    + "GMEPAY_INTERNAL_AUTH_SECRET.", InternalAuthHeaders.INTERNAL_TOKEN);
+        }
+        return b;
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

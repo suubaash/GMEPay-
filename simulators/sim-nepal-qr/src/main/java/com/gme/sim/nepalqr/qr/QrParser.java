@@ -9,7 +9,7 @@ import java.util.Map;
  *
  * EMVCo QR = concatenation of TLV fields: 2-digit tag + 2-digit length + value.
  * Sample Fonepay QR (from the docs):
- *   00020101021126350011fonepay.com0716...5914SudanMerchant6015AathraiTriveni...6304d60f
+ *   00020101021126350011fonepay.com0716...5914SudanMerchant6015AathraiTriveni...630421f2
  *
  * Tags read:
  *   00 Payload Format Indicator

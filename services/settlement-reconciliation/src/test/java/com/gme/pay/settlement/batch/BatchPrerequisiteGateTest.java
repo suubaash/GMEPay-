@@ -39,7 +39,15 @@ class BatchPrerequisiteGateTest {
 
     private SettlementBatchJobService job() {
         return new SettlementBatchJobService(txnPort, partnerPort, booking, factory, batchRepo,
-                lineRepo, outbox, new FixtureRefundedTransactionAdapter(), registrationPort, "", "");
+                lineRepo, outbox, new FixtureRefundedTransactionAdapter(), registrationPort,
+                com.gme.pay.settlement.calendar.BusinessCalendar.empty(),
+                // T4-5: a recorder over "no transmission channel", which is the platform's real state —
+                // so a generated batch here is stamped NOT_TRANSMITTED_CHANNEL_UNAVAILABLE, exactly as in
+                // production. Nothing in this test reaches generation anyway (the gate blocks first).
+                new com.gme.pay.settlement.transmission.SettlementTransmissionRecorder(
+                        com.gme.pay.settlement.transmission.SettlementTransmissionChannelRegistry
+                                .noChannelConfigured(), batchRepo),
+                "", "");
     }
 
     @Test

@@ -25,13 +25,27 @@ dependencies {
     compileOnly 'org.springframework:spring-webmvc'   // RBAC HandlerInterceptor + WebMvcConfigurer
     compileOnly 'org.springframework:spring-webflux'
     compileOnly 'io.projectreactor:reactor-core'
+    // T3-11: WebClientTimeoutAutoConfiguration bounds the REACTIVE stack (api-gateway). Reactor Netty
+    // for HttpClient.responseTimeout(..) and netty-transport for ChannelOption.CONNECT_TIMEOUT_MILLIS —
+    // the two halves live on two different objects, which is exactly the detail that gets half-done when
+    // it is copy-pasted. compileOnly + @ConditionalOnClass, so a service without a reactive stack on its
+    // classpath is unaffected and nothing leaks to consumers.
+    compileOnly 'io.projectreactor.netty:reactor-netty-http'
+    compileOnly 'io.netty:netty-transport'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
     compileOnly 'org.slf4j:slf4j-api'                 // RBAC default decision listener logging
+    compileOnly 'io.micrometer:micrometer-core'      // outbox lag gauges (T3-5)
+    compileOnly 'jakarta.annotation:jakarta.annotation-api'  // @PostConstruct on the gauge probe
     compileOnly 'org.springframework.kafka:spring-kafka'
     compileOnly 'org.apache.kafka:kafka-clients'
 
     testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // T3-11: the scheduler-lag gauges are asserted against a real SimpleMeterRegistry, so the
+    // Micrometer surface that is compileOnly above has to be on the TEST classpath too. Test-scoped
+    // only — nothing leaks to consumers, which still bring their own registry via the root
+    // build.gradle Boot block.
+    testImplementation 'io.micrometer:micrometer-core'
     testImplementation 'org.springframework.boot:spring-boot-starter-web'
     // Reactive twin of the correlation filter (CorrelationIdWebFilter) — api-gateway's stack.
     testImplementation 'org.springframework.boot:spring-boot-starter-webflux'

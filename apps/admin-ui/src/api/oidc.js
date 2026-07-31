@@ -1,13 +1,20 @@
 /**
  * Minimal browser-side OIDC authorization-code flow with PKCE for Keycloak.
  *
- * Slice 1 retires the legacy `password=demo` BFF login (see PARTNER_SETUP_PLAN.md
- * §"Slice 1 — Identity + Foundation"). The admin-ui now redirects operators to
- * Keycloak (realm `gmepay`, configured by env `NEXT_PUBLIC_KEYCLOAK_URL`,
- * default http://localhost:8090/realms/gmepay) and runs the standard OIDC
- * authorization-code + PKCE dance entirely in the browser. Keycloak's
- * admin-ui client is a *public* client (no client_secret in the browser), so
- * PKCE is mandatory.
+ * Keycloak is the ONLY credential source: the legacy `password=demo` BFF login
+ * (`POST /v1/auth/login`) was deleted server-side (gap T0-1), so the admin-ui
+ * redirects operators to the realm and runs the standard authorization-code +
+ * PKCE dance in the browser. The `admin-ui` client is *public* (no client_secret
+ * in a browser bundle), so PKCE is mandatory.
+ *
+ * Canonical topology (gap T1-2, docker/keycloak/README.md §1):
+ *   realm  `gmepay`
+ *   client `admin-ui`  ← was hardcoded to `gmepay-admin-ui`, which exists in no
+ *                        seed file or chart, so authorize returned
+ *                        "Client not found" in every environment
+ *   issuer `http://localhost:8097/realms/gmepay` for local docker (8090 is
+ *                        scheme-adapter-zeropay's host port)
+ * Both are env-overridable: NEXT_PUBLIC_KEYCLOAK_URL / NEXT_PUBLIC_KEYCLOAK_CLIENT_ID.
  *
  * Flow:
  *   1. {@link buildAuthRequest} — generates a fresh PKCE verifier + state,
@@ -20,15 +27,13 @@
  *      the admin-ui uses the access token as a bearer to the BFF, identical
  *      to the previous JWT flow (so api/client.js continues to work).
  *
- * Dev-skip escape hatch:
- *   When `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` is set at build time, the login
- *   page exposes a "Dev: skip login" affordance that issues a synthetic
- *   token via the old BFF `/v1/auth/login` endpoint. This is what vitest and
- *   local-no-Keycloak iteration use; CI compose-smoke covers the real flow.
+ * `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` no longer enables any password path — it
+ * only makes AuthGate land on `/login` (which renders the SSO button) instead of
+ * navigating the whole window to Keycloak, which is what vitest/jsdom needs.
  */
 
-const DEFAULT_KEYCLOAK_URL = 'http://localhost:8090/realms/gmepay';
-const CLIENT_ID = 'gmepay-admin-ui';
+const DEFAULT_KEYCLOAK_URL = 'http://localhost:8097/realms/gmepay';
+const DEFAULT_CLIENT_ID = 'admin-ui';
 const PKCE_VERIFIER_KEY = 'gmepay.oidc.pkceVerifier';
 const STATE_KEY = 'gmepay.oidc.state';
 const RETURN_TO_KEY = 'gmepay.oidc.returnTo';
@@ -47,10 +52,23 @@ export function keycloakBaseUrl() {
 }
 
 /**
- * Whether the dev escape hatch is active. Returns false unless the env flag
- * is the literal string "true" (so a typo like `NEXT_PUBLIC_ALLOW_DEV_LOGIN=1`
- * keeps the real OIDC flow). Vitest sets this true via `vitest.setup.js`
- * so the existing test suite keeps working without a live Keycloak.
+ * OIDC client_id from the build-time env, defaulting to the id the realm seed
+ * actually declares (`admin-ui`).
+ */
+export function keycloakClientId() {
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID) {
+    return process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID;
+  }
+  return DEFAULT_CLIENT_ID;
+}
+
+/**
+ * Whether the MANUAL login page is used instead of an automatic redirect to
+ * Keycloak. Returns false unless the env flag is the literal string "true" (so a
+ * typo like `NEXT_PUBLIC_ALLOW_DEV_LOGIN=1` keeps the auto-redirect). Vitest sets
+ * it true via `vitest.setup.js` so the suite never navigates jsdom away.
+ *
+ * It is NOT a password bypass: `POST /v1/auth/login` no longer exists on the BFF.
  */
 export function isDevLoginAllowed() {
   if (typeof process === 'undefined') return false;
@@ -119,7 +137,7 @@ export async function buildAuthRequest(returnTo = '/') {
   }
   const params = new URLSearchParams({
     response_type: 'code',
-    client_id: CLIENT_ID,
+    client_id: keycloakClientId(),
     redirect_uri: callbackUrl(),
     scope: 'openid profile email',
     state,
@@ -163,7 +181,7 @@ export async function exchangeCode({ code, state }) {
   }
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
-    client_id: CLIENT_ID,
+    client_id: keycloakClientId(),
     code,
     redirect_uri: callbackUrl(),
     code_verifier: verifier,
@@ -183,6 +201,35 @@ export async function exchangeCode({ code, state }) {
     window.sessionStorage.removeItem(STATE_KEY);
   } catch {
     /* ignore */
+  }
+  return res.json();
+}
+
+/**
+ * Silent token refresh (refresh_token grant, public client → no secret). Returns
+ * the new token response, or throws so the caller can start a full login. This
+ * replaces the deleted BFF `POST /v1/auth/refresh`.
+ *
+ * @param {string} refreshToken
+ * @returns {Promise<object>}
+ */
+export async function refreshTokens(refreshToken) {
+  if (!refreshToken) {
+    throw new Error('No refresh token provided');
+  }
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: keycloakClientId(),
+    refresh_token: refreshToken,
+  });
+  const res = await fetch(`${keycloakBaseUrl()}/protocol/openid-connect/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Token refresh failed (${res.status}): ${text || res.statusText}`);
   }
   return res.json();
 }
@@ -230,7 +277,7 @@ export function decodeJwtPayload(jwt) {
 export function logoutUrl(idToken, postLogoutRedirect) {
   const params = new URLSearchParams({
     post_logout_redirect_uri: postLogoutRedirect || `${origin()}/login`,
-    client_id: CLIENT_ID,
+    client_id: keycloakClientId(),
   });
   if (idToken) params.set('id_token_hint', idToken);
   return `${keycloakBaseUrl()}/protocol/openid-connect/logout?${params.toString()}`;

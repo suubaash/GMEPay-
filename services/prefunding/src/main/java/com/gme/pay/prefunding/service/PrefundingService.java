@@ -4,6 +4,11 @@ import com.gme.pay.errors.ApiException;
 import com.gme.pay.errors.ErrorCode;
 import com.gme.pay.prefunding.PrefundingAccount;
 import com.gme.pay.prefunding.alert.TierAlertEvaluator;
+import com.gme.pay.prefunding.audit.PrefundingAuditor;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.BalanceState;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.Limits;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.Movement;
+import com.gme.pay.prefunding.audit.PrefundingAuditor.UsageState;
 import com.gme.pay.prefunding.persistence.CumulativeUsageLedgerEntity;
 import com.gme.pay.prefunding.persistence.CumulativeUsageLedgerRepository;
 import com.gme.pay.prefunding.persistence.LedgerEntryEntity;
@@ -14,7 +19,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +40,26 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Slice 5: after every balance mutation the {@link TierAlertEvaluator} runs inside the
  * same transaction, so a raised {@code balance_alert} row and its outbox event commit
  * atomically with the new balance (transactional-Outbox contract, ADR-001).
+ *
+ * <h2>Audit (gap T5-1 / CISO §9)</h2>
+ *
+ * <p>Every mutating method here also writes one hash-chained {@code audit_log} row via
+ * {@link PrefundingAuditor}, in the same transaction, carrying <b>who</b> acted (in the
+ * {@link com.gme.pay.audit.AuditActors} vocabulary), the before/after position, and the reason where
+ * the API has one. {@code ledger_entry} keeps recording the money; it has no actor, no reason and no
+ * IP column, which is what the CISO audit flagged, and it is deliberately left alone.
+ *
+ * <p>Two rules the call sites below follow consistently:
+ *
+ * <ol>
+ *   <li><b>An idempotent replay writes no audit row.</b> A repeat deduct/reserve/reverse under a key
+ *       that already applied changes nothing, so there is nothing to attribute. Auditing it would
+ *       make the trail count Kafka redeliveries as movements.</li>
+ *   <li><b>Off-request paths name their own system principal.</b>
+ *       {@link #releaseReversedFloat} is reached only from the {@code payment.reversed} Kafka
+ *       consumer, so it passes {@link PrefundingAuditor#SYSTEM_REVERSAL_CONSUMER} rather than letting
+ *       the row fall through to {@code unattributed}.</li>
+ * </ol>
  */
 @Service
 public class PrefundingService {
@@ -49,14 +81,17 @@ public class PrefundingService {
     private final LedgerEntryRepository ledger;
     private final CumulativeUsageLedgerRepository cumulativeLedger;
     private final TierAlertEvaluator tierAlerts;
+    private final PrefundingAuditor audit;
 
     public PrefundingService(PartnerBalanceRepository balances, LedgerEntryRepository ledger,
                              CumulativeUsageLedgerRepository cumulativeLedger,
-                             TierAlertEvaluator tierAlerts) {
+                             TierAlertEvaluator tierAlerts,
+                             PrefundingAuditor audit) {
         this.balances = balances;
         this.ledger = ledger;
         this.cumulativeLedger = cumulativeLedger;
         this.tierAlerts = tierAlerts;
+        this.audit = audit;
     }
 
     /** Returns the current balance for {@code partnerId}, or throws if no such partner exists. */
@@ -102,6 +137,7 @@ public class PrefundingService {
             }
         }
         BigDecimal previousBalance = row.getBalance();
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.deduct(amount); // throws INSUFFICIENT_PREFUNDING if too low
         Instant now = Instant.now();
@@ -110,6 +146,9 @@ public class PrefundingService {
         PartnerBalanceEntity saved = balances.save(row);
         LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
                 ENTRY_DEBIT, amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.BALANCE_DEBITED,
+                before, BalanceState.of(row),
+                Movement.of(ENTRY_DEBIT, amount, idempotencyKey, entry.getId()), null);
         tierAlerts.afterBalanceChange(saved, previousBalance);
         return new DeductResult(newBalance, entry.getId(), false);
     }
@@ -122,14 +161,20 @@ public class PrefundingService {
     public BigDecimal credit(String partnerId, BigDecimal amount) {
         PartnerBalanceEntity row = lockOrThrow(partnerId);
         BigDecimal previousBalance = row.getBalance();
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.credit(amount);
         Instant now = Instant.now();
         row.setBalance(newBalance);
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, null, ENTRY_CREDIT, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, null, ENTRY_CREDIT,
+                amount, row.getCurrency(), now));
+        // The single most attribution-sensitive movement in the service: an operator top-up with no
+        // txnRef behind it. Before this, the only record was a CREDIT amount with no actor at all.
+        audit.balanceMovement(partnerId, PrefundingAuditor.BALANCE_CREDITED,
+                before, BalanceState.of(row),
+                Movement.of(ENTRY_CREDIT, amount, null, entry.getId()), null);
         tierAlerts.afterBalanceChange(saved, previousBalance);
         return newBalance;
     }
@@ -163,6 +208,7 @@ public class PrefundingService {
             return new ReverseResult(BigDecimal.ZERO, row.getBalance(), existingReversalId);
         }
         BigDecimal previousBalance = row.getBalance();
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.credit(debited);
         Instant now = Instant.now();
@@ -171,6 +217,10 @@ public class PrefundingService {
         PartnerBalanceEntity saved = balances.save(row);
         LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT,
                 debited, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.BALANCE_DEBIT_REVERSED,
+                before, BalanceState.of(row),
+                new Movement(ENTRY_CREDIT, debited, txnRef, entry.getId(),
+                        "reversal of the DEBIT recorded under this txnRef"), null);
         tierAlerts.afterBalanceChange(saved, previousBalance);
         return new ReverseResult(debited, newBalance, entry.getId());
     }
@@ -212,6 +262,7 @@ public class PrefundingService {
                     existingCredit != null ? existingCredit.getId() : null);
         }
         BigDecimal previousBalance = row.getBalance();
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         BigDecimal newBalance = account.credit(reversedUsd);
         Instant now = Instant.now();
@@ -220,6 +271,14 @@ public class PrefundingService {
         PartnerBalanceEntity saved = balances.save(row);
         LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CREDIT,
                 reversedUsd, row.getCurrency(), now));
+        // Reached only from the payment.reversed Kafka consumer: no HTTP request, no human. It names
+        // its component rather than being recorded as unattributed — an event-driven credit and a
+        // lost operator identity must not look the same in the log.
+        audit.balanceMovement(partnerId, PrefundingAuditor.REVERSED_FLOAT_RELEASED,
+                before, BalanceState.of(row),
+                new Movement(ENTRY_CREDIT, reversedUsd, txnRef, entry.getId(),
+                        "payment.reversed event — releasing held prefund float"),
+                PrefundingAuditor.SYSTEM_REVERSAL_CONSUMER);
         tierAlerts.afterBalanceChange(saved, previousBalance);
         return new ReverseResult(reversedUsd, newBalance, entry.getId());
     }
@@ -287,6 +346,10 @@ public class PrefundingService {
 
         cumulativeLedger.save(new CumulativeUsageLedgerEntity(
                 partnerId, txnRef, ENTRY_CUM_CHARGE, amt, dKey, mKey, yKey, now));
+        audit.cumulativeUsage(partnerId, PrefundingAuditor.CUMULATIVE_USAGE_CHARGED,
+                new UsageState(daily, monthly, annual),
+                new UsageState(daily.add(amt), monthly.add(amt), annual.add(amt)),
+                txnRef, amt, null);
         return new CumulativeChargeResult(daily.add(amt), monthly.add(amt), annual.add(amt));
     }
 
@@ -326,9 +389,18 @@ public class PrefundingService {
         if (charge == null) {
             return new CumulativeReverseResult(BigDecimal.ZERO);
         }
+        BigDecimal daily = cumulativeLedger.sumDaily(partnerId, charge.getDailyKey());
+        BigDecimal monthly = cumulativeLedger.sumMonthly(partnerId, charge.getMonthlyKey());
+        BigDecimal annual = cumulativeLedger.sumAnnual(partnerId, charge.getAnnualKey());
+        BigDecimal returned = charge.getAmountUsd();
         cumulativeLedger.save(new CumulativeUsageLedgerEntity(
-                partnerId, txnRef, ENTRY_CUM_REVERSE, charge.getAmountUsd().negate(),
+                partnerId, txnRef, ENTRY_CUM_REVERSE, returned.negate(),
                 charge.getDailyKey(), charge.getMonthlyKey(), charge.getAnnualKey(), Instant.now()));
+        audit.cumulativeUsage(partnerId, PrefundingAuditor.CUMULATIVE_USAGE_REVERSED,
+                new UsageState(daily, monthly, annual),
+                new UsageState(daily.subtract(returned), monthly.subtract(returned),
+                        annual.subtract(returned)),
+                txnRef, returned.negate(), null);
         return new CumulativeReverseResult(charge.getAmountUsd());
     }
 
@@ -367,14 +439,18 @@ public class PrefundingService {
             PrefundingAccount existing = toDomain(row);
             return new ReserveResult(active, existing.available(), row.getBalance());
         }
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         account.reserve(amount); // throws INSUFFICIENT_PREFUNDING if available < amount
         Instant now = Instant.now();
         row.setReserved(account.reserved());
         row.setUpdatedAt(now);
         balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RESERVE, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RESERVE,
+                amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.FUNDS_RESERVED,
+                before, BalanceState.of(row),
+                Movement.of(ENTRY_RESERVE, amount, txnRef, entry.getId()), null);
         return new ReserveResult(amount, account.available(), row.getBalance());
     }
 
@@ -391,6 +467,7 @@ public class PrefundingService {
             return new CaptureResult(BigDecimal.ZERO, row.getBalance());
         }
         BigDecimal previousBalance = row.getBalance();
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         account.capture(amount);
         Instant now = Instant.now();
@@ -398,8 +475,11 @@ public class PrefundingService {
         row.setReserved(account.reserved());
         row.setUpdatedAt(now);
         PartnerBalanceEntity saved = balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CAPTURE, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_CAPTURE,
+                amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.FUNDS_CAPTURED,
+                before, BalanceState.of(row),
+                Movement.of(ENTRY_CAPTURE, amount, txnRef, entry.getId()), null);
         tierAlerts.afterBalanceChange(saved, previousBalance);
         return new CaptureResult(amount, account.balance());
     }
@@ -415,14 +495,18 @@ public class PrefundingService {
         if (amount.signum() == 0) {
             return new ReleaseResult(BigDecimal.ZERO, row.getBalance());
         }
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         account.release(amount);
         Instant now = Instant.now();
         row.setReserved(account.reserved());
         row.setUpdatedAt(now);
         balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RELEASE, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, txnRef, ENTRY_RELEASE,
+                amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.FUNDS_RELEASED,
+                before, BalanceState.of(row),
+                Movement.of(ENTRY_RELEASE, amount, txnRef, entry.getId()), null);
         return new ReleaseResult(amount, row.getBalance());
     }
 
@@ -434,9 +518,15 @@ public class PrefundingService {
     @Transactional
     public CreditLimitResult setCreditLimit(String partnerId, BigDecimal creditLimit) {
         PartnerBalanceEntity row = lockOrThrow(partnerId);
+        Limits before = Limits.of(row);
         row.setCreditLimit(creditLimit == null ? BigDecimal.ZERO : creditLimit);
         row.setUpdatedAt(Instant.now());
         balances.save(row);
+        // Raising credit headroom lets a partner overdraw its prefund by that much: it is a money
+        // decision that writes NO ledger row, so before this audit row there was nowhere in the
+        // database that recorded who made it.
+        audit.limitChange(partnerId, PrefundingAuditor.CREDIT_LIMIT_SET, before, Limits.of(row),
+                null, null);
         PrefundingAccount account = toDomain(row);
         return new CreditLimitResult(row.getCreditLimit(), account.available(), row.getBalance());
     }
@@ -461,6 +551,11 @@ public class PrefundingService {
                                            BigDecimal amlDailyCapUsd, BigDecimal amlMonthlyCapUsd,
                                            BigDecimal amlAnnualCapUsd, Integer amlDailyTxnCountCap) {
         PartnerBalanceEntity row = balances.lockByPartnerId(partnerId).orElse(null);
+        // Limits.none() rather than a zero-filled snapshot when the row did not exist: "this partner
+        // had no configured limits" and "this partner had all-zero limits" are different facts, and
+        // an all-zero before would read as a headroom reduction that never happened.
+        Limits before = row == null ? Limits.none() : Limits.of(row);
+        boolean created = row == null;
         if (row == null) {
             row = new PartnerBalanceEntity(partnerId, "USD", BigDecimal.ZERO, null, Instant.now());
         }
@@ -471,6 +566,12 @@ public class PrefundingService {
         row.setAmlDailyTxnCountCap(amlDailyTxnCountCap);
         row.setUpdatedAt(Instant.now());
         balances.save(row);
+        audit.limitChange(partnerId, PrefundingAuditor.PARTNER_LIMITS_PUSHED, before, Limits.of(row),
+                created
+                        ? "config-registry limit push; partner_balance row created with a zero "
+                                + "opening balance because the push preceded provisioning"
+                        : "config-registry limit push",
+                null);
         PrefundingAccount account = toDomain(row);
         return new PartnerLimits(row.getCreditLimit(), row.getAmlDailyCapUsd(), row.getAmlMonthlyCapUsd(),
                 row.getAmlAnnualCapUsd(), row.getAmlDailyTxnCountCap(), account.available(), row.getBalance());
@@ -519,6 +620,7 @@ public class PrefundingService {
             return new CpmReserveResult(existingId, active, existing.available(),
                     row.getReserved(), true);
         }
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         account.reserve(amount); // throws INSUFFICIENT_PREFUNDING if available < amount
         Instant now = Instant.now();
@@ -527,6 +629,10 @@ public class PrefundingService {
         balances.save(row);
         LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
                 ENTRY_RESERVE, amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.FUNDS_RESERVED,
+                before, BalanceState.of(row),
+                new Movement(ENTRY_RESERVE, amount, idempotencyKey, entry.getId(),
+                        "overseas CPM token issuance"), null);
         return new CpmReserveResult(entry.getId(), amount, account.available(),
                 account.reserved(), false);
     }
@@ -543,14 +649,19 @@ public class PrefundingService {
         if (amount.signum() == 0) {
             return new CpmReleaseResult(BigDecimal.ZERO, row.getBalance(), row.getReserved());
         }
+        BalanceState before = BalanceState.of(row);
         PrefundingAccount account = toDomain(row);
         account.release(amount);
         Instant now = Instant.now();
         row.setReserved(account.reserved());
         row.setUpdatedAt(now);
         balances.save(row);
-        ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey, ENTRY_RELEASE, amount,
-                row.getCurrency(), now));
+        LedgerEntryEntity entry = ledger.save(new LedgerEntryEntity(partnerId, idempotencyKey,
+                ENTRY_RELEASE, amount, row.getCurrency(), now));
+        audit.balanceMovement(partnerId, PrefundingAuditor.FUNDS_RELEASED,
+                before, BalanceState.of(row),
+                new Movement(ENTRY_RELEASE, amount, idempotencyKey, entry.getId(),
+                        "overseas CPM token expiry / decline"), null);
         return new CpmReleaseResult(amount, row.getBalance(), account.reserved());
     }
 
@@ -580,6 +691,179 @@ public class PrefundingService {
 
     /** One deduction-history row: USD amount, the instant applied, and the originating txnRef. */
     public record DeductionHistoryRow(BigDecimal amountUsd, Instant at, String txnRef) {}
+
+    // ---- date-ranged float movements (GAP T2-8: finance / reconciliation read surface) ----
+
+    /** Direction label for an entry that reduces the partner's balance. */
+    public static final String DIRECTION_DEBIT = "DEBIT";
+    /** Direction label for an entry that increases the partner's balance. */
+    public static final String DIRECTION_CREDIT = "CREDIT";
+    /** Direction label for an entry that records something OTHER than a balance movement. */
+    public static final String DIRECTION_NONE = "NONE";
+
+    /**
+     * Every {@code entry_type} the ledger can hold — the vocabulary the {@code types} filter of
+     * {@code GET /v1/prefunding/{code}/movements} validates against. An unrecognised type is rejected
+     * rather than silently matching nothing: a typo that returned an empty page would read to a
+     * finance control exactly like "no movements happened".
+     */
+    public static final List<String> ALL_ENTRY_TYPES = List.of(
+            ENTRY_DEBIT, ENTRY_CREDIT, ENTRY_RESERVE, ENTRY_CAPTURE, ENTRY_RELEASE,
+            ENTRY_CUM_CHARGE, ENTRY_CUM_REVERSE);
+
+    /**
+     * The subset of entry types that actually move the balance: {@code DEBIT} and {@code CAPTURE}
+     * (down), {@code CREDIT} (up — this is what a reversal writes). Holds ({@code RESERVE},
+     * {@code RELEASE}) and the AML cumulative counters ({@code CUM_CHARGE}, {@code CUM_REVERSE})
+     * are excluded because they leave the balance untouched.
+     */
+    public static final List<String> BALANCE_MOVEMENT_TYPES =
+            List.of(ENTRY_DEBIT, ENTRY_CREDIT, ENTRY_CAPTURE);
+
+    /** Largest page a single movements request may ask for. */
+    public static final int MOVEMENTS_MAX_PAGE_SIZE = 1000;
+
+    /** Page size used when the caller does not specify one. */
+    public static final int MOVEMENTS_DEFAULT_PAGE_SIZE = 200;
+
+    /**
+     * All float movements for one partner in a date range, <b>paged</b> so the caller can tell a
+     * partial read from a complete one (GAP T2-8).
+     *
+     * <p>Window semantics: {@code [from, to)} — {@code from} <b>inclusive</b>, {@code to}
+     * <b>exclusive</b>. Consecutive windows therefore tile the timeline exactly once, which is the
+     * property a per-day reconciliation needs: an entry stamped precisely at a boundary belongs to
+     * one day only, so it can be neither double-counted nor lost.
+     *
+     * <p>Ordering is {@code created_at ASC, id ASC} — oldest first, with the surrogate key as
+     * tie-break so entries sharing an instant have one stable position and cannot repeat or vanish
+     * across page boundaries. (The older {@code recentDeductions} feed is newest-first because it
+     * backs a "recent activity" widget; a range query is a ledger read and reads forward.)
+     *
+     * <p>Unlike {@code recentDeductions} this method applies <b>no implicit cap</b>. {@code size}
+     * bounds one page (clamped to 1..{@value #MOVEMENTS_MAX_PAGE_SIZE}); the returned
+     * {@link MovementPage#totalElements()} and {@link MovementPage#hasNext()} tell the caller exactly
+     * how much more there is, so a set larger than any single page is walked in full rather than
+     * silently truncated.
+     *
+     * @param types entry types to include; {@code null}/empty means every type. Each must be a member
+     *              of {@link #ALL_ENTRY_TYPES} — an unknown value is a 400, never an empty result.
+     * @throws ApiException {@code VALIDATION_ERROR} if the window is absent/inverted or a type is unknown
+     */
+    @Transactional(readOnly = true)
+    public MovementPage movements(String partnerId, Instant from, Instant to,
+                                  Collection<String> types, int page, int size) {
+        if (from == null || to == null) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "from and to are required (ISO-8601 instants; from inclusive, to exclusive)");
+        }
+        if (!from.isBefore(to)) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                    "to (" + to + ") must be strictly after from (" + from + ") — the window is "
+                            + "half-open [from, to), so an empty or inverted range can never match");
+        }
+        int pageIndex = Math.max(page, 0);
+        int pageSize = size <= 0 ? MOVEMENTS_DEFAULT_PAGE_SIZE
+                : Math.min(size, MOVEMENTS_MAX_PAGE_SIZE);
+        List<String> filter = normaliseTypes(types);
+
+        Pageable pageable = PageRequest.of(pageIndex, pageSize,
+                Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+        Page<LedgerEntryEntity> found = filter.isEmpty()
+                ? ledger.findByPartnerIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                        partnerId, from, to, pageable)
+                : ledger.findByPartnerIdAndEntryTypeInAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                        partnerId, filter, from, to, pageable);
+
+        List<MovementRow> rows = found.getContent().stream()
+                .map(e -> new MovementRow(e.getId(), e.getTxnRef(), e.getEntryType(), e.getAmount(),
+                        balanceDelta(e.getEntryType(), e.getAmount()), direction(e.getEntryType()),
+                        e.getCurrency(), e.getCreatedAt()))
+                .toList();
+        return new MovementPage(rows, pageIndex, pageSize, found.getTotalElements(),
+                found.getTotalPages(), found.hasNext());
+    }
+
+    /** Validates + upper-cases the requested type filter; empty result means "no filter". */
+    private static List<String> normaliseTypes(Collection<String> types) {
+        if (types == null) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>(types.size());
+        for (String t : types) {
+            if (t == null || t.isBlank()) {
+                continue;
+            }
+            String upper = t.trim().toUpperCase(Locale.ROOT);
+            if (!ALL_ENTRY_TYPES.contains(upper)) {
+                throw new ApiException(ErrorCode.VALIDATION_ERROR,
+                        "unknown ledger entry type '" + t.trim() + "' — known types are "
+                                + ALL_ENTRY_TYPES);
+            }
+            if (!out.contains(upper)) {
+                out.add(upper);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Signed effect of one ledger entry on the partner's balance. DEBIT and CAPTURE reduce it;
+     * CREDIT (a top-up or a reversal) increases it; holds and AML counters are zero because they
+     * never touch the balance. Exposing this rather than making every consumer re-derive the sign
+     * from a type string is the point: the reconciliation nets a deduct against its reversal without
+     * having to know prefunding's internal vocabulary.
+     */
+    static BigDecimal balanceDelta(String entryType, BigDecimal amount) {
+        if (amount == null || entryType == null) {
+            return BigDecimal.ZERO;
+        }
+        return switch (entryType) {
+            case ENTRY_DEBIT, ENTRY_CAPTURE -> amount.negate();
+            case ENTRY_CREDIT -> amount;
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    /** Balance-movement direction of an entry type: DEBIT (down), CREDIT (up) or NONE. */
+    static String direction(String entryType) {
+        if (entryType == null) {
+            return DIRECTION_NONE;
+        }
+        return switch (entryType) {
+            case ENTRY_DEBIT, ENTRY_CAPTURE -> DIRECTION_DEBIT;
+            case ENTRY_CREDIT -> DIRECTION_CREDIT;
+            default -> DIRECTION_NONE;
+        };
+    }
+
+    /**
+     * One float movement.
+     *
+     * @param ledgerEntryId   the append-only ledger row's surrogate key — a stable citation for an
+     *                        auditor, and the tie-break that makes paging deterministic
+     * @param txnRef          reference the movement was keyed on ({@code null} for an operator
+     *                        top-up, which belongs to no transaction)
+     * @param entryType       prefunding's raw ledger type (DEBIT / CREDIT / CAPTURE / …)
+     * @param amountUsd       the magnitude exactly as stored, unsigned semantics per {@code entryType}
+     * @param balanceDeltaUsd signed change to the balance — negative = float consumed, positive =
+     *                        float returned, zero = no balance movement (hold / AML counter)
+     * @param direction       {@link #DIRECTION_DEBIT} / {@link #DIRECTION_CREDIT} / {@link #DIRECTION_NONE}
+     * @param currency        float currency (USD today)
+     * @param at              instant the movement was applied
+     */
+    public record MovementRow(Long ledgerEntryId, String txnRef, String entryType,
+                              BigDecimal amountUsd, BigDecimal balanceDeltaUsd, String direction,
+                              String currency, Instant at) {}
+
+    /**
+     * One page of movements plus the totals that make truncation impossible to miss.
+     *
+     * @param totalElements movements matching the whole window, not just this page
+     * @param hasNext       true when at least one more page exists — the caller's loop condition
+     */
+    public record MovementPage(List<MovementRow> rows, int page, int size, long totalElements,
+                               int totalPages, boolean hasNext) {}
 
     /** Net active hold for a (partner, txnRef) = sum RESERVE - sum CAPTURE - sum RELEASE. */
     private BigDecimal activeReservation(String partnerId, String txnRef) {

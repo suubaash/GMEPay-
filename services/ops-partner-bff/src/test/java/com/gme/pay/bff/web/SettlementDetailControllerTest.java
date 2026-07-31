@@ -53,15 +53,59 @@ class SettlementDetailControllerTest {
     }
 
     @Test
-    @DisplayName("GET /v1/admin/settlement/{batchId} returns batch + lines")
+    @DisplayName("GET /v1/admin/settlement/{batchId} returns batch + lines + matched/open counts")
     void detail_returns200() throws Exception {
-        mvc.perform(get("/v1/admin/settlement/{batchId}", "BATCH-20260608-001"))
+        mvc.perform(get("/v1/admin/settlement/{batchId}", "ZP0061-20260608-MORNING"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.batch.batchId").value("BATCH-20260608-001"))
+                .andExpect(jsonPath("$.batch.batchId").value("ZP0061-20260608-MORNING"))
                 .andExpect(jsonPath("$.batch.partnerId").value("partner_test_001"))
                 .andExpect(jsonPath("$.lines.length()").value(3))
                 .andExpect(jsonPath("$.lines[0].txnRef").value("TXN-1001"))
-                .andExpect(jsonPath("$.lines[2].matched").value(false));
+                .andExpect(jsonPath("$.lines[2].matched").value(false))
+                .andExpect(jsonPath("$.matchedCount").value(2))
+                .andExpect(jsonPath("$.openCount").value(1));
+    }
+
+    /**
+     * GAP T4-5: the drawer must not be able to show a settlement as done/sent. The seeded batch is
+     * {@code RECONCILED} — the confirmation file tied out — and still reports that nothing left the
+     * platform, because no transmission channel exists in any environment.
+     */
+    @Test
+    @DisplayName("T4-5: the batch reports a real status and is never presented as transmitted")
+    void detail_isHonestAboutTransmission() throws Exception {
+        mvc.perform(get("/v1/admin/settlement/{batchId}", "ZP0061-20260608-MORNING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.batch.status").value("RECONCILED"))
+                .andExpect(jsonPath("$.batch.transmissionState")
+                        .value("NOT_TRANSMITTED_CHANNEL_UNAVAILABLE"))
+                .andExpect(jsonPath("$.batch.transmittedAt").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.batch.transmissionReason")
+                        .value(org.hamcrest.Matchers.containsString("never sent")));
+    }
+
+    @Test
+    @DisplayName("T4-5: no stub batch anywhere says COMPLETED, and none is transmitted")
+    void recentSettlements_carryNoInventedStatus() throws Exception {
+        mvc.perform(get("/v1/admin/settlement/recent"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].status",
+                        org.hamcrest.Matchers.everyItem(
+                                org.hamcrest.Matchers.not(org.hamcrest.Matchers.is("COMPLETED")))))
+                .andExpect(jsonPath("$[*].transmissionState",
+                        org.hamcrest.Matchers.everyItem(
+                                org.hamcrest.Matchers.is("NOT_TRANSMITTED_CHANNEL_UNAVAILABLE"))));
+    }
+
+    @Test
+    @DisplayName("T4-5: the transmission-channel board is exposed and reports no live channel")
+    void transmissionChannelBoard() throws Exception {
+        mvc.perform(get("/v1/admin/settlement/transmission-channel"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.live").value(false))
+                .andExpect(jsonPath("$.reachableState").value("NOT_TRANSMITTED_CHANNEL_UNAVAILABLE"))
+                .andExpect(jsonPath("$.reason")
+                        .value(org.hamcrest.Matchers.containsString("never sent")));
     }
 
     @Test

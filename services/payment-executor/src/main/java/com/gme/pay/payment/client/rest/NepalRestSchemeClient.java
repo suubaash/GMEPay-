@@ -1,14 +1,14 @@
 package com.gme.pay.payment.client.rest;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.gme.pay.http.HttpClientTimeouts;
 import com.gme.pay.payment.domain.PaymentException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
+import com.gme.pay.payment.domain.SchemeOperationNotSupportedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.ClientHttpRequestFactories;
-import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -17,7 +17,6 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -41,6 +40,9 @@ import java.time.Instant;
 @Component
 public class NepalRestSchemeClient implements SchemeClient {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(NepalRestSchemeClient.class);
+
     /** Router key this adapter serves. */
     public static final String SCHEME_CODE = "NEPAL";
 
@@ -55,11 +57,17 @@ public class NepalRestSchemeClient implements SchemeClient {
             @Value("${gmepay.scheme.read-timeout-millis:5000}") long readTimeoutMillis) {
         // Hard connect + read timeout (see RestSchemeClient): a hung Nepal adapter socket aborts fast
         // as ResourceAccessException → SchemeTimeoutException rather than stalling the pay path.
-        ClientHttpRequestFactorySettings timeouts = ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
-                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
+        // T3-11: HttpClientTimeouts, not ClientHttpRequestFactories.get(..). The Boot 3.3 helper
+        // picks a transport by CLASSPATH SCAN and, with no Apache/Jetty/Reactor client present, falls
+        // back to SimpleClientHttpRequestFactory (HttpURLConnection) -- under which a read timeout was
+        // observed to surface as a RestClientException from BODY EXTRACTION rather than the
+        // ResourceAccessException the catch blocks below expect. That difference is not cosmetic: it
+        // meant a hung scheme produced a PaymentException, which PaymentOrchestrator does not catch,
+        // so no UNCERTAIN row was written and the payment simply vanished from ops' view. Naming the
+        // JDK transport explicitly makes the timeout's exception type deterministic (and keeps PATCH
+        // working, which HttpURLConnection rejects outright). Pinned by InternalHttpTimeoutTest.
         this.restClient = builder.baseUrl(baseUrl)
-                .requestFactory(ClientHttpRequestFactories.get(timeouts))
+                .requestFactory(HttpClientTimeouts.requestFactory(connectTimeoutMillis, readTimeoutMillis))
                 .build();
     }
 
@@ -104,13 +112,17 @@ public class NepalRestSchemeClient implements SchemeClient {
         }
     }
 
+    /**
+     * Nepal pay is single-phase (submit = authorize+commit) and the adapter exposes no cancel endpoint,
+     * so there is nothing to call. T2-7: this now raises the structured
+     * {@link SchemeOperationNotSupportedException} ({@code SCHEME_OPERATION_UNSUPPORTED}) so the caller
+     * gets an unambiguous "this corridor has no refund path" answer — previously the router discarded
+     * the scheme code and a Nepal refund came back as a ZeroPay decline.
+     */
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
-        // Nepal pay is single-phase (submit = authorize+commit); the adapter exposes no
-        // cancel endpoint. Cancellation is not part of the Nepal contract, so this is a
-        // no-op rather than a misrouted call to a non-existent endpoint.
-        throw new PaymentException(
-                "NEPAL is single-phase (submit=authorize+commit); cancelPayment is not supported");
+        throw new SchemeOperationNotSupportedException(SCHEME_CODE, "cancelPayment",
+                "NEPAL is single-phase (submit=authorize+commit); the adapter exposes no cancel endpoint");
     }
 
     /**
@@ -142,6 +154,40 @@ public class NepalRestSchemeClient implements SchemeClient {
             return LookupStatus.NOT_FOUND;
         } catch (RuntimeException ex) {
             return LookupStatus.NOT_FOUND;
+        }
+    }
+
+    /**
+     * T4-4: decodes the scanned QR to the receiver/merchant display name via the adapter's
+     * {@code POST /internal/scheme/nepal/decode}. This corridor performs NO hub-side merchant lookup
+     * (see {@code NepalPaymentService} step 6 — the adapter resolves the merchant from the QR itself),
+     * so the adapter is the only component that can name who is being paid, and the name has to be
+     * asked for explicitly: the {@code /submit} response carries {@code {schemeTxnRef,status,amountPaisa}}
+     * and nothing else.
+     *
+     * <p>Never throws, per the {@link SchemeClient#resolveMerchantName} contract: a decode failure,
+     * an empty body or a blank name all degrade to null so the payment is unaffected and the receipt
+     * honestly shows "—". Returning the merchant CITY or the raw QR would be worse than nothing.
+     */
+    @Override
+    public String resolveMerchantName(String schemeId, String qrPayload) {
+        if (qrPayload == null || qrPayload.isBlank()) {
+            return null;
+        }
+        try {
+            NepalDecodeResponse body = restClient.post()
+                    .uri("/internal/scheme/nepal/decode")
+                    .body(new NepalDecodeRequest(qrPayload))
+                    .retrieve()
+                    .body(NepalDecodeResponse.class);
+            if (body == null || body.merchantName() == null || body.merchantName().isBlank()) {
+                return null;
+            }
+            return body.merchantName().trim();
+        } catch (RuntimeException ex) {
+            log.debug("scheme-adapter-nepal decode unavailable — merchant name left unknown: {}",
+                    ex.toString());
+            return null;
         }
     }
 
@@ -205,6 +251,24 @@ public class NepalRestSchemeClient implements SchemeClient {
             String schemeTxnRef,
             String status,
             BigDecimal amountPaisa
+    ) {}
+
+    /**
+     * T4-4 decode contract. {@code qs} matches the adapter's {@code DecodeRequest} field name exactly
+     * (Jackson binds by name); the response is its {@code DecodeResponse}, of which only the merchant
+     * name is read here — {@code merchantCity} / {@code network} are deliberately NOT used as
+     * stand-ins for a missing name.
+     */
+    record NepalDecodeRequest(String qs) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record NepalDecodeResponse(
+            String network,
+            String merchantId,
+            String merchantName,
+            String merchantCity,
+            Long amountPaisa,
+            String currency
     ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)

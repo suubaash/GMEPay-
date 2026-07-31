@@ -1,105 +1,23 @@
+/**
+ * The E2E Test tab is now an honest DISABLED notice, not a runner console (GAP T0-5).
+ *
+ * The old suite drove a run form and asserted on POST /e2e/run + the run history
+ * table. Those paths no longer exist: the payment-executor sandbox runner is
+ * @ConditionalOnProperty (404 by default) and internal-token gated when on, and the
+ * admin portal's same-origin `/e2e/*` rewrite was deleted. Coverage is therefore
+ * inverted rather than dropped — the meaningful assertions now are:
+ *
+ *  1. the tab says the runner is not enabled (instead of looking broken),
+ *  2. it explains it is a dev-only tool and how to run the journey without the portal,
+ *  3. it makes NO network call — in particular nothing to /e2e/**,
+ *  4. it offers no run affordance that could imply money can be moved from here.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material/styles';
 import { theme } from '@/theme/theme';
 
 import E2eTestConsole from './E2eTestConsole';
-
-const OPTIONS = {
-  countries: [
-    { code: 'NP', label: 'Nepal', currency: 'NPR' },
-    { code: 'KR', label: 'Korea', currency: 'KRW' },
-  ],
-  partners: [
-    { code: 'GMEREMIT', label: 'GMEREMIT' },
-    { code: 'SENDMN', label: 'SENDMN' },
-  ],
-  mpmTypes: ['STATIC', 'DYNAMIC'],
-};
-
-const HISTORY = [
-  {
-    id: 'run-1',
-    createdAt: '2026-07-03T10:00:00Z',
-    country: 'NP',
-    partner: 'GMEREMIT',
-    amount: 100,
-    currency: 'NPR',
-    mpmType: 'STATIC',
-    status: 'PASS',
-    failedStep: null,
-    stepCount: 4,
-  },
-  {
-    id: 'run-2',
-    createdAt: '2026-07-03T09:00:00Z',
-    country: 'KR',
-    partner: 'SENDMN',
-    amount: 5000,
-    currency: 'KRW',
-    mpmType: 'DYNAMIC',
-    status: 'FAIL',
-    failedStep: 'Pay',
-    stepCount: 3,
-  },
-];
-
-const PASS_RUN = {
-  id: 'run-3',
-  createdAt: '2026-07-03T11:00:00Z',
-  country: 'NP',
-  partner: 'GMEREMIT',
-  amount: 100,
-  currency: 'NPR',
-  mpmType: 'STATIC',
-  status: 'PASS',
-  failedStep: null,
-  stepCount: 2,
-  steps: [
-    { seq: 1, name: 'Create QR', status: 'PASS', detail: 'QR generated', latencyMs: 12, httpStatus: 200 },
-    { seq: 2, name: 'Pay', status: 'PASS', detail: 'Payment approved', latencyMs: 30, httpStatus: 200 },
-  ],
-};
-
-const FAIL_RUN = {
-  id: 'run-4',
-  createdAt: '2026-07-03T11:05:00Z',
-  country: 'NP',
-  partner: 'GMEREMIT',
-  amount: 100,
-  currency: 'NPR',
-  mpmType: 'STATIC',
-  status: 'FAIL',
-  failedStep: 'Pay',
-  stepCount: 2,
-  steps: [
-    { seq: 1, name: 'Create QR', status: 'PASS', detail: 'QR generated', latencyMs: 12, httpStatus: 200 },
-    { seq: 2, name: 'Pay', status: 'FAIL', detail: 'Wallet declined', latencyMs: 8, httpStatus: 402 },
-  ],
-};
-
-function jsonResponse(body, ok = true, status = 200) {
-  return Promise.resolve({ ok, status, json: () => Promise.resolve(body) });
-}
-
-// Route fetch by path. `runBody` is the RunDetail returned by POST /e2e/run.
-function installFetch(runBody = PASS_RUN, history = HISTORY) {
-  const fetchMock = vi.fn((url, opts) => {
-    const u = String(url);
-    if (u.includes('/e2e/options')) return jsonResponse(OPTIONS);
-    if (u.includes('/e2e/run') && opts?.method === 'POST') return jsonResponse(runBody);
-    if (u.match(/\/e2e\/runs\/[^?]+$/)) {
-      const id = u.split('/').pop();
-      const found = history.find((h) => h.id === id) || runBody;
-      return jsonResponse(found);
-    }
-    if (u.includes('/e2e/runs')) return jsonResponse(history);
-    return jsonResponse({}, false, 404);
-  });
-  global.fetch = fetchMock;
-  return fetchMock;
-}
 
 function renderConsole() {
   return render(
@@ -109,77 +27,50 @@ function renderConsole() {
   );
 }
 
-describe('E2eTestConsole', () => {
+describe('E2eTestConsole (disabled sandbox runner notice)', () => {
+  let fetchMock;
+
   beforeEach(() => {
-    installFetch();
+    fetchMock = vi.fn(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) }),
+    );
+    global.fetch = fetchMock;
   });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('renders the run form inputs', async () => {
+  it('states that the sandbox runner is not enabled', () => {
     renderConsole();
-    expect(screen.getByRole('button', { name: /run test/i })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /static/i })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /dynamic/i })).toBeInTheDocument();
-    // Amount input (label starts with "Amount"; use the spinbutton role to avoid
-    // matching the "amount is in the QR" helper/radio text).
-    expect(screen.getByRole('spinbutton')).toBeInTheDocument();
-    // Country + Partner selects present.
-    expect(screen.getByLabelText('Country')).toBeInTheDocument();
-    expect(screen.getByLabelText('Partner')).toBeInTheDocument();
+    expect(screen.getByTestId('e2e-runner-disabled')).toBeInTheDocument();
+    expect(screen.getByText(/sandbox runner not enabled/i)).toBeInTheDocument();
+    expect(screen.getByText(/not reachable from the/i)).toBeInTheDocument();
   });
 
-  it('renders the history table rows from GET /e2e/runs', async () => {
+  it('is presented as a developer tool and names the gate + the removed proxy', () => {
     renderConsole();
-    await waitFor(() => {
-      expect(screen.getByTestId('history-row-run-1')).toBeInTheDocument();
-    });
-    expect(screen.getByTestId('history-row-run-2')).toBeInTheDocument();
-    const passRow = screen.getByTestId('history-row-run-1');
-    expect(within(passRow).getByText('PASS')).toBeInTheDocument();
-    const failRow = screen.getByTestId('history-row-run-2');
-    expect(within(failRow).getByText('FAIL')).toBeInTheDocument();
+    expect(screen.getByText(/developer tool/i)).toBeInTheDocument();
+    expect(screen.getByText('gmepay.sandbox.e2e.enabled=true')).toBeInTheDocument();
+    expect(screen.getAllByText('X-Gme-Internal').length).toBeGreaterThan(0);
+    expect(screen.getByText(/proxy to it was removed/i)).toBeInTheDocument();
   });
 
-  it('clicking Run posts to /e2e/run and shows the PASS banner + steps', async () => {
-    const fetchMock = installFetch(PASS_RUN);
-    const user = userEvent.setup();
+  it('explains how to run the journey without the portal', () => {
     renderConsole();
-
-    await user.click(screen.getByRole('button', { name: /run test/i }));
-
-    await waitFor(() => {
-      // The result banner heading (distinct from the status Alert line).
-      expect(screen.getByText('✅ Payment journey passed')).toBeInTheDocument();
-    });
-    // POST body carried the form values.
-    const postCall = fetchMock.mock.calls.find(
-      ([u, o]) => String(u).includes('/e2e/run') && o?.method === 'POST',
-    );
-    expect(postCall).toBeTruthy();
-    expect(JSON.parse(postCall[1].body)).toMatchObject({
-      country: 'NP',
-      partner: 'GMEREMIT',
-      mpmType: 'STATIC',
-      amount: 100,
-    });
-    // Steps rendered.
-    expect(screen.getByText(/1\. Create QR/)).toBeInTheDocument();
-    expect(screen.getByText(/2\. Pay/)).toBeInTheDocument();
+    expect(screen.getByText(/running the journey from a dev machine/i)).toBeInTheDocument();
+    expect(screen.getByText('POST /v1/sandbox/e2e/run')).toBeInTheDocument();
   });
 
-  it('a FAIL run shows "Failed at: Pay" and the failed step', async () => {
-    installFetch(FAIL_RUN);
-    const user = userEvent.setup();
+  it('makes no network call at all (nothing to /e2e/**)', () => {
     renderConsole();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    await user.click(screen.getByRole('button', { name: /run test/i }));
-
-    await waitFor(() => {
-      // The result banner heading carries the ❌ prefix (distinct from the status Alert).
-      expect(screen.getByText('❌ Failed at: Pay')).toBeInTheDocument();
-    });
-    expect(screen.getByText(/Wallet declined/)).toBeInTheDocument();
+  it('offers no run affordance', () => {
+    renderConsole();
+    expect(screen.queryByRole('button', { name: /run test/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
   });
 });

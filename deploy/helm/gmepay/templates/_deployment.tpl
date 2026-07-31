@@ -21,6 +21,15 @@ Per-service value object shape (see values.yaml for the full schema):
     port          probe port (default containerPort)
   serviceType     ClusterIP (default) | NodePort | LoadBalancer
   ingress         (handled separately in ingress.yaml)
+
+  --- container hardening (gap T5-5) ---
+  podSecurityContext        overrides merged ON TOP of global.podSecurityContext
+  containerSecurityContext  overrides merged ON TOP of global.containerSecurityContext
+                            (the two SPAs need runAsUser 1001, not the JVM images' 10001)
+  writablePaths             list of paths that MUST stay writable under
+                            readOnlyRootFilesystem; each becomes an emptyDir
+                            mount. Appended to global.writablePaths (which
+                            carries /tmp for every JVM's java.io.tmpdir).
 */}}
 {{- define "gmepay.deployment" -}}
 {{- $key := .key -}}
@@ -32,6 +41,14 @@ Per-service value object shape (see values.yaml for the full schema):
 {{- $probeType := $probe.type | default "tcp" -}}
 {{- $probePath := $probe.path | default $root.Values.global.healthPath -}}
 {{- $probePort := $probe.port | default $port -}}
+{{- /* ---------------------------------------------------------------------
+     T5-5 container hardening. deepCopy before mergeOverwrite because
+     mergeOverwrite MUTATES its first argument — without the copy, the first
+     service rendered would permanently rewrite global.* for every later one.
+     -------------------------------------------------------------------- */}}
+{{- $podSec := mergeOverwrite (deepCopy ($root.Values.global.podSecurityContext | default dict)) ($svc.podSecurityContext | default dict) -}}
+{{- $ctrSec := mergeOverwrite (deepCopy ($root.Values.global.containerSecurityContext | default dict)) ($svc.containerSecurityContext | default dict) -}}
+{{- $writable := concat ($root.Values.global.writablePaths | default list) ($svc.writablePaths | default list) | uniq -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,7 +58,20 @@ metadata:
     {{- include "gmepay.selectorLabels" $ctx | nindent 4 }}
     app.kubernetes.io/component: {{ $svc.component | default "backend" }}
 spec:
+  {{- /* -------------------------------------------------------------------
+       Replica count. `replicas` is a PER-SERVICE cost decision (see the
+       `autoscaling:` block in values.yaml for which services are safe at N>1
+       and which are not); global.defaultReplicas is the floor, and it is 1.
+
+       When an HPA manages this Deployment the field is OMITTED ENTIRELY rather
+       than set to 1. A Deployment that keeps a hardcoded replica count while an
+       HPA scales it fights the HPA on every `helm upgrade` — the visible symptom
+       is an autoscaler that "randomly" resets the pod count back to 1 mid-load.
+       hpa.yaml and this branch read the SAME helper so they cannot disagree.
+       ------------------------------------------------------------------- */}}
+  {{- if not (include "gmepay.autoscalingEnabled" (dict "svc" $svc "root" $root)) }}
   replicas: {{ $svc.replicas | default $root.Values.global.defaultReplicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "gmepay.selectorLabels" $ctx | nindent 6 }}
@@ -53,15 +83,44 @@ spec:
       annotations:
         # Roll pods when the ABI config or secrets change.
         checksum/abi-config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- /*
+          T3-2 — advertise the Prometheus scrape target. Every service now really serves
+          /actuator/prometheus (Micrometer registry on all 20 deployables, endpoint exposed
+          fleet-wide by com.gme.pay.platform.MetricsExposureEnvironmentPostProcessor); before this
+          iteration the path 404'd everywhere despite comments claiming otherwise.
+
+          These annotations are the discovery convention for a kubernetes_sd Prometheus. They do NOT
+          deploy Prometheus — this chart still ships no monitoring stack, which stays an open part of
+          T3-2. The scrape requires the platform internal token (X-Gme-Internal), so the scrape job
+          also needs that header; see Documentation/RUNBOOK_MONITORING.md for the scrape_configs
+          snippet. Set monitoring.podAnnotations=false to suppress them.
+        */}}
+        {{- if $root.Values.monitoring.podAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: {{ $root.Values.monitoring.scrapePath | quote }}
+        prometheus.io/port: {{ $port | quote }}
+        {{- end }}
     spec:
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* Pod-level: runAsNonRoot/runAsUser/fsGroup + seccomp. Gap T5-5. */}}
+      {{- with $podSec }}
+      securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: {{ $key }}
           image: {{ include "gmepay.image" (dict "svc" $svc "root" $root) }}
           imagePullPolicy: {{ $svc.imagePullPolicy | default $root.Values.global.imagePullPolicy }}
+          {{- /* Container-level: the fields the kubelet actually enforces per
+                 process — no privilege escalation, ALL capabilities dropped,
+                 read-only root filesystem. Gap T5-5. */}}
+          {{- with $ctrSec }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ $port }}
@@ -86,10 +145,22 @@ spec:
                   name: {{ include "gmepay.secretName" $root }}
                   key: {{ $secretKey }}
             {{- end }}
-            {{- /* Per-service literal env (base URLs, feature flags, datasource URL). */}}
+            {{- /* ---------------------------------------------------------------
+                 Per-service literal env (base URLs, feature flags, datasource URL).
+
+                 Rendered through `tpl` (gap T3-10) so a value may reference the release
+                 context — in practice `{{ .Release.Name }}`. This is not cosmetic: the
+                 Service object above is named `{{ .Release.Name }}-{{ $key }}`, so the
+                 in-cluster DNS name of every service carries the release prefix. Values
+                 used to hard-code bare hostnames (`http://config-registry:8080`), which
+                 resolve to NOTHING in any real release — every cross-service call in a
+                 Helm deployment failed DNS. Base URLs are now written
+                 `http://{{ .Release.Name }}-config-registry:8080` and this is what makes
+                 that work. Plain values are unaffected (tpl is a no-op without braces).
+                 ------------------------------------------------------------- */}}
             {{- range $k, $v := $svc.env }}
             - name: {{ $k }}
-              value: {{ $v | quote }}
+              value: {{ tpl (printf "%v" $v) $root | quote }}
             {{- end }}
           {{- if $svc.resources }}
           resources:
@@ -132,6 +203,28 @@ spec:
             periodSeconds: {{ $probe.periodSeconds | default 10 }}
             failureThreshold: {{ $probe.failureThreshold | default 6 }}
           {{- end }}
+          {{- /* ---------------------------------------------------------------
+               T5-5: readOnlyRootFilesystem is on for every container, so the few
+               paths a process legitimately writes are mounted as emptyDir rather
+               than the whole filesystem being left writable. global.writablePaths
+               carries /tmp (every JVM's java.io.tmpdir — embedded Tomcat's work
+               dir and scheme-adapter-zeropay's ${java.io.tmpdir}/gmepay/{in,out}bound
+               live there); per-service writablePaths add the rest.
+               ------------------------------------------------------------- */}}
+          {{- if $writable }}
+          volumeMounts:
+            {{- range $writable }}
+            - name: writable-{{ . | trimPrefix "/" | replace "/" "-" | replace "." "-" | replace "_" "-" | lower }}
+              mountPath: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+      {{- if $writable }}
+      volumes:
+        {{- range $writable }}
+        - name: writable-{{ . | trimPrefix "/" | replace "/" "-" | replace "." "-" | replace "_" "-" | lower }}
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

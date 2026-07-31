@@ -63,6 +63,10 @@ import org.springframework.scheduling.annotation.Scheduled;
         AuditLogService.class, PartnerStore.class, CacheConfig.class})
 class PartnerCredentialRotationSchedulerTest {
 
+    /** The named system principal the scheduler now writes (gap T5-1). */
+    private static final String ROTATION_ACTOR =
+            com.gme.pay.audit.AuditActors.system("credential-rotation");
+
     @Autowired
     private PartnerCredentialRotationScheduler scheduler;
 
@@ -148,7 +152,7 @@ class PartnerCredentialRotationSchedulerTest {
         verify(changeRequestService).propose(
                 eq(PartnerCredentialRotationScheduler.AGGREGATE_TYPE),
                 eq("ROT_OLD"),
-                eq("system"),
+                eq(ROTATION_ACTOR),
                 contains("\"environment\":\"SANDBOX\""),
                 any(String[].class));
         verify(changeRequestService, never()).propose(
@@ -170,7 +174,7 @@ class PartnerCredentialRotationSchedulerTest {
         open.setAggregateType(PartnerCredentialRotationScheduler.AGGREGATE_TYPE);
         open.setAggregateId("ROT_OPEN");
         open.setState(ChangeRequestState.PROPOSED);
-        open.setProposedBy("system");
+        open.setProposedBy(ROTATION_ACTOR);
         open.setProposedAt(now.truncatedTo(ChronoUnit.MICROS));
         changeRequestRepository.saveAndFlush(open);
 
@@ -200,7 +204,12 @@ class PartnerCredentialRotationSchedulerTest {
                 .toList();
         assertThat(events).hasSize(1);
         assertThat(events.get(0).aggregateId()).isEqualTo("ROT_AUD");
-        assertThat(events.get(0).actorId()).isEqualTo("system");
+        assertThat(events.get(0).actorId())
+                .as("gap T5-1: an automated rotation proposal names its component instead of "
+                        + "writing the bare \"system\" literal, which was simultaneously the "
+                        + "4-eyes carve-out and the missing-header default")
+                .isEqualTo(ROTATION_ACTOR);
+        assertThat(events.get(0).actorId()).isNotEqualTo("system");
         String after = new String(events.get(0).afterJsonb(), StandardCharsets.UTF_8);
         assertThat(after).contains("\"environment\":\"SANDBOX\"");
         assertThat(after).contains(String.valueOf(row.getId()));

@@ -42,11 +42,25 @@ Signed calls (`pay`, `status`) send `{"data": base64(json), "signature": <sig>}`
 JSON carries a `nonce` (Nepal-time UNIX seconds) equal to the `X-KhaltiNonce` header.
 
 - **`NepalRequestSigner`** — the seam.
-- **`StubNepalSigner`** (default `@Component`) — injects `nonce = now`, base64-encodes the JSON into
-  `data`, returns a **placeholder signature** (the sim accepts any). Sufficient end-to-end vs the sim.
-- **TODO — real signer:** a production `RsaNepalSigner` must sign `SHA-256(base64(json))` with
-  **RSA-2048 / PKCS#1 v1.5** using the Khalti-provided private key. Not implemented here (no key
-  material / no real endpoint). See the Javadoc on `StubNepalSigner`.
+- **`RsaNepalSigner`** (the only `@Component`) — injects `nonce = now`, base64-encodes the JSON into
+  `data`, and signs the base64 **text** with **RSA / PKCS#1 v1.5 / SHA-256** (`SHA256withRSA`,
+  minimum 2048-bit). This replaced `StubNepalSigner`, which returned the constant
+  `c3R1Yi1zaWduYXR1cmU=` for every request — accepted by the sim (it soft-logs signatures) and
+  rejected by the real scheme, i.e. a defect that only surfaced in production (gap **T4-1**).
+
+**Key material comes from configuration; no key is committed, and the adapter fails CLOSED without
+one** (signed `pay`/`status` answer `503 SCHEME_UNAVAILABLE`; `/decode` and health are unaffected):
+
+| property | meaning |
+|---|---|
+| `gmepay.scheme.nepal.signing.private-key` | PKCS#8 key, PEM or bare base64 DER (env `GMEPAY_SCHEME_NEPAL_SIGNING_PRIVATE_KEY`) |
+| `gmepay.scheme.nepal.signing.private-key-path` | path to a mounted secret file with the same |
+| `gmepay.scheme.nepal.signing.mode=EPHEMERAL_DEV` | **local/sim only:** mint a throwaway RSA-2048 keypair at startup (loudly logged). The real signing path still runs; the live scheme holds no matching public key. |
+
+A PKCS#1 key (`BEGIN RSA PRIVATE KEY`) must be converted first:
+`openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem`.
+`docker-compose.yml` sets `EPHEMERAL_DEV` for the single-host stack; production must mount the real
+Khalti-issued key and leave `mode` unset.
 
 ## Error mapping (partner → canonical `ErrorCode`)
 

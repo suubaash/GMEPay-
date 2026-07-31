@@ -2,6 +2,7 @@ package com.gme.pay.notify.persistence;
 
 import com.gme.pay.notify.alert.WebhookAlertService;
 import com.gme.pay.notify.domain.RetryPolicy;
+import com.gme.pay.notify.domain.WebhookPayloads;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -106,6 +107,10 @@ public class WebhookPersistenceService {
         row.setAttempt(0);
         row.setStatus(STATUS_PENDING);
         row.setCreatedAt(now);
+        // V009: stamp the partner so the drain can select per endpoint. Read here, once, at enqueue —
+        // the drain must not have to parse every candidate row's JSON just to decide whose share it
+        // belongs to. A null (unparseable / partner-less payload) is legitimate and handled downstream.
+        row.setPartnerId(WebhookPayloads.partnerId(payload));
         return Optional.of(deliveryRepository.save(row));
     }
 

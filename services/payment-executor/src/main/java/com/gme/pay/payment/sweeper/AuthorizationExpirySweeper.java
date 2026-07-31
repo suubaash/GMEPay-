@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -52,7 +53,13 @@ public class AuthorizationExpirySweeper {
         this.batchSize = batchSize;
     }
 
+    // T3-11: this sweeper releases prefunding holds on expired authorizations. Two replicas would
+    // each select the same expired rows and each issue a release, so a partner's float could be
+    // credited twice for one authorization. lockAtMostFor is the crash safety net (a dead holder
+    // releases nothing) and is set above the worst-case paged sweep.
     @Scheduled(fixedDelayString = "${gmepay.payments.authz.sweeper.interval-ms:60000}")
+    @SchedulerLock(name = "AuthorizationExpirySweeper_sweepExpired",
+            lockAtMostFor = "PT10M", lockAtLeastFor = "PT0S")
     public void sweepExpired() {
         sweepOnce(Instant.now());
     }

@@ -4,16 +4,18 @@
     --ground:#F6F7F9; --surface:#FFFFFF; --ink:#14263F; --body:#3A4653;
     --muted:#6B7683; --accent:#0E7C7B; --accent-2:#0B5F5E; --tint:#E7F1F0;
     --hair:#E4E7EC; --warn-bg:#FBF5E9; --warn-bd:#E8D6A8; --warn-ink:#7A5B14;
+    --bad-bg:#FCEDEC; --bad-bd:#E9C3BF; --bad-ink:#8A2F26;
+    --info-bg:#EDF3FA; --info-bd:#C6D8ED; --info-ink:#254B76;
+    --ok-bg:#EAF5EE; --ok-bd:#BFDECB; --ok-ink:#1F6136;
     --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--ground);color:var(--body);font-family:var(--sans);
     font-size:16px;line-height:1.62;-webkit-text-size-adjust:100%;}
-  .wrap{max-width:720px;margin:0 auto;padding:22px 18px 72px;}
+  .wrap{max-width:760px;margin:0 auto;padding:22px 18px 72px;}
   .card{background:var(--surface);border:1px solid var(--hair);border-radius:14px;
     padding:20px 18px;margin:14px 0;}
-  /* header */
   header{padding:14px 2px 6px;}
   .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
     color:var(--accent);font-weight:600;}
@@ -22,13 +24,13 @@
   .sub{color:var(--muted);font-size:15px;margin:0 0 12px;text-wrap:balance;}
   .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);border-top:1px solid var(--hair);
     padding-top:10px;margin-top:8px;}
-  /* nav */
   nav{margin:16px 0;}
   nav a{display:block;text-decoration:none;color:var(--ink);font-size:14.5px;padding:9px 12px;
     border:1px solid var(--hair);border-radius:9px;background:var(--surface);margin:6px 0;}
   nav a .n{font-family:var(--mono);color:var(--accent);font-weight:600;margin-right:9px;font-size:12.5px;}
   nav a:active{background:var(--tint);}
-  /* headings */
+  nav a.alarm{border-color:var(--bad-bd);background:var(--bad-bg);color:var(--bad-ink);font-weight:700;}
+  nav a.alarm .n{color:var(--bad-ink);}
   h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent-2);
     margin:34px 0 4px;font-weight:700;}
   h2 .big{display:block;font-family:var(--sans);font-size:22px;letter-spacing:-.01em;text-transform:none;
@@ -36,14 +38,12 @@
   h3{font-size:17px;color:var(--ink);margin:22px 0 4px;font-weight:750;line-height:1.25;text-wrap:balance;}
   p{margin:.5em 0;}
   .lead{color:var(--body);font-size:16.5px;}
-  /* labelled bullets */
   ul.plain{list-style:none;margin:.4em 0;padding:0;}
   ul.plain>li{position:relative;padding:7px 0 7px 20px;border-bottom:1px solid var(--hair);}
   ul.plain>li:last-child{border-bottom:0;}
   ul.plain>li::before{content:"";position:absolute;left:2px;top:15px;width:7px;height:7px;border-radius:2px;
     background:var(--accent);}
   b.lab{color:var(--ink);}
-  /* numbered flow */
   ol.flow{list-style:none;margin:.6em 0;padding:0;counter-reset:s;}
   ol.flow>li{counter-increment:s;position:relative;padding:4px 0 14px 44px;}
   ol.flow>li::before{content:counter(s);position:absolute;left:0;top:1px;width:28px;height:28px;
@@ -52,280 +52,193 @@
   ol.flow>li::after{content:"";position:absolute;left:13px;top:30px;bottom:2px;width:2px;background:var(--hair);}
   ol.flow>li:last-child::after{display:none;}
   ol.flow .lab{color:var(--ink);font-weight:700;}
-  /* note callout */
   .note{background:var(--warn-bg);border:1px solid var(--warn-bd);color:var(--warn-ink);
     border-radius:10px;padding:10px 13px;font-size:14px;margin:10px 0 2px;}
   .note b{color:var(--warn-ink);}
-  /* services */
   dl.svc{margin:.4em 0;padding:0;}
   dl.svc div{padding:11px 0;border-bottom:1px solid var(--hair);}
   dl.svc div:last-child{border-bottom:0;}
-  dl.svc dt{font-family:var(--mono);font-size:13.5px;color:var(--accent-2);font-weight:600;}
+  dl.svc dt{font-family:var(--mono);font-size:13.5px;color:var(--accent-2);font-weight:600;
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
   dl.svc dd{margin:3px 0 0;font-size:14.5px;color:var(--body);}
-  /* waterfall */
+  .st{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;
+    border-radius:999px;padding:2px 8px;font-weight:700;white-space:nowrap;border:1px solid;}
+  .st-ok{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok-ink);}
+  .st-info{background:var(--info-bg);border-color:var(--info-bd);color:var(--info-ink);}
+  .st-warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-ink);}
+  .st-bad{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad-ink);}
+  .legend{margin:.6em 0 .2em;border:1px solid var(--hair);border-radius:10px;padding:10px 12px;}
+  .lgrow{display:flex;gap:9px;align-items:flex-start;padding:5px 0;font-size:13.5px;color:var(--muted);}
+  .lgrow .st{flex:0 0 auto;margin-top:1px;}
+  .scroll{overflow-x:auto;margin:.6em 0;}
+  table.grid{border-collapse:collapse;width:100%;font-size:14px;min-width:520px;}
+  table.grid th{text-align:left;background:var(--tint);color:var(--accent-2);border:1px solid var(--hair);
+    padding:8px 10px;font-family:var(--mono);font-size:12px;letter-spacing:.04em;text-transform:uppercase;}
+  table.grid td{border:1px solid var(--hair);padding:8px 10px;vertical-align:top;}
   .fall{margin:14px 0 2px;}
   .fall .node{background:var(--tint);border:1px solid #CFE4E2;color:var(--ink);border-radius:10px;
     padding:11px 14px;font-family:var(--mono);font-size:13.5px;text-align:center;font-weight:600;}
   .fall .arrow{color:var(--accent);text-align:center;font-size:18px;line-height:1;margin:5px 0;}
   .fall .node.pay{background:var(--ink);color:#fff;border-color:var(--ink);}
-  /* pills */
-  .pill{display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:.04em;
-    background:var(--tint);color:var(--accent-2);border:1px solid #CFE4E2;border-radius:999px;
-    padding:2px 9px;margin:0 4px 6px 0;}
+  .hardban{background:var(--bad-bg);border:2px solid var(--bad-ink);border-radius:14px;
+    padding:16px 16px 14px;margin:16px 0;color:var(--bad-ink);}
+  .hardban-t{font-family:var(--mono);font-size:13px;letter-spacing:.09em;font-weight:800;
+    text-transform:uppercase;line-height:1.3;}
+  .hardban-i{font-size:14.5px;margin:.6em 0 .4em;}
+  .hardban-l{list-style:none;margin:.2em 0;padding:0;}
+  .hardban-l>li{padding:8px 0;border-top:1px solid var(--bad-bd);font-size:14px;}
+  .hardban-l>li b{display:block;font-size:14.5px;}
+  .hardban-c{font-size:14.5px;font-weight:600;margin:.7em 0 0;padding-top:.7em;
+    border-top:1px solid var(--bad-bd);}
   .foot{color:var(--muted);font-size:12.5px;font-family:var(--mono);text-align:center;margin-top:40px;
     border-top:1px solid var(--hair);padding-top:16px;}
   a.up{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:12px;}
+  @media (prefers-color-scheme: dark){
+    :root{--ground:#0E1621;--surface:#151F2B;--ink:#E8EEF5;--body:#C3CEDA;--muted:#8B98A6;
+      --hair:#26323F;--tint:#122A29;--accent:#4FBDBB;--accent-2:#7FD3D1;
+      --warn-bg:#2A2415;--warn-bd:#4E4326;--warn-ink:#E9CE86;
+      --bad-bg:#2C1917;--bad-bd:#553330;--bad-ink:#F0A79C;
+      --info-bg:#16233A;--info-bd:#2C4162;--info-ink:#9FC2EB;
+      --ok-bg:#132A1D;--ok-bd:#2A4A34;--ok-ink:#93CFA7;}
+    .fall .node.pay{background:#1D2C3D;border-color:#2C4258;color:var(--ink);}
+    .hardban{border-color:var(--bad-ink);}
+  }
 </style>
 
 <div class="wrap">
   <header>
-    <div class="kicker">Feature Specification · v1.0</div>
+    <div class="kicker">End-to-End Feature Specification · Version 2.0 · regenerated from the gap register</div>
     <h1>GMEPay+</h1>
-    <p class="sub">What the platform must do — and how the microservices coordinate to do it.</p>
-    <div class="meta">1 JULY 2026 · grounded in a full review of the repo: Hub-Core PRD, business scenarios, spec, service map, inter-service contracts, settlement-flow spec, and all 16 ADRs.</div>
+    <p class="sub">What the platform does, what it only produces, and what has never been exercised</p>
+    <div class="meta">Grounded in a full review of the GMEPay+ repository — the Hub-Core PRD, the Business Scenario &amp; Use-Case document, the Specification, the Service Map, the inter-service contracts, the Settlement Flow Spec and all 16 ADRs — and reconciled line by line against Documentation/GAP_REGISTER.md, which is the authority on what is built, what is gated and what does not exist.</div>
   </header>
 
   <nav aria-label="Contents">
+    <a href="#s0" class="alarm"><span class="n">0</span>What has never been exercised</a>
     <a href="#s1"><span class="n">1</span>What GMEPay+ is</a>
     <a href="#s2"><span class="n">2</span>Key concepts</a>
     <a href="#s3"><span class="n">3</span>The microservices at a glance</a>
-    <a href="#s4"><span class="n">4</span>End-to-end feature flows (16)</a>
+    <a href="#s4"><span class="n">4</span>End-to-end feature flows</a>
     <a href="#s5"><span class="n">5</span>The money waterfall</a>
     <a href="#s6"><span class="n">6</span>Coordination non-negotiables</a>
     <a href="#s7"><span class="n">7</span>Phasing &amp; external dependencies</a>
+    <a href="#s8"><span class="n">8</span>Operational readiness</a>
+    <a href="#s9"><span class="n">9</span>How this document stays true</a>
   </nav>
 
+  <section id="s0" class="card">
+    <h2>Section 0<span class="big">What Has Never Been Exercised</span></h2>
+      <div class="hardban"><div class="hardban-t">READ THIS FIRST — WHAT HAS NEVER BEEN EXERCISED</div><p class="hardban-i">This document describes a platform that has been BUILT and TESTED, and that has never been RUN IN ANGER. Every statement below is a verified fact about this branch, not a caveat:</p><ul class="hardban-l"><li><b>No live fleet.</b> Nothing in this branch has ever run against a standing, always-on environment. The platform runs on one Windows laptop under Docker Compose; the Helm chart has never been applied to any cluster, and it carries no StatefulSet or volume claim for the datastores. (T1-6, T3-9, T3-10)</li><li><b>No regulatory filing, ever.</b> Not one report has been submitted to the Bank of Korea, KoFIU or Hometax. No lane has a transmission channel, so every filing stops at NOT_FILED_CHANNEL_UNAVAILABLE. (T5-2)</li><li><b>No settlement file has ever been transmitted.</b> Files are generated and can be inspected; the only transport writes to a local directory, and a local directory is not a channel. Every batch in every environment is terminal at NOT_TRANSMITTED_CHANNEL_UNAVAILABLE. (T4-5)</li><li><b>No partner has ever verified a webhook.</b> The global signing secret was never the secret handed to partners, so partner-side verification could not have matched — for any partner, ever. That is fixed by derivation, but every existing endpoint still has to be rotated and its new secret handed over, and there is no end-to-end proof that any partner has verified one of our signatures. (T5-4, T5-9)</li><li><b>No transaction has ever been screened.</b> There is no sanctions/PEP screening and no AML monitoring in the payment path. There is also nobody to screen: both payment entry points carry only an opaque payer handle, so the screening provider id is literally NO_PROVIDER_ID. (T5-3, T5-11)</li><li><b>No scheme certification.</b> The real-time ZeroPay path runs against a simulator; the Nepal corridor refuses every payment until an owner supplies its pricing; SENDMN runs on placeholder credentials; 9Pay payout has no hub orchestration at all. (T4-3, T4-1, T4-6, T4-7)</li><li><b>No restore drill has ever run.</b> Backup scripts and a runbook exist. Nothing is scheduled, there is no WAL archiving and no off-host copy, the per-database dumps are not mutually consistent, and no restore has ever been performed. The recovery-point objective is 24 hours by accident, not by design. (T3-1, T3-8)</li><li><b>No load test has ever been executed.</b> A load and soak harness exists and ships unrun: no baseline, no 10x run, no published result. There is also no service-level objective to measure against — SLO_TARGETS.properties ships entirely blank on purpose, because the targets are a business decision. (T3-5)</li><li><b>No continuous monitoring.</b> The metrics endpoint and the payment SLIs are real and were verified by scraping a local fleet. Nothing deploys Prometheus, nothing aggregates logs, and there is no paging target — the alert sweepers are armed and terminate in a database table nobody is woken by. (T3-2, T3-3)</li></ul><p class="hardban-c">Nothing in this document should be read as "in production". The honest summary is: the money mechanics are built and tested, and every edge that touches a real external counterparty — scheme, regulator, bank, partner — is either refusing on purpose or unproven.</p></div>
+  </section>
+
   <section id="s1" class="card">
-    <h2>Section 1<span class="big">What GMEPay+ is</span></h2>
-    <p class="lead">GMEPay+ is GME’s cross-border QR-payment hub. It sits between three parties and lets a wallet/remittance partner’s own customer pay a merchant by scanning a QR — across borders and currencies — while GME handles routing, FX, funding, settlement, accounting and regulatory reporting.</p>
-    <h3>Who is involved</h3>
-    <ul class="plain">
-      <li><b class="lab">Wallet / remittance partners (“API clients”)</b> — e.g. GME Remit, SendMN, more later. They own the end customer and their wallet.</li>
-      <li><b class="lab">Their customers</b> — the people who scan and pay. GME never charges them directly; only the partner debits its own customer.</li>
-      <li><b class="lab">QR scheme providers</b> — the local rails: ZeroPay (Korea); Khalti/Fonepay (Nepal); later Alipay, WeChat, QRIS, KHQR.</li>
-      <li><b class="lab">Merchants</b> — the shops that receive money and always get the full payout.</li>
-      <li><b class="lab">GME (the hub)</b> — parses the QR, routes it, prices the FX, funds the payment, settles with everyone, reports to regulators.</li>
-      <li><b class="lab">Regulators</b> — Bank of Korea (FX), KoFIU (AML), Hometax (tax invoices).</li>
-    </ul>
-    <h3>How GME earns</h3>
-    <p>Three revenue streams: an <b class="lab">FX margin</b> on cross-border payments, a <b class="lab">service fee</b> charged to the partner, and a conditional <b class="lab">share of the merchant fee (MDR)</b>. Every partner × scheme × direction is priced independently.</p>
+    <h2>Section 1<span class="big">What GMEPay+ Is</span></h2>
+      <p class="lead">GMEPay+ is GME's cross-border QR-payment hub. It sits in the middle of three parties and lets a wallet/remittance partner's own customer pay a merchant by scanning a QR code — across borders and currencies — while GME routes the payment, prices the foreign exchange, funds it, records it, and PRODUCES the settlement and regulatory artifacts. It does not yet deliver those artifacts to anyone: no settlement file has been transmitted to a scheme and no report has been filed with an authority.</p>
+      <h3>Who is involved</h3>
+      <ul class="plain"><li><b class="lab">Wallet / remittance partners ("API clients")</b> — GME Remit (domestic KRW) and SendMN (overseas inbound) are the two integrated today. SendMN runs on placeholder credentials, so "integrated" means the code path is complete, not that the counterparty has signed off. (T4-6)</li><li><b class="lab">Their customers</b> — the people who scan and pay. GME never charges them directly; only the partner debits its own customer. The platform receives no identifying detail about them at all — only an opaque handle — which is why nobody can be screened. (T5-11)</li><li><b class="lab">QR scheme providers</b> — the local rails: ZeroPay in Korea; Mongolia via SendMN; Khalti/Fonepay in Nepal; 9Pay in Vietnam; later Alipay, WeChat, QRIS, KHQR and others. None of them has certified GMEPay+, and the real-time paths run against simulators. (T4-3)</li><li><b class="lab">Merchants</b> — the shops that receive the money and always get the full payout.</li><li><b class="lab">GME (the hub)</b> — parses the QR, routes it, prices the FX, funds the payment, computes the settlement position and generates the regulatory content.</li><li><b class="lab">Regulators</b> — Bank of Korea (FX reporting), KoFIU (anti-money-laundering) and the tax authority (Hometax invoices). There is no live submission channel to any of the three, and nothing has been filed with any of them. (T5-2)</li></ul>
+      <h3>What GME provides</h3>
+      <p>QR parsing, smart routing, payment orchestration, multi-currency FX, prefunding (float) management, settlement calculation and reconciliation, revenue accounting, regulatory report generation, partner onboarding, and admin/partner web portals.</p>
+      <h3>How GME earns</h3>
+      <p>Three revenue streams: (1) an FX margin on cross-border payments, (2) a service fee charged to the partner, and (3) a conditional share of the merchant fee (MDR) where applicable. Every partner × scheme × direction can be priced independently. The FX margin and service fee are booked; the merchant-fee share is calculated and recorded but not yet billed or collected, and the main profit-and-loss does not all reach the double-entry journal, so there is no trial balance yet. (T2-4)</p>
+      <h3>Phasing (a plan, not a delivered state)</h3>
+      <ul class="plain"><li><b class="lab">Phase 1</b> — GME Remit (domestic KRW) and SendMN (overseas inbound) over ZeroPay. Both money paths are built and pass end-to-end tests against simulators. Neither has processed a real payment.</li><li><b class="lab">Phase 2 and beyond</b> — more partners and more schemes (Nepal/Khalti, Vietnam/9Pay), with automatic QR-based routing and failover across multiple partners per country. Nepal is built and refusing on price; 9Pay is built and unwired pending a product decision.</li></ul>
+      <div class="note">How to read the rest of this document: every capability carries a state — LIVE, BUILT · LOCAL ONLY, BUILT · NOT LIVE, PARTLY BUILT, NOT BUILT or BLOCKED ON A DECISION. LIVE means exercised against the real external counterparty in a standing environment; nothing in this platform is in that state, and the generator that produced this document refuses to let anything claim it while the register says there is no always-on environment.</div>
   </section>
 
   <section id="s2" class="card">
-    <h2>Section 2<span class="big">Key concepts</span></h2>
-    <ul class="plain">
-      <li><b class="lab">Partner vs customer vs merchant</b> — partner is GME’s client; customer is the partner’s user who pays; merchant gets paid.</li>
-      <li><b class="lab">MPM vs CPM</b> — MPM: the customer scans the merchant’s QR. CPM: the merchant scans a token from the customer’s wallet.</li>
-      <li><b class="lab">Static vs dynamic QR</b> — static carries no amount (customer types it); dynamic already contains the amount.</li>
-      <li><b class="lab">Inbound vs outbound</b> — inbound = a foreigner pays a Korean merchant; outbound = a customer pays a merchant abroad (e.g. Nepal).</li>
-      <li><b class="lab">Prefunding / float (double prefund)</b> — partners keep a prepaid balance with GME, and GME keeps one with each scheme; both drawn per transaction.</li>
-      <li><b class="lab">Authorize → Confirm (two-phase)</b> — the payment is reserved first (nothing irreversible), then confirmed; GME submits to the scheme only after the partner has charged its customer.</li>
-      <li><b class="lab">Net vs gross settlement</b> — domestic settles net; overseas settles gross with a separate monthly merchant-fee invoice.</li>
-    </ul>
+    <h2>Section 2<span class="big">Key Concepts (plain-language glossary)</span></h2>
+      <ul class="plain"><li><b class="lab">Partner vs customer vs merchant</b> — the partner is GME's client; the customer is the partner's user who pays; the merchant is who gets paid.</li><li><b class="lab">MPM vs CPM</b> — MPM (Merchant-Presented Mode): the customer scans the merchant's QR. CPM (Customer-Presented Mode): the merchant scans a QR/token from the customer's wallet.</li><li><b class="lab">Static vs dynamic QR</b> — a static merchant QR carries no amount (the customer types it in); a dynamic QR already contains the amount.</li><li><b class="lab">Inbound vs outbound</b> — inbound = a foreign customer pays a Korean merchant; outbound = a customer pays a merchant in another country (e.g. Nepal).</li><li><b class="lab">Domestic vs cross-border</b> — domestic has no FX (flat KRW fee); cross-border applies an FX margin.</li><li><b class="lab">Prefunding / float (double prefund)</b> — partners keep a prepaid balance with GME, and GME keeps a prepaid balance with each scheme. Both are drawn down per transaction and topped up in bulk.</li><li><b class="lab">Authorize → Confirm (two-phase)</b> — the payment is first reserved (nothing irreversible), then confirmed; GME only submits to the scheme after the partner has charged its customer.</li><li><b class="lab">Net vs gross settlement</b> — domestic settles net; overseas settles gross with a separate monthly merchant-fee invoice.</li><li><b class="lab">A regulatory LIMIT is not a SCREENING</b> — the platform enforces statutory value and velocity ceilings (per-transaction, daily, monthly, annual, and a daily count). Those are numeric comparisons. They consult no sanctions list, no politically-exposed-person register and no adverse-media source, and they detect no pattern. This document uses "limit" for the first and reserves "screening" for the second, which does not exist. (T5-3)</li><li><b class="lab">Generated vs transmitted vs filed</b> — three different facts, routinely collapsed into one word. GME generates settlement files and report content (true today), transmits them to a scheme or authority (never happened), and receives an acknowledgement (never happened). The platform now carries a separate status for each so the distinction survives into every screen and record. (T4-5, T5-2)</li></ul>
   </section>
 
   <section id="s3" class="card">
-    <h2>Section 3<span class="big">The microservices at a glance</span></h2>
-    <p>Independent services, each owning its own database, talking only via APIs and events — never a shared database. Features are delivered by these services coordinating.</p>
-    <dl class="svc">
-      <div><dt>API Gateway</dt><dd>The front door: authenticates partner requests, enforces rate limits &amp; replay protection, routes inward.</dd></div>
-      <div><dt>Payment Executor</dt><dd>The orchestrator/brain of a payment — coordinates rate, merchant check, prefunding, scheme submit and recording in the right order.</dd></div>
-      <div><dt>Smart Router</dt><dd>Decides which partner/scheme handles a scanned QR, and in what order (failover), by network + country.</dd></div>
-      <div><dt>QR Service</dt><dd>Generates customer-presented tokens; parses/validates scanned QR payloads (EMVCo).</dd></div>
-      <div><dt>Rate-FX</dt><dd>Produces locked exchange-rate quotes (USD-intermediary), applies margins, holds the rate briefly.</dd></div>
-      <div><dt>Prefunding</dt><dd>Manages float: reserve, capture, release, top-up, low-balance alerts, credit limits.</dd></div>
-      <div><dt>Transaction Mgmt</dt><dd>The system of record: state machine, history, idempotency, rate-locked details for reporting.</dd></div>
-      <div><dt>Scheme Adapter · ZeroPay</dt><dd>Talks to ZeroPay: two-phase authorize→commit, settlement files, refunds.</dd></div>
-      <div><dt>Scheme Adapter · Nepal</dt><dd>Talks to Khalti/Fonepay: decode, pay (single step), status lookup.</dd></div>
-      <div><dt>Merchant &amp; QR Data</dt><dd>Mirrors merchant/QR data; validates a scanned QR against a real, active merchant.</dd></div>
-      <div><dt>Revenue Ledger</dt><dd>Double-entry accounting: FX margin, service fee, fee-share split, rounding.</dd></div>
-      <div><dt>Settlement &amp; Recon</dt><dd>Calculates what’s owed (net/gross), matches scheme files, flags exceptions, books the residual.</dd></div>
-      <div><dt>Reporting &amp; Compliance</dt><dd>BOK FX reports, KoFIU AML (CTR/STR), Hometax tax invoices.</dd></div>
-      <div><dt>Config Registry</dt><dd>Source of truth for partners, schemes, pricing, corridors, credentials — with 4-eyes approval + tamper-evident audit.</dd></div>
-      <div><dt>Auth-Identity</dt><dd>Issues/verifies machine credentials (partner keys, service tokens); rotation.</dd></div>
-      <div><dt>KYB Adapter</dt><dd>Business screening &amp; registration verification during onboarding.</dd></div>
-      <div><dt>Notification / Webhook</dt><dd>Delivers results to partners over signed webhooks, with retries &amp; a dead-letter queue.</dd></div>
-      <div><dt>Ops / Partner BFF</dt><dd>Aggregates data from the services for the Admin &amp; Partner portals.</dd></div>
-      <div><dt>Admin &amp; Partner Portals</dt><dd>Dashboards, onboarding, settlement/revenue views, a sandbox console, partner self-service.</dd></div>
-      <div><dt>Simulators (sandbox)</dt><dd>Mock schemes/wallets (ZeroPay, Nepal QR, rates) that record every request/response.</dd></div>
-    </dl>
+    <h2>Section 3<span class="big">The Microservices at a Glance</span></h2>
+      <p>The platform is built as independent microservices, each owning its own database and talking to the others only through APIs or events (never a shared database). The features described later are delivered by these services coordinating with each other.</p>
+      <p>The STATE column is the important one. It is not a maturity opinion: it says how far each service has been exercised, and the words mean exactly what the legend says they mean.</p>
+      <div class="legend"><div class="lgrow"><span class="st st-ok" title="exercised against the real external counterparty in a standing environment">LIVE</span><span>exercised against the real external counterparty in a standing environment</span></div><div class="lgrow"><span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span><span>built, and exercised only against local simulators and automated tests — never against the real counterparty</span></div><div class="lgrow"><span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span><span>built and refusing on purpose: it cannot act until a named external gate opens</span></div><div class="lgrow"><span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span><span>some of it exists; what is missing is named rather than implied</span></div><div class="lgrow"><span class="st st-bad" title="does not exist — there is no code for it">NOT BUILT</span><span>does not exist — there is no code for it</span></div><div class="lgrow"><span class="st st-bad" title="deliberately unbuilt until a named owner decides; inventing the answer would be worse than the gap">BLOCKED ON A DECISION</span><span>deliberately unbuilt until a named owner decides; inventing the answer would be worse than the gap</span></div></div>
+      <dl class="svc"><div><dt>API Gateway <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>The front door. Authenticates partner requests (signature/keys), enforces rate limits and replay protection, and routes to internal services. Both web UIs still call the BFF directly rather than through it, and the rate-limit and replay stores are per-replica in memory. (T0-8, T3-11)</dd></div><div><dt>Payment Executor <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>The orchestrator of a payment. Coordinates rate, merchant check, limits, prefunding, scheme submission and recording in the right order.</dd></div><div><dt>Smart Router <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Decides which partner/scheme should handle a scanned QR, and in what order (failover), based on the QR's network and the country. Never exercised with two simultaneously live partners, because there are none.</dd></div><div><dt>QR Service <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Generates customer-presented QR/tokens and parses/validates scanned QR payloads (EMVCo).</dd></div><div><dt>Rate-FX <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Produces locked exchange-rate quotes (USD-intermediary), applies margins, and holds the rate for a short window.</dd></div><div><dt>Prefunding <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Manages each partner's prepaid balance (float) with GME and GME's float with schemes: reserve, capture, release, top-up, low-balance alerts, credit limits, and the cumulative regulatory ceilings.</dd></div><div><dt>Transaction Management <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>The system of record for every transaction: state machine, history, idempotency, and the rate-locked details used for reporting. Its shared idempotency store activates only where Redis is configured, which today is the gateway alone. (T3-11)</dd></div><div><dt>Scheme Adapter · ZeroPay <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Speaks ZeroPay's protocol: two-phase authorize then commit, settlement files and refunds. The real-time path runs against a simulator, several fixed-format QR fields are empty and the file transfer is a local-directory stub. Needs KFTC certification. (T4-3)</dd></div><div><dt>Scheme Adapter · SENDMN (Mongolia) <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Mongolia QR pay-in. Built end to end and running on PLACEHOLDER credentials with an assumed QR application identifier, so any Mongolian QR classifies to it. Blocked on eight external items from the counterparty. (T4-6)</dd></div><div><dt>Scheme Adapter · Nepal (Khalti/Fonepay) <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Decode, pay (single step) and status lookup, with real RSA request signing. It REFUSES every payment until an owner supplies the KRW→NPR margin and the service fee — by design, so that no price is invented. There is no scheme-side refund. (T4-1)</dd></div><div><dt>Scheme Adapter · 9Pay (Vietnam) <span class="st st-bad" title="deliberately unbuilt until a named owner decides; inventing the answer would be worse than the gap">BLOCKED ON A DECISION</span></dt><dd>A production-shaped VND payout adapter that NOTHING CALLS. Wiring it needs the product decision on how a payout is initiated, funded and approved. A post-success bank reversal currently dies inside the adapter without restoring float or reversing the ledger. (T4-7, T2-3)</dd></div><div><dt>Merchant &amp; QR Data <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Holds the mirror of merchant/QR data and validates a scanned QR against a real, active merchant. The mirror is fed by scheme files, and no scheme publishes one yet.</dd></div><div><dt>Revenue Ledger <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>Double-entry journal entries for FX margin, service fee, fee-share split and rounding. The main P&amp;L does not all reach the journal yet, so there is no trial balance, and the commission split is record-only. (T2-4)</dd></div><div><dt>Settlement &amp; Reconciliation <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Calculates what is owed (net/gross), matches GME's records against a scheme confirmation file, flags exceptions and books the residual. It has never transmitted anything, and there is no settlement feed at all for the SENDMN or 9Pay corridors. Every batch is NOT_TRANSMITTED_CHANNEL_UNAVAILABLE. (T4-5, T2-2)</dd></div><div><dt>Reporting &amp; Compliance <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Produces the CONTENT of regulatory outputs: Bank of Korea FX reports, KoFIU AML report bodies and Hometax tax invoices. It does not file them — no submission channel is live, for any lane, and the status model now refuses to represent an unfiled report as accepted. (T5-2)</dd></div><div><dt>Config Registry <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>The source of truth for partners, schemes, pricing rules, corridors and credentials, with maker-checker (4-eyes) approval and a hash-chained audit trail. The trail is not write-once storage and covers 4 of 21 services. (T5-1)</dd></div><div><dt>Auth-Identity <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Issues and verifies machine credentials (partner API keys, service tokens) and rotates them. Also owns role-based access control and approval workflows.</dd></div><div><dt>KYB Adapter <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>The integration POINT for Know-Your-Business screening and business-registration verification at onboarding. No vendor is connected: the only responder is an in-process keyword matcher that consults no list, so activation REFUSES rather than passing an unscreened partner. (T1-4)</dd></div><div><dt>Notification / Webhook <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></dt><dd>Signs and posts payment and settlement results to partners, with retries and a dead-letter queue. No partner has ever successfully verified one of these signatures. (T5-9)</dd></div><div><dt>Ops/Partner BFF <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>The backend that aggregates data from the services for the Admin and Partner web portals.</dd></div><div><dt>Admin &amp; Partner Portals <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>Admin: operations dashboards, onboarding, approvals, settlement/revenue views and a sandbox console. Partner: transaction history and a settlement statement are real and read-only; API-key and webhook management are still fixtures, and partner login is unreachable in every environment as shipped. (T1-2, T1-3)</dd></div><div><dt>Simulators (sandbox) <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></dt><dd>Stand-in mocks of the schemes/wallets (ZeroPay, SENDMN, 9Pay, Nepal QR, rate provider) used to exercise flows without live partners; they record every request/response. Everything this document calls "exercised" was exercised against these.</dd></div></dl>
   </section>
 
-  <section id="s4">
-    <h2 style="margin-left:2px">Section 4<span class="big">End-to-end feature flows</span></h2>
-    <p style="margin:0 2px 4px;color:var(--muted)">Each feature as a coordinated sequence across the services — what each step does and what it triggers next.</p>
-
-    <div class="card">
-      <h3>4.1 · Make a payment — inbound (foreign customer → Korean merchant, via ZeroPay)</h3>
-      <p>The flagship two-phase flow. Rules: only the partner charges its own customer, and GME submits to the scheme <b class="lab">last</b> (the only irreversible step).</p>
-      <ol class="flow">
-        <li><span class="lab">Quote the rate.</span> The partner asks Rate-FX for a locked quote (valid ~15 min).</li>
-        <li><span class="lab">Start the payment (authorize).</span> The partner sends the request to the Payment Executor, echoing the quoted amount; the Executor re-checks it against Rate-FX.</li>
-        <li><span class="lab">Check limits.</span> The Executor applies the per-transaction AML cap before anything moves.</li>
-        <li><span class="lab">Identify the merchant.</span> The Executor asks Merchant &amp; QR Data to resolve the QR to a real, active merchant.</li>
-        <li><span class="lab">Create a pending transaction.</span> Transaction Mgmt records a PENDING txn, snapshotting rate, margins and merchant fee.</li>
-        <li><span class="lab">Reserve the partner’s float (hold, not charge).</span> Prefunding reserves payout-cost + FX margin + service fee. Short float declines here — nothing moved.</li>
-        <li><span class="lab">Check the scheme balance.</span> The ZeroPay adapter confirms GME’s prepaid balance is enough; if short, the authorization is voided before the customer is charged.</li>
-        <li><span class="lab">Partner charges its own customer.</span> Only the partner debits its customer’s wallet.</li>
-        <li><span class="lab">Confirm &amp; pay the merchant.</span> The partner confirms; the Executor tells the ZeroPay adapter to submit — paying the merchant. The only irreversible step, done last.</li>
-        <li><span class="lab">Capture &amp; commit.</span> Prefunding turns the hold into a debit; Transaction Mgmt marks APPROVED and emits “payment approved”.</li>
-        <li><span class="lab">Book revenue &amp; notify.</span> Revenue Ledger books the margin/fee/split journal; Notification sends the result to the partner.</li>
-      </ol>
-      <div class="note"><b>If it goes wrong:</b> decline → release hold, mark FAILED. Timeout → funds stay held, mark UNCERTAIN for reconciliation. Never confirmed → an expiry sweeper releases the hold.</div>
-    </div>
-
-    <div class="card">
-      <h3>4.2 · Make a payment — outbound (customer → merchant abroad, e.g. Nepal)</h3>
-      <p>A wallet scans a foreign QR. Routing is decided by the QR itself, with failover across partners.</p>
-      <ol class="flow">
-        <li><span class="lab">Scan &amp; classify.</span> The QR Classifier reads the QR’s network (e.g. fonepay.com) + country — routing by the QR, not just the country.</li>
-        <li><span class="lab">Find the partners.</span> Smart Router returns an ordered candidate list (by priority) of partners that can serve that network.</li>
-        <li><span class="lab">Try the first partner.</span> The Nepal adapter calls the partner (Khalti) to pay — a single synchronous step returning a reference.</li>
-        <li><span class="lab">Fail over safely.</span> On a technical failure it first asks that partner whether it already paid; only if it definitely didn’t does it try the next. A business decline is final — no failover, no double-charge.</li>
-        <li><span class="lab">If all fail.</span> The customer sees a clear “scheme unavailable”.</li>
-        <li><span class="lab">Record.</span> Transaction Mgmt records the txn; every attempt is logged.</li>
-      </ol>
-      <div class="note"><b>Next step:</b> the Nepal corridor is single-phase today; adding FX (KRW→NPR) and prefunding reserve/capture for it is a documented follow-up.</div>
-    </div>
-
-    <div class="card">
-      <h3>4.3 · Scan the QR &amp; enter the amount</h3>
-      <ul class="plain">
-        <li><b class="lab">Static QR</b> — no amount encoded; the customer types it, and that’s what’s authorized.</li>
-        <li><b class="lab">Dynamic QR</b> — the amount is in the QR and used as-is.</li>
-        <li><b class="lab">Customer-presented (CPM)</b> — the wallet mints a one-time token (with a prefunding reservation) that the merchant scans.</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3>4.4 · Refund / cancel</h3>
-      <ol class="flow">
-        <li><span class="lab">Request.</span> The partner or an operator requests a same-day cancel/refund.</li>
-        <li><span class="lab">Reverse at the scheme.</span> The Executor calls the scheme adapter’s cancel/refund; the merchant payment is reversed.</li>
-        <li><span class="lab">Restore &amp; record.</span> Prefunding restores the amount, Transaction Mgmt moves to REVERSED/REFUNDED, Revenue Ledger books the mirror reversal at the originally locked rate.</li>
-      </ol>
-    </div>
-
-    <div class="card">
-      <h3>4.5 · Quote the rate &amp; compute amounts (FX)</h3>
-      <ul class="plain">
-        <li><b class="lab">Two-leg, USD-intermediary</b> — collection leg + payout leg, with market±buffer cost rates.</li>
-        <li><b class="lab">Three-tier cascade</b> — scheme KRW rate + GME margin + partner margin.</li>
-        <li><b class="lab">Locked &amp; time-boxed</b> — ~15-min lock; expired quote rejected at confirm; survives restart.</li>
-        <li><b class="lab">GME bears the FX risk</b> in that window; same-currency domestic skips FX (flat KRW fee).</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3>4.6 · Manage prefunding / balances</h3>
-      <ul class="plain">
-        <li><b class="lab">Reserve → capture → release</b> — held at authorize, debited on success, released on decline/expiry; can never go negative.</li>
-        <li><b class="lab">Top-up &amp; credit limit</b> — partners top up in bulk; Config Registry pushes credit limit + AML caps to Prefunding.</li>
-        <li><b class="lab">Low-balance alerts</b> — a threshold breach emits an alert delivered to partner + ops.</li>
-        <li><b class="lab">Two float relationships</b> — partner→GME and GME→scheme tracked independently.</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3>4.7 · Settle &amp; reconcile</h3>
-      <ol class="flow">
-        <li><span class="lab">Calculate what’s owed.</span> Net (domestic) or gross (international), summed at full precision.</li>
-        <li><span class="lab">Match against the scheme.</span> Per-merchant match vs the scheme’s files; a mismatch raises a reconciliation exception + ops alert.</li>
-        <li><span class="lab">Book the journal &amp; residual.</span> Round the liability once at the end; post the tiny rounding difference as a journal entry — exactly once per batch.</li>
-        <li><span class="lab">Ship files &amp; announce.</span> Generate scheme settlement files; emit “settlement completed”; cross-date refunds netted back.</li>
-      </ol>
-    </div>
-
-    <div class="card">
-      <h3>4.8 · Book revenue &amp; accounting</h3>
-      <ul class="plain">
-        <li><b class="lab">On “payment approved”</b> — Revenue Ledger books a revenue-capture entry (FX margin + service fee) and the fee-share split as balanced double-entry.</li>
-        <li><b class="lab">On “settlement booked”</b> — a journal entry is triggered for the position and the rounding residual.</li>
-        <li><b class="lab">Configurable split</b> — fee-share is config-driven, not hardcoded; every entry balances.</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3>4.9 · Onboard &amp; configure a partner</h3>
-      <ol class="flow">
-        <li><span class="lab">Draft.</span> An operator fills the onboarding wizard in Config Registry (identity, banking, pricing, schemes, credentials).</li>
-        <li><span class="lab">Verify (KYB).</span> Config Registry calls the KYB Adapter to screen + verify registration; the verdict is stored.</li>
-        <li><span class="lab">Approve (4-eyes).</span> A second operator approves; every change is maker-checker controlled + audited.</li>
-        <li><span class="lab">Issue &amp; wire up.</span> On activation: issue API credentials (Auth-Identity), register the webhook (Notification), push the credit limit (Prefunding).</li>
-        <li><span class="lab">Set pricing.</span> Per partner × scheme × direction pricing stored, enforcing the cross-border minimum-margin rule.</li>
-      </ol>
-    </div>
-
-    <div class="card">
-      <h3>4.10 · Register schemes &amp; route intelligently</h3>
-      <ul class="plain">
-        <li><b class="lab">Config-driven</b> — each partner is registered with the QR network(s) it serves + a priority. Adding a partner is config, not code.</li>
-        <li><b class="lab">Route by the QR</b> — Smart Router maps a scanned QR’s network to the partner(s) that can serve it, filtered by country/mode/direction.</li>
-        <li><b class="lab">Failover</b> — multiple partners per network are tried in priority order, with the no-double-charge check between hops.</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3>4.11 – 4.16 · The rest, in brief</h3>
-      <ul class="plain">
-        <li><b class="lab">Merchant/QR sync &amp; validation</b> — mirror scheme data; reject unknown/suspended merchants with a precise reason.</li>
-        <li><b class="lab">Partner notifications</b> — signed webhooks, retry with back-off, dead-letter + alert, idempotent delivery.</li>
-        <li><b class="lab">Regulatory reporting</b> — BOK FX (incl. the rate-locked offer-rate field), KoFIU CTR/STR, monthly Hometax invoices.</li>
-        <li><b class="lab">Security &amp; access</b> — signed partner APIs, replay/rate-limit, OIDC operator login, role-based + partner-scoped access, hash-chained audit.</li>
-        <li><b class="lab">Portals</b> — ops dashboards, onboarding &amp; approvals, a sandbox console (incl. a Nepal QR tab), partner self-service.</li>
-        <li><b class="lab">Platform</b> — cloud-agnostic (on-prem / AWS / Azure via config), one database per service, reliable events.</li>
-      </ul>
-    </div>
+  <section id="s4" class="card">
+    <h2>Section 4<span class="big">End-to-End Feature Flows</span></h2>
+      <p>Each feature below is described as a coordinated sequence across the microservices — what each step does and what it triggers next. Unless a step says otherwise, it has been exercised only against simulators and automated tests.</p>
+      <h3>4.1  Make a payment — inbound (foreign customer pays a Korean merchant, via ZeroPay) <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <p>This is the flagship two-phase flow. The guiding rules: only the partner charges its own customer, and GME submits to the scheme last (the only irreversible step). The flow is complete and covered end to end by automated tests against the ZeroPay SIMULATOR; the real-time protocol edge is not certified and several fixed-format QR fields are still empty. (T4-3)</p>
+      <ol class="flow"><li><span class="lab">Quote the rate.</span> The partner asks Rate-FX for a locked exchange-rate quote. Rate-FX returns a USD-based quote that is valid for a short window (about 15 minutes).</li><li><span class="lab">Start the payment (authorize).</span> The partner sends the request to the Payment Executor, echoing the quoted amount. The Executor re-reads the quote from Rate-FX and checks the amount still matches.</li><li><span class="lab">Check the regulatory LIMITS.</span> The Executor applies the statutory per-transaction value ceiling and the cumulative daily/monthly/annual and daily-count ceilings before anything moves. These are numeric caps enforcing the small-sum overseas-transfer limits. NO SCREENING HAPPENS HERE: no list is consulted, and the request carries no party name to consult one with. (T4-2, T5-3, T5-11)</li><li><span class="lab">Identify the merchant.</span> The Executor asks Merchant &amp; QR Data to resolve the scanned QR to a real, active merchant (rejecting unknown/suspended ones), and the merchant name is carried through to the receipt. (T4-4)</li><li><span class="lab">Create a pending transaction.</span> The Executor asks Transaction Management to record a PENDING transaction, snapshotting the rate, margins and merchant fee.</li><li><span class="lab">Reserve the partner's float (hold, not charge).</span> The Executor asks Prefunding to reserve the partner's balance for payout cost + FX margin + service fee. If the float is short, it declines here — nothing has moved.</li><li><span class="lab">Check the scheme balance.</span> The Executor asks the ZeroPay Scheme Adapter to confirm GME holds enough prepaid balance with ZeroPay. If short, the authorization is voided before the customer is charged. Still nothing irreversible.</li><li><span class="lab">Partner charges its own customer.</span> Only the partner debits its customer's wallet. GME never touches the customer's money.</li><li><span class="lab">Confirm &amp; pay the merchant.</span> The partner confirms; the Executor tells the ZeroPay Scheme Adapter to submit the payment, which pays the merchant. This is the only irreversible step and it is done last. Today it is submitted to a simulator. (T4-3)</li><li><span class="lab">Capture &amp; commit.</span> On approval, Prefunding turns the hold into an actual debit (capture), and Transaction Management marks the transaction APPROVED and emits a "payment approved" event.</li><li><span class="lab">Book revenue &amp; notify.</span> Revenue Ledger consumes the event and books the FX margin, service fee and fee-share as balanced journal lines; Notification/Webhook signs and posts the result to the partner — a delivery no partner has yet verified. (T2-4, T5-9)</li></ol>
+      <div class="note">If confirm declines, the hold is released and the transaction is marked FAILED. If confirm times out, the funds stay held and the transaction is marked UNCERTAIN for reconciliation — and the operational loop for resolving an UNCERTAIN payment is only half-wired, so today that means an operator notices. If it is never confirmed, an expiry sweeper releases the hold. (T3-5)</div>
+      <h3>4.2  Make a payment — outbound (a customer pays a merchant abroad, e.g. Nepal) <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <p>A wallet scans a foreign QR (e.g. Fonepay). Routing is decided by the QR itself, and the platform is built to fail over across partners if one is unavailable — never yet exercised with two live partners, because there are none.</p>
+      <ol class="flow"><li><span class="lab">Scan &amp; classify.</span> The customer scans a Nepali QR. The hub's QR Classifier reads the QR's network identity (e.g. fonepay.com) and country — it routes by the QR, not just the country.</li><li><span class="lab">Find the partners.</span> The Executor asks Smart Router which partner(s) can process that network in that country. Smart Router returns an ordered candidate list (by priority) from configuration.</li><li><span class="lab">Price it, or refuse.</span> The corridor reads its FX margin and service fee from the commercial-terms configuration. If either is missing it REFUSES the payment outright — no float moves and no scheme call is made. This is the corridor's state today: an owner has not supplied the KRW→NPR margin or the service fee, so the Nepal corridor declines every payment and is not sellable. (T4-1)</li><li><span class="lab">Try the first partner.</span> The Nepal Scheme Adapter asks the partner (Khalti/Fonepay) to pay — a single synchronous step returning a payment reference, RSA-signed with a real key. Against the simulator today; there is no live Khalti endpoint, credential or IP allow-listing.</li><li><span class="lab">Fail over safely if needed.</span> On a technical failure (timeout/outage) the Executor first asks that partner whether the payment actually went through; only if it definitely did not does it try the next partner. A business decline (e.g. invalid QR) is final — no failover, no double-charge.</li><li><span class="lab">If all fail.</span> The customer sees a clear "scheme unavailable", not a vague error.</li><li><span class="lab">Record.</span> On approval, Transaction Management records the transaction; every attempt is logged.</li></ol>
+      <div class="note">Two honest residuals on this corridor: it has no scheme-side refund at all, and a cross-border cancellation currently routes to the wrong scheme adapter. (T4-1, T2-7)</div>
+      <h3>4.3  Scan the QR and enter the amount <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></h3>
+      <ul class="plain"><li><b class="lab">Static merchant QR</b> — no amount is encoded, so the customer types the amount, which is what gets authorized.</li><li><b class="lab">Dynamic merchant QR</b> — the amount is already in the QR and is used as-is.</li><li><b class="lab">Customer-presented (CPM)</b> — the wallet generates a one-time token (with a prefunding reservation) that the merchant terminal scans.</li></ul>
+      <h3>4.4  Refund / cancel a payment <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></h3>
+      <ol class="flow"><li><span class="lab">Request.</span> The partner (or an operator in the admin portal) requests a same-day cancel/refund.</li><li><span class="lab">Reverse at the scheme.</span> The Executor calls the scheme adapter's cancel/refund; the merchant payment is reversed.</li><li><span class="lab">Restore &amp; record.</span> Prefunding restores the reserved/debited amount, Transaction Management moves the transaction to REVERSED/REFUNDED, and Revenue Ledger books the mirror reversal at the originally locked rate.</li></ol>
+      <div class="note">What does not work yet: the hub side of PARTIAL refunds is complete and tested, but no scheme adapter can transmit one, so a partial refund cannot actually be executed. A cross-border cancellation carries no scheme code and misroutes to ZeroPay. Nepal has no scheme-side refund. (T2-6, T2-12, T2-7)</div>
+      <h3>4.5  Quote the exchange rate &amp; compute the amounts (FX) <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></h3>
+      <p>Rate-FX prices every cross-border payment using a USD-intermediary, two-leg model (collection leg + payout leg) with a three-tier rate cascade.</p>
+      <ul class="plain"><li><b class="lab">Three-tier cascade</b> — the scheme's KRW payout rate, plus GME's margin (quoted to the partner in KRW or USD), plus the partner's own margin (to its customer).</li><li><b class="lab">Locked &amp; time-limited</b> — the quote is locked for a short window (~15 min); an expired quote is rejected at confirm; the lock survives a restart.</li><li><b class="lab">GME bears the FX risk</b> between quote and settlement; domestic same-currency payments skip FX entirely (flat KRW fee). That exposure is not tracked anywhere for the unhedged currencies, and there is no day-close position report. (T2-5)</li></ul>
+      <h3>4.6  Manage prefunding / balances <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></h3>
+      <ul class="plain"><li><b class="lab">Reserve → capture → release</b> — funds are held at authorize, converted to a debit on success, or released on decline/expiry; concurrency-safe so a balance can never go negative.</li><li><b class="lab">Top-up &amp; credit limit</b> — partners top up in bulk; Config Registry can push a credit limit and the statutory value ceilings to Prefunding.</li><li><b class="lab">Low-balance alerts</b> — when a balance crosses a threshold, Prefunding emits an alert that Notification/Webhook delivers to the partner and records for operations. Nothing pages a human: the operations end of every alert is a table someone has to open. (T3-3)</li><li><b class="lab">Two float relationships</b> — partner→GME and GME→scheme are tracked independently.</li></ul>
+      <h3>4.7  Settle &amp; reconcile <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <ol class="flow"><li><span class="lab">Calculate what is owed.</span> Settlement &amp; Reconciliation computes each partner's position — net for domestic, gross for international — summing at full precision.</li><li><span class="lab">Match against the scheme.</span> It matches GME's records against the scheme's confirmation file per merchant; any mismatch or missing item raises a reconciliation exception and an operations alert. No scheme publishes a confirmation file yet, so both sides of every reconciliation are currently GME-owned records.</li><li><span class="lab">Book the journal &amp; residual.</span> It rounds the per-partner liability once at the end and posts the rounding difference as a journal entry in Revenue Ledger, exactly once per batch. (T3-12)</li><li><span class="lab">GENERATE the files — and stop there.</span> It produces the scheme settlement files, checksums them and emits a "settlement batch generated" event. IT DOES NOT SEND THEM. The only transport writes to a local directory, which the platform deliberately classifies as NO CHANNEL, so every batch in every environment ends at NOT_TRANSMITTED_CHANNEL_UNAVAILABLE and says why. Real transfer needs scheme credentials and a certification run. (T4-5)</li></ol>
+      <div class="note">Two more things an exec should know here: a batch can legitimately read RECONCILED while GME never sent the request file — those are separate columns on purpose — and there is no settlement or reconciliation feed at all for the SENDMN (USD) or 9Pay (VND) corridors, so nobody reconciles those against the float deductions. Netting is wired as a REPORT only; funding on a netted basis is an unmade treasury decision. (T4-5, T2-2)</div>
+      <h3>4.8  Book revenue &amp; accounting entries <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></h3>
+      <ul class="plain"><li><b class="lab">On "payment approved"</b> — Revenue Ledger books a revenue-capture entry (FX margin + service fee) and the fee-share split as balanced double-entry lines. Every entry that is booked balances.</li><li><b class="lab">On "settlement booked"</b> — a journal entry is triggered for the settlement position and the rounding residual.</li><li><b class="lab">What is not booked yet</b> — the main profit-and-loss does not all reach the double-entry journal, so THERE IS NO TRIAL BALANCE; the commission split is record-only; the scheme's actual fee field is unused; and there is no merchant-fee billing or collection subsystem. Ledger posting is also fire-and-forget with a durable failure sink but no replay job, and there is no three-way daily reconciliation between scheme, ledger and float. (T2-4, T2-5)</li></ul>
+      <h3>4.9  Onboard &amp; configure a partner <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <ol class="flow"><li><span class="lab">Draft the partner.</span> An operator fills the multi-step onboarding wizard in Config Registry (identity, contacts, banking, pricing, schemes/corridors, credentials).</li><li><span class="lab">Verify (KYB) — or record that nobody did.</span> Config Registry calls the KYB Adapter to screen the business and verify its registration. NO SCREENING PROVIDER IS CONNECTED: the only responder is an in-process keyword matcher that consults no sanctions list, no politically-exposed-person register and no adverse-media source. The verdict is therefore recorded as NOT SCREENED, WITH ITS PROVENANCE, and activation REFUSES — an unscreened partner cannot be made live. The politically-exposed-person flag is a self-declared checkbox, not a register lookup. (T1-4)</li><li><span class="lab">Approve (4-eyes).</span> A second operator approves the change; every change is maker-checker controlled and written to a hash-chained audit trail. (T5-1)</li><li><span class="lab">Issue credentials &amp; wire up.</span> On activation, Config Registry issues partner API credentials (via Auth-Identity), registers the partner's webhook (via Notification), and pushes the credit limit to Prefunding.</li><li><span class="lab">Set pricing rules.</span> Per partner × scheme × direction pricing (margins, rate source) is stored, enforcing the cross-border minimum-margin rule. A corridor with no pricing refuses payments rather than guessing. (T4-1)</li></ol>
+      <h3>4.10  Register QR schemes &amp; route intelligently (many partners per country) <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></h3>
+      <ul class="plain"><li><b class="lab">Config-driven</b> — each scheme/partner is registered with the QR network identifier(s) it serves and a priority. Adding a partner is a configuration change, not new code.</li><li><b class="lab">Route by the QR</b> — Smart Router maps a scanned QR's network to the partner(s) that can serve it, filtered by country, mode and direction. One caveat worth naming: the Mongolian QR application identifier is assumed, so today ANY Mongolian QR classifies to SENDMN. (T4-6)</li><li><b class="lab">Failover</b> — when more than one partner serves the same QR, they are tried in priority order; on a technical failure the platform checks whether the first already paid (to avoid double-charging) before moving to the next. Correct by construction and by test; never exercised with two live partners.</li><li><b class="lab">Operating hours &amp; cutoffs</b> — a scheme outside its operating window or past its cutoff is skipped as a failover candidate with a structured reason, rather than being called and failing. (T3-6)</li></ul>
+      <h3>4.11  Sync &amp; validate merchant / QR data <span class="st st-info" title="built, and exercised only against local simulators and automated tests — never against the real counterparty">BUILT · LOCAL ONLY</span></h3>
+      <ul class="plain"><li><b class="lab">Validation</b> — every scanned QR is checked against a real, active merchant; suspended/deactivated merchants are rejected with a precise reason.</li><li><b class="lab">Sync</b> — merchant and QR data are mirrored from scheme files, including deactivation-on-receipt and orphan reconciliation. No scheme delivers those files yet, so every mirror is currently seeded from GME-side fixtures.</li></ul>
+      <h3>4.12  Notify partners (webhooks) <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <ol class="flow"><li><span class="lab">Enqueue.</span> When a payment is approved/failed (or a settlement batch is generated), Notification/Webhook records a pending delivery in the same step as the event, so an event can never be lost.</li><li><span class="lab">Sign &amp; deliver.</span> It derives a per-endpoint signing secret, signs the payload and posts it to the partner over HTTPS. The signature is now derivable, which it was not: the global secret used previously was never the secret handed to partners, so PARTNER-SIDE VERIFICATION COULD NEVER HAVE MATCHED, FOR ANY PARTNER, EVER. (T5-4, T5-9)</li><li><span class="lab">Retry &amp; dead-letter.</span> On failure it retries with increasing back-off, and after exhaustion moves the item to a dead-letter queue and raises an alert; deliveries are idempotent.</li><li><span class="lab">Rotate — the outstanding partner task.</span> Every pre-existing endpoint holds a secret that cannot be derived and must be rotated, with the new secret handed to that partner. Until that has happened for a given partner, "webhooks work" is unproven for them, and there is no end-to-end proof that any partner has ever verified a GMEPay+ signature. (T5-8, T5-9)</li></ol>
+      <h3>4.13  Regulatory reporting <span class="st st-warn" title="built and refusing on purpose: it cannot act until a named external gate opens">BUILT · NOT LIVE</span></h3>
+      <ul class="plain"><li><b class="lab">Bank of Korea (FX)</b> — every cross-border commit produces an FX report record (FX1014/1015), including the rate-locked "offer rate" field; domestic is exempt. Generated, never sent.</li><li><b class="lab">KoFIU (AML)</b> — report CONTENT for a currency-transaction or suspicious-transaction report can be produced from transaction data. SUSPICIOUS-TRANSACTION DETECTION DOES NOT EXIST: there is no transaction screening and no AML monitoring in the payment path, so nothing is ever auto-flagged. And there is no route to file even a hand-identified case, because the KoFIU channel is not live. No report has ever been filed. (T5-3, T5-2)</li><li><b class="lab">Hometax (tax)</b> — monthly overseas merchant-fee tax invoices are generated. Generated, never sent.</li><li><b class="lab">What the platform will not pretend</b> — a filing's most advanced reachable status is NOT_FILED_CHANNEL_UNAVAILABLE, on every lane, with the missing configuration named. The invented "accepted"/"submitted" statuses that stubs used to produce are rejected at the database, and the admin surface reserves a success colour for a real filing — so nothing on any screen is green. (T5-2)</li></ul>
+      <div class="note">NOTHING HAS BEEN FILED WITH ANY REGULATOR. The platform produces report content; every government submission channel (mutual-TLS, secure file transfer, entity registration) is unconfigured. Separately, suspicious-transaction detection cannot be bought as a product: the payment path carries no payer identity at all — only an opaque handle — so a screening vendor would return "no match" on every transaction, which is indistinguishable from a clean result. The order of work is: partner contract change to carry party identity → vendor → compliance-owned rules → an alert-triage function → a filing channel. The first step is a partner-integration programme, not a purchase. (T5-11, T5-3)</div>
+      <h3>4.14  Security &amp; access control <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></h3>
+      <ul class="plain"><li><b class="lab">Partner API security</b> — signed requests (HMAC), replay protection and per-partner rate limits at the gateway, with credentials from a real store. The rate-limit and replay-nonce stores are per-replica and in memory, so they hold only because everything runs at one replica. (T0-7, T3-11)</li><li><b class="lab">Operator security</b> — human login through a real identity provider (OpenID Connect), role-based access, partner-scoped data, and maker-checker on configuration changes. The hardened services verify the token; not every service has an authentication layer of its own yet. (T0-2, T0-3)</li><li><b class="lab">Audit</b> — a hash-chained, tamper-evident audit trail of sensitive changes. It is not write-once storage, it covers 4 of 21 services, and its off-box and archival tiers are not deployed. (T5-1)</li><li><b class="lab">What is missing</b> — no secrets vault, rotation or key versioning; no encryption of any database column; no transport TLS between services; most containers run as root; no retention or erasure policy; and the supply-chain security gates (static analysis, image scanning, software bill of materials) do not exist in the pipeline. (T0-6, T5-5)</li></ul>
+      <h3>4.15  Admin &amp; partner portals <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></h3>
+      <ul class="plain"><li><b class="lab">Operations (admin)</b> — dashboards for transactions, settlement, revenue, rates and system health; the approvals queue; the audit trail; a compliance overview. Filing and settlement honesty is enforced in the user interface itself: a success colour is reserved for a genuine filing or transmission, an absent status renders as UNKNOWN rather than being promoted, and standing banners state that nothing has been filed or transmitted — driven by the services, not hardcoded, so they self-remove if a channel ever goes live. This document mirrors that discipline deliberately. (T5-2, T4-5)</li><li><b class="lab">Onboarding &amp; approvals</b> — the partner wizard, the four-eyes approvals queue and the audit trail.</li><li><b class="lab">Sandbox console</b> — an in-portal console to walk a payment through the simulators and see the stored request/response.</li><li><b class="lab">Partner self-service — read carefully</b> — a partner can view its balance, transaction history and a real settlement statement, scoped to its own data. API-key and webhook management are still fixtures with no implementation path, and PARTNER LOGIN IS UNREACHABLE IN EVERY ENVIRONMENT as shipped (realm/client/port mismatch). There is no self-serve sign-up: whether to build one or reposition the portal as read-only reporting with operator-led onboarding is an OPEN PRODUCT DECISION. Until it is made, the product should not be presented as self-service. (T1-2, T1-3, T1-5)</li></ul>
+      <h3>4.16  Platform &amp; operations <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></h3>
+      <ul class="plain"><li><b class="lab">Cloud-agnostic by design, unexercised in fact</b> — the same container images are intended to run on-premise, on AWS or on Azure with only a configuration change. That has never been demonstrated: the Helm chart has never been applied to a cluster, it declares no persistent storage for the datastores, and one money-path service had no database configured in it at all — which would have run the payment path on an in-memory database. Treat the deployment path as untested. (T1-6, T3-9, T3-10)</li><li><b class="lab">One database per service</b> — services never share a database; they coordinate only via APIs and events. This one is structurally true and enforced.</li><li><b class="lab">Events</b> — business changes are published reliably (a transactional outbox drained to a message bus) so revenue, webhooks and reporting react asynchronously. The outbox is real and monitored for depth and lag; the message bus is not deployed in the cluster path, so the off-box tiers that depend on it (including the audit log's regulator-defensible copy) do not exist yet. (T5-1)</li><li><b class="lab">Operability</b> — see Section 8. It is the weakest part of the platform and the part an exec is most likely to assume is present.</li></ul>
   </section>
 
   <section id="s5" class="card">
-    <h2>Section 5<span class="big">The money waterfall</span></h2>
-    <p>Money flows in a layered waterfall; the funding behind it flows the opposite way.</p>
-    <div class="fall">
-      <div class="node">customer</div>
-      <div class="arrow">↓</div>
-      <div class="node">partner float (with GME)</div>
-      <div class="arrow">↓</div>
-      <div class="node">GME scheme float</div>
-      <div class="arrow">↓</div>
-      <div class="node pay">merchant · full payout</div>
-    </div>
-    <ul class="plain">
-      <li><b class="lab">Only the partner charges the customer</b> — GME never debits the end customer.</li>
-      <li><b class="lab">GME submits to the scheme last</b> — the irreversible merchant payment happens only after the partner confirms.</li>
-      <li><b class="lab">Double prefund</b> — partner floats with GME; GME floats with the scheme.</li>
-      <li><b class="lab">Refund is a mirror</b> — full reversal at the originally locked rate.</li>
-    </ul>
+    <h2>Section 5<span class="big">The Money Waterfall</span></h2>
+      <p>Money flows in a layered waterfall, and the funding behind it flows the opposite way:</p>
+      <div class="fall"><div class="node">customer</div><div class="arrow">&darr;</div><div class="node">partner float (with GME)</div><div class="arrow">&darr;</div><div class="node">GME scheme float</div><div class="arrow">&darr;</div><div class="node pay">merchant · full payout</div></div>
+      <ul class="plain"><li><b class="lab">Only the partner charges the customer</b> — GME never debits the end customer.</li><li><b class="lab">GME submits to the scheme last</b> — the irreversible payment to the merchant happens only after the partner has confirmed and charged its customer.</li><li><b class="lab">Double prefund</b> — the partner floats with GME, and GME floats with the scheme; both are drawn per transaction.</li><li><b class="lab">Three revenue streams</b> — FX margin, service fee (GME→partner), and a conditional merchant-fee (MDR) share. The third is calculated and recorded but not billed or collected. (T2-4)</li><li><b class="lab">Refund is a mirror — for a FULL refund</b> — a full refund reverses the amount at the originally locked rate. A partial refund is computed correctly by the hub and cannot be transmitted by any adapter, so it cannot be executed. (T2-6, T2-12)</li><li><b class="lab">The waterfall stops one step short</b> — the final leg, telling the scheme what GME owes it by transmitting a settlement file, has never happened. Positions are computed and booked; the file sits on a local disk. (T4-5)</li></ul>
   </section>
 
   <section id="s6" class="card">
-    <h2>Section 6<span class="big">Coordination non-negotiables</span></h2>
-    <ul class="plain">
-      <li><b class="lab">Submit last, and only once</b> — the scheme submission is the single irreversible step.</li>
-      <li><b class="lab">Never double-charge on failover</b> — confirm the first partner didn’t already pay before trying the next.</li>
-      <li><b class="lab">Idempotency everywhere</b> — the same payment key never charges twice.</li>
-      <li><b class="lab">One database per service</b> — services talk only via APIs and events.</li>
-      <li><b class="lab">Maker-checker on configuration</b> — every partner/pricing/scheme change needs a second approver, and is audited.</li>
-      <li><b class="lab">Reliable events</b> — business writes + their events recorded together, so revenue, webhooks and reporting never miss one.</li>
-    </ul>
+    <h2>Section 6<span class="big">Cross-Service Coordination Rules (the non-negotiables)</span></h2>
+      <p>These are the platform's invariants. Each is enforced in code and covered by tests; where enforcement depends on a deployment property that is not yet true, that is stated.</p>
+      <ul class="plain"><li><b class="lab">Submit last, and only once</b> — the scheme submission is the single irreversible step and must be the last one.</li><li><b class="lab">Never double-charge on failover</b> — before retrying another partner after a technical failure, confirm the first one did not already pay.</li><li><b class="lab">Idempotency everywhere</b> — the same payment key never charges twice; retries replay the original result. The shared idempotency store activates only where a cache is configured, which today is the gateway alone, so this invariant currently depends on running one replica of each service. (T3-11)</li><li><b class="lab">One database per service</b> — services talk only through APIs and events, never a shared database.</li><li><b class="lab">Maker-checker on configuration</b> — every partner/pricing/scheme change needs a second approver and is audited. One exception is known and named: the velocity-limit write is a direct single-actor change with no approval applier, which must be fixed before any real detection threshold is configured through it. (T5-3)</li><li><b class="lab">Reliable events</b> — business writes and their events are recorded together (outbox), so revenue, webhooks and reporting never miss one.</li><li><b class="lab">Quotes are locked and time-boxed</b> — and GME carries the FX risk within that window.</li><li><b class="lab">A capability that cannot act must REFUSE, not pretend</b> — this is the invariant this document exists to respect. An unscreened partner cannot be activated; a corridor with no configured price declines every payment; a settlement batch with no channel records that it was never sent and why; a filing with no channel terminates in a status that says so. Across the platform the refusing state is deliberately distinct from "not yet", because "cannot" and "not yet" are different facts. (T1-4, T4-1, T4-5, T5-2)</li></ul>
   </section>
 
   <section id="s7" class="card">
-    <h2>Section 7<span class="big">Phasing &amp; external dependencies</span></h2>
-    <h3>Delivery phases</h3>
-    <ul class="plain">
-      <li><b class="lab">Phase 1</b> — GME Remit (domestic) + SendMN (overseas inbound) over ZeroPay.</li>
-      <li><b class="lab">Phase 2+</b> — more partners &amp; schemes (incl. Nepal/Khalti), automatic QR-based routing, multi-partner failover.</li>
-    </ul>
-    <h3>Depends on external parties</h3>
-    <p style="color:var(--muted);font-size:14px;margin-top:2px">Specifiable now; live only when the third party is ready.</p>
-    <div>
-      <span class="pill">ZeroPay / KFTC cert</span>
-      <span class="pill">Khalti live endpoint + signing</span>
-      <span class="pill">BOK · Hometax · KoFIU channels</span>
-      <span class="pill">Production infra</span>
-    </div>
+    <h2>Section 7<span class="big">Phasing &amp; External Dependencies</span></h2>
+      <h3>Delivery phases (planned, not delivered)</h3>
+      <ul class="plain"><li><b class="lab">Phase 1</b> — GME Remit (domestic) and SendMN (overseas inbound) over ZeroPay. Built; not certified; not live.</li><li><b class="lab">Phase 2+</b> — additional partners and schemes (Nepal/Khalti, Vietnam/9Pay), automatic QR-based routing and multi-partner failover. Nepal built and refusing on price; 9Pay built and unwired.</li></ul>
+      <h3>Every external gate, and what it blocks</h3>
+      <p>None of these can be closed by writing code. Each one is a counterparty, a contract or a decision, and each blocks a capability this document describes.</p>
+      <div class="scroll"><table class="grid"><thead><tr><th>External gate</th><th>What it blocks until it opens</th></tr></thead><tbody><tr><td>ZeroPay / KFTC certification and live connectivity</td><td>The whole Korea real-time path (today: a simulator), the fixed-format QR fields that are still empty, and any settlement transmission to ZeroPay. (T4-3, T4-5)</td></tr><tr><td>SendMN counterparty sign-off (credentials, QR application identifier, envelope)</td><td>The SENDMN corridor leaving placeholder credentials, and correct QR classification for Mongolia. (T4-6)</td></tr><tr><td>Khalti live endpoint, credential and IP allow-listing</td><td>The Nepal corridor connecting to anything real — though the corridor is blocked FIRST by a GME-side pricing decision. (T4-1)</td></tr><tr><td>A 9Pay payout product decision (initiation, funding, approval)</td><td>Any use of the Vietnam payout adapter, which nothing calls today. (T4-7)</td></tr><tr><td>KoFIU entity registration, endpoint and file layout</td><td>Filing any AML report. Detection is separately blocked by a partner-contract change. (T5-2, T5-3, T5-11)</td></tr><tr><td>Bank of Korea secure-file-transfer endpoint</td><td>Filing any FX report. (T5-2)</td></tr><tr><td>Hometax mutual-TLS certificate</td><td>Issuing any tax invoice to the authority. (T5-2)</td></tr><tr><td>A screening vendor contract AND a partner contract change carrying party identity</td><td>Any sanctions/PEP screening of a payer or beneficiary. The vendor alone buys nothing: with only an opaque handle, a vendor returns "no match" on everything. (T5-3, T5-11)</td></tr><tr><td>Compliance ownership of rules, thresholds and alert triage</td><td>AML monitoring. The rule engine ships with an EMPTY rule list on purpose — a plausible-looking invented threshold would read as a control that exists. (T5-3)</td></tr><tr><td>Partner-by-partner webhook secret rotation and handover</td><td>Any claim that webhook delivery is verified end to end. (T5-8, T5-9)</td></tr><tr><td>Production infrastructure (managed database, message bus, cache, identity) and a standing environment</td><td>Everything in Section 8: monitoring, alerting, backup verification, disaster recovery, and any measurement of a service level. (T1-6)</td></tr><tr><td>A named owner for corridor pricing, netting, and the open finance decisions</td><td>The Nepal corridor being sellable, funding on a netted basis, and several accounting treatments that are deliberately unimplemented rather than guessed. (T4-1, T4-5, T2-4)</td></tr></tbody></table></div>
   </section>
 
-  <div class="foot">GMEPay+ · End-to-end feature specification · v1.0 · 1 Jul 2026<br><a class="up" href="#s1">↑ back to top</a></div>
+  <section id="s8" class="card">
+    <h2>Section 8<span class="big">Operational Readiness (measured, not assumed)</span></h2>
+      <p>The earlier version of this document had no section like this one. That was itself a form of overstatement: it described dashboards, alerts and a cloud-agnostic platform, and left a reader to assume the operating discipline behind them. This is the actual state.</p>
+      <dl class="svc"><div><dt>Always-on environment <span class="st st-bad" title="does not exist — there is no code for it">NOT BUILT</span></dt><dd>One Windows laptop running Docker Compose. The Helm chart has never been applied; it has no StatefulSet or volume claim, and one money-path service had no datasource in it at all — so the Helm path has never been exercised. The tunnel that supposedly fronts it exists nowhere in the repo. (T1-6, T3-9, T3-10)</dd></div><div><dt>Monitoring <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>The metrics endpoint exists (it did not before), and payment latency/outcome plus outbox depth and lag were verified by scraping a local fleet after 200 real payments. Nothing deploys Prometheus, there is no log aggregation, no per-partner indicator, and nowhere for a continuous measurement to live. (T3-2)</dd></div><div><dt>Alerting / on-call <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>The decline-spike and stuck-transaction sweepers are armed and durable. There is no paging target and no on-call rotation: an alert lands in a table and waits for someone to look. (T3-3)</dd></div><div><dt>Backup <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>Per-database dump scripts and a runbook exist and work. Nothing is scheduled, there is no WAL archiving, no off-host copy, and the dumps are sequential so they are not mutually consistent. (T3-1, T3-8)</dd></div><div><dt>Restore / disaster recovery <span class="st st-bad" title="does not exist — there is no code for it">NOT BUILT</span></dt><dd>No restore drill has ever been run, so the recovery time is unknown and the backups are unverified. The effective recovery-point objective is 24 hours. There is no second site and no failover plan. (T3-8)</dd></div><div><dt>Service-level objectives <span class="st st-bad" title="does not exist — there is no code for it">NOT BUILT</span></dt><dd>SLO_TARGETS.properties ships with every value blank, deliberately: the targets are a business decision, and the platform reports "no targets declared" rather than inventing one. The prior question an owner must answer is whether a declined payment counts against availability. (T3-5)</dd></div><div><dt>Load / capacity proof <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>The per-transaction footprint is MEASURED against a real local fleet (about 12 rows and 11 KB retained per payment, roughly 45 % below the earlier estimate, so AWS sizing was conservative in the safe direction). Latency and saturation are NOT measured: the load harness has never been run. (T3-5)</dd></div><div><dt>Batch operations <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>Failures are durable, alerted and re-runnable, and scheme operating hours and cutoffs are now enforced. The uncertain/stuck-payment operations loop is still only half-wired, and the manual escalation path for one corridor has no named owner. (T3-4, T3-5, T3-6)</dd></div><div><dt>Secrets management <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>Committed development defaults are no longer the live values in the hardened services, but there is no vault, no rotation and no key versioning, and a vendor credential is tracked in git history. (T0-6)</dd></div><div><dt>Data protection <span class="st st-warn" title="some of it exists; what is missing is named rather than implied">PARTLY BUILT</span></dt><dd>No column encryption anywhere, no transport TLS between services, most containers run as root, and there is no retention or erasure policy. (T5-5)</dd></div></dl>
+      <div class="note">The single most useful sentence for planning: the money mechanics are the mature part of this platform, and operability is the immature part. Every item above is bounded work — none of it is research — but none of it is done, and two of them (a standing environment and a restore drill) gate the credibility of everything else.</div>
+  </section>
+
+  <section id="s9" class="card">
+    <h2>Section 9<span class="big">How This Document Stays True</span></h2>
+      <p>This document is GENERATED, not written. Both renderings — the Word file and the web artifact — come from one content model, so they cannot drift apart the way they previously did (the Word file was corrected for a false AML claim and the web artifact, the one people were actually shown, kept making it).</p>
+      <p>Every qualified statement above names the gap-register entry that justifies it, and the generator ASSERTS that entry's status at build time. If a gap closes, the build FAILS and names the sentence to revisit — so this document cannot quietly keep a stale pessimistic claim after the work lands. If a gap re-opens, likewise. The status words printed in Section 3 and Section 8 are read out of the platform's own source: the settlement transmission states, the filing-channel status, the screening provenance, and the admin user interface's own rule that a success colour means a real filing and nothing else. If any of those are renamed, the build fails rather than printing a word the platform no longer uses.</p>
+      <p>One value is structurally unreachable: no capability may be presented as LIVE while the register records that there is no always-on environment. That is enforced in the generator, not by editorial care.</p>
+      <ul class="plain"><li><b class="lab">Source of truth</b> — Documentation/GAP_REGISTER.md, which records for every gap whether it is closed, partly closed, open, or blocked on an owner's decision. A live tally is deliberately NOT printed here: it would make this document's bytes change on every unrelated register edit, and a check that cries wolf gets switched off. What is enforced instead is precise — 42 individual claims each assert the marker of the gap they cite.</li><li><b class="lab">Generator</b> — outputs/docgen/build.js (content in content.js, derivations in truth.js). Run "node outputs/docgen/build.js" to regenerate both renderings.</li><li><b class="lab">If you find an overstatement in here</b> — it is a bug in content.js, and the fix belongs there rather than in the rendered file, which is overwritten on every build.</li></ul>
+  </section>
+
+  <div class="foot">GMEPay+ · End-to-End Feature Specification · generated from Documentation/GAP_REGISTER.md by outputs/docgen/build.js — do not hand-edit<br><a class="up" href="#s0">&uarr; back to top</a></div>
 </div>

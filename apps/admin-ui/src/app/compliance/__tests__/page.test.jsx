@@ -34,16 +34,20 @@ const mockGetComplianceOverview = vi.fn();
 const mockGetRegulatoryConfig = vi.fn();
 const mockGetPartnerKyb = vi.fn();
 const mockGetAuditLog = vi.fn();
+const mockGetFilingChannels = vi.fn();
 
 vi.mock('@/api/complianceApi', () => ({
   getComplianceOverview: (...args) => mockGetComplianceOverview(...args),
   getRegulatoryConfig: (...args) => mockGetRegulatoryConfig(...args),
   getPartnerKyb: (...args) => mockGetPartnerKyb(...args),
   getAuditLog: (...args) => mockGetAuditLog(...args),
+  getFilingChannels: (...args) => mockGetFilingChannels(...args),
   FIXTURE_OVERVIEW: [],
   FIXTURE_REGULATORY: {},
   FIXTURE_KYB: {},
   FIXTURE_AUDIT_PAGE: { content: [], page: 0, size: 20, total: 0 },
+  FIXTURE_FILING_CHANNELS: [],
+  FIXTURE_FILING_CHANNEL_REASON: '',
 }));
 
 // ---------------------------------------------------------------------------
@@ -111,6 +115,17 @@ const AUDIT = {
   total: 2,
 };
 
+/** All three lanes dark — the only state reachable today (GAP T5-2). */
+const DARK_CHANNELS = {
+  channels: ['BOK', 'KOFIU', 'HOMETAX'].map((lane) => ({
+    lane,
+    channelLive: false,
+    reachableStatus: 'NOT_FILED_CHANNEL_UNAVAILABLE',
+    reason: `${lane} endpoint is not configured (externally gated).`,
+  })),
+  reason: 'No regulatory filing channel is configured.',
+};
+
 const AUDIT_PAGE2 = {
   content: [
     { id: 'AUD-003', event: 'PARTNER_ACTIVATED', aggregate: 'GME_KR_001', actor: 'admin@gmeremit.com', at: '2024-09-01T06:00:00Z' },
@@ -148,6 +163,8 @@ describe('CompliancePage', () => {
     mockGetRegulatoryConfig.mockReset();
     mockGetPartnerKyb.mockReset();
     mockGetAuditLog.mockReset();
+    mockGetFilingChannels.mockReset();
+    mockGetFilingChannels.mockResolvedValue(DARK_CHANNELS);
   });
 
   // -------------------------------------------------------------------------
@@ -283,6 +300,62 @@ describe('CompliancePage', () => {
     // Audit entries from AUDIT fixture — may appear in both the global audit table
     // and the drill-down panel, so just assert at least one occurrence.
     expect(screen.getAllByText('PARTNER_KYB_APPROVED').length).toBeGreaterThanOrEqual(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 6b. GAP T5-2 — config, channel availability and "filed" are three facts
+  // -------------------------------------------------------------------------
+  it('renders regulatory config as neutral "Configured", never a green tick', async () => {
+    mockGetComplianceOverview.mockResolvedValue(OVERVIEW_ROWS);
+    mockGetAuditLog.mockResolvedValue(AUDIT);
+
+    renderPage();
+
+    const table = await screen.findByRole('table', { name: /partner compliance overview/i });
+    // GME_KR_001 has all four flags true — the old UI showed four green "Set" chips.
+    expect(within(table).queryByText('Set')).not.toBeInTheDocument();
+    expect(within(table).getAllByText('Configured').length).toBe(4);
+    expect(within(table).getAllByText('Not configured').length).toBe(8);
+    // The columns say "config", so no reader can take them for a live lane.
+    expect(within(table).getByText('BOK config')).toBeInTheDocument();
+    expect(within(table).getByText('Hometax config')).toBeInTheDocument();
+    expect(within(table).getByText('KoFIU config')).toBeInTheDocument();
+  });
+
+  it('states that no filing channel is live and nothing has been filed', async () => {
+    mockGetComplianceOverview.mockResolvedValue(OVERVIEW_ROWS);
+    mockGetAuditLog.mockResolvedValue(AUDIT);
+
+    renderPage();
+
+    const banner = await screen.findByTestId('filing-channel-status');
+    expect(
+      within(banner).getByText(/no regulatory filing channel is live/i),
+    ).toBeInTheDocument();
+    // Said in the title and again under the lane board.
+    expect(within(banner).getAllByText(/nothing has been filed/i).length).toBeGreaterThan(1);
+
+    // Per-lane board, straight from the backend — all three dark.
+    const board = within(banner).getByTestId('filing-channel-board');
+    expect(within(board).getByText('BOK: no filing channel')).toBeInTheDocument();
+    expect(within(board).getByText('KOFIU: no filing channel')).toBeInTheDocument();
+    expect(within(board).getByText('HOMETAX: no filing channel')).toBeInTheDocument();
+    expect(within(board).queryByText(/channel live/i)).not.toBeInTheDocument();
+  });
+
+  it('treats an unreported channel board as unknown, not as available', async () => {
+    mockGetComplianceOverview.mockResolvedValue(OVERVIEW_ROWS);
+    mockGetAuditLog.mockResolvedValue(AUDIT);
+    mockGetFilingChannels.mockResolvedValue({ channels: null, reason: null });
+
+    renderPage();
+
+    const banner = await screen.findByTestId('filing-channel-status');
+    expect(within(banner).getByTestId('filing-channels-unknown')).toBeInTheDocument();
+    expect(
+      within(banner).getByText(/nothing may be assumed\s+filed/i),
+    ).toBeInTheDocument();
+    expect(within(banner).queryByTestId('filing-channel-board')).not.toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------

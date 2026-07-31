@@ -7,6 +7,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -81,15 +82,41 @@ public class PrefundingKafkaConsumerConfig {
         return new DefaultErrorHandler(recoverer, new FixedBackOff(0L, MAX_DELIVERY_ATTEMPTS - 1L));
     }
 
+    /**
+     * T3-11 follow-up 3: {@code concurrency} is read from configuration instead of being left at
+     * Spring's default of 1.
+     *
+     * <p>The defect this closes is not "the value was 1", it is that the value was <b>unreadable</b>.
+     * This factory is hand-built, and Boot applies {@code spring.kafka.listener.concurrency} only to
+     * its own <em>auto-configured</em> factory — so an operator could set the property, watch it
+     * resolve in {@code /actuator/env}, and change nothing at all. That is worse than a bad default,
+     * because it looks like a lever. Identical to the fix in notification-webhook and revenue-ledger,
+     * deliberately, so the four factories cannot drift apart again.
+     *
+     * <p><b>Capped by partitions, not by this number.</b> Kafka assigns whole partitions to consumers,
+     * so N threads against a 1-partition topic leaves N-1 idle. The default of 3 matches
+     * {@code KAFKA_NUM_PARTITIONS} in {@code docker-compose.yml} and the
+     * {@code SPRING_KAFKA_LISTENER_CONCURRENCY} in the Helm ABI ConfigMap.
+     *
+     * <p><b>Ordering where it matters:</b> this listener releases float on
+     * {@code payment.reversed}. The producer keys by aggregate id, so both events for one payment land
+     * on one partition and are still handled in order by one thread; concurrency reorders across
+     * payments only, and a release is scoped to its own authorization.
+     *
+     * <p>A non-positive value clamps to 1 rather than silently stopping float release entirely — which
+     * would leave partner money reserved with no error anywhere.
+     */
     @Bean(name = LISTENER_CONTAINER_FACTORY)
     public ConcurrentKafkaListenerContainerFactory<String, String> prefundingKafkaListenerContainerFactory(
             ConsumerFactory<String, String> prefundingConsumerFactory,
-            DefaultErrorHandler prefundingKafkaErrorHandler) {
+            DefaultErrorHandler prefundingKafkaErrorHandler,
+            @Value("${spring.kafka.listener.concurrency:3}") int concurrency) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(prefundingConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
         factory.setCommonErrorHandler(prefundingKafkaErrorHandler);
+        factory.setConcurrency(Math.max(1, concurrency));
         return factory;
     }
 

@@ -33,17 +33,22 @@ import java.util.concurrent.ConcurrentHashMap;
  *       sandbox key is visibly distinct from a production key.</li>
  * </ul>
  *
- * <p>This is the default (matchIfMissing) so the portal Get-Started flow works
- * standalone. When {@code gmepay.auth-identity.client=rest}, the
- * {@link com.gme.pay.bff.client.rest.RestSandboxKeyClient} (which forwards to
- * auth-identity {@code POST/GET /internal/auth/keys} with
- * {@code environment=SANDBOX}) wins as {@code @Primary} and this stub is not
- * created — matching the established Rest/Stub selector idiom
- * (see {@code RestRbacAdminClient} / {@code StubRbacAdminClient}).
+ * <p><b>OPT-IN ONLY since the selector inversion.</b> The live
+ * {@link com.gme.pay.bff.client.rest.RestSandboxKeyClient} (which forwards to auth-identity
+ * {@code POST/GET /internal/auth/keys} with {@code environment=SANDBOX}) is the default; this bean
+ * is created only when {@code gmepay.auth-identity.client=stub} is set deliberately, and an
+ * unrecognised value leaves no bean so the service refuses to start. It used to carry
+ * {@code matchIfMissing = true}.
+ *
+ * <p><b>Per-JVM state — INCORRECT above one replica.</b> Issued keys live in this object's
+ * {@code ConcurrentHashMap}. At N&gt;1 a SANDBOX key issued through replica A does not exist on
+ * B, so the credential a partner was just handed authenticates intermittently and vanishes from
+ * the list intermittently — a support incident that looks like a partner-side bug. Not fixed by
+ * sharing the map: the credential store that must hold these keys is auth-identity's
+ * {@code api_keys} table, which the real client already writes to.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub",
-        matchIfMissing = true)
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub")
 public class StubSandboxKeyClient implements SandboxKeyClient {
 
     /** SANDBOX scope marker — sandbox keys must not authorize production calls. */

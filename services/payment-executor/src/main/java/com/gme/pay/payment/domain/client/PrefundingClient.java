@@ -63,7 +63,8 @@ public interface PrefundingClient {
     }
 
     /**
-     * AML cumulative cap (authorize phase): charge {@code amountUsd} toward the partner's daily/monthly/
+     * Cumulative cap (authorize phase; the prefunding column names say "AML" but this is a monetary/count
+     * ceiling, not screening -- see T5-3): charge {@code amountUsd} toward the partner's daily/monthly/
      * annual usage, throwing {@link com.gme.pay.payment.domain.CumulativeLimitExceededException} if any
      * non-null cap would be breached. Race-free on the prefunding side (per-partner row lock). Only invoked
      * when a cap is actually configured; default throws so real impls must override.
@@ -128,6 +129,47 @@ public interface PrefundingClient {
      */
     default void releaseCpm(long partnerId, String reservationId, String idempotencyKey, String reason) {
         throw new UnsupportedOperationException("releaseCpm not implemented in this PrefundingClient");
+    }
+
+    /**
+     * Reads one partner's SIGNED float movements over a half-open window — leg (c) of the day-close tie-out
+     * (gap T2-5), against prefunding's {@code GET /v1/prefunding/{code}/movements?from=&to=&types=&page=&size=}
+     * (the date-ranged endpoint T2-8 added).
+     *
+     * <p>Signed and complete on purpose: the CREDIT legs come back too, so a deduct-then-reverse pair nets to
+     * zero instead of masquerading as consumed float. The window is half-open {@code [from, to)} so consecutive
+     * business dates tile the timeline exactly once.
+     *
+     * <p>The default throws so every hand-written test fake stays valid, and so a client that cannot perform the
+     * read is distinguishable from a partner with no movements — a day-close that reported "no float moved" when
+     * it simply could not look would be worse than one that says the leg is unavailable.
+     *
+     * @param partnerCode prefunding's partner_balance row key (a business code, not the numeric id)
+     * @param from        inclusive start
+     * @param to          exclusive end
+     * @return every balance-moving entry in the window, in prefunding's order
+     * @throws UnsupportedOperationException when this client cannot perform the read at all
+     */
+    default java.util.List<FloatMovement> movements(String partnerCode, java.time.Instant from,
+                                                   java.time.Instant to) {
+        throw new UnsupportedOperationException("movements not implemented in this PrefundingClient");
+    }
+
+    /**
+     * One signed float movement (gap T2-5).
+     *
+     * @param txnRef          the transaction reference the movement was keyed on; the join to leg (a)
+     * @param entryType       prefunding's entry type (DEBIT / CREDIT / CAPTURE / ...)
+     * @param balanceDeltaUsd SIGNED change to the float: negative consumes it, positive restores it
+     * @param occurredAt      when prefunding recorded it
+     */
+    record FloatMovement(String txnRef, String entryType, BigDecimal balanceDeltaUsd,
+                         java.time.Instant occurredAt) {
+
+        /** The signed delta, never null. */
+        public BigDecimal delta() {
+            return balanceDeltaUsd == null ? BigDecimal.ZERO : balanceDeltaUsd;
+        }
     }
 
     /** Result returned by a successful deduction. */

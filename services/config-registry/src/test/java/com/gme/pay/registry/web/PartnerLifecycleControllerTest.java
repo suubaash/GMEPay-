@@ -143,8 +143,9 @@ class PartnerLifecycleControllerTest {
         // the immutability PATCH path — null keeps the slice context lean.
         PartnerController partnerController =
                 new PartnerController(partnerStore, partnerRepository, null, null);
-        mvc = standaloneSetup(new PartnerLifecycleController(lifecycleService),
-                partnerController)
+        mvc = com.gme.pay.registry.actor.TestActors
+                .withActorResolution(standaloneSetup(
+                        new PartnerLifecycleController(lifecycleService), partnerController))
                 .setControllerAdvice(new RegistryApiExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
@@ -170,6 +171,11 @@ class PartnerLifecycleControllerTest {
         kyb.setPartnerId(partner.getId());
         kyb.setRiskRating("MEDIUM");
         kyb.setScreeningStatus("CLEAR");
+        // T1-4: a CLEAR must name the authority that produced it — the activation
+        // gate refuses an unscreened partner and the V042 CHECK refuses to store a
+        // CLEAR with no provenance. This fixture stands in for a real provider.
+        kyb.setScreeningProviderId("octa-test");
+        kyb.setScreeningAuthoritative(true);
         kybRepository.saveAndFlush(kyb);
 
         BankAccountEntity account = new BankAccountEntity();
@@ -254,6 +260,8 @@ class PartnerLifecycleControllerTest {
         seedActivatable("lc_act_01");
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_01")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.state").value("PROPOSED"))
@@ -272,11 +280,15 @@ class PartnerLifecycleControllerTest {
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_02")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isAccepted());
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_02")
                         .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("LIVE"));
@@ -302,11 +314,15 @@ class PartnerLifecycleControllerTest {
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_03")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isAccepted());
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_03")
                         .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.passes").value(false))
@@ -324,11 +340,15 @@ class PartnerLifecycleControllerTest {
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_04")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isAccepted());
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_04")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isConflict());
     }
@@ -339,6 +359,8 @@ class PartnerLifecycleControllerTest {
         seedPartner("lc_act_05", PartnerStatus.ONBOARDING);
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/activate", "lc_act_05")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isUnprocessableEntity());
     }
@@ -349,6 +371,8 @@ class PartnerLifecycleControllerTest {
         seedPartner("lc_sus_01", PartnerStatus.UAT);
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_sus_01")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"OPERATOR_INITIATED\"}"))
                 .andExpect(status().isUnprocessableEntity());
@@ -360,10 +384,14 @@ class PartnerLifecycleControllerTest {
         seedLive("lc_sus_02");
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_sus_02")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_sus_02")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"BECAUSE\"}"))
                 .andExpect(status().isBadRequest());
@@ -377,12 +405,16 @@ class PartnerLifecycleControllerTest {
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_sus_03")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.state").value("PROPOSED"));
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_sus_03")
                         .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUSPENDED"));
@@ -407,10 +439,14 @@ class PartnerLifecycleControllerTest {
 
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/reactivate", "lc_rea_01")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isAccepted());
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/reactivate", "lc_rea_01")
                         .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("LIVE"));
@@ -430,6 +466,8 @@ class PartnerLifecycleControllerTest {
         seedLive("lc_ter_01");
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/terminate", "lc_ter_01")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
     }
@@ -446,10 +484,14 @@ class PartnerLifecycleControllerTest {
         String body = "{\"reason\":\"contract lapsed, partner declined renewal\"}";
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/terminate", "lc_ter_02")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isAccepted());
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/terminate", "lc_ter_02")
                         .header("X-Actor", "checker_lee")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("TERMINATED"));
@@ -462,6 +504,8 @@ class PartnerLifecycleControllerTest {
         // Terminal: no lifecycle action may leave TERMINATED.
         mvc.perform(post("/v1/admin/partners/{code}/lifecycle/suspend", "lc_ter_02")
                         .header("X-Actor", "maker_kim")
+                        .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                                com.gme.pay.registry.actor.TestActors.INTERNAL_SECRET)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"OPERATOR_INITIATED\"}"))
                 .andExpect(status().isUnprocessableEntity());

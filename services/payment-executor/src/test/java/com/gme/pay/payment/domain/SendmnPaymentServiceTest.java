@@ -8,6 +8,7 @@ import com.gme.pay.payment.domain.client.RevenueLedgerClient;
 import com.gme.pay.payment.domain.client.SchemeClient;
 import com.gme.pay.payment.domain.client.TransactionClient;
 import com.gme.pay.payment.persistence.ExecutionAttemptRepository;
+import com.gme.pay.payment.persistence.RevenuePostingFailureStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,8 @@ import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,9 +28,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +61,10 @@ class SendmnPaymentServiceTest {
     private static final BigDecimal MID_RATE = new BigDecimal("3.5");
     private static final BigDecimal FX_MARGIN = new BigDecimal("0.02");
     private static final long PARTNER_ID = 2L;
+    /** SchemeId.resolve("sendmn") — the platform roster's numeric id for the Mongolia corridor. */
+    private static final long SENDMN_SCHEME_ID = 9L;
+    /** fxMarginKrw (10000 × 0.02 = 200.00) converted at the 1350 KRW/USD fallback, 4dp HALF_UP. */
+    private static final BigDecimal EXPECTED_FX_MARGIN_USD = new BigDecimal("0.1481");
 
     @BeforeEach
     void setUp() {
@@ -192,6 +199,33 @@ class SendmnPaymentServiceTest {
     }
 
     // =========================================================================
+    // T2-1: the APPROVED commit must carry the REAL margin (it used to pass the
+    // 5-arg StatusPatch → null margins → a zero-revenue transaction row).
+    // =========================================================================
+
+    @Test
+    @DisplayName("T2-1: commitStatus carries the real payout-leg FX margin, not null")
+    void sendmn_commitStatus_carriesRealMargin() {
+        service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-margin", PARTNER_ID);
+
+        ArgumentCaptor<TransactionClient.StatusPatch> patchCaptor =
+                ArgumentCaptor.forClass(TransactionClient.StatusPatch.class);
+        verify(transactionClient).commitStatus(eq("txn-sendmn-001"), patchCaptor.capture());
+
+        TransactionClient.StatusPatch patch = patchCaptor.getValue();
+        // fxMarginKrw = 10000 * 0.02 = 200.00; krwPerUsd falls back to 1350
+        // → fxMarginUsd = 200.00 / 1350 = 0.1481 (4dp HALF_UP)
+        assertNotNull(patch.payoutMarginUsd(), "payoutMarginUsd must NOT be null (T2-1)");
+        assertEquals(0, patch.payoutMarginUsd().compareTo(EXPECTED_FX_MARGIN_USD),
+                "the real KRW→MNT margin must ride the commit");
+        // Collection is KRW at the live rate — no collection-leg spread.
+        assertEquals(0, patch.collectionMarginUsd().compareTo(BigDecimal.ZERO));
+        // collectionUsd = the USD equivalent of chargedKrw actually deducted from the float.
+        assertNotNull(patch.collectionUsd(), "collectionUsd must be populated");
+        assertEquals(0, patch.collectionUsd().compareTo(patch.prefundDeductedUsd()));
+    }
+
+    // =========================================================================
     // Live USD/KRW prefunding conversion (replaces the hardcoded 1350)
     // =========================================================================
 
@@ -225,33 +259,184 @@ class SendmnPaymentServiceTest {
     }
 
     // =========================================================================
-    // Test 4: Revenue-ledger invoked for FX margin + fee
+    // Test 4 (T2-1): FX margin + fee are booked as REVENUE, not as a rounding residual.
+    //
+    // Both amounts used to go through postRoundingResidual → the REVENUE_ROUNDING
+    // account ("rounding gain/loss vs partner booking"), which made the corridor's
+    // entire P&L indistinguishable from rounding noise and left the FX-margin /
+    // service-charge accounts empty. The correct call is the one the orchestrated
+    // ZeroPay/GMEREMIT confirm path uses: postRevenueCapture.
     // =========================================================================
 
     @Test
-    @DisplayName("RevenueLedgerClient called for FX margin KRW + service fee KRW")
-    void sendmn_revenueLedger_fxMarginAndFee() {
+    @DisplayName("T2-1: FX margin + fee booked via postRevenueCapture (FX margin + service charge)")
+    void sendmn_revenueLedger_booksRevenueCapture() {
         service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-005", PARTNER_ID);
 
-        ArgumentCaptor<String> refCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<BigDecimal> amountCaptor = ArgumentCaptor.forClass(BigDecimal.class);
-        ArgumentCaptor<String> currencyCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<LocalDate> dateCaptor = ArgumentCaptor.forClass(LocalDate.class);
+        verify(revenueLedgerClient).postRevenueCapture(
+                eq("txn-sendmn-001"),
+                eq(PARTNER_ID),
+                eq(SENDMN_SCHEME_ID),
+                dateCaptor.capture(),
+                eq(BigDecimal.ZERO),          // collectionMarginUsd — KRW collected at the live rate
+                eq(EXPECTED_FX_MARGIN_USD),   // payoutMarginUsd — 200.00 KRW / 1350 = 0.1481 USD
+                eq(new BigDecimal("500")),    // serviceCharge — the ₩500 fee
+                eq("KRW"),                    // serviceChargeCcy
+                eq(BigDecimal.ZERO));         // feeSharePct — SENDMN has no scheme fee share
 
-        verify(revenueLedgerClient, times(2)).postRoundingResidual(
-                refCaptor.capture(), amountCaptor.capture(), currencyCaptor.capture());
+        assertNotNull(dateCaptor.getValue(), "revenueDate must be set (KST business date)");
+    }
 
-        // Both calls must use KRW
-        assertTrue(currencyCaptor.getAllValues().stream().allMatch("KRW"::equals),
-                "all revenue-ledger posts must use KRW");
+    @Test
+    @DisplayName("T2-1: REVENUE_ROUNDING is no longer touched by the SENDMN path")
+    void sendmn_revenueLedger_neverPostsRoundingResidual() {
+        service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-005b", PARTNER_ID);
 
-        // FX margin: 10000 * 0.02 = 200 KRW
-        // Fee: 500 KRW
-        // We don't assert the order but both values must be in the amounts
-        var amounts = amountCaptor.getAllValues();
-        assertTrue(amounts.stream().anyMatch(a -> a.compareTo(new BigDecimal("200.00")) == 0),
-                "FX margin of 200 KRW must be posted");
-        assertTrue(amounts.stream().anyMatch(a -> a.compareTo(new BigDecimal("500")) == 0),
-                "Service fee of 500 KRW must be posted");
+        verify(revenueLedgerClient, never()).postRoundingResidual(anyString(), any(), anyString());
+    }
+
+    // =========================================================================
+    // T2-1 durability: a revenue posting that cannot be delivered is PERSISTED for
+    // replay instead of being lost to a log line — and never fails the payment.
+    // =========================================================================
+
+    @Test
+    @DisplayName("T2-1: a failed revenue posting is persisted for replay, payment still APPROVED")
+    void sendmn_failedRevenuePosting_persistedForReplay() {
+        RevenuePostingFailureStore failureStore = mock(RevenuePostingFailureStore.class);
+        doThrow(new RuntimeException("revenue-ledger down"))
+                .when(revenueLedgerClient).postRevenueCapture(
+                        anyString(), anyLong(), anyLong(), any(),
+                        any(), any(), any(), anyString(), any());
+
+        WalletResult result = new SendmnPaymentService(
+                qrClient, rateClient, prefundingClient, schemeClient, attemptRepository,
+                /* lenient */ false, FX_MARGIN, transactionClient, revenueLedgerClient, failureStore)
+                .pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-durable", PARTNER_ID);
+
+        // The money already moved — a ledger outage must not fail the payment.
+        assertTrue(result.approved(), "a revenue-ledger outage must not fail the payment");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<String> errorCaptor = ArgumentCaptor.forClass(String.class);
+        verify(failureStore).record(
+                eq("txn-sendmn-001"),
+                eq(RevenuePostingFailureStore.TYPE_REVENUE_CAPTURE),
+                payloadCaptor.capture(),
+                errorCaptor.capture());
+
+        // The persisted payload must be replayable on its own: the exact capture request.
+        Map<String, Object> payload = payloadCaptor.getValue();
+        assertEquals("txn-sendmn-001", payload.get("txnRef"));
+        assertEquals(PARTNER_ID, payload.get("partnerId"));
+        assertEquals(SENDMN_SCHEME_ID, payload.get("schemeId"));
+        assertEquals(0, ((BigDecimal) payload.get("payoutMarginUsd")).compareTo(EXPECTED_FX_MARGIN_USD));
+        assertEquals(0, ((BigDecimal) payload.get("serviceChargeAmount")).compareTo(new BigDecimal("500")));
+        assertEquals("KRW", payload.get("serviceChargeCcy"));
+        assertTrue(errorCaptor.getValue().contains("revenue-ledger down"),
+                "the failure cause must be recorded for the operator");
+    }
+
+    @Test
+    @DisplayName("T2-1: with no failure store wired the payment still succeeds (degrades to logging)")
+    void sendmn_failedRevenuePosting_noStore_stillApproved() {
+        doThrow(new RuntimeException("revenue-ledger down"))
+                .when(revenueLedgerClient).postRevenueCapture(
+                        anyString(), anyLong(), anyLong(), any(),
+                        any(), any(), any(), anyString(), any());
+
+        WalletResult result = service()
+                .pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-nostore", PARTNER_ID);
+
+        assertTrue(result.approved());
+    }
+
+    // =========================================================================
+    // Phase-2 hub wiring: the submit rides the router to the SENDMN adapter
+    // =========================================================================
+
+    @Test
+    @DisplayName("scheme submit carries schemeId=sendmn, the real MNT amount and the raw qrPayload")
+    void sendmn_schemeSubmit_routesToSendmnWithMntAmount() {
+        service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-route", PARTNER_ID);
+
+        ArgumentCaptor<SchemeClient.MpmSubmitRequest> captor =
+                ArgumentCaptor.forClass(SchemeClient.MpmSubmitRequest.class);
+        verify(schemeClient).submitMpm(captor.capture());
+
+        SchemeClient.MpmSubmitRequest req = captor.getValue();
+        // Router key: "sendmn" upper-cases to SENDMN → SendmnRestSchemeClient (not ZeroPay).
+        assertEquals("sendmn", req.schemeId());
+        // The SendMN adapter is MNT-denominated: real MNT payout, not the KRW charge.
+        assertEquals("MNT", req.payoutCurrency());
+        assertEquals(new BigDecimal("34300"), req.payoutAmount());
+        // Raw scanned QR rides through for the adapter's VerifyQr step.
+        assertEquals("ZPQR_MNT", req.qrPayload());
+    }
+
+    // =========================================================================
+    // ADR-016: in-body UNKNOWN / PENDING outcomes (adapter never auto-fails)
+    // =========================================================================
+
+    @Test
+    @DisplayName("UNKNOWN submit outcome resolved APPROVED by lookupStatus → payment approved")
+    void sendmn_unknownOutcome_lookupApproved() {
+        when(schemeClient.submitMpm(any())).thenReturn(
+                new SchemeClient.MpmSubmitResponse("UNKNOWN", "SMN-TOKEN-1", Instant.now()));
+        when(schemeClient.lookupStatus(eq("sendmn"), anyString()))
+                .thenReturn(SchemeClient.LookupStatus.APPROVED);
+
+        WalletResult result = service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-u1", PARTNER_ID);
+
+        assertTrue(result.approved(), "lookup-confirmed APPROVED must complete the payment");
+        verify(prefundingClient, never()).reverse(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("UNKNOWN submit outcome resolved REJECTED by lookupStatus → prefund reversed, declined")
+    void sendmn_unknownOutcome_lookupRejected() {
+        when(schemeClient.submitMpm(any())).thenReturn(
+                new SchemeClient.MpmSubmitResponse("UNKNOWN", "SMN-TOKEN-2", Instant.now()));
+        when(schemeClient.lookupStatus(eq("sendmn"), anyString()))
+                .thenReturn(SchemeClient.LookupStatus.REJECTED);
+
+        WalletResult result = service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-u2", PARTNER_ID);
+
+        assertFalse(result.approved());
+        assertEquals("SENDMN_REJECTED", result.declineReason());
+        verify(prefundingClient).reverse(eq(PARTNER_ID), anyString());
+    }
+
+    @Test
+    @DisplayName("UNKNOWN submit outcome still unresolved (PENDING probe) → PENDING, prefund KEPT")
+    void sendmn_unknownOutcome_staysPending_prefundKept() {
+        when(schemeClient.submitMpm(any())).thenReturn(
+                new SchemeClient.MpmSubmitResponse("UNKNOWN", "SMN-TOKEN-3", Instant.now()));
+        when(schemeClient.lookupStatus(eq("sendmn"), anyString()))
+                .thenReturn(SchemeClient.LookupStatus.PENDING);
+
+        WalletResult result = service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-u3", PARTNER_ID);
+
+        assertFalse(result.approved());
+        assertEquals("PENDING", result.declineReason());
+        // The Confirm may have landed — the prefund must NOT be reversed (anti-double-charge).
+        verify(prefundingClient, never()).reverse(anyLong(), anyString());
+        verify(transactionClient, never()).createPending(any());
+    }
+
+    @Test
+    @DisplayName("PENDING submit outcome → PENDING surfaced, prefund KEPT, no lookup needed")
+    void sendmn_pendingOutcome_prefundKept() {
+        when(schemeClient.submitMpm(any())).thenReturn(
+                new SchemeClient.MpmSubmitResponse("PENDING", "SMN-TOKEN-4", Instant.now()));
+
+        WalletResult result = service().pay("ZPQR_MNT", new BigDecimal("10000"), "user-mn-p1", PARTNER_ID);
+
+        assertFalse(result.approved());
+        assertEquals("PENDING", result.declineReason());
+        verify(prefundingClient, never()).reverse(anyLong(), anyString());
     }
 
     // =========================================================================

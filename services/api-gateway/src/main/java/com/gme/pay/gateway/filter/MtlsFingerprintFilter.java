@@ -1,5 +1,6 @@
 package com.gme.pay.gateway.filter;
 
+import com.gme.pay.gateway.partner.PartnerCredentialSourceUnavailableException;
 import com.gme.pay.gateway.partner.PartnerCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,6 +113,14 @@ public class MtlsFingerprintFilter implements GlobalFilter, Ordered {
                 .switchIfEmpty(Mono.defer(() ->
                         // Unknown API key — HmacSignatureFilter will 401 this; pass through.
                         chain.filter(exchange).then(Mono.empty())))
+                // T0-7 fail-closed: an unavailable credential store must not become a pass-through.
+                // This filter runs BEFORE the HMAC filter, so "pass through and let HMAC decide"
+                // would hand the request to a filter that is about to hit the same broken store.
+                // Answer 503 here instead. Scoped to resolution only — errors raised inside the
+                // flatMap below are already terminal 401 writes.
+                .onErrorResume(PartnerCredentialSourceUnavailableException.class,
+                        error -> HmacSignatureFilter.credentialSourceUnavailable(exchange, error)
+                                .then(Mono.empty()))
                 .flatMap(creds -> {
                     if (creds.mtlsCertFingerprint() == null) {
                         log.warn("mTLS: partner {} has no registered certificate; rejecting",

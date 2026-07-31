@@ -38,10 +38,9 @@ public class OpsWebhookActionController {
     public WebhookOpsClient.ReplayResult replay(
             @PathVariable String id,
             @RequestBody(required = false) Map<String, String> body,
-            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal,
-            @RequestHeader(value = RbacHeaders.PERMISSIONS, required = false) String permissions) {
-        rbac.requireOps(permissions);
-        String actor = OpsActionController.actor(principal);
+            @RequestHeader(value = RbacHeaders.PRINCIPAL_ID, required = false) String principal) {
+        rbac.requireOps();
+        String actor = rbac.actor(principal);
         String reason = OpsActionController.reason(body);
         audit.recordDurable("webhook.replay", id, actor, reason);
         return webhooks.replay(id, actor);

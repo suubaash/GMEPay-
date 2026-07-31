@@ -1,0 +1,57 @@
+// ============================================================================
+// CI-ONLY Gradle init script — gap T5-5 (dependency scanning).
+//
+// WHY THIS EXISTS
+// Trivy (and every other SCA tool) can identify Java dependencies from Maven
+// `pom.xml`, from a Gradle **lockfile**, or from the jars themselves. This repo
+// resolves everything through the Spring Boot BOM and pins nothing in-repo, and
+// it has no `dependencyLocking` / `verification-metadata.xml`, so there is no
+// manifest for a scanner to read. Rather than bulk-introduce lockfiles (which
+// would change what every module resolves — explicitly out of scope for this
+// pass), this script materialises the ACTUAL resolved runtime classpath into one
+// flat directory and lets the scanner read the jars.
+//
+// WHY AN INIT SCRIPT AND NOT A build.gradle CHANGE
+// It is applied with `-I` from .github/workflows/ci.yml only. No module build
+// file is touched, so a normal `./gradlew build` — local or in the `build` job —
+// is byte-for-byte unaffected, and this cannot break another team's module.
+//
+// SCOPE / KNOWN LIMITS
+//  * Covers every project in the ROOT Gradle build (all libs + all services +
+//    :e2e-tests). It does NOT cover simulators/* — each has its own
+//    settings.gradle and is a non-deployable test double.
+//  * `runtimeClasspath` is the right configuration: it is what actually ships
+//    inside the bootJar. Build-time-only and test-only dependencies are
+//    deliberately excluded — a CVE in a test library is not a shipped CVE.
+//  * Duplicates across modules are collapsed (same jar, same coordinates), so
+//    one finding is reported once instead of ~20 times.
+// ============================================================================
+
+def OUT = 'dependency-scan/jars'
+
+gradle.rootProject { root ->
+    root.tasks.register('exportDependencyJars', Copy) { t ->
+        t.group = 'verification'
+        t.description = 'CI-only: flatten every module runtime classpath into ' +
+                        "build/${OUT} so an SCA tool can identify the shipped dependency set."
+        t.into root.layout.buildDirectory.dir(OUT)
+        t.include '**/*.jar'
+        // Same coordinate resolved by several modules => one copy.
+        t.duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
+}
+
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+    def exportTask = root.tasks.named('exportDependencyJars')
+    root.allprojects.each { p ->
+        // java-library / java modules have runtimeClasspath; anything else (a
+        // pure aggregator) is skipped rather than failing the whole export.
+        def cfg = p.configurations.findByName('runtimeClasspath')
+        if (cfg == null) {
+            return
+        }
+        // Resolution happens at execution time, inside the Copy task.
+        exportTask.configure { t -> t.from(cfg) }
+    }
+}

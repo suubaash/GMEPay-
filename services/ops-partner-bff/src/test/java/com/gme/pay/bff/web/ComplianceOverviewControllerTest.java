@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gme.pay.bff.client.ConfigRegistryClient;
+import com.gme.pay.bff.config.AdminSurfaceRbacInterceptor;
+import com.gme.pay.bff.security.TestTokens;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.contracts.PartnerRegulatoryConfigView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -21,6 +23,7 @@ import com.gme.pay.domain.PartnerType;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,12 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * #77 Slice 3 — MockMvc tests for the compliance-overview orchestration ({@link ComplianceOverviewController}),
  * with a Mockito {@link ConfigRegistryClient} so each partial-failure path is exercised precisely.
+ *
+ * <p>Runs behind the real {@link AdminSurfaceRbacInterceptor} with RBAC enforcing, authenticated
+ * through {@link TestTokens}, so the board is exercised on the same authorization path as production.
+ *
+ * <p>Also pins GAP T5-2: a placeholder value (e.g. the shipped {@code stub-cert-id}) must NOT
+ * render as a configured lane.
  */
 class ComplianceOverviewControllerTest {
 
@@ -46,13 +55,21 @@ class ComplianceOverviewControllerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         mvc = standaloneSetup(new ComplianceOverviewController(configRegistry))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
+                .addMappedInterceptors(new String[]{"/v1/admin/**"},
+                        new AdminSurfaceRbacInterceptor(new OpsRbacGuard(true)))
                 .build();
+        TestTokens.hubOperator("partner.view");
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
     }
 
     private static PartnerView partner(String code, String romanizedName, PartnerStatus status) {
         return new PartnerView(1L, code, PartnerType.OVERSEAS, "KRW", RoundingMode.HALF_UP,
                 "KRW", "KRW", null, romanizedName, null, null, "KR", null, null, null, null, status,
-                null, null, null);
+                null, null, null, null);
     }
 
     private static KybView kyb(String screeningStatus) {
@@ -139,6 +156,52 @@ class ComplianceOverviewControllerTest {
                 .andExpect(jsonPath("$[0].regulatoryConfig.hometaxSet").value(false))
                 .andExpect(jsonPath("$[0].regulatoryConfig.kofiuSet").value(false))
                 .andExpect(jsonPath("$[0].regulatoryConfig.travelRuleSet").value(false));
+    }
+
+    @Test
+    @DisplayName("T5-2: placeholder credentials (stub-cert-id / TODO_OI03 / blank) do NOT count as configured")
+    void placeholderValuesAreNotConfigured() throws Exception {
+        when(configRegistry.listPartnerViews())
+                .thenReturn(List.of(partner("P_STUB", "Placeholder Co", PartnerStatus.LIVE)));
+        when(configRegistry.getKyb("P_STUB")).thenReturn(kyb("CLEAR"));
+        // Exactly the literals that ship today: the Hometax NTS cert placeholder, the BOK code
+        // placeholder, and a blank KoFIU entity id.
+        when(configRegistry.getRegulatory("P_STUB"))
+                .thenReturn(reg("TODO_OI03", "stub-cert-id", "   ", TravelRuleProtocol.NONE));
+
+        mvc.perform(get("/v1/admin/compliance/overview"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].regulatoryConfig.hometaxSet").value(false))
+                .andExpect(jsonPath("$[0].regulatoryConfig.bokSet").value(false))
+                .andExpect(jsonPath("$[0].regulatoryConfig.kofiuSet").value(false))
+                .andExpect(jsonPath("$[0].regulatoryConfig.travelRuleSet").value(false));
+    }
+
+    @Test
+    @DisplayName("T5-2: a real-looking credential still counts as configured")
+    void realCredentialIsConfigured() throws Exception {
+        when(configRegistry.listPartnerViews())
+                .thenReturn(List.of(partner("P_REAL", "Real Co", PartnerStatus.LIVE)));
+        when(configRegistry.getKyb("P_REAL")).thenReturn(kyb("CLEAR"));
+        when(configRegistry.getRegulatory("P_REAL"))
+                .thenReturn(reg("101", "1234567890123456", "KOFIU-GME-001", TravelRuleProtocol.IVMS101));
+
+        mvc.perform(get("/v1/admin/compliance/overview"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].regulatoryConfig.hometaxSet").value(true))
+                .andExpect(jsonPath("$[0].regulatoryConfig.bokSet").value(true))
+                .andExpect(jsonPath("$[0].regulatoryConfig.kofiuSet").value(true))
+                .andExpect(jsonPath("$[0].regulatoryConfig.travelRuleSet").value(true));
+    }
+
+    @Test
+    @DisplayName("a partner-scoped token cannot read the admin compliance board (403)")
+    void deniedForPartnerToken() throws Exception {
+        TestTokens.clear();
+        TestTokens.partner("PARTNER_A", "portal.view");
+
+        mvc.perform(get("/v1/admin/compliance/overview"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

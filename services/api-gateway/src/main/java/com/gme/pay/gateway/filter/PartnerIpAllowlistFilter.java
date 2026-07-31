@@ -5,6 +5,7 @@ import com.gme.pay.audit.AuditPublisher;
 import com.gme.pay.audit.HashChain;
 import com.gme.pay.domain.net.Cidr;
 import com.gme.pay.gateway.partner.PartnerCredentialService;
+import com.gme.pay.gateway.partner.PartnerCredentialSourceUnavailableException;
 import com.gme.pay.gateway.registry.IpAllowlistCache;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -49,19 +50,22 @@ import reactor.core.publisher.Mono;
  * {@code security.gateway.allowlist.trust_header_only_in_dev}:
  *
  * <ul>
- *   <li>{@code true} (DEV ONLY — default outside the {@code prod} profile): the bare
- *       {@code X-Partner-Id} header is trusted as the partner identity. Convenient for
- *       local development and tests; unsafe at the real edge.</li>
- *   <li>{@code false} (the {@code prod} profile default): the partner is resolved from the
+ *   <li>{@code false} (<b>the default since T0-7</b>): the partner is resolved from the
  *       HMAC keyId ({@code X-API-Key} via {@link PartnerCredentialService} — the same
  *       lookup {@link HmacSignatureFilter} performs). A present-but-mismatching
  *       {@code X-Partner-Id} is rejected with 403 {@code PARTNER_ID_MISMATCH} so a spoofed
  *       header can never select another partner's allowlist.</li>
+ *   <li>{@code true} (DEV ONLY, must now be switched on explicitly): the bare
+ *       {@code X-Partner-Id} header is trusted as the partner identity. Convenient for local
+ *       development; <b>unsafe at the real edge</b> — it lets an attacker have their source IP
+ *       checked against any partner's allowlist, so whichever partner has the broadest ranges
+ *       becomes everyone's allowlist. It used to be the default, which is exactly the
+ *       "edge controls fail open" half of T0-7.</li>
  * </ul>
  *
- * <p>TODO(Slice 8 hardening): once credential issuance lands, fold this check into a single
- * pre-resolution step shared with {@link HmacSignatureFilter} so the keyId→partner lookup
- * happens exactly once per request, then delete the dev trust mode entirely.
+ * <p>TODO(Slice 8 hardening): fold this check into a single pre-resolution step shared with
+ * {@link HmacSignatureFilter} so the keyId→partner lookup happens exactly once per request, then
+ * delete the dev trust mode entirely.
  *
  * <h2>Decision table</h2>
  * <ol>
@@ -72,10 +76,10 @@ import reactor.core.publisher.Mono;
  *       range ({@link Cidr#isInternal}), else the socket remote address.</li>
  *   <li>Allowlist = config-registry rows for (partner, environment) via
  *       {@link IpAllowlistCache} (TTL ≤ 60 s). Empty list → 403 (fail closed: an
- *       unconfigured environment admits nobody). Lookup failure → the
- *       {@code security.gateway.allowlist.fail-open} flag decides (mirrors
- *       {@code gateway.replay-protection.fail-open}); HMAC verification still stands
- *       between a failed-open request and any downstream service.</li>
+ *       unconfigured environment admits nobody). Lookup failure → 403 by default since T0-7
+ *       ({@code security.gateway.allowlist.fail-open} now defaults to {@code false}); an operator
+ *       may still opt into admitting traffic during a registry outage, and that opt-in is logged
+ *       on every admitted request.</li>
  *   <li>No CIDR match → 403 {@code IP_NOT_ALLOWED} + an ADR-007 audit event
  *       ({@code GATEWAY_IP_REJECTED}) through the {@link AuditPublisher} path.</li>
  * </ol>
@@ -128,17 +132,29 @@ public class PartnerIpAllowlistFilter implements GlobalFilter, Ordered {
             IpAllowlistCache allowlistCache,
             PartnerCredentialService credentialService,
             ObjectProvider<AuditPublisher> auditPublisherProvider,
-            @Value("${security.gateway.allowlist.trust_header_only_in_dev:true}")
+            // T0-7: both of these defaulted to `true` — i.e. the edge shipped fail-open twice over
+            // (a spoofable partner identity, and admit-on-registry-error). Both now default to the
+            // safe value and must be switched on deliberately.
+            @Value("${security.gateway.allowlist.trust_header_only_in_dev:false}")
             boolean trustHeaderOnlyInDev,
             @Value("${security.gateway.allowlist.default-environment:sandbox}")
             String defaultEnvironment,
-            @Value("${security.gateway.allowlist.fail-open:true}") boolean failOpen) {
+            @Value("${security.gateway.allowlist.fail-open:false}") boolean failOpen) {
         this.allowlistCache = allowlistCache;
         this.credentialService = credentialService;
         this.auditPublisherProvider = auditPublisherProvider;
         this.trustHeaderOnlyInDev = trustHeaderOnlyInDev;
         this.defaultEnvironment = defaultEnvironment;
         this.failOpen = failOpen;
+        if (trustHeaderOnlyInDev) {
+            log.warn("security.gateway.allowlist.trust_header_only_in_dev=true — the unauthenticated "
+                    + "X-Partner-Id header selects which partner's IP allowlist is checked. An "
+                    + "attacker can name the partner with the broadest ranges. DEV ONLY (T0-7).");
+        }
+        if (failOpen) {
+            log.warn("security.gateway.allowlist.fail-open=true — a config-registry outage ADMITS "
+                    + "partner traffic that was never allowlist-checked (T0-7).");
+        }
     }
 
     @Override
@@ -167,6 +183,13 @@ public class PartnerIpAllowlistFilter implements GlobalFilter, Ordered {
         String sourceIp = resolveSourceIp(exchange.getRequest());
 
         return resolveIdentity(partnerHeader, apiKey)
+                // T0-7 fail-closed: identity resolution consults the credential store. If that
+                // store is unavailable we cannot know which allowlist applies, so the request is
+                // refused with 503 rather than passed on to the HMAC filter (which would hit the
+                // same broken store) or admitted.
+                .onErrorResume(PartnerCredentialSourceUnavailableException.class,
+                        error -> HmacSignatureFilter.credentialSourceUnavailable(exchange, error)
+                                .then(Mono.empty()))
                 .flatMap(identity -> {
                     if (identity.unresolved()) {
                         // No verifiable partner identity pre-HMAC (missing/unknown API key).

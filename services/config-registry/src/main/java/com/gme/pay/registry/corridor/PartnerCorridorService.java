@@ -1,5 +1,6 @@
 package com.gme.pay.registry.corridor;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerCorridorCommand;
 import com.gme.pay.contracts.PartnerCorridorView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -67,7 +68,7 @@ public class PartnerCorridorService {
     static final Pattern CURRENCY = Pattern.compile("[A-Z]{3}");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerCorridorRepository corridorRepository;
     private final PartnerRepository partnerRepository;
@@ -86,7 +87,11 @@ public class PartnerCorridorService {
      *
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param corridors   the FULL desired set; empty clears, {@code null} is a 400.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the freshly-inserted current set as canonical {@link PartnerCorridorView}s.
      * @throws ResponseStatusException 404 when no current partner row matches;
      *         409 when the partner is no longer in {@code ONBOARDING}

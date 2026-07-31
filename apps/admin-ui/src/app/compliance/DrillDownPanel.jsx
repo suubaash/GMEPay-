@@ -12,11 +12,13 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { useAppSelector } from '@/store';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 import { toKst } from './page';
 
 /**
@@ -142,6 +144,17 @@ export default function DrillDownPanel({ partnerCode }) {
         <Typography variant="h3" sx={{ mb: 1 }}>
           Regulatory configuration
         </Typography>
+        {/*
+          GAP T5-2: these are stored config values, shown verbatim — they are not a
+          filing capability. Placeholders that ship with the platform (e.g.
+          `stub-cert-id`, `TODO_OI03`) appear here as the text they are; the BFF does
+          not count them as configured, and no lane has a live filing channel.
+        */}
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+          Stored configuration values, verbatim. Entering these does not enable filing —
+          placeholders such as <code>stub-cert-id</code> or <code>TODO_OI03</code> are config text
+          only, and no regulatory lane currently has a live filing channel.
+        </Typography>
         <ErrorAlert message={regulatoryError} title="Could not load regulatory config" />
         {regulatoryLoading ? (
           <LoadingSkeleton variant="card" />
@@ -212,14 +225,23 @@ function LabelValue({ label, value }) {
   );
 }
 
+/**
+ * Sanctions-screening chip. Wording and colour come from `@/api/screeningStatus` (GAP T1-4) —
+ * this component used to carry its own three-value colour map and print the raw enum name, so a
+ * partner cleared by a MANUAL SOP attestation and one cleared by a vendor would have looked the
+ * same, and a run that screened NOTHING rendered as a grey unremarkable value.
+ */
 function ScreeningChip({ status }) {
-  const colorMap = { CLEAR: 'success', NEEDS_REVIEW: 'warning', HIT: 'error' };
+  const meta = screeningStatusMeta(status);
   return (
-    <Chip
-      size="small"
-      label={status ?? '—'}
-      color={colorMap[status] ?? 'default'}
-    />
+    <Tooltip title={meta.description}>
+      <Chip
+        size="small"
+        label={status == null ? '—' : meta.label}
+        color={status == null ? 'default' : meta.color}
+        variant={meta.variant}
+      />
+    </Tooltip>
   );
 }
 

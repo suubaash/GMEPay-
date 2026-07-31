@@ -63,7 +63,17 @@ public class PartnerCredentialRotationScheduler {
     private static final Logger log =
             LoggerFactory.getLogger(PartnerCredentialRotationScheduler.class);
 
-    private static final String SYSTEM_ACTOR = "system";
+    /**
+     * Audit + change-request principal for the automated rotation proposal (gap T5-1).
+     *
+     * <p>This was the bare {@code "system"} literal, which the V005 4-eyes CHECK exempts
+     * ({@code proposed_by = 'system' AND approved_by = 'system'}). Naming the component instead
+     * has a second, load-bearing effect: this proposal can no longer be approved by another
+     * {@code "system"} write and slip through the carve-out. A human approver is now required for
+     * a credential rotation, which is what the control was for.
+     */
+    private static final String SYSTEM_ACTOR =
+            com.gme.pay.audit.AuditActors.system("credential-rotation");
 
     private final PartnerCredentialRepository credentialRepository;
     private final PartnerRepository partnerRepository;

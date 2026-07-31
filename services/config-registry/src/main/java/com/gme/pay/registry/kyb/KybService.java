@@ -1,10 +1,13 @@
 package com.gme.pay.registry.kyb;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.KybCommand;
 import com.gme.pay.contracts.KybView;
 import com.gme.pay.contracts.PartnerStatus;
 import com.gme.pay.contracts.UboView;
 import com.gme.pay.kyb.KybSubject;
+import com.gme.pay.kyb.ManualScreeningAttestation;
+import com.gme.pay.kyb.ScreeningProvenance;
 import com.gme.pay.kyb.ScreeningResult;
 import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
@@ -60,6 +63,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class KybService {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(KybService.class);
+
     /** Aggregate-type discriminator on audit rows for KYB mutations. */
     public static final String AGGREGATE_TYPE = "partner_kyb";
 
@@ -73,10 +79,21 @@ public class KybService {
     static final Set<String> RISK_RATINGS = Set.of("LOW", "MEDIUM", "HIGH");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through (Slice 1B.4 carve-out). */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     /** Audit verb for a full verify run landing on the row. */
     public static final String EVENT_TYPE_VERIFIED = "PARTNER_KYB_VERIFIED";
+
+    /**
+     * Audit verb for a MANUAL screening attestation (T1-4 owner decision). A human assuming
+     * compliance liability, so it gets its own verb rather than sharing
+     * {@link #EVENT_TYPE_SCREENED}: a report must be able to list every attestation without
+     * filtering machine runs out of it, and the row's actor IS the accountable person.
+     */
+    public static final String EVENT_TYPE_MANUAL_ATTESTED = "PARTNER_KYB_MANUAL_SCREENING_ATTESTED";
+
+    /** Outcomes an attester may record. {@code CLEAR} is stored as CLEAR_MANUAL_ATTESTATION. */
+    static final Set<String> MANUAL_OUTCOMES = Set.of("CLEAR", "HIT", "NEEDS_REVIEW");
 
     private final KybRepository kybRepository;
     private final PartnerRepository partnerRepository;
@@ -147,6 +164,8 @@ public class KybService {
         Optional<KybEntity> priorOpt = kybRepository.findCurrentByPartnerId(partner.getId());
 
         ScreeningResult result = screeningClient.screen(toSubject(partner, priorOpt.orElse(null)));
+        refuseToDestroyManualAttestation(partnerCode, priorOpt.orElse(null),
+                result.authoritative(), "screening");
 
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         KybEntity fresh = new KybEntity();
@@ -154,10 +173,20 @@ public class KybService {
         priorOpt.ifPresent(prior -> copyStep3Fields(prior, fresh));
         fresh.setScreeningStatus(result.status() == null ? null : result.status().name());
         fresh.setScreeningProviderRef(result.providerRef());
+        // T1-4: WHO screened, and whether they are an authority, is stored with the
+        // verdict. lib-kyb guarantees a non-authoritative run cannot arrive as
+        // CLEAR, so this row cannot claim a clean screening nobody performed.
+        applyProvenance(fresh, result.provenance().providerId(),
+                result.authoritative(), result.caveat());
         // Defensive truncation: the stub already truncates, but a vendor
         // adapter may not — the stored TIMESTAMP must equal the entity value.
         fresh.setScreenedAt(result.screenedAt() == null
                 ? now : result.screenedAt().truncatedTo(ChronoUnit.MICROS));
+        if (!result.screeningPerformed()) {
+            log.warn("partner {} was NOT SCREENED: provider={} status={} — activation cannot treat"
+                            + " this as a satisfied sanctions pre-condition. {}",
+                    partnerCode, result.provenance().providerId(), result.status(), result.caveat());
+        }
 
         KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor, EVENT_TYPE_SCREENED,
@@ -189,6 +218,8 @@ public class KybService {
 
         KybVerificationResult result = verifyClient.verify(new KybVerificationRequest(
                 toSubject(partner, priorOpt.orElse(null)), suppliedDocuments, force));
+        refuseToDestroyManualAttestation(partnerCode, priorOpt.orElse(null),
+                Boolean.TRUE.equals(result.screeningAuthoritative()), "verification");
 
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         KybEntity fresh = new KybEntity();
@@ -200,11 +231,131 @@ public class KybService {
                 ? now : result.screenedAt().truncatedTo(ChronoUnit.MICROS));
         fresh.setVerificationDecision(result.decision());
         fresh.setVerificationDecisionReason(result.decisionReason());
+        // T1-4: the verify result carries the same provenance as the screen result
+        // (kyb-adapter threads it through), so a stored verification decision can
+        // never be read as resting on a screening that did not happen.
+        applyProvenance(fresh, result.screeningProviderId(),
+                result.screeningAuthoritative(), result.screeningCaveat());
+        if (!fresh.hasAuthoritativeScreening()) {
+            log.warn("partner {} verification decision {} rests on NO SANCTIONS SCREENING"
+                            + " (provider={}, screeningStatus={}). {}",
+                    partnerCode, result.decision(), result.screeningProviderId(),
+                    result.screeningStatus(), result.screeningCaveat());
+        }
 
         KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
         publishAudit(partnerCode, actor, EVENT_TYPE_VERIFIED,
                 priorOpt.map(KybJson::canonical).orElse(null), KybJson.canonical(saved));
         return saved.toView();
+    }
+
+    /**
+     * Record a MANUAL sanctions/PEP screening attestation for the partner — the interim screening
+     * authority the owner chose for gap T1-4 (2026-07-28) in place of waiting for the ADR-014
+     * vendor and in place of the non-production {@code allow-unscreened-kyb} escape hatch.
+     *
+     * <h2>What makes this authoritative when the stub is not</h2>
+     *
+     * <p>Not a flag and not a different string: <b>evidence</b>. The verdict is built through
+     * {@link com.gme.pay.kyb.ScreeningProvenance#manualAttestation}, which cannot be constructed
+     * without a {@link ManualScreeningAttestation} naming who screened, when, under which SOP
+     * document and version, and what they consulted. The T1-4 coercions are untouched — a
+     * non-authoritative producer still cannot report a clean screening — and a manual clean verdict
+     * is coerced to {@code CLEAR_MANUAL_ATTESTATION} so it can never be read as a vendor's
+     * {@code CLEAR}.
+     *
+     * <h2>The attester is not client input</h2>
+     *
+     * <p>{@code actor} comes from {@code AuditActorResolver}, and this method requires it to be an
+     * ATTESTED HUMAN ({@code AuditActors.requireAttestedHuman}) — 403 otherwise. That is stricter
+     * than the rest of this service, deliberately: elsewhere an unproven claim is recorded as
+     * {@code unverified:<name>} and made countable (T5-1's fail-visible posture, because failing
+     * closed would break every operator write). Here the whole content of the write is a person
+     * taking responsibility, so recording it under a name nobody verified would produce an
+     * attestation that attests to nothing — and, unlike a fee change, there is no fallback value
+     * that is merely less useful.
+     *
+     * <p>Consequence worth stating: this endpoint requires the caller to present the internal-auth
+     * token AND forward the human principal. {@code ops-partner-bff} does both for this call.
+     *
+     * @throws ResponseStatusException 404 unknown partner; 400 on a malformed attestation;
+     *         403 when the actor is not a verified human.
+     */
+    @Transactional
+    public KybView recordManualScreeningAttestation(String partnerCode,
+                                                    ManualAttestationCommand cmd,
+                                                    String actor) {
+        if (cmd == null) {
+            throw badRequest("request body required");
+        }
+        PartnerEntity partner = requirePartner(partnerCode);
+        String attester = requireAttestedHumanActor(actor);
+        String outcome = normaliseOutcome(cmd.outcome());
+        requireAssertion(cmd.attestation());
+
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        ManualScreeningAttestation attestation;
+        try {
+            attestation = new ManualScreeningAttestation(
+                    attester, now, cmd.sopDocumentRef(), cmd.sopVersion(), cmd.sourcesConsulted());
+        } catch (IllegalArgumentException e) {
+            // lib-kyb's own field rules (presence, lengths, "not a platform principal"). Surfaced
+            // verbatim: each message names the field and says why it is required, which is exactly
+            // what the operator needs to fix the form.
+            throw badRequest(e.getMessage());
+        }
+
+        // Build the verdict through lib-kyb so the coercions apply here too — this path does not
+        // get its own private way of writing a screening status.
+        ScreeningResult result = new ScreeningResult(
+                ScreeningResult.Status.valueOf(outcome),
+                List.of(),
+                now,
+                manualProviderRef(attestation),
+                ScreeningProvenance.manualAttestation(attestation));
+
+        Optional<KybEntity> priorOpt = kybRepository.findCurrentByPartnerId(partner.getId());
+        KybEntity fresh = new KybEntity();
+        fresh.setPartnerId(partner.getId());
+        priorOpt.ifPresent(prior -> copyStep3Fields(prior, fresh));
+        // The verify verdict is a separate fact produced by kyb-adapter's document checks; an
+        // attestation is about sanctions screening only and must not silently approve a KYB.
+        priorOpt.ifPresent(prior -> {
+            fresh.setVerificationDecision(prior.getVerificationDecision());
+            fresh.setVerificationDecisionReason(prior.getVerificationDecisionReason());
+        });
+        fresh.setScreeningStatus(result.status().name());
+        fresh.setScreeningProviderRef(result.providerRef());
+        fresh.setScreenedAt(result.screenedAt());
+        applyProvenance(fresh, result.provenance().providerId(),
+                result.authoritative(), result.caveat());
+        applyManualAttestation(fresh, attestation);
+
+        KybEntity saved = pairedWrite(priorOpt.orElse(null), fresh, now);
+        // Audited under the ATTESTER, not under whatever service carried the request: the audit
+        // row is the durable record of who assumed the liability, and it is hash-chained (T5-1),
+        // so the attester, the SOP version and the sources are all sealed via KybJson.canonical.
+        publishAudit(partnerCode, attester, EVENT_TYPE_MANUAL_ATTESTED,
+                priorOpt.map(KybJson::canonical).orElse(null), KybJson.canonical(saved));
+        log.info("partner {} manual sanctions screening attested by {} under SOP {} {} — status {}",
+                partnerCode, attester, attestation.sopDocumentRef(), attestation.sopVersion(),
+                saved.getScreeningStatus());
+        return saved.toView();
+    }
+
+    /**
+     * The CURRENT screening provenance for a partner (T1-4 requirement 5): the full detail behind
+     * whichever authority produced the stored verdict, including the manual attestation.
+     *
+     * @throws ResponseStatusException 404 unknown partner or no KYB row yet.
+     */
+    @Transactional(readOnly = true)
+    public ScreeningProvenanceView currentScreeningProvenance(String partnerCode) {
+        PartnerEntity partner = requirePartner(partnerCode);
+        return kybRepository.findCurrentByPartnerId(partner.getId())
+                .map(ScreeningProvenanceView::from)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "no KYB data for partner '" + partnerCode + "'"));
     }
 
     /**
@@ -298,6 +449,11 @@ public class KybService {
     /**
      * Copy the screening + verify verdict between rows (step-3 saves keep
      * screening/verification state — a wizard save must never erase a verdict).
+     *
+     * <p>T1-4: the provenance travels with the verdict. If it did not, a wizard
+     * save would carry a CLEAR forward while dropping the authority that vouched
+     * for it — the V042 CHECK would then reject the row, which is the right
+     * failure mode but a needless one.
      */
     private static void carryForwardScreening(KybEntity from, KybEntity to) {
         to.setScreeningStatus(from.getScreeningStatus());
@@ -305,6 +461,140 @@ public class KybService {
         to.setScreenedAt(from.getScreenedAt());
         to.setVerificationDecision(from.getVerificationDecision());
         to.setVerificationDecisionReason(from.getVerificationDecisionReason());
+        to.setScreeningProviderId(from.getScreeningProviderId());
+        to.setScreeningAuthoritative(from.getScreeningAuthoritative());
+        to.setScreeningCaveat(from.getScreeningCaveat());
+        // T1-4 (V045): the manual attestation travels with the verdict for the same reason the
+        // provenance does, only more sharply — CLEAR_MANUAL_ATTESTATION without the five columns
+        // violates ck_partner_kyb_manual_clear_requires_attestation, so dropping them on a wizard
+        // save would make step-3 unsaveable for every manually-screened partner.
+        to.setManualAttesterActorId(from.getManualAttesterActorId());
+        to.setManualAttestedAt(from.getManualAttestedAt());
+        to.setManualSopDocumentRef(from.getManualSopDocumentRef());
+        to.setManualSopVersion(from.getManualSopVersion());
+        to.setManualSourcesConsulted(from.getManualSourcesConsulted());
+    }
+
+    /**
+     * Stamp a run's provenance onto the fresh row. An absent provider id is
+     * recorded as the explicitly non-authoritative {@code unknown} producer with
+     * its caveat rather than left blank: a blank could be misread as "no opinion",
+     * and the whole point of T1-4 is that absence of provenance is never authority.
+     */
+    /**
+     * A machine run may SUPERSEDE a manual attestation, but only with a real screening.
+     *
+     * <p>Both {@code /screen} and {@code /verify} write a fresh SCD-6 row, so whatever they produce
+     * replaces the current verdict — including a manual attestation, whose five columns the fresh
+     * row does not carry. Without this guard the sequence "attest manually, then click Run
+     * screening" would silently downgrade an activatable partner to
+     * {@code NOT_SCREENED_NO_PROVIDER} through the stub, and the operator's only clue would be the
+     * activation gate refusing again later.
+     *
+     * <p>So an unscreened run is REFUSED (409) while a real vendor screening is allowed through —
+     * which is the right way round: a vendor result is better evidence than an attestation and
+     * should supersede it, whereas a run that screened nothing is worse than what it would replace.
+     * The prior attestation is never mutated either way; it stays on the superseded row as history.
+     */
+    private static void refuseToDestroyManualAttestation(String partnerCode, KybEntity prior,
+                                                         boolean incomingAuthoritative,
+                                                         String what) {
+        if (prior == null || incomingAuthoritative) {
+            return;
+        }
+        if (!prior.isManuallyAttestedScreening() || !prior.hasCompleteManualAttestation()) {
+            return;
+        }
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "partner '" + partnerCode + "' carries a MANUAL screening attestation made by "
+                        + prior.getManualAttesterActorId() + " under SOP "
+                        + prior.getManualSopDocumentRef() + " " + prior.getManualSopVersion()
+                        + ", and this " + what + " run produced no authoritative result"
+                        + " (no KYB vendor is configured — ADR-014). Running it would replace a"
+                        + " real screening with 'nothing was screened' and make the partner"
+                        + " unactivatable. Configure a real provider, or record a fresh manual"
+                        + " attestation instead.");
+    }
+
+    /** Stamp the five V045 attestation columns. */
+    private static void applyManualAttestation(KybEntity row, ManualScreeningAttestation a) {
+        row.setManualAttesterActorId(a.attesterActorId());
+        row.setManualAttestedAt(a.attestedAt());
+        row.setManualSopDocumentRef(a.sopDocumentRef());
+        row.setManualSopVersion(a.sopVersion());
+        row.setManualSourcesConsulted(a.sourcesConsulted());
+    }
+
+    /**
+     * Correlation reference for a manual run, in the same shape the other producers use
+     * ({@code stub-<hash>}, a vendor's own id). Names the SOP and version so the reference alone
+     * identifies which procedure produced the verdict; clamped to the column width.
+     */
+    private static String manualProviderRef(ManualScreeningAttestation a) {
+        String ref = ScreeningProvenance.MANUAL_ATTESTATION_PROVIDER_ID + ":"
+                + a.sopDocumentRef() + "@" + a.sopVersion();
+        return ref.length() <= 100 ? ref : ref.substring(0, 100);
+    }
+
+    /**
+     * The attester must be a verified human. See
+     * {@link #recordManualScreeningAttestation} for why this one endpoint fails closed while the
+     * rest of the service is fail-visible.
+     */
+    private static String requireAttestedHumanActor(String actor) {
+        try {
+            return AuditActors.requireAttestedHuman(actor);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "a manual screening attestation must be made by a verified human operator: "
+                            + e.getMessage());
+        }
+    }
+
+    /** {@code CLEAR} | {@code HIT} | {@code NEEDS_REVIEW} — nothing else may be attested. */
+    private static String normaliseOutcome(String outcome) {
+        String o = outcome == null ? null : outcome.trim().toUpperCase(java.util.Locale.ROOT);
+        if (o == null || o.isEmpty()) {
+            throw badRequest("outcome is required and must be one of " + MANUAL_OUTCOMES);
+        }
+        if (KybEntity.SCREENING_CLEAR_MANUAL_ATTESTATION.equals(o)) {
+            // The stored spelling, not an input. Accepting it would let a caller choose the
+            // storage form directly and bypass the lib-kyb coercion that produces it.
+            throw badRequest("outcome must be one of " + MANUAL_OUTCOMES
+                    + " — CLEAR_MANUAL_ATTESTATION is how a CLEAR outcome is STORED, not an input");
+        }
+        if (!MANUAL_OUTCOMES.contains(o)) {
+            throw badRequest("outcome must be one of " + MANUAL_OUTCOMES + ", was: " + outcome
+                    + (KybEntity.SCREENING_NOT_PERFORMED.equals(o)
+                            ? " — an attestation that nothing was screened is not an attestation;"
+                                    + " simply do not record one"
+                            : ""));
+        }
+        return o;
+    }
+
+    /** The typed confirmation. See {@link ManualAttestationCommand#REQUIRED_ASSERTION}. */
+    private static void requireAssertion(String supplied) {
+        String s = supplied == null ? null : supplied.trim();
+        if (!ManualAttestationCommand.REQUIRED_ASSERTION.equals(s)) {
+            throw badRequest("the attestation field must be exactly: \""
+                    + ManualAttestationCommand.REQUIRED_ASSERTION + "\" — the attester must send"
+                    + " the assertion they are making, so it cannot be defaulted or omitted");
+        }
+    }
+
+    private static void applyProvenance(KybEntity row, String providerId,
+                                        boolean authoritative, String caveat) {
+        if (providerId == null || providerId.isBlank()) {
+            row.setScreeningProviderId(ScreeningProvenance.UNKNOWN_PROVIDER_ID);
+            row.setScreeningAuthoritative(Boolean.FALSE);
+            row.setScreeningCaveat(ScreeningProvenance.UNKNOWN_CAVEAT);
+            return;
+        }
+        row.setScreeningProviderId(providerId);
+        row.setScreeningAuthoritative(authoritative);
+        row.setScreeningCaveat(authoritative ? null
+                : (caveat == null || caveat.isBlank() ? ScreeningProvenance.UNKNOWN_CAVEAT : caveat));
     }
 
     /** Project the stored aggregate into the vendor-agnostic screening subject. */

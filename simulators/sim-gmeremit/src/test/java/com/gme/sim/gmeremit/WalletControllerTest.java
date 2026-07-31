@@ -46,7 +46,7 @@ class WalletControllerTest {
 
     // A Fonepay (Nepal) QR — note "fonepay.com" and "5802NP".
     private static final String NEPAL_QR =
-            "00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni62060702316304d60f";
+            "00020101021126350011fonepay.com071640897200000017835204541253035245802NP5914SudanMerchant6015AathraiTriveni6206070231630421f2";
 
     @BeforeEach
     void resetStore() {

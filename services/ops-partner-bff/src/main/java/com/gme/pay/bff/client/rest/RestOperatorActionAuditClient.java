@@ -16,11 +16,25 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Production {@link OperatorActionAuditClient}. POSTs each operator action to
- * auth-identity's operator-action audit endpoint ({@code POST /v1/audit/operator-actions})
- * over Spring 6 {@link RestClient}. Active when
- * {@code gmepay.operator-action-audit.client=rest}; otherwise the in-memory
- * {@link com.gme.pay.bff.client.stub.StubOperatorActionAuditClient} wins.
+ * Remote {@link OperatorActionAuditClient}. POSTs each operator action to
+ * {@code POST /v1/audit/operator-actions} over Spring 6 {@link RestClient}. Active only when
+ * {@code gmepay.operator-action-audit.client=rest} is set explicitly.
+ *
+ * <h2>WARNING: the endpoint this calls does not exist yet</h2>
+ * As of this commit <b>no service in this repository exposes
+ * {@code POST /v1/audit/operator-actions}</b> — not auth-identity, which this client's base URL points
+ * at, and not config-registry, whose {@code /v1/audit} surfaces
+ * ({@code AuditLogController}, {@code AuditIntegrityController}) are read-only. Selecting {@code rest}
+ * today therefore means: {@link #record} logs a warning per action and returns a local echo, and
+ * {@link #recordDurable} <b>fails closed and blocks every audited operator action</b> (500).
+ *
+ * <p>This is exactly why the default was NOT flipped to this client when the stub's
+ * {@code matchIfMissing = true} defect was fixed. T1-1's first step — verify the real client's
+ * endpoint is real before inverting a default — is what surfaced it. The default is instead
+ * {@code db} ({@link com.gme.pay.bff.client.db.DbOperatorActionAuditClient}, the durable
+ * {@code operator_action_audit} table); this class is kept, and kept selectable, for the day a
+ * hash-chained write endpoint ships on config-registry (the recorded follow-up), at which point
+ * {@code gmepay.auth-identity.base-url} below must be re-pointed at that service.
  *
  * <p>The audit log is owned by auth-identity, so the base URL reuses
  * {@code gmepay.auth-identity.base-url} and the internal-auth shared secret rides in the

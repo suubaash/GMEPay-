@@ -8,6 +8,9 @@
   --pass: #2ea043;
   --fail: #f85149;
   --blocked: #d29922;
+  /* Deliberately withdrawn capability — neutral purple, not an alarm colour: it is
+     an intended product decision, not a defect. */
+  --removed: #a371f7;
   --todo: #6e7681;
   --accent: #2f81f7;
 }
@@ -74,6 +77,7 @@ header h1 { margin: 0; font-size: 22px; }
 .pill.PASS b { color: var(--pass); }
 .pill.FAIL b { color: var(--fail); }
 .pill.BLOCKED b { color: var(--blocked); }
+.pill.UNSUPPORTED b { color: var(--removed); }
 .pill.NOT_AUTOMATED b { color: var(--todo); }
 
 .health {
@@ -126,6 +130,7 @@ header h1 { margin: 0; font-size: 22px; }
 .row.PASS { border-left-color: var(--pass); }
 .row.FAIL { border-left-color: var(--fail); }
 .row.BLOCKED { border-left-color: var(--blocked); }
+.row.UNSUPPORTED { border-left-color: var(--removed); }
 .row.RUNNING { border-left-color: var(--accent); }
 
 .row-main {
@@ -148,6 +153,7 @@ header h1 { margin: 0; font-size: 22px; }
 .badge.PASS { background: #11331c; color: var(--pass); }
 .badge.FAIL { background: #3a1416; color: var(--fail); }
 .badge.BLOCKED { background: #33280a; color: var(--blocked); }
+.badge.UNSUPPORTED { background: #241a3d; color: var(--removed); }
 .badge.RUNNING { background: #0d2847; color: var(--accent); }
 
 .uc-id { font-family: ui-monospace, monospace; color: var(--muted); min-width: 150px; }

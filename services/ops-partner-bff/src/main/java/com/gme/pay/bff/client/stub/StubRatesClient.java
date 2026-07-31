@@ -32,6 +32,21 @@ import java.util.Map;
  * <p>Short-circuit: when {@code fromCcy.equals(toCcy)}, the engine skips the
  * USD pivot and echoes {@code amount} unchanged on both sides with zero
  * margins.
+ *
+ * <h2>THE RATES ARE INVENTED — and there is no selector that makes them real</h2>
+ *
+ * <p>The shape of the arithmetic mirrors the rate engine, but the inputs do not come from anywhere:
+ * the treasury rates are a hardcoded sample table and the margins are a flat 1%/1%, not the
+ * partner's configured margins. So {@code POST /v1/admin/rates/preview} returns a number that is
+ * <b>plausible and wrong</b>, which is worse than an error page for anyone using it to quote.
+ *
+ * <p>Unlike most stubs in this package this one has <b>no {@code Rest*} counterpart and no
+ * {@code gmepay.*.client} selector</b>: it is the only {@link RatesClient} that exists and is
+ * unconditionally wired, so no configuration can turn it into the truth.
+ * {@link com.gme.pay.bff.client.StubClientSelectionWarner} says so at every boot rather than
+ * leaving the fact in this file. The real source is {@code rate-fx}
+ * ({@code POST /v1/rates/quote}); pointing this surface at it needs a new Rest adapter and a
+ * selector, and is recorded as the follow-up rather than half-built here.
  */
 @Component
 public class StubRatesClient implements RatesClient {

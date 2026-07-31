@@ -55,10 +55,20 @@ import java.util.Map;
  * <p>{@code POST} returns the one-time plaintext once; auth-identity has
  * already discarded it in favour of a salted hash. The list surface returns no
  * secret material. This client never logs the plaintext.
+ *
+ * <h2>Internal auth (T0-2)</h2>
+ *
+ * <p>auth-identity's {@code /internal/**} surface — API-key issuance included — is now behind the
+ * service-to-service internal-auth gate ({@code com.gme.pay.internalauth}) and auth-identity
+ * refuses to boot without a secret, so this client must present the shared token from
+ * {@code gmepay.auth-identity.internal-secret} in the {@code X-Gme-Internal} header exactly the way
+ * its sibling {@link RestRbacAdminClient} / {@link RestApprovalQueueClient} /
+ * {@link RestOperatorActionAuditClient} do. Without it self-serve sandbox key issuance 401s. A
+ * blank secret sends no header and logs a WARN — fail-closed, never a fabricated credential.
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest", matchIfMissing = true)
 public class RestSandboxKeyClient implements SandboxKeyClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestSandboxKeyClient.class);
@@ -79,8 +89,28 @@ public class RestSandboxKeyClient implements SandboxKeyClient {
 
     @Autowired
     public RestSandboxKeyClient(
-            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).build());
+            @Value("${gmepay.auth-identity.base-url:http://auth-identity:8080}") String baseUrl,
+            @Value("${gmepay.auth-identity.internal-secret:}") String internalSecret) {
+        this(builderFor(baseUrl, internalSecret).build());
+    }
+
+    /**
+     * Builds the {@link RestClient.Builder} the production constructor uses: base URL plus, when a
+     * secret is configured, the {@code X-Gme-Internal} default header. Package-private so a test can
+     * bind a {@code MockRestServiceServer} to the very same builder and assert the header really
+     * goes on the wire instead of trusting a hand-built client.
+     */
+    static RestClient.Builder builderFor(String baseUrl, String internalSecret) {
+        RestClient.Builder b = RestClient.builder().baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        } else {
+            log.warn("gmepay.auth-identity.internal-secret is blank — sandbox key issuance will carry "
+                    + "no {} header and a gated auth-identity will refuse it (401). Set "
+                    + "GMEPAY_INTERNAL_AUTH_SECRET.",
+                    com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN);
+        }
+        return b;
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */

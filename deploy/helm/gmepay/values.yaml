@@ -13,6 +13,39 @@
 # PORTABILITY RULE: every backing dependency is injected as ENV here, never
 # baked into an image. The env-var NAMES below are the exact ones the services
 # read (harvested from docker-compose.yml + each module's application.*).
+#
+# ============================================================================
+# WHAT THIS CHART DOES **NOT** DEPLOY — gap T3-9. Read this before installing.
+# ============================================================================
+# This chart ships NO StatefulSet, NO PersistentVolumeClaim and NO datastore.
+# Every stateful dependency is EXTERNAL and must already exist before install:
+#
+#   PostgreSQL   (per-service databases; see services.<svc>.env.SPRING_DATASOURCE_URL)
+#   Redis        (api-gateway rate limiting / session)
+#   Kafka        (+ schema registry)
+#   MongoDB      (merchant-qr-data)
+#   S3/MinIO     (partner document vault)
+#   Keycloak     (OIDC issuer for the two SPAs + the resource servers)
+#
+# This is a deliberate posture, not an oversight: in every target environment
+# these are managed services (RDS/ElastiCache/MSK/DocumentDB/S3, or their Azure
+# equivalents), and a chart that also shipped single-replica StatefulSets would
+# invite someone to run the money path's database on an emptyDir-grade volume.
+#
+# THE CONSEQUENCES, stated plainly rather than implied:
+#   * A Helm-based deployment inherits NO backup story from this chart. The
+#     T3-1 backup/restore scripts under scripts/backup/ are `docker exec`-based
+#     and DO NOT APPLY to a Kubernetes install — backups there are the managed
+#     service's own (RDS snapshots, etc.) and must be configured separately.
+#   * `helm install` succeeding proves nothing about whether the datastores are
+#     reachable, correctly sized, or backed up.
+#   * The one exception is reporting-compliance's /app/build emptyDir (see its
+#     entry below): a generated filing file dies with the pod. Acceptable only
+#     while the filing channels are not live; it must become a PVC before they are.
+#
+# scripts/check_helm_chart_wiring.py asserts this posture stays true and stays
+# documented, and asserts the chart provides every env each service's
+# application.* actually requires (gap T3-10).
 # ============================================================================
 
 global:
@@ -34,17 +67,101 @@ global:
     limits:
       memory: 640Mi
 
+  # =========================================================================
+  # Container hardening — gap T5-5 (CISO audit 2026-07-28 §14).
+  #
+  # Before this block the chart set NO securityContext at all, so every pod
+  # inherited the image's user. 23 of the 24 images ran as root, which meant a
+  # remote-code-execution in any service was root in its container, with the
+  # full default capability set and a writable filesystem.
+  #
+  # The image side of the same fix is in every services/*/Dockerfile and
+  # simulators/*/Dockerfile (UID 10001, numeric USER) plus apps/*/Dockerfile
+  # (UID 1001). The two must stay in sync: if you change a Dockerfile's UID,
+  # change runAsUser here, and vice versa.
+  #
+  # Overridable per service via services.<svc>.podSecurityContext /
+  # .containerSecurityContext / .writablePaths — see templates/_deployment.tpl.
+  # The three overlays (values-{aws,azure,onprem}.yaml) inherit all of this;
+  # they intentionally override only registry/tag/endpoints.
+  # =========================================================================
+  podSecurityContext:
+    # Refuse to start the pod at all if the image's user resolves to UID 0. This
+    # is the assertion that keeps a future Dockerfile regression from silently
+    # reintroducing root — hence the numeric USER in the Dockerfiles, which is
+    # what lets the kubelet check this BEFORE the container runs.
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # Group-own mounted volumes so the emptyDirs below are writable by the JVM.
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    # setuid/setgid/file-capability escalation off: the process cannot regain
+    # privileges it was started without.
+    allowPrivilegeEscalation: false
+    privileged: false
+    # No service needs to write to its own image. The paths that ARE written are
+    # enumerated in writablePaths and mounted as emptyDir instead — leaving the
+    # root filesystem writable everywhere to accommodate a handful of temp dirs
+    # is what this deliberately avoids.
+    readOnlyRootFilesystem: true
+    capabilities:
+      # Nothing here binds a privileged port (all listeners are >= 3000) or does
+      # any raw-socket / chown / mknod work, so the entire default set goes.
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  # Paths every container must still be able to write with a read-only root.
+  # /tmp is java.io.tmpdir: embedded Tomcat's work directory lives there, and so
+  # do scheme-adapter-zeropay's ${java.io.tmpdir}/gmepay/{inbound,outbound}
+  # settlement-file staging dirs. Nothing in the fleet logs to a file (verified —
+  # no FileAppender / logging.file.* anywhere), so no log volume is needed.
+  writablePaths:
+    - /tmp
+
 # ---------------------------------------------------------------------------
 # NON-SECRET portability ABI — rendered into one ConfigMap, mounted into EVERY
 # pod via envFrom. Endpoints/regions/flags only; credentials go in `secrets`.
 # Defaults below are in-cluster on-prem (self-hosted) service DNS names.
 # ---------------------------------------------------------------------------
 abi:
-  # Redis (api-gateway reads SPRING_DATA_REDIS_*).
+  # Redis. Two services read SPRING_DATA_REDIS_*, and for BOTH of them it is what lifts the
+  # replica ceiling rather than an optional cache:
+  #   * api-gateway     — the per-partner rate-limit window and the replay-protection nonce set.
+  #                       Without it N replicas enforce N x the configured cap and a captured
+  #                       signed request is replayable once per replica. Its replay posture is
+  #                       fail-CLOSED, so Redis is a hard dependency of the partner edge; size and
+  #                       operate it accordingly (managed/HA, not a single pod).
+  #   * ops-partner-bff — the ops-paging dedupe cooldown. Degrades to per-JVM if unreachable
+  #                       (it never suppresses a page), so it is not a hard dependency there.
+  # transaction-mgmt deliberately does NOT read these any more: its idempotency store is its own
+  # durable idempotency_keys table (V013). It previously picked Redis up FROM THIS ConfigMap by
+  # accident, putting a duplicate-money-transaction control in a cache with no AOF.
   SPRING_DATA_REDIS_HOST: redis
   SPRING_DATA_REDIS_PORT: "6379"
   # Kafka (transaction-mgmt, revenue-ledger, notification-webhook).
   SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  # T3-11: consumer threads per listener container. Was Spring's default of 1 in every service, and
+  # the property could not even be read -- the consumer factories are hand-built, so Boot's
+  # auto-configured binding never applied. They now read this value explicitly.
+  #
+  # This number is capped by the TOPIC'S PARTITION COUNT, which this chart does not control: Kafka
+  # assigns whole partitions, so N threads against a 1-partition topic leaves N-1 idle, and so does
+  # an extra replica. 3 assumes the gmepay.* topics have >= 3 partitions.
+  #
+  # OPERATOR ACTION REQUIRED, and it is not a values-file change. This chart does not deploy Kafka --
+  # SPRING_KAFKA_BOOTSTRAP_SERVERS points at an external/managed broker (MSK, Event Hubs, or a
+  # self-hosted cluster). Whoever owns that broker must ensure the gmepay.* topics are created with
+  # at least this many partitions. INCREASING PARTITIONS ON AN EXISTING TOPIC IS A MIGRATION, not a
+  # config edit: it changes the key -> partition mapping, so ordering guarantees for a given key do
+  # not hold across the change. Do it while producers are quiesced, or create new topics and cut
+  # over. Until it is done, this value is simply an upper bound nothing reaches.
+  SPRING_KAFKA_LISTENER_CONCURRENCY: "3"
   GMEPAY_SCHEMA_REGISTRY_URL: http://schema-registry:8081
   # Mongo (merchant-qr-data).
   SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/merchant
@@ -54,12 +171,44 @@ abi:
   GMEPAY_VAULT_ENDPOINT: http://minio:9000
   GMEPAY_VAULT_REGION: us-east-1
   GMEPAY_VAULT_PATH_STYLE: "true"
-  # OIDC issuer (api-gateway resource-server). Provider-neutral var name kept as
-  # an alias; the binding var is the Spring property name.
-  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/gmepay
-  OIDC_ISSUER_URI: http://keycloak:8080/realms/gmepay
-  # Telemetry (OTLP, vendor-neutral).
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  # OIDC (api-gateway + ops-partner-bff resource servers). Provider-neutral var
+  # name kept as an alias; the binding var is the Spring property name.
+  #
+  # T1-2: the ISSUER must be the BROWSER-facing URL, because that is what Keycloak
+  # stamps into the token's `iss` and what the SPAs' NEXT_PUBLIC_KEYCLOAK_URL points
+  # at. An in-cluster `http://keycloak:8080/...` issuer can never match a token a
+  # browser obtained through the ingress, so every request 401'd. The JWKS URI stays
+  # in-cluster — that is the URL the PODS fetch keys from; Spring still validates the
+  # `iss` claim against issuer-uri when the decoder is built from jwk-set-uri.
+  # Realm and client ids come from docker/keycloak/realm-gmepay.json (realm `gmepay`,
+  # clients `admin-ui` / `partner-portal-ui`) — see docker/keycloak/README.md §1.
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  OIDC_ISSUER_URI: http://keycloak.gmepay.local/realms/gmepay
+  SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/gmepay/protocol/openid-connect/certs
+  # ---- Telemetry ----------------------------------------------------------
+  # T3-2: OTEL_EXPORTER_OTLP_ENDPOINT used to be declared here (and in all three overlays) pointing at
+  # an `otel-collector` that this chart does not deploy. It was DEAD CONFIG: no service has an
+  # OpenTelemetry SDK / OTLP exporter / micrometer-tracing on its classpath, so nothing ever read the
+  # variable, and the chart contains no collector Deployment. It has been REMOVED rather than wired,
+  # because wiring it means adding a tracer to 20 services plus a collector — real work, not a config
+  # line. Distributed tracing is an OPEN gap, stated honestly in Documentation/RUNBOOK_MONITORING.md.
+  #
+  # What DOES exist now: every service serves /actuator/prometheus (Micrometer registry on all 20
+  # deployables), gated by the platform internal token. There is still no Prometheus/Grafana/Loki
+  # deployed by this chart — scraping is the operator's, and the endpoints are the contract. Pod
+  # annotations below advertise the target so a cluster-wide Prometheus can discover it.
+
+# ---------------------------------------------------------------------------
+# Monitoring (T3-2). This chart does NOT deploy Prometheus/Grafana/Alertmanager
+# or any log aggregation — that remains an open part of T3-2. What it does is
+# advertise every pod as a scrape target for an operator-supplied Prometheus.
+# The scrape needs the platform internal token in the X-Gme-Internal header;
+# Documentation/RUNBOOK_MONITORING.md carries the scrape_configs snippet.
+# ---------------------------------------------------------------------------
+monitoring:
+  # Stamp prometheus.io/{scrape,path,port} onto every pod (kubernetes_sd convention).
+  podAnnotations: true
+  scrapePath: /actuator/prometheus
 
 # ---------------------------------------------------------------------------
 # SECRET portability ABI. `create: true` renders a chart-managed Secret from
@@ -80,13 +229,53 @@ secrets:
     GMEPAY_VAULT_SECRET_KEY: CHANGE_ME_VAULT_SECRET
     # Cross-service signing / internal-auth secrets (#90 RBAC + webhook).
     GMEPAY_RBAC_SECRET: CHANGE_ME_RBAC_EDGE_SECRET
+    # GMEPAY_INTERNAL_AUTH_SECRET is now FAIL-CLOSED (T0-2 / T0-5), not best-effort:
+    # auth-identity, prefunding, scheme-adapter-zeropay and rate-fx REFUSE TO START without it, and
+    # any caller that omits it is answered 401 (never a bypass). It is surfaced to 11 services via
+    # their envSecretKeys / envSecretAliases below — see the matrix in
+    # outputs/agent/fix_fleet-config-convergence_2026-07-28.md. All 11 must receive the SAME value.
+    # This placeholder is not a working credential; the cloud overlays point it at
+    # Secrets Manager / Key Vault. Leaving it as-is means the whole fleet fails closed, by design.
     GMEPAY_INTERNAL_AUTH_SECRET: CHANGE_ME_INTERNAL_SVC_SECRET
     GMEPAY_WEBHOOK_SIGNING_SECRET: CHANGE_ME_WEBHOOK_SECRET
+    # HS256 key for the platform capability tokens auth-identity mints (T0-6). Symmetric: whoever
+    # holds it can forge any token. It used to be templated NOWHERE while auth-identity defaulted it
+    # to a literal published in the repo; auth-identity now REFUSES TO START on a blank, too-short,
+    # placeholder or previously-published value, so leaving this placeholder as-is fails the service
+    # closed rather than signing forgeable tokens. Must be >= 32 chars of random material.
+    GME_AUTH_JWT_SIGNING_SECRET: CHANGE_ME_AUTH_JWT_SIGNING_SECRET
+    # T0-6 rotation: previously active JWT keys, accepted for VERIFICATION ONLY while the tokens
+    # they signed expire. Format `<secret>@<ISO-8601 instant it stopped signing>`, entries separated
+    # by `;`. EMPTY IS THE CORRECT STEADY STATE — an entry exists only inside a rotation window, and
+    # leaving one here after the window closes is an extra copy of live signing material in a
+    # manifest (auth-identity WARNs about it at startup). Empty deliberately rather than a
+    # CHANGE_ME_ placeholder: a placeholder here would be a *rejected key value*, so it would fail
+    # the service closed for the situation that is normal.
+    # Procedure: docs/runbooks/JWT_KEY_ROTATION.md
+    GME_AUTH_JWT_PREVIOUS_KEYS: ""
+    # ---- partner scheme credentials (gap T3-10) ----
+    # The Nepal pair was referenced by scheme-adapter-nepal's envSecretKeys but declared
+    # NOWHERE in secrets.data. A secretKeyRef to a key the Secret does not contain is not a
+    # soft failure: the kubelet refuses to start the container ("couldn't find key ... in
+    # Secret"), so scheme-adapter-nepal could never have come up in a Helm deployment. Same
+    # class of never-exercised-chart omission as the missing datasources.
+    GMEPAY_SCHEME_NEPAL_TOKEN: CHANGE_ME_NEPAL_PARTNER_TOKEN
+    GMEPAY_SCHEME_NEPAL_KEY: CHANGE_ME_NEPAL_PARTNER_KEY
+    # 9Pay request/response signing material (RSA PEM). Ours to sign with, theirs to verify.
+    GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM: CHANGE_ME_9PAY_PRIVATE_KEY_PEM
+    GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM: CHANGE_ME_9PAY_PUBLIC_KEY_PEM
 
 # ---------------------------------------------------------------------------
 # Ingress — fronts api-gateway + the two UIs. Hosts/class/annotations are
 # overridden per target (nginx / ALB / App Gateway).
 # ---------------------------------------------------------------------------
+# NOTE (T1-2): Keycloak is NOT deployed by this chart — it is an external
+# dependency. `keycloak.gmepay.local` (abi.OIDC_ISSUER_URI + the UIs'
+# NEXT_PUBLIC_KEYCLOAK_URL) must resolve, from the BROWSER, to that external
+# Keycloak's realm base; the pods reach the same realm in-cluster at
+# http://keycloak:8080 for JWKS only. If you host Keycloak in-cluster, add a
+# `keycloak` entry to the services map + an ingress host here and keep the two
+# URLs pointing at the same realm.
 ingress:
   enabled: true
   className: nginx
@@ -102,6 +291,136 @@ ingress:
     - host: partner.gmepay.local
       paths:
         - { path: /, pathType: Prefix, service: partner-portal-ui, port: 3001 }
+
+# ---------------------------------------------------------------------------
+# 9Pay IPN edge — gap T5-7. Rendered by templates/ingress-ipn.yaml.
+#
+# THE ONLY compensating control for gap T5-6: 9Pay leaves the IPN `code` field
+# OUTSIDE its signed string, and a bank reversal (code 009) reuses the original
+# transfer's created_at, so a captured success IPN with `code` rewritten to 009
+# still verifies cryptographically and no local rule can tell it from a real
+# reversal. Restricting the edge to 9Pay's own network is what closes that.
+#
+# DISABLED BY DEFAULT, and that is not laziness:
+#   * `enabled: false` keeps the platform's behaviour unchanged — note the main
+#     ingress above never routed to scheme-adapter-ninepay at all, so a Helm
+#     install has never been able to receive a 9Pay IPN (every VND payout would
+#     wait forever for a status push). Opening that route and restricting it are
+#     the same job.
+#   * `enabled: true` with an EMPTY sourceRanges makes `helm template`/`install`
+#     FAIL (see the template). You cannot open this edge to the internet by
+#     forgetting a value; you can only open it deliberately.
+#
+# sourceRanges IS OPERATOR-SUPPLIED DATA AND IS NOT SHIPPED HERE. Ask 9Pay for
+# their current IPN egress addresses IN WRITING; they differ between 9Pay's test
+# and production estates. Documentation/schemes/digest_9pay-payout-api_2026-07-27.md
+# records what 9Pay's API document listed at digest time — a reference to CONFIRM
+# with the partner, never a default to trust. A stale hardcoded range fails closed
+# against live traffic, i.e. it is a production incident, not a safe default.
+#
+# ALSO SET THE SERVICE-LEVEL LIST (defence in depth, for direct reachability):
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES
+#   services.scheme-adapter-ninepay.env.GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "1"
+# The service ships the list EMPTY and logs a WARN naming T5-7/T5-6 on every boot
+# while it stays empty — an unprotected edge is loud, not silent.
+#
+# STILL NOT COVERED by this chart: our EGRESS addresses (9Pay whitelists us too,
+# which needs a stable NAT/SNAT address registered with them — infrastructure, not
+# a chart value), and an in-cluster NetworkPolicy for who may call the adapter
+# (a different control: external source IPs are SNAT'd before a NetworkPolicy
+# sees them, so 9Pay's CIDRs are meaningless there).
+# ---------------------------------------------------------------------------
+ipnIngress:
+  enabled: false
+  # nginx | alb. Chosen here so the template picks the right annotation key —
+  # putting CIDRs on the wrong controller's annotation is a silent no-op. Azure
+  # AGIC has no per-Ingress source allowlist: the template fails rather than
+  # render something that filters nothing (see values-azure.yaml).
+  controller: nginx
+  className: nginx
+  # The hostname registered with 9Pay as the IPN callback URL. Empty + enabled=true
+  # is a template failure.
+  host: ""
+  path: /scheme/ipn        # Exact match. NEVER widen to `/` — /scheme/payout is behind it.
+  service: scheme-adapter-ninepay
+  port: 8080
+  sourceRanges: []         # <-- 9Pay-supplied. See the block above. MUST stay empty in git.
+  tls: []
+  extraAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# HORIZONTAL SCALING — the chart is now CAPABLE of it, and ships it OFF.
+#
+# Until the replica-ceiling work, N>1 was not a capacity choice but a
+# CORRECTNESS defect. Concretely, at two replicas:
+#   * api-gateway enforced 2x the configured rate limit and accepted a captured
+#     signed request once per replica (an integrity defect, not a perf one);
+#   * transaction-mgmt's idempotency window was per-JVM, so ONE partner retry
+#     created TWO transactions;
+#   * ops-partner-bff minted colliding ops-alert ids, served a different alert
+#     list per replica, and paged a human once per replica;
+#   * six services ran duplicate scheduled jobs — including ones that transmit
+#     settlement files to a scheme and release partner float.
+# All of those now use shared state (Redis / per-service PostgreSQL tables) or a
+# ShedLock lease, so the chart may finally offer scaling at all.
+#
+# OFFERING IS NOT TURNING ON. `global.defaultReplicas` stays 1, every service
+# stays at 1, and templates/hpa.yaml renders NOTHING until someone opts in.
+# How many replicas to run is a cost decision that belongs to the owner; this
+# repository has no basis to pick one, and a plausible-looking default would be
+# read as an engineering position. Enabling autoscaling without supplying
+# maxReplicas and a metric FAILS the template rather than inventing either.
+#
+# ---- SAFE AT N>1 (correctness-wise; still a cost decision) ----------------
+#   api-gateway              needs Redis (SPRING_DATA_REDIS_HOST is set in the
+#                            ABI ConfigMap; gateway.shared-state.store=auto).
+#                            With store=memory it is capped at 1 again.
+#   transaction-mgmt         idempotency claims + the partner_txn_ref unique
+#                            index live in its own database.
+#   payment-executor, settlement-reconciliation, notification-webhook,
+#   scheme-adapter-zeropay, revenue-ledger, prefunding
+#                            every @Scheduled job holds a uniquely-named
+#                            ShedLock lease, and the pools are sized.
+#   ops-partner-bff          SAFE ONLY BECAUSE its ops-alert store, alert ids and
+#                            operator acks moved into its OWN `bff` database.
+#                            *** THAT DATABASE IS NOT PROVISIONED IN ANY REAL
+#                            ENVIRONMENT YET *** — the AWS/Azure overlays point at
+#                            placeholder managed instances. Until it exists, this
+#                            service must not be scaled (and in fact will fail at
+#                            Flyway on deploy, which is the correct failure).
+#
+# ---- NOT ASSESSED — do NOT read the absence of a warning as approval -------
+#   auth-identity, config-registry, rate-fx, smart-router, qr-service,
+#   merchant-qr-data, reporting-compliance, kyb-adapter,
+#   scheme-adapter-{sendmn,ninepay,nepal}, admin-ui, partner-portal-ui.
+#   These were never swept for per-JVM request/money state. reporting-compliance
+#   additionally writes generated filing files to an emptyDir (see its entry), so
+#   a second replica holds a different set of files.
+#
+# ---- KAFKA CONSUMERS: a caveat that is not about state --------------------
+#   Kafka assigns WHOLE partitions to consumers, so a topic still created with one
+#   partition gains nothing from a second replica OR from
+#   SPRING_KAFKA_LISTENER_CONCURRENCY. Repartitioning is an operational migration,
+#   not a values edit (MSK: set num.partitions BEFORE the gmepay.* topics are
+#   auto-created; Azure Event Hubs Standard: partition count is fixed at creation).
+#
+# Per-service schema (see templates/hpa.yaml):
+#   services.<svc>.replicas                      int, default global.defaultReplicas (1)
+#   services.<svc>.autoscaling.enabled           bool, default autoscaling.enabled
+#   services.<svc>.autoscaling.minReplicas       int, default 1
+#   services.<svc>.autoscaling.maxReplicas       int, REQUIRED when enabled
+#   services.<svc>.autoscaling.targetCPUUtilizationPercentage      \ at least one
+#   services.<svc>.autoscaling.targetMemoryUtilizationPercentage   / REQUIRED
+#   services.<svc>.autoscaling.metrics           raw autoscaling/v2 list (wins)
+#   services.<svc>.autoscaling.behavior          raw autoscaling/v2 behaviour
+# When an HPA is enabled for a service the Deployment omits spec.replicas, so the
+# two cannot fight each other on `helm upgrade`.
+# ---------------------------------------------------------------------------
+autoscaling:
+  # Fleet-wide master switch. A per-service `autoscaling.enabled` overrides it in
+  # BOTH directions (explicitly — a per-service `false` is honoured even if this
+  # is true). Left false: see the block above.
+  enabled: false
 
 # ===========================================================================
 # SERVICES MAP — the single source of deployables. deployments.yaml ranges
@@ -121,25 +440,59 @@ services:
     containerPort: 8080
     probe: { type: tcp }
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_VAULT_ACCESS_KEY, GMEPAY_VAULT_SECRET_KEY]
+                    GMEPAY_VAULT_ACCESS_KEY, GMEPAY_VAULT_SECRET_KEY,
+                    # T0-2: prefunding credit-limit push (/internal/v1/prefunding/**) is gated.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     envSecretAliases:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-config:5432/configreg
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # ---- Partner ACTIVATION must issue REAL credentials (gap T1-1) --------------
+      # Both selectors default to `rest` in the image's application.properties; pinned
+      # here too so the deployed wiring is auditable from the values file alone. With
+      # `stub` (the pre-T1-1 implicit default) activation returns local randomness: the
+      # API key resolves to found=false at auth-identity's
+      # POST /internal/auth/keys/resolve and the whsec_ secret is unknown to
+      # notification-webhook, so no partner request or webhook signature can verify.
+      GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://{{ .Release.Name }}-auth-identity:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: "rest"
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://{{ .Release.Name }}-notification-webhook:8080
+      # ---- KYB screening must leave the JVM (gap T1-4) -----------------------------
+      # Unset, StubKybClient / StubKybVerifyClient (matchIfMissing=true) won in EVERY
+      # environment and "screening" was keyword matching inside this service. Now that
+      # kyb-adapter is deployable (entry below), the seam points at it. This changes
+      # the TRANSPORT, not the truthfulness — kyb-adapter still runs the same
+      # non-authoritative stub provider until ADR-014's vendor credentials land, and
+      # every verdict it returns says so.
+      GMEPAY_KYB_ADAPTER_CLIENT: "rest"
+      GMEPAY_KYB_ADAPTER_BASE_URL: http://{{ .Release.Name }}-kyb-adapter:8080
 
   rate-fx:
     image: rate-fx
     probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # REQUIRED TO BOOT (T0-2): POST /v1/rates/snapshots is gated, fail-closed.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
+      # T3-10: without these two the service falls through to the in-code
+      # `jdbc:h2:mem:ratefxdb` default and silently runs on an in-memory database that is
+      # WIPED ON EVERY RESTART. This is the same omission the register recorded for
+      # payment-executor; the systematic audit (scripts/check_helm_chart_wiring.py) found
+      # it here too. docker-compose.yml has always set them; the chart never did.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ratefx:5432/ratefxdb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
 
   prefunding:
     image: prefunding
     probe: { type: tcp }
-    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # REQUIRED TO BOOT (T0-5): every prefunding route is gated, fail-closed.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-prefunding:5432/prefunding
@@ -150,56 +503,136 @@ services:
     probe: { type: tcp }
     env:
       SERVER_PORT: "8080"
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
 
   qr-service:
     image: qr-service
     probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # T0-2 outbound: the gated CPM prefunding reserve/release calls.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
-      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://{{ .Release.Name }}-merchant-qr-data:8080
+      # T3-10: without these two the service falls through to the in-code
+      # `jdbc:h2:mem:qrdb` default and silently runs on an in-memory database that is
+      # WIPED ON EVERY RESTART. This is the same omission the register recorded for
+      # payment-executor; the systematic audit (scripts/check_helm_chart_wiring.py) found
+      # it here too. docker-compose.yml has always set them; the chart never did.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-qr:5432/qrdb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
 
   auth-identity:
     image: auth-identity
     probe: { type: http }     # ships spring-boot-starter-actuator
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_INTERNAL_AUTH_SECRET]
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    # REQUIRED TO BOOT (T0-6): the HS256 key for the platform capability tokens this
+                    # service mints. No default exists in the image any more; a blank / placeholder /
+                    # previously-published value stops the service starting.
+                    GME_AUTH_JWT_SIGNING_SECRET,
+                    # T0-6 rotation: previously active signing keys, accepted for verification only
+                    # while their tokens expire. Secret material, so it comes from the Secret and
+                    # not from env below. Empty in steady state.
+                    GME_AUTH_JWT_PREVIOUS_KEYS]
     envSecretAliases:
       GMEPAY_RBAC_VERIFY_SECRET: GMEPAY_RBAC_SECRET
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-authid:5432/authid
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
-      GME_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
+      GME_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
       GMEPAY_RBAC_ENABLED: "true"
       GMEPAY_INTERNAL_AUTH_ENABLED: "true"
+      # ---- JWT key rotation (T0-6) -------------------------------------------------
+      # NOT secrets — a timestamp and a boolean — so they live here rather than in the Secret.
+      #
+      # GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT: the instant the CURRENT signing key started signing,
+      # as an ISO-8601 instant (e.g. "2026-07-28T09:00:00Z"). Set it in the same change that
+      # promotes a new key. If it is less than one max-token-TTL ago and GME_AUTH_JWT_PREVIOUS_KEYS
+      # is empty, auth-identity REFUSES TO START — that combination is a rotation that dropped the
+      # outgoing key in the same step, silently invalidating every live token. Left empty the check
+      # simply cannot run (the service says so at startup) and rotation safety is on the operator.
+      GME_AUTH_JWT_ACTIVE_KEY_ACTIVATED_AT: ""
+      # Declares an intentional hard cutover: every live token dies. Correct for a FIRST deployment
+      # (there is no outgoing key to overlap with) and for a suspected key compromise (killing live
+      # tokens is the objective). It ships "true" so a first install of this chart comes up, and the
+      # rotation runbook's first step is to set it to "false" once the platform is live — after that
+      # it must only ever be flipped back deliberately, per docs/runbooks/JWT_KEY_ROTATION.md.
+      GME_AUTH_JWT_ALLOW_HARD_CUTOVER: "true"
 
   transaction-mgmt:
     image: transaction-mgmt
     probe: { type: tcp }
-    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # T0-2: gates /actuator/metrics + /actuator/prometheus + /v3/api-docs;
+                    # REQUIRED if devtools on.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-txn:5432/txndb
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # ---- Stuck / UNCERTAIN transaction alert sweep: ON (gap T3-3 / COO#4) -------
+      # StuckTransactionAlertSweeper is one of only two production safety nets on the money path (the
+      # other is payment-executor's DECLINE_SPIKE monitor). Its code default is still
+      # `gmepay.txn.stuck-alert.enabled:false` -- transaction-mgmt was owned by another workstream when
+      # T3-3 landed, so it is switched on HERE and in docker-compose.yml instead, which means every
+      # SHIPPED deployment has it armed. Flipping the code default remains a one-line follow-up
+      # (see Documentation/GAP_REGISTER.md T3-3).
+      # It emits UNCERTAIN_AGED / STUCK_TXN ops.alert events via the outbox -> gmepay.ops.alert; the
+      # operator recovery action is POST /v1/transactions/{txnRef}/resolve.
+      GMEPAY_TXN_STUCK_ALERT_ENABLED: "true"
+      # Sweep every 60s; WARN once a non-terminal row is 15min old, CRITICAL at 4x that (1h).
+      GMEPAY_TXN_STUCK_ALERT_INTERVAL_MS: "60000"
+      GMEPAY_TXN_STUCK_ALERT_THRESHOLD_SECONDS: "900"
+      GMEPAY_TXN_STUCK_ALERT_CRITICAL_MULTIPLIER: "4"
+      GMEPAY_TXN_STUCK_ALERT_STATUSES: "UNCERTAIN"
 
   payment-executor:
     image: payment-executor
     probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # T0-5/T0-2: gated prefunding debit + ZeroPay authorize/commit; also gates its own
+                    # GET /v1/balance, GET /internal/ops/alerts and /actuator/prometheus.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
-      GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
-      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
-      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
-      GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://scheme-adapter-zeropay:8080
-      GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://scheme-adapter-nepal:8080
-      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
-      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      # FOUND WHILE CLOSING T3-3: this block had NO datasource at all, so a Helm-deployed
+      # payment-executor fell back to the in-code H2 in-memory default and silently lost
+      # execution_attempts / idempotency_keys / payment_authorizations on every restart — and would
+      # have lost the new ops_alerts table too. docker-compose.yml has always set it; the chart did
+      # not. Same DB the compose stack uses (postgres-executor / `executor`).
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-executor:5432/executor
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
+      GMEPAY_RATE_FX_BASE_URL: http://{{ .Release.Name }}-rate-fx:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://{{ .Release.Name }}-prefunding:8080
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://{{ .Release.Name }}-merchant-qr-data:8080
+      GMEPAY_SCHEME_ADAPTER_ZEROPAY_BASE_URL: http://{{ .Release.Name }}-scheme-adapter-zeropay:8080
+      GMEPAY_SCHEME_ADAPTERS_NEPAL_BASE_URL: http://{{ .Release.Name }}-scheme-adapter-nepal:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://{{ .Release.Name }}-revenue-ledger:8080
+      # ---- Ops alert notification sink (gap T3-3) ----------------------------------
+      # DECLINE_SPIKE is ON by default (application.properties) and every alert is persisted to
+      # ops_alerts before publish, readable at GET /internal/ops/alerts (internal-token gated).
+      # To PAGE A HUMAN, uncomment ONE line and give it your pager/Slack/Opsgenie webhook URL. It is
+      # deliberately left unset: @ConditionalOnProperty matches an EMPTY value, so a blank URL would
+      # activate the webhook sink with no target and fail every delivery. Unset => LogAlertSink.
+      # There is no credential here — the token is inside the operator's URL.
+      #   GMEPAY_ALERT_SINK_WEBHOOK_URL: https://hooks.slack.com/services/REPLACE/ME
+      GMEPAY_ALERT_SINK_TIMEOUT_MS: "3000"
+      GMEPAY_ALERT_SINK_MAX_ATTEMPTS: "3"
 
   merchant-qr-data:
     image: merchant-qr-data
     probe: { type: tcp }
+    # T5-5: the ZeroPay merchant-feed sync works in a WORKDIR-relative directory
+    # (gmepay.merchant-sync.inbound-dir=./data/zeropay-inbound => /app/data), so
+    # readOnlyRootFilesystem needs that path mounted. An emptyDir is the safe
+    # default; a real deployment should replace it with the shared inbound volume
+    # the feed is actually delivered to.
+    writablePaths:
+      - /app/data
     env:
       SERVER_PORT: "8080"
       # Mongo URI comes from the shared ABI ConfigMap (SPRING_DATA_MONGODB_URI).
@@ -207,12 +640,82 @@ services:
   scheme-adapter-zeropay:
     image: scheme-adapter-zeropay
     probe: { type: tcp }
-    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # REQUIRED TO BOOT (T0-2): /internal/scheme/zeropay/** is gated.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-scheme:5432/zpadapter
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
-      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://merchant-qr-data:8080
+      GMEPAY_MERCHANT_QR_DATA_BASE_URL: http://{{ .Release.Name }}-merchant-qr-data:8080
+      # ---- T3-4 business-day calendar (same values as settlement-reconciliation) ----
+      # EMPTY on purpose — an OPERATOR / BUSINESS input, see Documentation/RUNBOOK_BATCH_OPS.md.
+      # Firing a ZP00xx file on a KRW bank holiday risks KFTC rejecting or double-counting it.
+      GMEPAY_CALENDAR_NON_BUSINESS_DATES: ""
+      GMEPAY_CALENDAR_NON_BUSINESS_DAYS_OF_WEEK: ""
+      GMEPAY_CALENDAR_VERIFIED_THROUGH: ""
+      GMEPAY_CALENDAR_FAIL_CLOSED: "false"
+
+  # ───────────── scheme-adapter-sendmn / -ninepay (gap T3-10) ─────────────
+  # Both were MISSING FROM THE CHART ENTIRELY. Both are deployable (each has a
+  # Dockerfile and a Flyway'd Postgres schema) and both sit on a live cross-border
+  # payout path — SENDMN is the Mongolia MNT corridor payment-executor already
+  # routes to, NINEPAY the Vietnam VND one. A `helm install` simply did not create
+  # them, so any transaction routed to either corridor failed at DNS, and the
+  # systematic audit (scripts/check_helm_chart_wiring.py) is what surfaced them.
+  #
+  # Their partner base-urls default to LOCALHOST SIMULATORS (:9106 / :9107) in the
+  # image, which is exactly the class of dev default that must never be inherited
+  # into a deployment — hence the explicit REPLACE- placeholders below, matching
+  # how scheme-adapter-nepal already handles it.
+  scheme-adapter-sendmn:
+    image: scheme-adapter-sendmn
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # /internal/scheme/sendmn/** moves real money at the partner.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
+    env:
+      SERVER_PORT: "8080"
+      # postgres-sendmn, NOT postgres-scheme — same defect as the ninepay entry below:
+      # compose + scripts/backup/inventory.env give smnadapter its own cluster.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-sendmn:5432/smnadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # REQUIRED override — the image default is the local simulator.
+      GMEPAY_SCHEME_SENDMN_BASE_URL: https://REPLACE-with-sendmn-partner-endpoint
+
+  scheme-adapter-ninepay:
+    image: scheme-adapter-ninepay
+    probe: { type: tcp }
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    # 9Pay signs requests with our RSA key and we verify theirs.
+                    # Both are key material: Secret, never values.yaml.
+                    GMEPAY_SCHEME_NINEPAY_PRIVATE_KEY_PEM,
+                    GMEPAY_SCHEME_NINEPAY_PUBLIC_KEY_PEM]
+    env:
+      SERVER_PORT: "8080"
+      # postgres-ninepay, NOT postgres-scheme: docker-compose.yml and the backup
+      # inventory (scripts/backup/inventory.env) both give npadapter its own cluster.
+      # The chart used to name the zeropay cluster's host with the ninepay database,
+      # which is a host that has no such DB — found while closing T5-7.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-ninepay:5432/npadapter
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # REQUIRED override — the image default is the local simulator.
+      GMEPAY_SCHEME_NINEPAY_BASE_URL: https://REPLACE-with-9pay-partner-endpoint
+      # Response-signature verification stays ON; turning it off accepts unsigned
+      # partner responses on a payout path.
+      GMEPAY_SCHEME_NINEPAY_VERIFY_RESPONSES: "true"
+      # ---- T5-7: IPN source allowlist (service-level layer) ---------------------
+      # Ships EMPTY on purpose. Empty = NOT enforcing: the adapter admits an IPN from
+      # any source and logs a WARN naming T5-7/T5-6 on every boot plus once on the
+      # first IPN it admits. Non-empty = fail closed (403 before the body is parsed).
+      # Fill both of these AND ipnIngress.sourceRanges above with the ranges 9Pay
+      # supplies in writing; they are partner data and are not shipped in this repo.
+      GMEPAY_SCHEME_NINEPAY_IPN_ALLOWED_SOURCE_RANGES: ""
+      # 0 = trust only the socket peer and IGNORE X-Forwarded-For (safe default).
+      # Set to "1" when traffic arrives through ipnIngress, or the peer this sees is
+      # the ingress controller pod and no external range can ever match.
+      GMEPAY_SCHEME_NINEPAY_IPN_TRUSTED_PROXY_COUNT: "0"
 
   # Nepal corridor adapter (stateless). Ships to cloud; the sim-nepal-qr
   # simulator does NOT — override GMEPAY_SCHEME_NEPAL_BASE_URL per overlay to the
@@ -230,21 +733,61 @@ services:
     image: notification-webhook
     probe: { type: tcp }
     envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
-                    GMEPAY_WEBHOOK_SIGNING_SECRET]
+                    GMEPAY_WEBHOOK_SIGNING_SECRET,
+                    # T5-8: /v1/webhooks/endpoints/** mints and rotates whsec_ secrets — it must not
+                    # be reachable by anything with in-cluster network access.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-notify:5432/notify
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
       GMEPAY_WEBHOOK_DISPATCHER_ENABLED: "true"
+      GMEPAY_INTERNAL_AUTH_ENABLED: "true"
 
   settlement-reconciliation:
     image: settlement-reconciliation
     probe: { type: tcp }
-    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD,
+                    # T0-2 outbound: the gated ZeroPay registration-status probe.
+                    GMEPAY_INTERNAL_AUTH_SECRET]
     env:
       SERVER_PORT: "8080"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-settlement:5432/settlement
       SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # ---------------------------------------------------------------------
+      # T3-10: this service does NOT use the GMEPAY_*_BASE_URL convention the rest of
+      # the fleet uses — its application.yml reads TRANSACTION_MGMT_URL, PREFUNDING_URL,
+      # REVENUE_LEDGER_URL, SCHEME_ADAPTER_*_URL. The chart set none of them, so it fell
+      # back to in-code defaults that are wrong TWICE over in Kubernetes: bare hostnames
+      # (the Services are `{{ .Release.Name }}-<svc>`) AND per-service ports
+      # (`transaction-mgmt:8082`, `revenue-ledger:8084`, `scheme-adapter-sendmn:8093`)
+      # that the chart normalises to 8080. Every cross-service read — corridor tie-out
+      # leg (b), the refund-date claw-back query, the spec §8.2 registration gate — would
+      # have failed in a Helm deploy.
+      TRANSACTION_MGMT_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
+      PREFUNDING_URL: http://{{ .Release.Name }}-prefunding:8080
+      REVENUE_LEDGER_URL: http://{{ .Release.Name }}-revenue-ledger:8080
+      SCHEME_ADAPTER_ZEROPAY_URL: http://{{ .Release.Name }}-scheme-adapter-zeropay:8080
+      SCHEME_ADAPTER_SENDMN_URL: http://{{ .Release.Name }}-scheme-adapter-sendmn:8080
+      # The cross-service gates ship default-FALSE in the image (so dev/CI use in-process
+      # fixtures). A real deployment wants them ON — otherwise the §8.2 prerequisite is
+      # not enforced, the Addendum-001 rounding residual is never posted, and cross-date
+      # refund claw-back silently does not happen. Set explicitly rather than inherited,
+      # because inheriting a dev default into production is what T3-10 is about.
+      SCHEME_ADAPTER_ZEROPAY_ENABLED: "true"
+      REVENUE_LEDGER_ENABLED: "true"
+      TRANSACTION_MGMT_REFUNDED_ENABLED: "true"
+      CORRIDOR_RECON_ENABLED: "true"
+      # ---- T3-4 business-day calendar (see Documentation/RUNBOOK_BATCH_OPS.md) ----
+      # EMPTY on purpose. There is no Korean banking-holiday table in this repo and no
+      # rule for deriving one, so POPULATING THIS IS AN OPERATOR / BUSINESS INPUT. While
+      # empty, batch windows still run (fail-open) but each is stamped
+      # calendar_verdict=UNVERIFIED in the batch_runs ledger and the day's first run
+      # raises a BATCH_CALENDAR_UNVERIFIED ops alert — visible, not silently assumed.
+      GMEPAY_CALENDAR_NON_BUSINESS_DATES: ""
+      GMEPAY_CALENDAR_NON_BUSINESS_DAYS_OF_WEEK: ""
+      GMEPAY_CALENDAR_VERIFIED_THROUGH: ""
+      GMEPAY_CALENDAR_FAIL_CLOSED: "false"
 
   revenue-ledger:
     image: revenue-ledger
@@ -258,35 +801,165 @@ services:
   reporting-compliance:
     image: reporting-compliance
     probe: { type: tcp }
+    # T5-5: the only service that WRITES under its WORKDIR by default — the BOK
+    # FX and KOFIU feed builders emit files to ./build/bok-out and ./build/kofiu-out
+    # (=> /app/build). Mounted as an emptyDir so readOnlyRootFilesystem holds.
+    # NOTE the operational consequence, which is not new but is now explicit: an
+    # emptyDir dies with the pod, so a generated filing file is lost on restart.
+    # That is acceptable only because the filing channels are not live (OI-02 /
+    # OI-03 are externally gated); before real filing this must become a PVC.
+    writablePaths:
+      - /app/build
+    envSecretKeys: [SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
     env:
       SERVER_PORT: "8080"
-      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
-      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://{{ .Release.Name }}-revenue-ledger:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
+      # T3-10: without these the service silently ran on `jdbc:h2:mem:reporting`, so the
+      # KOFIU / BOK filing aggregates and every reporting_run row were WIPED ON RESTART —
+      # on the one service whose whole output is a regulatory filing. Same omission class
+      # as payment-executor's; found by the systematic audit
+      # (scripts/check_helm_chart_wiring.py). docker-compose.yml has always set them.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-reporting:5432/reporting
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+
+  # ─────────────────────────── kyb-adapter (gap T1-4) ───────────────────────────
+  # This service was EXCLUDED from the chart because it had no Dockerfile (see
+  # deploy/CHANGELOG.md). It now has one, so the chart deploys it — previously the
+  # only way KYB screening could run anywhere was config-registry's in-process
+  # StubKybClient fallback, i.e. keyword matching inside the registry.
+  #
+  # HONESTY: deployable is not the same as real. With gmepay.kyb.provider=stub
+  # (the default until ADR-014's Octa Solution sandbox credentials land) this pod
+  # consults no sanctions / PEP / adverse-media source. Its verdicts are stamped
+  # non-authoritative, its clean branch is NOT_SCREENED_NO_PROVIDER rather than
+  # CLEAR, and config-registry's activation gate refuses to accept them as a passed
+  # pre-condition (it will REFUSE activation — see
+  # gmepay.activation.allow-unscreened-kyb, which must stay false here).
+  #
+  # NO DATASOURCE: the module defaults to in-memory H2 for its own kyb_screening
+  # run log, so GET /v1/kyb/result/{ref} history does not survive a restart. The
+  # regulator-defensible record is config-registry's partner_kyb, which is on
+  # PostgreSQL. Giving this service its own database is a T1-4 residual (it also
+  # needs an entry in scripts/backup/inventory.env).
+  kyb-adapter:
+    image: kyb-adapter
+    probe: { type: tcp }
+    envSecretKeys: [
+                    # REQUIRED TO BOOT (T1-4): /v1/kyb/screen, /v1/kyb/verify and
+                    # /v1/kyb/result/** carry partner UBO / tax-id data and are gated;
+                    # KybInternalAuthEnforcedConfig refuses to start on a blank secret.
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
+    env:
+      SERVER_PORT: "8080"
+      # T3-10: without these two the service falls through to the in-code
+      # `jdbc:h2:mem:kyb` default and silently runs on an in-memory database that is
+      # WIPED ON EVERY RESTART. This is the same omission the register recorded for
+      # payment-executor; the systematic audit (scripts/check_helm_chart_wiring.py) found
+      # it here too. docker-compose.yml has always set them; the chart never did.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-kyb:5432/kyb
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
 
   ops-partner-bff:
     image: ops-partner-bff
     probe: { type: tcp }
+    # Pinned explicitly rather than inherited from global.defaultReplicas, because for
+    # THIS service the 1 is not only a cost decision. Its ops-alert list, the alert IDs
+    # the ack endpoint addresses, and the operator acks themselves are only fleet-wide
+    # because they moved into the `bff` database configured below — and that database is
+    # a placeholder in the AWS/Azure overlays and does not exist in any real environment
+    # yet. Raise this (or set autoscaling.enabled) only after `bff` is provisioned; see
+    # the `autoscaling:` block above.
+    replicas: 1
+    envSecretKeys: [
+                    # T0-5: the gated prefunding balance/alerts reads (RestPrefundingClient).
+                    GMEPAY_INTERNAL_AUTH_SECRET,
+                    # Replica ceiling: the shared ops-paging dedupe cooldown. SPRING_DATA_REDIS_HOST
+                    # arrives from the ABI ConfigMap; the password is a secret and must be here too,
+                    # or on a Redis with auth the cooldown silently degrades to per-JVM and the
+                    # escalation sweep pages a human once per replica.
+                    SPRING_DATA_REDIS_PASSWORD,
+                    # This service now owns a small database (see env below).
+                    SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD]
     envSecretAliases:
       GMEPAY_AUTH_IDENTITY_INTERNAL_SECRET: GMEPAY_INTERNAL_AUTH_SECRET
     env:
       SERVER_PORT: "8080"
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
-      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      # ---- Aggregate on-call paging (gap T3-3) -------------------------------------
+      # The BFF already ships the platform's paging port (PagingPort + LogPagingAdapter fallback +
+      # WebhookPagingAdapter). It consumes gmepay.ops.alert -- the consumer is
+      # @ConditionalOnProperty("spring.kafka.bootstrap-servers"), which every pod gets from the shared
+      # ABI ConfigMap, so it IS active here. Give it a target and alerts reach a human:
+      #   GMEPAY_OPS_PAGING_WEBHOOK_URL: https://hooks.slack.com/services/REPLACE/ME
+      # Left unset on purpose (an empty value would register the webhook adapter with no target).
+      #
+      # CLOSED 2026-07-30: the BFF's OpsAlertStore was an in-memory ArrayDeque, which lost the
+      # aggregate view on every restart and DIVERGED per replica (different alert lists, per-replica
+      # seq numbering so acking id N could hit a different alert, and an ack on one replica invisible
+      # on another). It is now this service's OWN ops_alerts table (Flyway V001) -- the consumer half
+      # of T3-3, matching payment-executor's emitter-side ops_alerts (its V006). THAT WAS THE LAST
+      # SINGLE-REPLICA CEILING IN THE PLATFORM: with the datasource below set, ops-partner-bff may
+      # run N>1. See services/ops-partner-bff/.../alert/OpsAlertStore.java.
+      #
+      # Escalation (GMEPAY_OPS_PAGING_ESCALATION_ENABLED) stays off by operator choice, but the
+      # reason recorded here until 2026-07-30 -- "single-replica-only, no ShedLock, arming it under
+      # >1 replica would double-page" -- is NO LONGER TRUE and its remedy would have been wrong.
+      # Duplicate paging is now prevented at the pager by a shared PagingCooldown (Redis SET NX EX,
+      # claimed atomically before each page). The sweep runs on EVERY replica deliberately: the
+      # alert buffer is per-replica, so pinning the sweep to one would leave every other replica's
+      # un-acked CRITICAL alerts never escalated -- a missed page, which is worse than a duplicate.
+      # That reason is now partly historical (the store is shared, so any replica sees every alert),
+      # but the sweep is STILL deliberately unlocked: a stuck lock row or an unavailable lock provider
+      # would mean NO replica sweeps, i.e. the lock becomes a new way to silence the pager. The
+      # retention sweeper next to it IS locked -- see V003 for the contrast.
+      #
+      # ---- The BFF's own datastore (REQUIRED; the ceiling above is only lifted with it) ----------
+      # ops_alerts (V001) + operator_action_audit (V002) + shedlock (V003). Without these vars the
+      # image falls back to an in-memory H2, which is a per-JVM store wearing the durable store's
+      # name -- the exact defect, restored silently. The service logs a WARN when it resolves an
+      # in-memory H2 and scripts/check_helm_chart_wiring.py fails the build if this is missing.
+      # NOTE: this is a NEW database (`bff`); it must exist before the chart is upgraded. The cloud
+      # overlays point it at their managed instances.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-bff:5432/bff
+      SPRING_DATASOURCE_DRIVER: org.postgresql.Driver
+      # Durable operator-action audit (who paused the platform / suspended which partner). 'db' is
+      # also the code default now; set explicitly because this selector being set NOWHERE is exactly
+      # how the in-memory stub became the live audit trail in every environment, minting colliding
+      # "OA-n" ids per replica. Do NOT set 'rest': no service exposes
+      # POST /v1/audit/operator-actions yet, so recordDurable() would fail closed on every action.
+      GMEPAY_OPERATOR_ACTION_AUDIT_CLIENT: "db"
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
       # Live partner transactions: activate the real REST transaction-mgmt client
       # (default is the in-memory stub). Portal then shows LIVE txns from transaction-mgmt.
+      # Also selects the Portal CSV statement source — RestStatementClient builds the statement
+      # from these same rows (gap T1-3) instead of 5 hardcoded TXN-100x samples.
       GMEPAY_TRANSACTION_MGMT_CLIENT: "rest"
-      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
-      GMEPAY_REVENUE_LEDGER_BASE_URL: http://revenue-ledger:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://{{ .Release.Name }}-prefunding:8080
+      # Live prefunding balances (gap T1-3). Without this the BFF fell back to StubPrefundingClient,
+      # which only knows partner_test_001..003, so the Portal's Overview + Balance pages 404'd for
+      # every REAL partner. RestPrefundingClient presents GMEPAY_INTERNAL_AUTH_SECRET (that balance
+      # API is behind the internal-auth gate since T0-5) — already in envSecretKeys above.
+      GMEPAY_PREFUNDING_CLIENT: "rest"
+      GMEPAY_REVENUE_LEDGER_BASE_URL: http://{{ .Release.Name }}-revenue-ledger:8080
       # Live double-entry journals + revenue summary from revenue-ledger.
       GMEPAY_REVENUE_LEDGER_CLIENT: "rest"
-      GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://settlement-reconciliation:8080
+      GMEPAY_SETTLEMENT_RECONCILIATION_BASE_URL: http://{{ .Release.Name }}-settlement-reconciliation:8080
       # Live settlements + recon-exception count + operator recon re-run.
       GMEPAY_SETTLEMENT_RECONCILIATION_CLIENT: "rest"
       # Real self-serve SANDBOX API keys via auth-identity (default is the
       # in-memory stub). Get-Started keys issued by POST /internal/auth/keys
-      # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient.
+      # (environment=SANDBOX). NOTE: also drives RestRbacAdminClient and, since gap
+      # T1-3, RestApiKeyClient — the Portal's API Keys page reads the real api_keys
+      # registry instead of two fabricated gpk_live_ credentials.
       GMEPAY_AUTH_IDENTITY_CLIENT: "rest"
-      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://{{ .Release.Name }}-auth-identity:8080
+      # Live partner webhook endpoints for the Portal's Webhooks page (gap T1-3): reads
+      # notification-webhook GET /v1/webhook-configs?partnerId=. That page was previously two
+      # partner.example.com rows hardcoded in PartnerPortalController with no client at all.
+      GMEPAY_NOTIFICATION_WEBHOOK_BASE_URL: http://{{ .Release.Name }}-notification-webhook:8080
+      GMEPAY_NOTIFICATION_WEBHOOK_CLIENT: "rest"
       # Live config-registry data (Platform Settings persistence + partner/scheme/audit reads).
       GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
       # Live kill-switch: pause/suspend must reach config-registry's /v1/ops gate
@@ -297,28 +970,65 @@ services:
     image: api-gateway
     component: edge
     probe: { type: http }     # the one module with actuator + real /actuator/health
+    # T0-7: GMEPAY_INTERNAL_AUTH_SECRET is now on the hot path for EVERY partner request — the
+    # partner-credential lifecycle check calls auth-identity's POST /internal/auth/keys/resolve with
+    # it. Without it that lookup can only 401, and the gateway answers partner traffic 503 rather
+    # than skipping the check.
     envSecretKeys: [GMEPAY_INTERNAL_AUTH_SECRET, SPRING_DATA_REDIS_PASSWORD]
     envSecretAliases:
       GMEPAY_RBAC_STAMP_SECRET: GMEPAY_RBAC_SECRET
     env:
       SERVER_PORT: "8080"
       GMEPAY_RBAC_STAMP_ENABLED: "true"
-      GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://payment-executor:8080
-      GMEPAY_AUTH_IDENTITY_BASE_URL: http://auth-identity:8080
-      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://config-registry:8080
-      GMEPAY_RATE_FX_BASE_URL: http://rate-fx:8080
-      GMEPAY_PREFUNDING_BASE_URL: http://prefunding:8080
-      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://transaction-mgmt:8080
+      # T0-7: the partner IP allowlist must come from the real registry. The fallback
+      # ConfigRegistryClient returns NOTHING (it used to seed the published test partner with
+      # loopback/RFC1918 ranges), so without this every partner request is 403 IP_NOT_ALLOWED.
+      GMEPAY_CONFIG_REGISTRY_CLIENT: "rest"
+      # NOTE (T0-7): the gateway still authenticates nobody until an operator populates
+      # gateway.partner-credentials.partners[] with each live partner's api-key + hmac-secret
+      # (from a secret store) + ip-cidr-ranges. That table is intentionally NOT templated here:
+      # per-partner HMAC secrets do not belong in a values file. See
+      # services/api-gateway/.../partner/PartnerCredentialConfig.java for the checklist.
+      GMEPAY_PAYMENT_EXECUTOR_BASE_URL: http://{{ .Release.Name }}-payment-executor:8080
+      GMEPAY_AUTH_IDENTITY_BASE_URL: http://{{ .Release.Name }}-auth-identity:8080
+      GMEPAY_CONFIG_REGISTRY_BASE_URL: http://{{ .Release.Name }}-config-registry:8080
+      GMEPAY_RATE_FX_BASE_URL: http://{{ .Release.Name }}-rate-fx:8080
+      GMEPAY_PREFUNDING_BASE_URL: http://{{ .Release.Name }}-prefunding:8080
+      GMEPAY_TRANSACTION_MGMT_BASE_URL: http://{{ .Release.Name }}-transaction-mgmt:8080
 
   # ---- Human UIs (Next.js). NEXT_PUBLIC_* are read at runtime by npm start. ----
+  # BFF_PROXY_TARGET is server-side only: the Next node process proxies /api/* to it
+  # (next.config.mjs). NEXT_PUBLIC_BFF_BASE_URL is deliberately NOT set — it flips the
+  # browser into direct cross-origin calls and the BFF ships no CORS config, so every
+  # call would fail preflight (T1-2 task 4).
+  # NEXT_PUBLIC_KEYCLOAK_URL must be the URL the BROWSER can reach (ingress host), and
+  # must match abi.OIDC_ISSUER_URI above character-for-character.
   admin-ui:
     image: admin-ui
     component: ui
     containerPort: 3000
     probe: { type: tcp }
+    # ---- T5-5 -------------------------------------------------------------
+    # The two SPAs are node:20-alpine images running as nextjs:1001, NOT the JVM
+    # images' 10001, so runAsUser/runAsGroup/fsGroup are overridden here. Only
+    # these three keys are overridden; runAsNonRoot / allowPrivilegeEscalation /
+    # readOnlyRootFilesystem / capabilities-drop / seccomp all still come from
+    # global.*SecurityContext.
+    podSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+      fsGroup: 1001
+    containerSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+    # `next start` writes the ISR / image-optimiser cache at runtime, so this one
+    # subtree must be writable; the rest of the image stays read-only.
+    writablePaths:
+      - /app/.next/cache
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
-      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: admin-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"
 
   partner-portal-ui:
@@ -326,8 +1036,21 @@ services:
     component: ui
     containerPort: 3001
     probe: { type: tcp }
+    # T5-5 — same node:20-alpine / nextjs:1001 identity as admin-ui above. This
+    # was the ONE image that already dropped root before this change; the chart
+    # still has to state the UID explicitly, because its Dockerfile uses a NAMED
+    # `USER nextjs` which the kubelet cannot resolve to check runAsNonRoot.
+    podSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+      fsGroup: 1001
+    containerSecurityContext:
+      runAsUser: 1001
+      runAsGroup: 1001
+    writablePaths:
+      - /app/.next/cache
     env:
-      NEXT_PUBLIC_BFF_BASE_URL: http://api.gmepay.local
-      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak:8080/realms/gmepay-partners
-      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: gmepay-partner-ui
+      BFF_PROXY_TARGET: http://{{ .Release.Name }}-ops-partner-bff:8080
+      NEXT_PUBLIC_KEYCLOAK_URL: http://keycloak.gmepay.local/realms/gmepay
+      NEXT_PUBLIC_KEYCLOAK_CLIENT_ID: partner-portal-ui
       NEXT_PUBLIC_ALLOW_DEV_LOGIN: "false"

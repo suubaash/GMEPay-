@@ -1,11 +1,15 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.bff.alert.OpsAlertEventHandler;
 import com.gme.pay.bff.alert.OpsAlertStore;
 import com.gme.pay.bff.alert.OpsAlertView;
 import com.gme.pay.bff.alert.paging.TestPaging;
 import com.gme.pay.bff.client.stub.StubOperatorActionAuditClient;
+import com.gme.pay.bff.security.TestTokens;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -33,7 +37,7 @@ class OpsAlertAckControllerTest {
 
     @BeforeEach
     void setUp() {
-        store = new OpsAlertStore(200);
+        store = new InMemoryOpsAlertStore(200);
         audit = new StubOperatorActionAuditClient();
         new OpsAlertEventHandler(store, TestPaging.dispatcher(new TestPaging.RecordingPort(), store))
                 .handle("TXN-9", CRIT);
@@ -43,6 +47,11 @@ class OpsAlertAckControllerTest {
         return standaloneSetup(new OpsAlertAckController(store, audit, new OpsRbacGuard(enforce)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(new ObjectMapper()))
                 .build();
+    }
+
+    @AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
     }
 
     @Test
@@ -74,10 +83,12 @@ class OpsAlertAckControllerTest {
     }
 
     @Test
-    void ack_forbiddenWhenPermissionPresentButLacksOpsOperate() throws Exception {
+    void ack_forbiddenWhenTokenLacksOpsOperate() throws Exception {
         long seq = store.recent(null, null, 0).get(0).seq();
+        TestTokens.hubOperator("partner.view");
         mvc(false).perform(post("/v1/admin/ops/alerts/" + seq + "/ack")
-                        .header("X-Gme-Permissions", "partner:read")
+                        // forged header is ignored (T0-3)
+                        .header("X-Gme-Permissions", "ops:operate")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"operator\":\"x\"}"))
                 .andExpect(status().isForbidden());

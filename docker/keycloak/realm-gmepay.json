@@ -23,7 +23,7 @@
       },
       {
         "name": "PARTNER_USER",
-        "description": "Partner-portal-ui human user. Per-partner scoping enforced at the BFF.",
+        "description": "Partner-portal-ui human user. Per-partner scoping enforced at the BFF via the partner_id claim.",
         "composite": false,
         "clientRole": false
       }
@@ -33,11 +33,10 @@
     {
       "clientId": "admin-ui",
       "name": "GMEPay+ admin-ui (back-office)",
-      "description": "Next.js admin-ui — OIDC auth-code flow for operators.",
+      "description": "Next.js admin-ui - PUBLIC OIDC client, authorization-code + PKCE S256. A browser SPA cannot hold a client secret, so this client has none; PKCE is the proof-of-possession instead.",
       "enabled": true,
       "protocol": "openid-connect",
-      "publicClient": false,
-      "secret": "admin-ui-dev-secret",
+      "publicClient": true,
       "clientAuthenticatorType": "client-secret",
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
@@ -46,15 +45,16 @@
       "rootUrl": "http://localhost:3000",
       "baseUrl": "http://localhost:3000",
       "redirectUris": [
+        "http://localhost:3000/auth/callback",
         "http://localhost:3000/*",
-        "http://admin-ui:3000/*"
+        "http://127.0.0.1:3000/*"
       ],
       "webOrigins": [
         "http://localhost:3000",
-        "+"
+        "http://127.0.0.1:3000"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:3000/*",
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://127.0.0.1:3000/*",
         "pkce.code.challenge.method": "S256"
       },
       "fullScopeAllowed": true,
@@ -64,16 +64,51 @@
         "profile",
         "roles",
         "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "gmepay-permissions",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "permissions",
+            "claim.name": "permissions",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "aggregate.attrs": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "gmepay-partner-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "partner_id",
+            "claim.name": "partner_id",
+            "jsonType.label": "String",
+            "multivalued": "false",
+            "aggregate.attrs": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
       ]
     },
     {
       "clientId": "partner-portal-ui",
       "name": "GMEPay+ partner-portal-ui (self-service)",
-      "description": "Next.js partner-portal-ui — OIDC auth-code flow for partner humans.",
+      "description": "Next.js partner-portal-ui - PUBLIC OIDC client, authorization-code + PKCE S256. Was confidential with a committed secret, which no browser SPA can present; that mismatch was gap T1-2 (invalid_client on every token exchange).",
       "enabled": true,
       "protocol": "openid-connect",
-      "publicClient": false,
-      "secret": "partner-portal-ui-dev-secret",
+      "publicClient": true,
       "clientAuthenticatorType": "client-secret",
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
@@ -82,15 +117,16 @@
       "rootUrl": "http://localhost:3001",
       "baseUrl": "http://localhost:3001",
       "redirectUris": [
+        "http://localhost:3001/auth/callback",
         "http://localhost:3001/*",
-        "http://partner-portal-ui:3001/*"
+        "http://127.0.0.1:3001/*"
       ],
       "webOrigins": [
         "http://localhost:3001",
-        "+"
+        "http://127.0.0.1:3001"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:3001/*",
+        "post.logout.redirect.uris": "http://localhost:3001/*##http://127.0.0.1:3001/*",
         "pkce.code.challenge.method": "S256"
       },
       "fullScopeAllowed": true,
@@ -100,6 +136,42 @@
         "profile",
         "roles",
         "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "gmepay-permissions",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "permissions",
+            "claim.name": "permissions",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "aggregate.attrs": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "gmepay-partner-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "partner_id",
+            "claim.name": "partner_id",
+            "jsonType.label": "String",
+            "multivalued": "false",
+            "aggregate.attrs": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
       ]
     }
   ],
@@ -120,7 +192,46 @@
       ],
       "realmRoles": [
         "OPERATOR"
-      ]
+      ],
+      "attributes": {
+        "permissions": [
+          "ops:operate",
+          "partner.view",
+          "partner.activate",
+          "txn.view",
+          "rbac.manage",
+          "approval.view",
+          "approval.cfo_override",
+          "report.generate",
+          "settlement.resolve_exception",
+          "inspector.view"
+        ]
+      }
+    },
+    {
+      "username": "operator-readonly",
+      "email": "operator-readonly@gmepay.local",
+      "firstName": "Read",
+      "lastName": "Only",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "OPERATOR"
+      ],
+      "attributes": {
+        "permissions": [
+          "partner.view",
+          "txn.view",
+          "report.generate"
+        ]
+      }
     },
     {
       "username": "partner-demo",
@@ -138,7 +249,35 @@
       ],
       "realmRoles": [
         "PARTNER_USER"
-      ]
+      ],
+      "attributes": {
+        "partner_id": [
+          "GMEREMIT"
+        ]
+      }
+    },
+    {
+      "username": "partner-sendmn",
+      "email": "partner-sendmn@gmepay.local",
+      "firstName": "SendMN",
+      "lastName": "Partner",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "demo",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "PARTNER_USER"
+      ],
+      "attributes": {
+        "partner_id": [
+          "SENDMN"
+        ]
+      }
     }
   ]
 }

@@ -1,6 +1,8 @@
 package com.gme.pay.reporting;
 
+import com.gme.pay.reporting.channel.FilingChannelStatus;
 import com.gme.pay.reporting.domain.CommittedTransaction;
+import com.gme.pay.reporting.persistence.ReportFiling;
 import com.gme.pay.reporting.domain.TransactionDirection;
 import com.gme.pay.reporting.dto.BokFxRecordDto;
 import com.gme.pay.reporting.dto.ReportRequest;
@@ -188,6 +190,53 @@ class BokReportServiceTest {
 
         assertEquals(0, response.getTotalCount());
         assertNotNull(response.getGeneratedAt(), "generatedAt must be set even for empty results");
+    }
+
+    // =========================================================================
+    // TEST 8-10: filing-channel honesty on the API surface (GAP T5-2)
+    // =========================================================================
+
+    @Test
+    @DisplayName("report envelope states that BOK records are generated, not filed")
+    void response_carriesHonestFilingStatus() {
+        ReportResponse response = service.buildReport(request(ReportType.BOK_FX_ALL));
+
+        assertEquals(ReportFiling.Status.NOT_FILED_CHANNEL_UNAVAILABLE, response.getFilingStatus(),
+                "with no BOK channel the envelope must not imply a filing");
+        assertNotNull(response.getFilingChannelUnavailableReason(),
+                "the envelope must say why nothing is filed");
+        assertTrue(response.getFilingChannelUnavailableReason().contains("bok.channel.endpoint"),
+                "the reason must name the missing config: "
+                        + response.getFilingChannelUnavailableReason());
+        // Real capability unchanged: the records are still there.
+        assertEquals(2, response.getTotalCount());
+    }
+
+    @Test
+    @DisplayName("report envelope exposes the channel board for all three lanes")
+    void response_carriesChannelBoard() {
+        ReportResponse response = service.buildReport(request(ReportType.BOK_FX_ALL));
+
+        List<FilingChannelStatus> board = response.getFilingChannels();
+        assertNotNull(board);
+        assertEquals(3, board.size(), "BOK, KOFIU and HOMETAX must all appear");
+        assertTrue(board.stream().noneMatch(FilingChannelStatus::live),
+                "no lane may report a live filing channel");
+        assertTrue(board.stream().allMatch(s ->
+                        s.reachableStatus() == ReportFiling.Status.NOT_FILED_CHANNEL_UNAVAILABLE),
+                "every lane must terminate at NOT_FILED_CHANNEL_UNAVAILABLE");
+    }
+
+    @Test
+    @DisplayName("filingChannels() backs GET /v1/reports/filing-channels with reasons")
+    void filingChannels_exposesReasons() {
+        List<FilingChannelStatus> board = service.filingChannels();
+
+        assertEquals(3, board.size());
+        for (FilingChannelStatus s : board) {
+            assertFalse(s.live(), s.lane() + " must not be live");
+            assertNotNull(s.reason(), s.lane() + " must explain the missing channel");
+        }
     }
 
     // =========================================================================

@@ -38,9 +38,41 @@
   .\run-fleet.ps1 stop            # kill the whole fleet + tracer
 
 .NOTES
-  Memory: all 22 JVMs need ~8-10 GB. If services get reaped, use -Subset money or
+  Memory: all ~28 JVMs need ~9-11 GB. If services get reaped, use -Subset money or
   lower -Xmx (e.g. -Xmx 224m). Run from any path (uses its own folder as the repo root).
   First run from a new shell may need:  Unblock-File .\run-fleet.ps1
+
+  ENVIRONMENT AN OPERATOR SHOULD EXPORT BEFORE `start`
+  ----------------------------------------------------
+  Both are optional here — this script supplies dev defaults so a bare `.\run-fleet.ps1`
+  still works — but both MUST be set explicitly for anything shared or tunnelled:
+
+    $env:GMEPAY_INTERNAL_AUTH_SECRET = '<random 32+ bytes>'
+        The shared service-to-service token behind the X-Gme-Internal header (#90 / T0-2 / T0-5).
+        FAIL-CLOSED: auth-identity, prefunding, scheme-adapter-zeropay and rate-fx REFUSE TO START
+        without it, and any caller that omits it is answered 401. Exported to every child JVM below
+        so both sides of every gated edge agree. Default = a clearly-non-production dev literal
+        (same idiom as docker-compose.yml's x-internal-auth-secret anchor; gap-register item T0-6).
+
+    $env:OIDC_ISSUER_URI = 'http://localhost:8097/realms/gmepay'
+        Browser-facing Keycloak issuer for the two resource servers (ops-partner-bff, api-gateway).
+        Their Java default is still the stale :8090 — which is scheme-adapter-zeropay's port — so
+        without this a host-run BFF 401s every request (gap T1-2). Default = the canonical local
+        topology asserted by `node docker/keycloak/check-topology.mjs`. Keycloak itself is NOT
+        started by this script: run `docker compose --profile core up -d keycloak` (host port 8097).
+
+    $env:GME_AUTH_JWT_SIGNING_SECRET = '<random 32+ chars>'
+        HS256 key for the platform capability tokens auth-identity mints at
+        /internal/auth/token/issue. HS256 is symmetric, so whoever holds it can FORGE ANY TOKEN.
+        FAIL-CLOSED (T0-6): auth-identity REFUSES TO START on a blank, too-short, placeholder or
+        previously-published value. It used to default to the literal
+        `changeme-at-least-32-chars-long!!` inside the image while being set in no file anywhere,
+        so every environment signed real tokens with a key published in this repo. Default here =
+        a clearly-non-production dev literal (same idiom as docker-compose.yml's
+        x-auth-jwt-signing-secret anchor; gap-register item T0-6).
+
+  Full env-var matrix (service x compose/Helm/run-fleet): docs/COMPOSE.md, section
+  "Internal-auth secret (GMEPAY_INTERNAL_AUTH_SECRET)".
 #>
 [CmdletBinding()]
 param(
@@ -60,12 +92,70 @@ $traceEnabled = -not $NoTrace
 $logDir = Join-Path $root '.smoke\logs'
 $dashUrl = 'http://localhost:7099'
 
+# --- shared config every child JVM inherits ---------------------------------
+# Start-Process inherits this process's environment, so setting these once here reaches every
+# service below. Passing them as env (not --spring CLI args) is deliberate: each service reads a
+# DIFFERENT property name off the same variable (gmepay.internal-auth.secret,
+# gmepay.auth-identity.internal-secret, spring.security...issuer-uri), and Spring's relaxed binding
+# resolves all of them from the env var. One assignment, no per-service arg lists to keep in sync.
+
+# Service-to-service internal-auth token (#90 / T0-2 / T0-5). FAIL-CLOSED: auth-identity,
+# prefunding, scheme-adapter-zeropay and rate-fx refuse to START without it; payment-executor,
+# qr-service, config-registry, ops-partner-bff, settlement-reconciliation and api-gateway must
+# present the SAME value or their calls are refused 401. The dev default is a clearly-non-production
+# marker, matching docker-compose.yml's x-internal-auth-secret anchor (gap-register item T0-6).
+$internalAuthSecret = $env:GMEPAY_INTERNAL_AUTH_SECRET
+if (-not $internalAuthSecret) {
+    $internalAuthSecret = 'dev-internal-svc-secret-not-for-prod'
+    Write-Host "GMEPAY_INTERNAL_AUTH_SECRET not set - using the dev default (NOT for any shared or tunnelled host)" -ForegroundColor DarkYellow
+}
+$env:GMEPAY_INTERNAL_AUTH_SECRET = $internalAuthSecret
+
+# auth-identity's HS256 JWT signing key (T0-6). FAIL-CLOSED: auth-identity refuses to START without
+# a usable value, and there is no default inside the image any more (it used to default to a literal
+# published in this repo). Same dev-default idiom as above, matching docker-compose.yml's
+# x-auth-jwt-signing-secret anchor. Must be >= 32 chars.
+$authJwtSigningSecret = $env:GME_AUTH_JWT_SIGNING_SECRET
+if (-not $authJwtSigningSecret) {
+    $authJwtSigningSecret = 'dev-auth-jwt-signing-key-not-for-prod'
+    Write-Host "GME_AUTH_JWT_SIGNING_SECRET not set - using the dev default (NOT for any shared or tunnelled host)" -ForegroundColor DarkYellow
+}
+$env:GME_AUTH_JWT_SIGNING_SECRET = $authJwtSigningSecret
+
+# JWT key rotation (T0-6, rotation half). The key above is now the ACTIVE member of a versioned key
+# SET: tokens carry a derived `kid` and verification selects by it, so a previously active key can
+# stay accepted while the tokens it signed expire. A local fleet is always a first activation, so
+# there is nothing to overlap with and the hard cutover is declared. Rotating for real is a
+# deployment procedure, not a script flag: docs/runbooks/JWT_KEY_ROTATION.md.
+if (-not $env:GME_AUTH_JWT_PREVIOUS_KEYS)  { $env:GME_AUTH_JWT_PREVIOUS_KEYS = '' }
+if (-not $env:GME_AUTH_JWT_ALLOW_HARD_CUTOVER) { $env:GME_AUTH_JWT_ALLOW_HARD_CUTOVER = 'true' }
+
+# OIDC issuer for the two resource servers (ops-partner-bff :18095, api-gateway :18080). Their Java
+# default is the stale :8090 (= scheme-adapter-zeropay), so a host-run BFF 401s everything without
+# this (gap T1-2). Canonical local topology, asserted by docker/keycloak/check-topology.mjs.
+if (-not $env:OIDC_ISSUER_URI) { $env:OIDC_ISSUER_URI = 'http://localhost:8097/realms/gmepay' }
+
 # --- the fleet -------------------------------------------------------------
 # type: service jars are <name>-0.1.0.jar under services\<name>; sim jars are
 # <name>-*.jar under simulators\<name>. 'args' are extra Spring CLI args.
 $fleet = @(
-    @{ name = 'config-registry';           type = 'service'; port = 18081 }
-    @{ name = 'transaction-mgmt';           type = 'service'; port = 18082 }
+    # Partner ACTIVATION issues real credentials (gap T1-1): the auth-identity + notification-webhook
+    # clients default to `rest`, so the fleet must point them at the 18xxx band or activation 502s
+    # against the compose-internal hostnames. auth-identity = 18085, notification-webhook = 18086.
+    @{ name = 'config-registry';           type = 'service'; port = 18081; args = @(
+            '--gmepay.auth-identity.client=rest'
+            '--gmepay.auth-identity.base-url=http://localhost:18085'
+            '--gmepay.notification-webhook.client=rest'
+            '--gmepay.notification-webhook.base-url=http://localhost:18086') }
+    # transaction-mgmt persists to the REAL dockerized Postgres (txndb, host port 5434)
+    # instead of throwaway H2, so transactions survive fleet restarts; outbox events
+    # publish to the real Kafka (host EXTERNAL listener 29092).
+    @{ name = 'transaction-mgmt';           type = 'service'; port = 18082; args = @(
+            '--spring.datasource.url=jdbc:postgresql://localhost:5434/txndb'
+            '--spring.datasource.driver-class-name=org.postgresql.Driver'
+            '--spring.datasource.username=gmepay'
+            '--spring.datasource.password=gmepay'
+            '--spring.kafka.bootstrap-servers=localhost:29092') }
     @{ name = 'merchant-qr-data';           type = 'service'; port = 18083 }
     @{ name = 'payment-executor';           type = 'service'; port = 18084; args = @(
             '--gmepay.config-registry.base-url=http://localhost:18081'
@@ -76,6 +166,7 @@ $fleet = @(
             '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
             '--gmepay.revenue-ledger.base-url=http://localhost:18092'
             '--gmepay.scheme-adapters.NEPAL.base-url=http://localhost:18094'
+            '--gmepay.scheme-adapters.SENDMN.base-url=http://localhost:18096'
             '--gmepay.self.base-url=http://localhost:18084') }
     @{ name = 'auth-identity';              type = 'service'; port = 18085 }
     @{ name = 'notification-webhook';       type = 'service'; port = 18086 }
@@ -84,13 +175,45 @@ $fleet = @(
     @{ name = 'qr-service';                 type = 'service'; port = 18089 }
     @{ name = 'scheme-adapter-zeropay';     type = 'service'; port = 18090; args = @('--gmepay.scheme.zeropay.base-url=http://localhost:9102/v1/scheme') }
     @{ name = 'scheme-adapter-nepal';       type = 'service'; port = 18094; args = @('--gmepay.scheme.nepal.base-url=http://localhost:9106') }
+    # SendMN (Mongolia) + 9Pay (Vietnam) scheme edges — QR_SCHEME_ACCOMMODATION_PLAN Phase 5.
+    # Adapter default ports (8093/8096) stay for standalone runs; the fleet uses the 18xxx band.
+    @{ name = 'scheme-adapter-sendmn';      type = 'service'; port = 18096; args = @('--sendmn.base-url=http://localhost:9108') }
+    @{ name = 'scheme-adapter-ninepay';     type = 'service'; port = 18097; args = @('--gmepay.scheme.ninepay.base-url=http://localhost:9107') }
     @{ name = 'smart-router';               type = 'service'; port = 18091 }
     @{ name = 'revenue-ledger';             type = 'service'; port = 18092 }
     @{ name = 'settlement-reconciliation';  type = 'service'; port = 18093 }
-    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @('--gmepay.transaction-mgmt.client=rest', '--gmepay.auth-identity.client=rest', '--gmepay.auth-identity.base-url=http://localhost:18085', '--gmepay.config-registry.client=rest') }
+    # Every Partner Portal page must read the service that owns the fact (gap T1-3), so all five
+    # upstream selectors are 'rest' and each base-url is pinned to the 18xxx host band:
+    #   transaction-mgmt   -> Transactions page AND the CSV statement (RestStatementClient)
+    #   auth-identity      -> API Keys page (RestApiKeyClient) + sandbox key issuance + RBAC
+    #   config-registry    -> Profile page (real go_live_at) + the partner-code -> numeric-id
+    #                         resolution every other portal read depends on (PartnerDirectory)
+    #   prefunding         -> Overview + Balance pages for REAL partner codes, not just
+    #                         partner_test_001..003 (the stub's only rows)
+    #   notification-webhook -> Webhooks page (RestPortalWebhookClient)
+    @{ name = 'ops-partner-bff';            type = 'service'; port = 18095; args = @(
+            '--gmepay.transaction-mgmt.client=rest'
+            '--gmepay.transaction-mgmt.base-url=http://localhost:18082'
+            '--gmepay.auth-identity.client=rest'
+            '--gmepay.auth-identity.base-url=http://localhost:18085'
+            '--gmepay.config-registry.client=rest'
+            '--gmepay.config-registry.base-url=http://localhost:18081'
+            '--gmepay.prefunding.client=rest'
+            '--gmepay.prefunding.base-url=http://localhost:18088'
+            '--gmepay.notification-webhook.client=rest'
+            '--gmepay.notification-webhook.base-url=http://localhost:18086') }
     @{ name = 'kyb-adapter';                type = 'service'; port = 18098 }
     @{ name = 'rate-fx';                    type = 'service'; port = 18101 }
-    @{ name = 'api-gateway';                type = 'service'; port = 18080 }
+    # T0-7: the gateway's partner edge now (a) reads the IP allowlist from the REAL registry — its
+    # fallback client returns nothing, so without this every partner request is 403 IP_NOT_ALLOWED —
+    # and (b) checks every presented api key against auth-identity's api_keys store, so it needs
+    # that base-url on the 18xxx band. It still authenticates nobody until an operator adds rows to
+    # gateway.partner-credentials.partners[] (api-key + hmac-secret + ip-cidr-ranges); the published
+    # pk_test_abc/sk_test_xyz stub that used to make this work is deleted.
+    @{ name = 'api-gateway';                type = 'service'; port = 18080; args = @(
+            '--gmepay.config-registry.client=rest'
+            '--gmepay.config-registry.base-url=http://localhost:18081'
+            '--gmepay.auth-identity.base-url=http://localhost:18085') }
     @{ name = 'sim-rate-provider';          type = 'sim';     port = 9101 }
     @{ name = 'sim-scheme';                 type = 'sim';     port = 9102; args = @('--gmepay.sim.scheme.profile=ZEROPAY') }
     @{ name = 'sim-wallet';                 type = 'sim';     port = 9103 }
@@ -99,12 +222,23 @@ $fleet = @(
             '--gmepay.sim.gmeremit.gmepay-base-url=http://localhost:18084'
             '--gmepay.sim.nepal-qr.base-url=http://localhost:9106') }
     @{ name = 'sim-nepal-qr';               type = 'sim';     port = 9106 }
+    # sim-sendmn's application.yml default is 9106, but that is sim-nepal-qr's fleet port —
+    # the fleet pins 9108 via --server.port instead (scheme-adapter-sendmn above points there).
+    # fx-push.url targets the sendmn adapter's partner-hosted FX endpoint (push is off by
+    # default; trigger manually with POST /sim/fx-rate/push).
+    @{ name = 'sim-sendmn';                 type = 'sim';     port = 9108; args = @('--gmepay.sim.sendmn.fx-push.url=http://localhost:18096/partner-hosted/fx-rate') }
+    # sim-ninepay pushes terminal-status IPNs back into the ninepay adapter's inbound edge.
+    @{ name = 'sim-ninepay';                type = 'sim';     port = 9107; args = @('--sim.ninepay.ipn-url=http://localhost:18097/scheme/ipn') }
 )
 
-# Running all 22 JVMs at once needs ~8-10 GB RAM; on a tight box the OS may reap some.
+# Running all ~28 JVMs at once needs ~9-11 GB RAM; on a tight box the OS may reap some.
 # -Subset money boots just the core payment cascade (~14 components) which fits comfortably.
+# auth-identity is in the money subset because ops-partner-bff and config-registry BOTH point their
+# rest clients at it (--gmepay.auth-identity.client=rest): without it the RBAC page reads nothing and
+# partner activation 502s instead of minting a verifiable API key (gap T1-1).
 $moneyNames = @('config-registry', 'transaction-mgmt', 'payment-executor', 'scheme-adapter-zeropay',
     'scheme-adapter-nepal', 'rate-fx', 'prefunding', 'ops-partner-bff', 'merchant-qr-data', 'qr-service',
+    'auth-identity',
     'sim-scheme', 'sim-merchant', 'sim-gmeremit', 'sim-wallet', 'sim-nepal-qr', 'sim-rate-provider')
 if ($Subset -eq 'money') { $fleet = @($fleet | Where-Object { $moneyNames -contains $_.name }) }
 
@@ -153,11 +287,16 @@ function Build-Fleet($items) {
     if ($svc) {
         $tasks = $svc | ForEach-Object { ":services:$($_.name):bootJar" }
         Write-Host "  building services: $($svc.name -join ', ')" -ForegroundColor DarkGray
-        & (Join-Path $root 'gradlew.bat') -p $root @tasks --console=plain 2>$null | Out-Null
+        # cmd /c so gradle's stderr WARNINGS never become PowerShell NativeCommandErrors
+        # (with $ErrorActionPreference='Stop', a bare 2>$null on a native command turns any
+        # stderr line — even a deprecation warning — into a script-killing exception).
+        cmd /c "`"$(Join-Path $root 'gradlew.bat')`" -p `"$root`" $($tasks -join ' ') --console=plain 2>nul" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "service jar build failed (exit $LASTEXITCODE)" }
     }
     foreach ($s in ($items | Where-Object { $_.type -eq 'sim' })) {
         Write-Host "  building sim: $($s.name)" -ForegroundColor DarkGray
-        & (Join-Path $root 'gradlew.bat') -p (Join-Path $root "simulators\$($s.name)") bootJar --console=plain 2>$null | Out-Null
+        cmd /c "`"$(Join-Path $root 'gradlew.bat')`" -p `"$(Join-Path $root "simulators\$($s.name)")`" bootJar --console=plain 2>nul" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sim jar build failed: $($s.name) (exit $LASTEXITCODE)" }
     }
 }
 
@@ -176,7 +315,7 @@ function Start-TraceConsole {
 function Get-JvmFlags($c) {
     # Lean JVM tax: SerialGC (no G1 region overhead on small heaps), C1-only JIT
     # (small code cache, faster start), capped code-cache/metaspace, small stacks,
-    # JMX off. Heaps are STATIC per-tier — never MaxRAMPercentage (each of 23 JVMs
+    # JMX off. Heaps are STATIC per-tier — never MaxRAMPercentage (each of ~28 JVMs
     # would claim a % of the whole 16GB and over-commit instantly).
     $common = @(
         '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1', '-XX:ReservedCodeCacheSize=64m',
@@ -212,7 +351,14 @@ function Start-Component($c) {
     if ($traceEnabled) { $spring += '--gmepay.trace.enabled=true' }
     # Point every gmepay.<peer>.base-url at the peer's localhost fleet port (services only;
     # sims keep their own per-sim properties via $c.args below).
-    if ($c.type -eq 'service') { $spring += $downstreamArgs }
+    # NB: skip any key the component already sets explicitly in $c.args — Spring
+    # comma-joins repeated --key=value CLI args into "v1,v2", which breaks URI props
+    # (payment-executor merchant resolve failed with "unsupported URI http://...,http:/...").
+    if ($c.type -eq 'service') {
+        $explicitKeys = @()
+        if ($c.args) { $explicitKeys = @($c.args | ForEach-Object { ($_ -split '=', 2)[0] }) }
+        $spring += @($downstreamArgs | Where-Object { $explicitKeys -notcontains (($_ -split '=', 2)[0]) })
+    }
     if ($c.args) { $spring += $c.args }
     $a = (Get-JvmFlags $c) + @('-jar', $jar) + $spring
     Start-Process -FilePath 'java' -ArgumentList $a -WindowStyle Hidden `
@@ -264,6 +410,9 @@ switch ($Action) {
 
         Start-TraceConsole
         Write-Host "starting $($fleet.Count) components (trace=$traceEnabled, -Xmx$Xmx)..." -ForegroundColor Yellow
+        Write-Host ("  internal-auth secret: {0}  |  OIDC issuer: {1}" -f `
+            $(if ($internalAuthSecret -eq 'dev-internal-svc-secret-not-for-prod') { 'dev default' } else { 'from environment' }),
+            $env:OIDC_ISSUER_URI) -ForegroundColor DarkGray
         foreach ($c in $fleet) { Start-Component $c; Write-Host "  -> $($c.name) :$($c.port)" -ForegroundColor DarkGray }
 
         Write-Host "`nwaiting up to 180s for services to come up (heavy: many JVMs + H2)..." -ForegroundColor Yellow

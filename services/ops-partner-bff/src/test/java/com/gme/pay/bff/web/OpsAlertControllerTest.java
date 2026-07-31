@@ -1,5 +1,7 @@
 package com.gme.pay.bff.web;
 
+import com.gme.pay.bff.alert.InMemoryOpsAlertStore;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gme.pay.bff.alert.OpsAlertEventHandler;
 import com.gme.pay.bff.alert.OpsAlertStore;
@@ -24,7 +26,7 @@ class OpsAlertControllerTest {
 
     @BeforeEach
     void setUp() {
-        store = new OpsAlertStore(200);
+        store = new InMemoryOpsAlertStore(200);
         OpsAlertEventHandler handler = new OpsAlertEventHandler(store,
                 com.gme.pay.bff.alert.paging.TestPaging.dispatcher(
                         new com.gme.pay.bff.alert.paging.TestPaging.RecordingPort(), store));

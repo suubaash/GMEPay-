@@ -1,5 +1,6 @@
 package com.gme.pay.registry.credential;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerIpAllowlistCommand;
 import com.gme.pay.contracts.PartnerIpAllowlistView;
 import com.gme.pay.contracts.PartnerStatus;
@@ -75,7 +76,7 @@ public class PartnerIpAllowlistService {
     static final Set<String> ENVIRONMENTS = Set.of("SANDBOX", "PRODUCTION");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerIpAllowlistRepository allowlistRepository;
     private final PartnerRepository partnerRepository;
@@ -95,7 +96,11 @@ public class PartnerIpAllowlistService {
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param entries     the FULL desired set across both environments; empty
      *                    clears, {@code null} is a 400.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the freshly-inserted set as canonical {@link PartnerIpAllowlistView}s.
      * @throws ResponseStatusException 404 when no current partner row matches;
      *         409 when the partner is no longer in ONBOARDING, or with

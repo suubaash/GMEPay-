@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.registry.settings.PlatformSettingService;
 import com.gme.pay.registry.settings.PlatformSettingView;
 import java.util.List;
@@ -55,7 +56,7 @@ public class PlatformSettingController {
     public PlatformSettingView put(
             @PathVariable String key,
             @RequestBody UpdateRequest body,
-            @RequestHeader(value = "X-Actor", required = false) String actor,
+            @AuditActorHeader String actor,
             @RequestHeader(value = "X-Forwarded-For", required = false) String ip) {
         String value = body == null ? null : body.value();
         // X-Actor (from the BFF's authenticated principal) wins; body.updatedBy is a fallback.

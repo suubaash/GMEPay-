@@ -160,6 +160,23 @@ class WebhookProvisioningServiceTest {
 
     // -------------------------------------------------------------------- tests
 
+    /**
+     * Gap T1-1 cross-service pin: this service and notification-webhook each keep
+     * their OWN copy of the SHA-256 hex helper ({@code sha256Hex} here,
+     * {@code SigningSecrets.sha256Hex} there) with no shared library linking them.
+     * If either drifts — a different algorithm, uppercase hex, a salt — the two
+     * credential ledgers silently stop agreeing about which secret a partner holds.
+     * The SAME fixed vector is asserted in notification-webhook's
+     * {@code WebhookEndpointRegistrationContractTest#digestIsTheAgreedAlgorithm}.
+     */
+    @Test
+    void sha256Hex_matchesTheNotificationWebhookSideVector() {
+        assertThat(sha256Hex("whsec_test")).isEqualTo(
+                "609b97b03239401be8235dd68f4a53ea4e32183a775fb958b1c745e173586d73");
+        assertThat(sha256Hex("whsec_test")).hasSize(64).matches("[0-9a-f]{64}");
+        assertThat(sha256Hex("whsec_tesu")).isNotEqualTo(sha256Hex("whsec_test"));
+    }
+
     @Test
     void draftSave_insertsDraftRow_andResaveUpdatesInPlace() {
         seedPartner("WEBHOOK_DRAFT");

@@ -1,0 +1,45 @@
+server:
+  port: 9107
+
+spring:
+  application:
+    name: sim-ninepay
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+sim:
+  ninepay:
+    # partner_id the sim accepts (anything else -> error 1001).
+    partner-id: GMEPAY
+    # RSA digest used for BOTH verifying partner requests and signing responses/IPNs:
+    # SHA1 / SHA224 / SHA256 / SHA384 / SHA512 (default SHA256 — matches the adapter).
+    sign-algorithm: SHA256
+    # Sim's OWN RSA-2048 signing key, PEM PKCS#8 ("BEGIN PRIVATE KEY").
+    # Blank -> a fresh dev keypair is generated at startup; fetch the public half from
+    # GET /sim/public-key and feed it to the adapter's ninepay-public-key-pem.
+    private-key-pem: ""
+    # Partner's RSA public key, PEM X.509 ("BEGIN PUBLIC KEY") — verifies request
+    # signatures. Blank -> requests are accepted UNVERIFIED (lenient dev mode).
+    # Can also be set at runtime via POST /sim/partner-key.
+    partner-public-key-pem: ""
+    # Where terminal-status IPNs are pushed (the adapter's inbound edge).
+    ipn-url: http://localhost:8096/scheme/ipn
+    # Seeded prefunded partner balance (integer VND). Successful payouts decrement it
+    # by amount+fee; async FAIL and 009 reversals restore it.
+    initial-balance-vnd: 5000000000
+    # Flat 9Pay fee per payout (integer VND).
+    fee-vnd: 4000
+    # Lifecycle timer: PENDING -> PROCESSING -> terminal, one step per interval.
+    lifecycle-step-ms: 2000
+    # Also advance one lifecycle step on each /service/transfer/info poll.
+    advance-on-poll: true
+    # REVERSAL scenario: delay between the SUCCESS IPN and the code-009 reversal IPN.
+    reversal-delay-ms: 3000
+    # TIMEOUT scenario: how long /service/transfer stalls before answering 1063.
+    timeout-hold-ms: 120000
+
+logging:
+  level:
+    com.gme.sim: DEBUG

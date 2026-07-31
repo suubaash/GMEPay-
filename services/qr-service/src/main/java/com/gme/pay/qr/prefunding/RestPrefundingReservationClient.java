@@ -3,6 +3,7 @@ package com.gme.pay.qr.prefunding;
 import com.gme.pay.contracts.PrefundingReleaseRequest;
 import com.gme.pay.contracts.PrefundingReserveRequest;
 import com.gme.pay.contracts.PrefundingReserveResponse;
+import com.gme.pay.internalauth.InternalAuthHeaders;
 import com.gme.pay.qr.domain.cpm.PrefundingReservationPort;
 import com.gme.pay.qr.exception.QRErrorCode;
 import com.gme.pay.qr.exception.QRParseException;
@@ -28,6 +29,20 @@ import java.math.BigDecimal;
  *   <li>{@code POST /internal/v1/prefunding/{partnerId}/reserve} — 402 → {@link QRErrorCode#INSUFFICIENT_PREFUNDING}.</li>
  *   <li>{@code POST /internal/v1/prefunding/{partnerId}/release} — idempotent on the reserve key.</li>
  * </ul>
+ *
+ * <h2>Internal auth (T0-5 / T0-2)</h2>
+ *
+ * <p>prefunding's entire balance API is behind the platform's service-to-service internal-auth gate
+ * ({@code com.gme.pay.internalauth}, header {@link InternalAuthHeaders#INTERNAL_TOKEN}), so this
+ * client presents the shared secret from {@code gmepay.internal-auth.secret}. Without it, every CPM
+ * reserve/release 401s against a correctly deployed prefunding.
+ *
+ * <p>This replaces an invented, unverified scheme: the client used to send
+ * {@code X-Internal-Token: ${internal.api.token:changeme-internal-token}} — a header <b>nothing on
+ * the platform reads</b>, defaulted to a literal checked into main source and into
+ * {@code application.yml}. It provided no authentication whatsoever while looking as though it did.
+ * The new value has <b>no default</b>: a blank secret sends no header at all, so a gated prefunding
+ * answers 401 (fail-closed) rather than the client shipping a fake credential.
  */
 @Component
 @ConditionalOnProperty(name = "gmepay.prefunding.reserve.enabled", havingValue = "true")
@@ -36,14 +51,21 @@ public class RestPrefundingReservationClient implements PrefundingReservationPor
     private static final Logger log = LoggerFactory.getLogger(RestPrefundingReservationClient.class);
 
     private final RestClient restClient;
-    private final String internalToken;
 
     public RestPrefundingReservationClient(
             RestClient.Builder builder,
             @Value("${gmepay.prefunding.base-url:http://prefunding:8080}") String baseUrl,
-            @Value("${internal.api.token:changeme-internal-token}") String internalToken) {
-        this.restClient = builder.baseUrl(baseUrl).build();
-        this.internalToken = internalToken;
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
+        RestClient.Builder b = builder.baseUrl(baseUrl);
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            b.defaultHeader(InternalAuthHeaders.INTERNAL_TOKEN, internalSecret);
+        } else {
+            log.warn("gmepay.internal-auth.secret is blank — CPM reserve/release calls to prefunding "
+                    + "will carry no {} header and a gated prefunding will refuse them (401), which "
+                    + "declines CPM issuance. Set GMEPAY_INTERNAL_AUTH_SECRET.",
+                    InternalAuthHeaders.INTERNAL_TOKEN);
+        }
+        this.restClient = b.build();
     }
 
     @Override
@@ -51,7 +73,6 @@ public class RestPrefundingReservationClient implements PrefundingReservationPor
         try {
             PrefundingReserveResponse res = restClient.post()
                     .uri("/internal/v1/prefunding/{partnerId}/reserve", partnerId)
-                    .header("X-Internal-Token", internalToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new PrefundingReserveRequest(partnerId, amountUsd, idempotencyKey, txnRef))
                     .retrieve()
@@ -75,7 +96,6 @@ public class RestPrefundingReservationClient implements PrefundingReservationPor
         try {
             restClient.post()
                     .uri("/internal/v1/prefunding/{partnerId}/release", partnerId)
-                    .header("X-Internal-Token", internalToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new PrefundingReleaseRequest(partnerId, reservationId, idempotencyKey, reason))
                     .retrieve()

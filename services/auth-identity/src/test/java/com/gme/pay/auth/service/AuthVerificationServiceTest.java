@@ -5,6 +5,7 @@ import com.gme.pay.auth.domain.InMemoryNonceStore;
 import com.gme.pay.auth.domain.PartnerCredentialPort;
 import com.gme.pay.auth.dto.VerifyRequest;
 import com.gme.pay.auth.dto.VerifyResponse;
+import com.gme.pay.auth.testsupport.RecordingAuditTrail;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +26,7 @@ class AuthVerificationServiceTest {
     private static final String HMAC_SECRET     = "test-secret-exactly-32-chars-here";
 
     private AuthVerificationService service;
+    private RecordingAuditTrail audit;
 
     @BeforeEach
     void setUp() {
@@ -34,7 +36,11 @@ class AuthVerificationServiceTest {
                         ? Optional.of(new PartnerCredentialPort.ResolvedCredential(PARTNER_ID, HMAC_SECRET))
                         : Optional.empty();
 
-        service = new AuthVerificationService(port, new InMemoryNonceStore());
+        audit = new RecordingAuditTrail();
+        // recordSuccess=false is the shipped default (see AuthVerificationService's javadoc: this
+        // is the gateway's per-request oracle). The success-row behaviour is covered by
+        // AuthVerificationAuditTest, which flips it on explicitly.
+        service = new AuthVerificationService(port, new InMemoryNonceStore(), audit, false);
     }
 
     // ── Helper: build a fully valid request ──────────────────────────────────

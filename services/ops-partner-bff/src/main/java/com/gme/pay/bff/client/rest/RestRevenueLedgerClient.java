@@ -58,7 +58,7 @@ import java.util.Map;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.revenue-ledger.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.revenue-ledger.client", havingValue = "rest", matchIfMissing = true)
 public class RestRevenueLedgerClient implements RevenueLedgerClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestRevenueLedgerClient.class);

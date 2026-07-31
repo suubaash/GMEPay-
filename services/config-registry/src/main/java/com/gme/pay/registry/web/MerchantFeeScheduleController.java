@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.MerchantFeeScheduleCommand;
 import com.gme.pay.contracts.MerchantFeeScheduleView;
 import com.gme.pay.registry.scheme.MerchantFeeScheduleService;
@@ -10,7 +11,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -49,7 +49,7 @@ public class MerchantFeeScheduleController {
     public List<MerchantFeeScheduleView> replace(
             @PathVariable String schemeId,
             @RequestBody List<MerchantFeeScheduleCommand> fees,
-            @RequestHeader(name = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         return service.replaceMerchantFees(schemeId, fees, actor);
     }
 

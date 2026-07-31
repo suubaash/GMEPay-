@@ -22,8 +22,26 @@ import java.util.List;
  *   <li>otherwise any name containing {@code "REVIEW"} →
  *       {@link ScreeningResult.Status#NEEDS_REVIEW} (one hit per matching
  *       name, list {@code STUB_FUZZY}, score 0.65);</li>
- *   <li>otherwise → {@link ScreeningResult.Status#CLEAR}, no hits.</li>
+ *   <li>otherwise → {@link ScreeningResult.Status#NOT_SCREENED_NO_PROVIDER},
+ *       no hits.</li>
  * </ul>
+ *
+ * <h2>This adapter can never report CLEAR (gap T1-4)</h2>
+ *
+ * <p>The rules above are unchanged from Slice 3 <em>except</em> in what the
+ * no-trigger-word branch is called. It used to be {@code CLEAR}, which is a
+ * claim — "we screened this entity against the sanctions, PEP and adverse-media
+ * sources and it matched nothing". This class consults no source whatsoever, so
+ * it stamps {@link ScreeningProvenance#stub()} on every result and
+ * {@link ScreeningResult}'s constructor consequently records the clean branch as
+ * {@link ScreeningResult.Status#NOT_SCREENED_NO_PROVIDER}. The keyword rules
+ * were deliberately NOT made smarter: a smarter fake is a worse fake. What
+ * changed is that the fake can no longer be mistaken for the real thing in a
+ * database column, an API response or an activation checklist.
+ *
+ * <p>The HIT / NEEDS_REVIEW branches are untouched: both fail closed, and
+ * staging one by naming a partner {@code "SANCTIONED HOLDINGS"} is how demos and
+ * tests exercise the blocked paths.
  *
  * <p>HIT outranks NEEDS_REVIEW when both trigger words appear. The rules are
  * pure functions of the subject, so demo flows and tests can stage any outcome
@@ -76,24 +94,31 @@ public class StubKybAdapter implements KybProvider {
                 status,
                 List.copyOf(hits),
                 Instant.now().truncatedTo(ChronoUnit.MICROS),
-                providerRef(subject));
+                providerRef(subject),
+                // Non-authoritative by construction: ScreeningProvenance refuses to
+                // let the stub claim authority, and ScreeningResult therefore records
+                // the no-trigger-word branch as NOT_SCREENED_NO_PROVIDER, never CLEAR.
+                ScreeningProvenance.stub());
     }
 
     @Override
     public KybRunResult runFullKyb(KybSubject subject) {
         ScreeningResult screening = screen(subject);
-        // Deterministic registry checks: everything "verifies" unless the
-        // screening already flagged the subject — a HIT entity cannot have a
-        // verified license in any sane vendor response, and NEEDS_REVIEW
-        // surfaces an unverified UBO set so the review queue has something to
-        // disposition.
-        boolean clear = screening.status() == ScreeningResult.Status.CLEAR;
+        // T1-4: the registry flags are FALSE on every stub run, because this class
+        // checks no register. They used to be true on the clean branch (derived
+        // from a CLEAR the stub can no longer produce), which meant a full "KYB
+        // run" reported a verified license, a verified UBO register and a verified
+        // corporate registry without contacting any of the three. Reporting
+        // "verified" for a check that never happened is the defect; false is the
+        // honest answer and fails closed everywhere it is read.
         boolean review = screening.status() == ScreeningResult.Status.NEEDS_REVIEW;
+        boolean verified = screening.authoritative() && !review
+                && screening.status() != ScreeningResult.Status.HIT;
         return new KybRunResult(
                 screening,
-                clear || review,
-                clear,
-                clear || review,
+                verified,
+                verified,
+                verified,
                 providerRef(subject) + "-full",
                 Instant.now().truncatedTo(ChronoUnit.MICROS));
     }

@@ -280,4 +280,112 @@ class SettlementBatchJobServiceTest {
                 "net unchanged — the refund's original payment was never settled, so nothing to claw back");
         verify(lineRepo, times(1)).save(any());   // only the payment line; no claw-back line
     }
+
+    // ======================================================================
+    // T2-6 — the claw-back is only as good as refundAmountKrw
+    // ======================================================================
+
+    @Test
+    @DisplayName("T2-6: a refund leg with a NULL amount nets NOTHING — the defect this gap was about")
+    void crossDateRefundWithNullAmountNetsNothing() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(net("T1", "M001", 50000, "0")));
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        // This is exactly the state transaction-mgmt was in before T2-6: refundedAt stamped (so the leg
+        // surfaces) but refund_amount_krw never populated. The merchant keeps money they were refunded.
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-NULL", "PAY-OLD", "M001", null,
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-OLD"), any())).thenReturn(true);
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("50000")),
+                "with no amount there is nothing to net — which is why payment-executor must now persist it");
+        verify(lineRepo, times(1)).save(any());
+    }
+
+    @Test
+    @DisplayName("T2-6: a PARTIAL refund claws back exactly the partial amount")
+    void crossDatePartialRefundClawsBackThePartialAmount() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(net("T1", "M001", 50000, "0")));
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        // 20 000 of a prior-day 50 000 payment refunded today.
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-P", "PAY-OLD", "M001", new BigDecimal("20000"),
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-OLD"), any())).thenReturn(true);
+        when(lineRepo.sumClawedBackByTxnRef("RFND-P")).thenReturn(BigDecimal.ZERO);
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("30000")),
+                "only the refunded 20000 is clawed back — not the whole original payment");
+        verify(lineRepo, times(2)).save(any());
+    }
+
+    @Test
+    @DisplayName("T2-6: a FURTHER partial refund claws back only the DELTA not yet netted")
+    void crossDateCumulativeRefundClawsBackOnlyTheDelta() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(net("T1", "M001", 50000, "0")));
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        // The leg now reports the CUMULATIVE 30000 refunded, of which 20000 was netted in an earlier window.
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-P", "PAY-OLD", "M001", new BigDecimal("30000"),
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-OLD"), any())).thenReturn(true);
+        when(lineRepo.sumClawedBackByTxnRef("RFND-P")).thenReturn(new BigDecimal("20000"));
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("40000")),
+                "only the 10000 increment is netted; the presence-based guard would have netted nothing");
+        verify(lineRepo, times(2)).save(any());
+    }
+
+    @Test
+    @DisplayName("T2-6: a fully-netted refund leg is skipped (idempotent across windows)")
+    void crossDateFullyNettedRefundIsSkipped() {
+        SettlementBatchJobService crossJob = new SettlementBatchJobService(
+                txnPort, partnerPort, booking, factory, batchRepo, lineRepo, outbox, refundedPort, "", "");
+        when(batchRepo.findByFileTypeAndBusinessDateAndSettlementWindow(any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(batchRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(lineRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(partnerPort.resolve(any())).thenReturn(PartnerSettlementConfig.defaults("X"));
+        when(txnPort.findUnbatchedApproved(any())).thenReturn(List.of(net("T1", "M001", 50000, "0")));
+        when(txnPort.findUnbatchedRefunded(any())).thenReturn(List.of());
+        when(refundedPort.findRefundedOn(any())).thenReturn(List.of(
+                new RefundLeg("RFND-P", "PAY-OLD", "M001", new BigDecimal("20000"),
+                        LocalDate.now(KST), OffsetDateTime.now())));
+        when(lineRepo.existsByTxnRefAndAmountGreaterThan(eq("PAY-OLD"), any())).thenReturn(true);
+        // Already fully clawed back in a previous window.
+        when(lineRepo.sumClawedBackByTxnRef("RFND-P")).thenReturn(new BigDecimal("20000"));
+
+        SettlementBatchEntity batch = crossJob.runWindow("ZP0061", "MORNING");
+
+        assertEquals(0, batch.getNetSettlementAmount().compareTo(new BigDecimal("50000")),
+                "a refund already netted must not be netted twice");
+        verify(lineRepo, times(1)).save(any());
+    }
 }

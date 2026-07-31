@@ -1,5 +1,8 @@
 package com.gme.pay.ledger.consumer;
 
+import com.gme.pay.ledger.domain.ledger.LedgerPostingService;
+import com.gme.pay.ledger.fees.SchemeFeeSplitCalculator;
+import com.gme.pay.ledger.persistence.InMemoryJournalStore;
 import com.gme.pay.ledger.revenue.InMemoryRevenueRecordStore;
 import com.gme.pay.ledger.revenue.RevenueCaptureService;
 import com.gme.pay.ledger.revenue.RevenueRecord;
@@ -17,6 +20,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Unit tests for {@link PaymentApprovedEventHandler}: the async payment.approved → revenue-capture
  * mapping. Runs broker-free against the in-memory store wrapped in the real capture service, so it
  * exercises the genuine idempotency path the Kafka consumer relies on.
+ *
+ * <p>Since T2-4 the capture service also posts the double-entry journal, so the real
+ * {@link LedgerPostingService} is wired here over an {@link InMemoryJournalStore} (kept in-memory to
+ * keep this a broker-free, DB-free unit slice). The journal itself is asserted by
+ * {@code RevenueCaptureJournalTest}.
  */
 class PaymentApprovedEventHandlerTest {
 
@@ -26,7 +34,9 @@ class PaymentApprovedEventHandlerTest {
     @BeforeEach
     void setUp() {
         store = new InMemoryRevenueRecordStore();
-        handler = new PaymentApprovedEventHandler(new RevenueCaptureService(store));
+        LedgerPostingService posting =
+                new LedgerPostingService(new InMemoryJournalStore(), new SchemeFeeSplitCalculator());
+        handler = new PaymentApprovedEventHandler(new RevenueCaptureService(store, posting));
     }
 
     @Test

@@ -18,11 +18,22 @@ import java.time.Instant;
 
 /**
  * Production {@link AuthIdentityClient}: calls auth-identity's internal
- * key-issuance API via Spring 6 {@link RestClient}. Active when
- * {@code gmepay.auth-identity.client=rest}; base URL from
+ * key-issuance API via Spring 6 {@link RestClient}. Base URL from
  * {@code gmepay.auth-identity.base-url} (default the compose-internal
  * {@code http://auth-identity:8080}) — the same conditional/@Primary wiring
  * pattern as {@code RestKybClient} / the BFF's {@code RestConfigRegistryClient}.
+ *
+ * <h2>Selector: this is the DEFAULT (gap T1-1)</h2>
+ *
+ * <p>{@code gmepay.auth-identity.client} selects the transport, and this client
+ * wins both when the selector says {@code rest} AND when it is absent
+ * ({@code matchIfMissing = true}). That inversion is deliberate: until gap T1-1
+ * the stub was the unconditional default and the {@code rest} selector was set
+ * for ops-partner-bff but never for config-registry, so every deployed
+ * environment silently issued unverifiable credentials. A missing selector must
+ * fail loudly (502 here) rather than succeed with fabricated material — see
+ * {@link com.gme.pay.registry.client.StubAuthIdentityClient}, which now has to
+ * be opted into by name.
  *
  * <p>Endpoint mapping (auth-identity {@code ApiKeyAdminController} — mounted
  * under {@code /internal/auth}, the machine surface its
@@ -51,7 +62,8 @@ import java.time.Instant;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest",
+        matchIfMissing = true)
 public class RestAuthIdentityClient implements AuthIdentityClient {
 
     private final RestClient restClient;

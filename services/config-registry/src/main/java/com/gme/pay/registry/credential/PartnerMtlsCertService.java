@@ -1,5 +1,6 @@
 package com.gme.pay.registry.credential;
 
+import com.gme.pay.audit.AuditActors;
 import com.gme.pay.contracts.PartnerMtlsCertView;
 import com.gme.pay.registry.audit.AuditLogService;
 import com.gme.pay.registry.persistence.PartnerEntity;
@@ -73,7 +74,7 @@ public class PartnerMtlsCertService {
     static final Set<String> ENVIRONMENTS = Set.of("SANDBOX", "PRODUCTION");
 
     /** Default actor until the Keycloak {@code sub} claim is threaded through. */
-    private static final String DEFAULT_ACTOR = "system";
+    private static final String DEFAULT_ACTOR = AuditActors.UNATTRIBUTED;
 
     private final PartnerMtlsCertRepository certRepository;
     private final PartnerRepository partnerRepository;
@@ -93,7 +94,11 @@ public class PartnerMtlsCertService {
      * @param partnerCode the human-facing business code routing the PATCH.
      * @param environment SANDBOX | PRODUCTION.
      * @param certPem     one PEM-encoded X.509 leaf certificate.
-     * @param actor       the operator (X-Actor header); {@code "system"} when absent.
+     * @param actor       the acting principal, already resolved to the
+     *                    {@link com.gme.pay.audit.AuditActors} vocabulary by
+     *                    {@link com.gme.pay.registry.actor.AuditActorHeader} — an attested
+     *                    operator id, {@code unverified:<claim>} for an unproven claim, or
+     *                    {@code unattributed}. Never the bare {@code "system"} literal (T5-1).
      * @return the fresh ACTIVE binding as a canonical {@link PartnerMtlsCertView}.
      * @throws ResponseStatusException 404 unknown partner; 400 on roster /
      *         parse / validity-window failure; 409 when the identical cert

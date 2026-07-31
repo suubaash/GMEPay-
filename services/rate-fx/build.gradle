@@ -26,6 +26,12 @@ dependencies {
     implementation project(':libs:lib-rate')
     implementation project(':libs:lib-money')
     implementation project(':libs:lib-errors')
+    // Gap T5-1 / CISO §9: "FX rate change — NO: rate_snapshots permits source='MANUAL' with no
+    // actor column". A hand-entered treasury rate re-prices every subsequent quote and payment in
+    // that currency, and the table recorded the rate but not the human. lib-audit supplies the
+    // ADR-007 tier-1 hash-chained audit_log writer plus the AuditActors vocabulary that keeps an
+    // operator name from being unverified client input.
+    implementation project(':libs:lib-audit')
 
     runtimeOnly 'org.postgresql:postgresql'
     // Flyway 10.x ships PostgreSQL support as a separate module (needed by the PG ITs).

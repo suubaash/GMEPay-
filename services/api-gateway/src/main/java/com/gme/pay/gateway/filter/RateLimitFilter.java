@@ -1,9 +1,11 @@
 package com.gme.pay.gateway.filter;
 
+import com.gme.pay.gateway.ratelimit.InMemoryRateLimitStore;
 import com.gme.pay.gateway.ratelimit.RateLimitProperties;
 import com.gme.pay.gateway.ratelimit.RateLimitStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
@@ -35,11 +37,18 @@ import java.util.Set;
  *
  * <p>On breach: 429 {@code RATE_LIMITED} with a {@code Retry-After} header. Every response
  * (allowed or rejected) carries {@code X-RateLimit-Limit}, {@code X-RateLimit-Remaining}
- * and {@code X-RateLimit-Reset}. The backing {@link RateLimitStore} is Redis-optional; on a
- * store error the filter fails open or closed per {@code gateway.rate-limit.fail-open}.
+ * and {@code X-RateLimit-Reset}.
  *
- * <p>Disabled by default ({@code gateway.rate-limit.enabled=false}); when disabled the filter
- * is a transparent pass-through so existing flows and tests are unaffected.
+ * <p><b>Store errors.</b> The counter now lives in Redis when one is configured
+ * ({@link com.gme.pay.gateway.sharedstate.GatewaySharedStateConfig}), which makes the cap
+ * fleet-wide and makes "Redis is down" a case this filter must answer. It answers it per
+ * {@code gateway.rate-limit.on-store-error}: DENY (default, T0-7's fail-closed posture), LOCAL
+ * (degrade to the per-JVM window — N x the cap, but still a cap) or ALLOW. The legacy
+ * {@code fail-open: true} still means ALLOW. The reasoning behind each is on
+ * {@link RateLimitProperties.OnStoreError}.
+ *
+ * <p>Enabled by default since T0-7 ({@code gateway.rate-limit.enabled=true}); when disabled the
+ * filter is a transparent pass-through.
  */
 @Component
 public class RateLimitFilter implements GlobalFilter, Ordered {
@@ -58,10 +67,24 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
 
     private final RateLimitStore store;
     private final RateLimitProperties props;
+    /** Per-JVM window used only by {@code on-store-error=LOCAL}; may be null in unit tests. */
+    private final RateLimitStore localFallback;
 
-    public RateLimitFilter(RateLimitStore store, RateLimitProperties props) {
+    @Autowired
+    public RateLimitFilter(RateLimitStore store, RateLimitProperties props,
+                           InMemoryRateLimitStore localFallback) {
         this.store = store;
         this.props = props;
+        this.localFallback = localFallback;
+    }
+
+    /**
+     * No-fallback constructor for unit tests. {@code on-store-error=LOCAL} degrades to DENY when
+     * no fallback is present — the safe direction, and never the production wiring, which always
+     * supplies one.
+     */
+    public RateLimitFilter(RateLimitStore store, RateLimitProperties props) {
+        this(store, props, null);
     }
 
     @Override
@@ -86,18 +109,7 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
         String key = partnerId + ":" + scope;
 
         return store.recordHit(key, limit, WINDOW)
-                .onErrorResume(err -> {
-                    if (props.isFailOpen()) {
-                        log.warn("Rate-limit store error for {} — failing open: {}", key,
-                                err.toString());
-                        // Synthesize an allow decision so the request proceeds with full headroom.
-                        return Mono.just(new RateLimitStore.Decision(true, limit, limit, 0));
-                    }
-                    log.warn("Rate-limit store error for {} — failing closed: {}", key,
-                            err.toString());
-                    return Mono.just(new RateLimitStore.Decision(false, limit, 0,
-                            WINDOW.toMillis()));
-                })
+                .onErrorResume(err -> onStoreError(err, key, limit))
                 .flatMap(decision -> {
                     writeRateLimitHeaders(exchange.getResponse(), decision);
                     if (decision.allowed()) {
@@ -112,6 +124,43 @@ public class RateLimitFilter implements GlobalFilter, Ordered {
                             "Per-partner rate limit of " + limit
                                     + " requests/second exceeded for scope '" + scope + "'");
                 });
+    }
+
+    /**
+     * Apply the configured posture for an unavailable store. Never propagates the error: the three
+     * outcomes below are the only ones, so a Redis failure cannot reach the client as a bare 500.
+     */
+    private Mono<RateLimitStore.Decision> onStoreError(Throwable err, String key, long limit) {
+        RateLimitProperties.OnStoreError posture = props.effectiveOnStoreError();
+        switch (posture) {
+            case ALLOW -> {
+                log.warn("Rate-limit store error for {} — posture ALLOW, admitting unlimited "
+                        + "traffic for the duration of the outage: {}", key, err.toString());
+                return Mono.just(new RateLimitStore.Decision(true, limit, limit, 0));
+            }
+            case LOCAL -> {
+                if (localFallback != null) {
+                    log.warn("Rate-limit store error for {} — posture LOCAL, degrading to the "
+                            + "per-JVM window (effective cap becomes replicas x {}): {}",
+                            key, limit, err.toString());
+                    return localFallback.recordHit(key, limit, WINDOW)
+                            // The fallback is a map; if even that fails, deny.
+                            .onErrorResume(fallbackErr -> denied(key, limit, fallbackErr));
+                }
+                log.warn("Rate-limit store error for {} — posture LOCAL but no local fallback is "
+                        + "wired; denying: {}", key, err.toString());
+                return denied(key, limit, err);
+            }
+            default -> {
+                return denied(key, limit, err);
+            }
+        }
+    }
+
+    private Mono<RateLimitStore.Decision> denied(String key, long limit, Throwable err) {
+        log.warn("Rate-limit store error for {} — posture DENY (T0-7 fail-closed): {}",
+                key, err.toString());
+        return Mono.just(new RateLimitStore.Decision(false, limit, 0, WINDOW.toMillis()));
     }
 
     private long limitForScope(String scope) {

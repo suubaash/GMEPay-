@@ -35,30 +35,46 @@ Per `docs/INTER_SERVICE_CONTRACTS.md` the BFF is the *only* backend this UI talk
 fans out to `prefunding`, `transaction-mgmt`, `notification-webhook`, `config-registry`,
 `settlement-reconciliation`, and `auth-identity`.
 
-## Auth (Phase 1)
+## Auth (Keycloak OIDC only)
 
-Partners sign in at **`/login`** with their partner id + password. The login form posts
-to `POST /v1/auth/login`; on success we persist:
+Partners sign in at **`/login`**, which has exactly one affordance: *Sign in with
+Keycloak*. It starts an OIDC authorization-code + PKCE (S256) flow against realm
+`gmepay`, client `partner-portal-ui` (see `docker/keycloak/README.md` for the
+canonical realm/client/issuer/port table). Keycloak returns to `/auth/callback`,
+which exchanges the code and persists:
 
-- `gmepay.partnerToken` — JWT bearer token in `localStorage`
-- `gmepay.partnerId` — selected partner id in `localStorage`
+- `gmepay.partnerToken` — Keycloak **access_token** (the BFF bearer)
+- `gmepay.partnerRefreshToken` / `gmepay.partnerIdToken`
+- `gmepay.partnerTokenExpiresAt` — ms-since-epoch, used by `isAuthenticated()`
+- `gmepay.partnerId` — the token's **`partner_id` claim** (never a form field)
 
-The API client then sends `Authorization: Bearer <token>` and `X-Partner-Id: <id>` on
-every BFF request. An `AuthGate` (`components/AuthGate.tsx`) wraps the app and redirects
-unauthenticated users to `/login` for every non-public route.
+Every BFF request carries `Authorization: Bearer <access_token>`; a 401 triggers one
+silent `refresh_token` exchange and a replay. `ops-partner-bff` is an OAuth2 resource
+server that authorizes `/v1/portal/{partnerId}/**` by comparing the path segment with
+the token's `partner_id` claim, so:
 
-### Phase 1 demo credentials
+- the `X-Partner-Id` header is **not sent any more** — it was never an identity, and
+  the BFF reads it nowhere (gap T0-4);
+- `POST /v1/auth/login` and the `password=demo` form are **gone** — that endpoint was
+  deleted from the BFF (gap T0-1);
+- a Keycloak user with no `partner_id` attribute sees an explicit "your account is not
+  linked to a partner" message instead of pages that all 403.
 
-The BFF dev profile accepts:
+`AuthGate` (`components/AuthGate.jsx`) wraps the app: it redirects to Keycloak on
+protected routes, or lands on `/login` when `NEXT_PUBLIC_ALLOW_DEV_LOGIN=true` (which
+only suppresses the automatic redirect — it is not a password bypass).
 
-| partnerId | password |
-|---|---|
-| `GMEREMIT` | `demo` |
-| `SENDMN`   | `demo` |
+### Seeded dev users (realm `gmepay`, dev only)
 
-These are placeholders — production wires real OAuth2 / partner SSO and the token will
-move to an httpOnly session cookie. The `api/auth.ts` surface (login / logout / getToken /
-isAuthenticated) is stable across that change.
+| username | password | scope |
+|---|---|---|
+| `partner-demo` | `demo` | `partner_id=GMEREMIT` |
+| `partner-sendmn` | `demo` | `partner_id=SENDMN` |
+
+`GMEREMIT` / `SENDMN` are the codes `config-registry`'s `PartnerSeeder` creates, so the
+portal resolves real data. Production federates real users (SCIM/LDAP or the partner's
+own IdP as an identity provider inside realm `gmepay`) and the token will move to an
+httpOnly session cookie.
 
 ## Money / rounding
 Money values are rendered by `src/components/MoneyDisplay.tsx` which respects ISO-4217
@@ -96,8 +112,10 @@ state.profile       // partner profile incl. rounding mode
 
 ```bash
 cp .env.example .env.local
-# edit NEXT_PUBLIC_PARTNER_ID for env-var-only dev (skip the login screen).
-# Otherwise just navigate to http://localhost:3001/login and sign in.
+# Set BFF_PROXY_TARGET to your running BFF (18095 for run-fleet.ps1, 8095 for compose)
+# and keep NEXT_PUBLIC_KEYCLOAK_URL/CLIENT_ID matching the realm seed.
+# Do NOT set NEXT_PUBLIC_BFF_BASE_URL — it makes the browser call the BFF
+# cross-origin and the BFF configures no CORS.
 npm install   # NOT run by the scaffolding agent — run manually
 npm run dev   # http://localhost:3001
 ```
@@ -112,8 +130,10 @@ npm run test:watch    # watch mode
 ### Verify locally
 
 1. `npm install && npm run dev`
-2. Open <http://localhost:3001> — AuthGate redirects to `/login`.
-3. Sign in as `GMEREMIT` / `demo` (or `SENDMN` / `demo`).
+2. Start Keycloak (`docker compose --profile core up -d keycloak`) and the BFF with
+   `OIDC_ISSUER_URI=http://localhost:8097/realms/gmepay`.
+3. Open <http://localhost:3001> — AuthGate lands on `/login`; click *Sign in with
+   Keycloak* and authenticate as `partner-demo` / `demo`.
 4. Walk the nav: Overview → Balance → Transactions → click a row → Webhooks → Profile.
 5. Stop the BFF and click a "Try again" button — the error UI + retry path should work.
 6. `npm run test` — all Vitest suites green.
@@ -121,5 +141,5 @@ npm run test:watch    # watch mode
 ## Phase 2 (not in this scaffold)
 - Webhook edit / rotate-secret flows
 - Settlement currency / threshold updates
-- Real OAuth2 partner SSO (replace localStorage bearer + `X-Partner-Id` dev header)
-- Token refresh wiring (`portalApi.refreshToken` is a Phase-1 stub)
+- Move the bearer from localStorage to an httpOnly session cookie (ADR-011 phase D)
+- Partner-managed webhook secrets / settlement settings (write paths)

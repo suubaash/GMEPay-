@@ -1,5 +1,6 @@
 package com.gme.pay.payment.client.rest;
 
+import com.gme.pay.payment.domain.PartialRefundNotSupportedException;
 import com.gme.pay.payment.domain.SchemeDeclinedException;
 import com.gme.pay.payment.domain.SchemeTimeoutException;
 import com.gme.pay.payment.domain.client.SchemeClient;
@@ -96,6 +97,31 @@ class RestSchemeClientTest {
                 .andRespond(withSuccess());
 
         client.cancelPayment("ZP20260608093115001234", "PARTNER_INITIATED");
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("T2-6: a FULL scheme-routed cancel still POSTs to /cancel, byte-for-byte as before")
+    void cancelPayment_fullRequest_stillPosts() {
+        server.expect(requestTo(BASE + "/internal/scheme/zeropay/cancel"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess());
+
+        client.cancelPayment(new SchemeClient.CancelRequest("ZP-1", "PARTNER_INITIATED", "ZEROPAY"));
+        server.verify();
+    }
+
+    @Test
+    @DisplayName("T2-6: a PARTIAL refund is refused locally — no HTTP call is made at all")
+    void cancelPayment_partialRefund_refusedWithNoHttpCall() {
+        // No server.expect(...): the adapter contract carries no refund amount, so the only instruction we
+        // could send is a FULL cancel — which would refund the customer MORE at the scheme than our books
+        // recorded. Refusing beats guessing, and `server.verify()` below proves nothing was sent.
+        PartialRefundNotSupportedException ex = assertThrows(PartialRefundNotSupportedException.class,
+                () -> client.cancelPayment(new SchemeClient.CancelRequest(
+                        "ZP-1", "CUSTOMER_REQUEST", "ZEROPAY", new BigDecimal("20000"), "KRW")));
+
+        assertEquals(PartialRefundNotSupportedException.CODE, ex.code());
         server.verify();
     }
 

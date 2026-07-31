@@ -27,6 +27,22 @@ import java.util.Map;
  * netting agreement the platform does not have (see design note §4).
  *
  * <p>USD scale 2, HALF_UP, per {@code docs/MONEY_CONVENTION.md}.
+ *
+ * <h2>Who calls this, and what is NOT done with the answer (GAP T4-5)</h2>
+ * The single production caller is
+ * {@link com.gme.pay.settlement.netting.NettingReportService}, behind
+ * {@code GET /v1/settlements/netting}. It builds one {@link Obligation} per
+ * {@code (scheme, corridor, day)} from the persisted {@code corridor_recon_summary} rows'
+ * {@code usdOwedScheme}.
+ *
+ * <p>That caller produces a <b>report only</b>. Nothing applies these figures to funding — no
+ * prefunding balance, settlement file or funding instruction is derived from them — and every response
+ * says so on its face ({@code applied=false} plus
+ * {@link com.gme.pay.settlement.netting.NettingReportResponse#REPORTING_ONLY_NOTE}). Funding on a
+ * netted basis requires a per-counterparty agreement about which obligations offset, over which window,
+ * and who carries the intraday gap: a treasury/commercial decision, not a calculation. This class was
+ * previously reachable from no production code at all, which made the capability look available while
+ * being unusable; the split above is the deliberate replacement for that state.
  */
 @Component
 public class MultilateralNettingCalculator {

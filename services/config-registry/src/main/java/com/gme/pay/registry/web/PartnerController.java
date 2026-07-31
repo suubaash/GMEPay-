@@ -1,5 +1,6 @@
 package com.gme.pay.registry.web;
 
+import com.gme.pay.registry.actor.AuditActorHeader;
 import com.gme.pay.contracts.ContactView;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.contracts.PartnerView;
@@ -357,7 +358,7 @@ public class PartnerController {
     @PostMapping("/draft")
     public ResponseEntity<PartnerView> createDraft(
             @RequestBody PartnerCommand.CreateDraft req,
-            @RequestHeader(value = "X-Actor", required = false) String actor) {
+            @AuditActorHeader String actor) {
         try {
             PartnerValidator.validateCreateDraft(req);
         } catch (PartnerValidator.ValidationException e) {
@@ -382,7 +383,7 @@ public class PartnerController {
     @PatchMapping("/draft/{partnerCode}/step-1")
     public PartnerView patchDraftStep1(@PathVariable String partnerCode,
                                        @RequestBody PartnerCommand.UpdateStep1 req,
-                                       @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                       @AuditActorHeader String actor) {
         try {
             PartnerValidator.validateUpdateStep1(req);
         } catch (PartnerValidator.ValidationException e) {
@@ -407,7 +408,7 @@ public class PartnerController {
     @PatchMapping("/draft/{partnerCode}/step-2")
     public List<ContactView> patchDraftStep2(@PathVariable String partnerCode,
                                              @RequestBody PartnerCommand.UpdateStep2 req,
-                                             @RequestHeader(value = "X-Actor", required = false) String actor) {
+                                             @AuditActorHeader String actor) {
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body required");
         }

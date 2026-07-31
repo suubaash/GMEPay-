@@ -9,8 +9,11 @@ import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.TestPropertySource;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Set;
@@ -74,7 +77,7 @@ class GatewayRouteTableTest {
             "payment-executor",
             "rate-fx",
             "rate-fx-quotes",
-            "prefunding",
+            // NOTE: "prefunding" is deliberately absent — see prefundingIsNotRoutedToTheInternet().
             "smart-router",
             "merchant-qr-data",
             "config-registry",
@@ -117,6 +120,35 @@ class GatewayRouteTableTest {
 
         assertEquals(EXPECTED_ROUTE_IDS, actualIds,
                 "Route id set drift: declared routes must match the documented partner API table");
+    }
+
+    @Test
+    void prefundingIsNotRoutedToTheInternet() {
+        // T0-2 / T0-5: the gateway used to publish GET|POST /v1/prefunding/** — the entire partner
+        // float API (deduct, credit, reverse, reserve, capture, release, cumulative-charge,
+        // credit-limit) plus balance/alerts/deductions — to any internet caller. No partner may call
+        // any of it, and no legitimate consumer needed the route: payment-executor, qr-service,
+        // config-registry and ops-partner-bff all reach prefunding directly over the internal
+        // network. This test pins the removal: re-adding a wildcard prefunding route fails here.
+        //
+        // Both assertions matter. The id check catches a re-added route under the old name; the
+        // predicate check catches one re-added under a different id.
+        Set<String> actualIds = collectRoutes().stream()
+                .map(Route::getId)
+                .collect(Collectors.toSet());
+        assertTrue(!actualIds.contains("prefunding"),
+                () -> "the prefunding route must not be published through the gateway; ids = "
+                        + actualIds);
+
+        MockServerHttpRequest deduct = MockServerHttpRequest
+                .post("http://gateway/v1/prefunding/1/deduct").build();
+        MockServerWebExchange exchange = MockServerWebExchange.from(deduct);
+        for (Route route : collectRoutes()) {
+            Boolean matches = Mono.from(route.getPredicate().apply(exchange)).block();
+            assertTrue(!Boolean.TRUE.equals(matches),
+                    () -> "route '" + route.getId() + "' matches POST /v1/prefunding/1/deduct — the "
+                            + "partner float API must not be reachable through the gateway");
+        }
     }
 
     @Test

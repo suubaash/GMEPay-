@@ -91,12 +91,46 @@ public class ResilientSchemeClient implements SchemeClient {
 
     @Override
     public void cancelPayment(String schemeTxnRef, String reason) {
-        // cancelPayment carries no scheme id (ZeroPay two-phase concept). The router pins it to the
-        // ZeroPay default; wrap it on the ZeroPay breaker for consistency.
+        // Legacy scheme-less cancel: the router pins it to the ZeroPay default, so guard it on the
+        // ZeroPay breaker. Scheme-aware callers use cancelPayment(CancelRequest) below (T2-7).
         guarded("ZEROPAY", () -> {
             delegate.cancelPayment(schemeTxnRef, reason);
             return null;
         });
+    }
+
+    /**
+     * T2-7: scheme-routed cancel/refund, guarded on the TARGET scheme's own breaker/bulkhead (a dead
+     * SendMN adapter must not trip ZeroPay's breaker). A
+     * {@link com.gme.pay.payment.domain.SchemeOperationNotSupportedException} from an adapter that has
+     * no cancel round-trip propagates unchanged — it is a terminal contract fact, not a fault to fail
+     * over on (and {@code SchemeFailureRecordPredicate} governs whether it counts against the breaker).
+     */
+    @Override
+    public void cancelPayment(CancelRequest request) {
+        guarded(request.schemeId(), () -> {
+            delegate.cancelPayment(request);
+            return null;
+        });
+    }
+
+    /**
+     * T4-4: merchant-name decode, guarded on the scheme's own breaker/bulkhead like every other call —
+     * a decode against a dead adapter must not sit on a socket while the customer waits. Because the
+     * name is display-only, a short-circuit is swallowed here and reported as "unknown" (null) rather
+     * than propagated: the guard translates OPEN/saturated into {@link SchemeTimeoutException}, which
+     * on any other method means "fail over", and failing a payment over because a NAME lookup was
+     * unavailable would be a money-path decision taken for a cosmetic reason.
+     */
+    @Override
+    public String resolveMerchantName(String schemeId, String qrPayload) {
+        try {
+            return guarded(schemeId, () -> delegate.resolveMerchantName(schemeId, qrPayload));
+        } catch (RuntimeException ex) {
+            log.debug("merchant-name decode unavailable for scheme {} — leaving the name unknown: {}",
+                    schemeId, ex.toString());
+            return null;
+        }
     }
 
     /**
