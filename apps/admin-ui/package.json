@@ -22,7 +22,7 @@
     "react-dom": "18.3.1",
     "react-hook-form": "7.53.2",
     "react-redux": "9.1.2",
-    "yup": "1.4.0"
+    "yup": "1.7.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "6.6.3",
