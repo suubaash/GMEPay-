@@ -2,6 +2,14 @@
 
 # T0-6 — key rotation and key versioning for the platform JWT
 
+> **Commit-attribution note.** Two agents were committing on this branch concurrently. My 24 files
+> were sitting in the git index when the other agent ran `git commit`, so **all of this work landed
+> inside commit `e8fd228 "fix(ci): stop the internal-token rule flagging a code reference as a
+> leak"`** rather than under its own message. The content is complete and correct — only the commit
+> subject is wrong. I deliberately did **not** rewrite that commit to split it out: the other agent
+> was actively staging at the time, and `git reset --soft` against a live index is how the collision
+> happened in the first place. This document is the record of what `e8fd228` actually contains.
+
 Closes the residual `Documentation/GAP_REGISTER.md` T0-6 recorded as *"no rotation and no key
 versioning — grep for `kid`/`keyVersion`/`activeKeyId` is still zero hits"*, left deliberately
 un-half-built by `outputs/agent/fix_t0-partner-keys-and-secrets_2026-07-28.md` (which removed the
