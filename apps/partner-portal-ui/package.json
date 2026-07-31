@@ -24,7 +24,7 @@
     "react-redux": "9.1.2",
     "react-hook-form": "7.53.0",
     "@hookform/resolvers": "3.9.0",
-    "yup": "1.4.0",
+    "yup": "1.7.1",
     "lottie-react": "2.4.0"
   },
   "devDependencies": {
