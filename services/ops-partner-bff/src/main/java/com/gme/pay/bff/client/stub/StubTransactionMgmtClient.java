@@ -17,8 +17,7 @@ import java.util.Objects;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.transaction-mgmt.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubTransactionMgmtClient implements TransactionMgmtClient {
 
     private static final List<TransactionSummary> STORE = List.of(

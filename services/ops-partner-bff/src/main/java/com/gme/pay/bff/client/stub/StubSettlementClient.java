@@ -27,8 +27,7 @@ import java.util.Objects;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.settlement-reconciliation.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubSettlementClient implements SettlementClient {
 
     /** The reason every stub row carries — the same fact the real service reports. */

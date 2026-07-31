@@ -3,6 +3,7 @@ package com.gme.pay.bff.client.stub;
 import com.gme.pay.bff.client.ApiKeyClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -31,6 +32,7 @@ import java.util.List;
  * finds the selector.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub")
 public class StubApiKeyClient implements ApiKeyClient {
 
     private static final Logger log = LoggerFactory.getLogger(StubApiKeyClient.class);

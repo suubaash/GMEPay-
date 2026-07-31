@@ -17,6 +17,27 @@ import java.util.List;
  * Admin UI Audit page renders a realistic timeline.
  *
  * <p>Entries are seeded newest-first and paginated in memory.
+ *
+ * <h2>NOT AN AUDIT TRAIL — and there is no selector that makes it one</h2>
+ *
+ * <p>Read this before treating {@code GET /v1/admin/audit} as evidence of anything. Every row this
+ * class returns is <b>invented at construction time</b>: five action names and four actor addresses
+ * cycled over 25 fixed timestamps anchored to a hardcoded "now". Nobody performed any of them.
+ *
+ * <p>Unlike the other stubs in this package, this one has <b>no {@code Rest*} counterpart and no
+ * {@code gmepay.*.client} selector</b>, so it cannot be switched to a real implementation — it is
+ * the only {@link AuditClient} that exists and it is therefore unconditionally wired. That is
+ * exactly the property that makes it dangerous, so it is stated here, and
+ * {@link com.gme.pay.bff.client.StubClientSelectionWarner} names it at every boot rather than
+ * leaving it to whoever opens this file.
+ *
+ * <p>The <b>real</b> audit surfaces already exist and are separate interfaces: config-registry's
+ * hash-chained {@code audit_log} behind {@link com.gme.pay.bff.client.AuditTrailClient}
+ * ({@code gmepay.config-registry.client}), and this service's own {@code operator_action_audit}
+ * table behind {@link com.gme.pay.bff.client.OperatorActionAuditClient}. Anything that needs to be
+ * true must come from those. Retiring this page onto {@code AuditTrailClient} — or deleting it — is
+ * the outstanding follow-up; it was not done here because it changes an Admin UI route's contract,
+ * which is a product decision rather than a wiring one.
  */
 @Component
 public class StubAuditClient implements AuditClient {

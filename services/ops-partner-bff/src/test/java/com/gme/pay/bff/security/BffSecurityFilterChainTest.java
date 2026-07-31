@@ -33,7 +33,24 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * as {@code sub|partnerId|perm,perm} ({@code -} = absent). That substitutes only the cryptographic
  * verification step; every authorization decision under test is the production code path.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK, properties = {
+        // This class tests the SECURITY filter chain (who may reach which route), not upstream
+        // wiring, so it opts into the in-memory clients explicitly. That opt-in is now REQUIRED
+        // and that is the point of the change that added it: the shipped selectors were inverted
+        // so the LIVE clients win when nobody chooses, because a stub winning by default is how
+        // three surfaces ended up serving fabricated data in production. Without these lines the
+        // 200-path assertions here would open real sockets to config-registry / transaction-mgmt.
+        "gmepay.config-registry.client=stub",
+        "gmepay.transaction-mgmt.client=stub",
+        "gmepay.prefunding.client=stub",
+        "gmepay.notification-webhook.client=stub",
+        "gmepay.settlement-reconciliation.client=stub",
+        "gmepay.revenue-ledger.client=stub",
+        "gmepay.reporting-compliance.client=stub",
+        "gmepay.auth-identity.client=stub",
+        "gmepay.system-health.client=stub",
+        "gmepay.ops-control.client=stub",
+        "gmepay.webhook-ops.client=stub"})
 @AutoConfigureMockMvc
 class BffSecurityFilterChainTest {
 

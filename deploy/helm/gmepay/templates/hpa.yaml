@@ -1,0 +1,94 @@
+{{/*
+HorizontalPodAutoscaler — one per service that opts in.
+
+WHY THIS TEMPLATE EXISTS, AND WHY IT RENDERS NOTHING BY DEFAULT
+===============================================================
+Until the replica-ceiling work, running any service at N>1 was not a capacity
+choice but a CORRECTNESS defect: api-gateway enforced N x its rate-limit cap and
+accepted one replay per replica, transaction-mgmt's idempotency window was
+per-JVM (so one partner retry created N transactions), ops-partner-bff paged a
+human once per replica and served a different alert list from each. All of that
+is now shared state (Redis / per-service tables), so the chart may finally offer
+scaling at all.
+
+Offering it is not the same as turning it on. HOW MANY REPLICAS TO RUN IS A COST
+DECISION AND IT BELONGS TO THE OWNER, so this template ships inert: every service
+keeps `replicas: 1` and no HPA object is created until someone sets
+`autoscaling.enabled: true`. Nothing here is a capacity recommendation.
+
+NO INVENTED NUMBERS
+===================
+An HPA needs a ceiling and a target, and both are judgements about money and
+traffic that this repository has no basis to make. So rather than shipping a
+plausible-looking `maxReplicas: 5` / `targetCPUUtilizationPercentage: 70` that
+would be mistaken for an engineering position, enabling autoscaling WITHOUT
+supplying them FAILS the template. Same idiom as ingress-ipn.yaml's empty
+`sourceRanges` guard: you cannot get a number by forgetting one, only by choosing
+it.
+
+WHICH SERVICES ARE SAFE TO SCALE — see the `autoscaling:` block in values.yaml.
+Two are NOT purely a cost decision and are named there: ops-partner-bff (safe only
+because its alert store moved to its own `bff` database, which is not provisioned
+in any real environment yet) and every Kafka consumer (a topic still created with
+one partition gains nothing from a second replica — Kafka assigns whole
+partitions).
+
+Per-service schema (all under services.<svc>.autoscaling):
+  enabled       bool    default = .Values.autoscaling.enabled (false)
+  minReplicas   int     default 1
+  maxReplicas   int     REQUIRED when enabled
+  targetCPUUtilizationPercentage  int   \  at least ONE of these
+  targetMemoryUtilizationPercentage int |  is REQUIRED when enabled
+  metrics       list    raw autoscaling/v2 metrics (wins over the two above)
+  behavior      map     raw autoscaling/v2 scaling behaviour (optional)
+*/}}
+{{- range $key, $svc := .Values.services }}
+{{- if $svc.enabled | default true }}
+{{- if include "gmepay.autoscalingEnabled" (dict "svc" $svc "root" $) }}
+{{- $auto := $svc.autoscaling | default dict }}
+{{- $ctx := dict "key" $key "root" $ }}
+{{- $min := $auto.minReplicas | default 1 }}
+{{- $max := $auto.maxReplicas }}
+{{- if not $max }}
+{{- fail (printf "services.%s.autoscaling.enabled is true but maxReplicas is not set. An autoscaler with no ceiling is an unbounded cost commitment, and this chart deliberately does not pick one for you." $key) }}
+{{- end }}
+{{- if lt (int $max) (int $min) }}
+{{- fail (printf "services.%s.autoscaling: maxReplicas (%v) is below minReplicas (%v)." $key $max $min) }}
+{{- end }}
+{{- $metrics := $auto.metrics | default list }}
+{{- if not $metrics }}
+{{- if $auto.targetCPUUtilizationPercentage }}
+{{- $metrics = append $metrics (dict "type" "Resource" "resource" (dict "name" "cpu" "target" (dict "type" "Utilization" "averageUtilization" (int $auto.targetCPUUtilizationPercentage)))) }}
+{{- end }}
+{{- if $auto.targetMemoryUtilizationPercentage }}
+{{- $metrics = append $metrics (dict "type" "Resource" "resource" (dict "name" "memory" "target" (dict "type" "Utilization" "averageUtilization" (int $auto.targetMemoryUtilizationPercentage)))) }}
+{{- end }}
+{{- end }}
+{{- if not $metrics }}
+{{- fail (printf "services.%s.autoscaling.enabled is true but no metric is configured. Set targetCPUUtilizationPercentage (and/or targetMemoryUtilizationPercentage), or supply a raw `metrics:` list. An HPA with no metric never scales, so a silently metric-less HPA would look like autoscaling while doing nothing." $key) }}
+{{- end }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "gmepay.svcName" $ctx }}
+  labels:
+    {{- include "gmepay.commonLabels" $ | nindent 4 }}
+    {{- include "gmepay.selectorLabels" $ctx | nindent 4 }}
+    app.kubernetes.io/component: {{ $svc.component | default "backend" }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "gmepay.svcName" $ctx }}
+  minReplicas: {{ $min }}
+  maxReplicas: {{ $max }}
+  metrics:
+    {{- toYaml $metrics | nindent 4 }}
+  {{- with $auto.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

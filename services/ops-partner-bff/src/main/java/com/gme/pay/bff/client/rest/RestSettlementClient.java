@@ -51,7 +51,7 @@ import java.util.List;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.settlement-reconciliation.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.settlement-reconciliation.client", havingValue = "rest", matchIfMissing = true)
 public class RestSettlementClient implements SettlementClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestSettlementClient.class);

@@ -1,5 +1,48 @@
 # deploy — CHANGELOG
 
+## 2026-07-31 — the chart can scale, and still ships one replica everywhere
+
+The replica-ceiling work made N>1 *correct* (shared rate-limit / replay / idempotency / ops-alert
+state, ShedLock on every scheduled job). Before it, N>1 was not a capacity choice but a defect: two
+api-gateway replicas enforced 2x the configured rate limit and accepted a captured signed request
+once per replica; two transaction-mgmt replicas turned one partner retry into two transactions.
+The chart could not express scaling at all, so this adds the mechanism — and nothing else.
+
+### Added
+- **`templates/hpa.yaml`** — one `autoscaling/v2` HorizontalPodAutoscaler per service that opts in.
+  Per-service `autoscaling.{enabled,minReplicas,maxReplicas,targetCPUUtilizationPercentage,
+  targetMemoryUtilizationPercentage,metrics,behavior}`.
+- **`gmepay.autoscalingEnabled`** in `_helpers.tpl` — resolves per-service over fleet-wide
+  explicitly (`hasKey`, not `default`, so a per-service `false` is honoured against a `true` fleet
+  switch). Read by BOTH `hpa.yaml` and `_deployment.tpl` so the two can never disagree.
+- **`autoscaling:` block in `values.yaml`** — the master switch (`enabled: false`) plus the
+  per-service safety list: which services are safe at N>1 and why, which were **never swept** (so
+  the absence of a warning is not approval), and the Kafka caveat that a one-partition topic gains
+  nothing from a second replica.
+- **`scripts/check_helm_chart_wiring.py` §8b** — fails if the template disappears, if the fail
+  guards are removed, if `_deployment.tpl` stops yielding `spec.replicas` to an HPA, if any values
+  file enables autoscaling, or if any service ships more than one replica.
+
+### Changed
+- **`_deployment.tpl` omits `spec.replicas` when an HPA manages the Deployment.** A hardcoded
+  replica count under an HPA fights it on every `helm upgrade`; the visible symptom is an
+  autoscaler that "randomly" resets the pod count mid-load.
+- **`values.yaml` pins `services.ops-partner-bff.replicas: 1` explicitly** — for this one service
+  the 1 is not only a cost decision. Its ops-alert list, alert IDs and operator acks are fleet-wide
+  only because they moved into its own `bff` database, and that database is a placeholder in the
+  AWS/Azure overlays: it exists in no real environment yet.
+
+### Deliberately not done
+- **Nothing is enabled and no number is shipped.** `autoscaling.enabled: false`,
+  `global.defaultReplicas: 1`, no service opts in. Enabling autoscaling **without** `maxReplicas`
+  or a metric **fails the template** rather than falling back to a plausible-looking `maxReplicas:
+  5` / `targetCPUUtilizationPercentage: 70` — same idiom as `ingress-ipn.yaml`'s empty
+  `sourceRanges`. How many replicas to run, and what to scale on, are cost judgements that belong
+  to the owner.
+- No Helm and no Docker were run. Validation is static: PyYAML parse of all four values files, the
+  wiring guard, and a Go-template action-balance check.
+
+
 ## 2026-07-28 — kyb-adapter becomes deployable; config-registry's vault points at MinIO (gap T1-4)
 
 ### Added

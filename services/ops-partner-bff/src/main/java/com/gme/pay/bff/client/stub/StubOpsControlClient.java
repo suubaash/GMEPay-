@@ -15,16 +15,28 @@ import java.util.List;
  * standalone and each operator-action endpoint exercises a real state transition
  * without config-registry running.
  *
- * <p>Default bean: wired unless {@code gmepay.ops-control.client=rest} selects the
- * live {@link com.gme.pay.bff.client.rest.RestOpsControlClient}.
+ * <p><b>OPT-IN ONLY since the selector inversion.</b> The live
+ * {@link com.gme.pay.bff.client.rest.RestOpsControlClient} wins unless
+ * {@code gmepay.ops-control.client=stub} explicitly asks for this bean; an unrecognised value
+ * leaves no bean at all and the service refuses to start. Before the inversion this class carried
+ * {@code matchIfMissing = true}, so an environment that simply forgot the selector ran the
+ * platform kill switch out of a field on one heap.
+ *
+ * <p><b>Per-JVM state — INCORRECT above one replica, which is why it must never be the default.</b>
+ * {@code systemPaused} / {@code maintenanceMode} / the three suspension lists live in this object.
+ * At N&gt;1 an operator pauses the platform on replica A, the next payment authorisation reads
+ * ALL-CLEAR from replica B, and money keeps flowing while the console says paused. It is also
+ * invisible to payment-executor either way: the enforcement point is config-registry's
+ * {@code /v1/ops} gate, which this bean never reaches. Both facts are properties of a stub that
+ * fabricates a control surface, and neither is fixable by sharing the state — the fix is the real
+ * client, which is now the default.
  *
  * <p>Starts ALL-CLEAR. Mutations are synchronized so concurrent tests are stable.
  */
 @Component
 @ConditionalOnProperty(
         name = "gmepay.ops-control.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubOpsControlClient implements OpsControlClient {
 
     private boolean systemPaused = false;

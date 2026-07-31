@@ -29,7 +29,7 @@ import org.springframework.web.client.RestClient;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest", matchIfMissing = true)
 public class RestAuditTrailClient implements AuditTrailClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestAuditTrailClient.class);

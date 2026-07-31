@@ -5,6 +5,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -82,15 +83,40 @@ public class OpsAlertKafkaConsumerConfig {
         return new DefaultErrorHandler(recoverer, new FixedBackOff(0L, MAX_DELIVERY_ATTEMPTS - 1L));
     }
 
+    /**
+     * Listener container factory for {@code gmepay.ops.alert}.
+     *
+     * <p><b>Why the concurrency parameter is here at all.</b> Boot binds
+     * {@code spring.kafka.listener.concurrency} onto its <em>auto-configured</em> container factory
+     * only. This factory is hand-built (MANUAL ack + a DLT error handler), so before this parameter
+     * existed the property was not merely unset — it was <b>unreadable</b>: an operator could set it,
+     * watch it resolve in {@code /actuator/env}, restart, and change nothing, while the Helm ABI
+     * ConfigMap advertised {@code SPRING_KAFKA_LISTENER_CONCURRENCY} as a fleet-wide lever. This was
+     * the last of the four hand-built factories in the fleet to ignore it
+     * ({@code KafkaListenerConcurrencyWiringGuardTest} in {@code libs/lib-events-kafka} is what stops a
+     * fifth appearing).
+     *
+     * <p><b>Default 3, clamp at 1.</b> 3 is not a tuning guess: it is {@code KAFKA_NUM_PARTITIONS} in
+     * {@code docker-compose.yml} and {@code SPRING_KAFKA_LISTENER_CONCURRENCY} in the Helm ABI. Kafka
+     * assigns whole partitions, so threads beyond the partition count sit idle. {@code 0} from a config
+     * typo would mean <em>no consumer threads</em> — ops alerts would stop being stored and stop being
+     * paged on, silently, which is the one failure this pipeline exists to prevent — so it clamps to 1.
+     *
+     * <p><b>Ordering is unaffected.</b> The producer keys by subject, so every alert for one subject
+     * lands on one partition and is still handled in order by one thread; concurrency reorders across
+     * subjects only, and the paging cooldown is claimed atomically per {@code (alertType|subjectRef)}.
+     */
     @Bean(name = LISTENER_CONTAINER_FACTORY)
     public ConcurrentKafkaListenerContainerFactory<String, String> opsAlertKafkaListenerContainerFactory(
             ConsumerFactory<String, String> opsAlertConsumerFactory,
-            DefaultErrorHandler opsAlertKafkaErrorHandler) {
+            DefaultErrorHandler opsAlertKafkaErrorHandler,
+            @Value("${spring.kafka.listener.concurrency:3}") int concurrency) {
         ConcurrentKafkaListenerContainerFactory<String, String> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(opsAlertConsumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
         factory.setCommonErrorHandler(opsAlertKafkaErrorHandler);
+        factory.setConcurrency(Math.max(1, concurrency));
         return factory;
     }
 

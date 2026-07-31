@@ -58,7 +58,20 @@ metadata:
     {{- include "gmepay.selectorLabels" $ctx | nindent 4 }}
     app.kubernetes.io/component: {{ $svc.component | default "backend" }}
 spec:
+  {{- /* -------------------------------------------------------------------
+       Replica count. `replicas` is a PER-SERVICE cost decision (see the
+       `autoscaling:` block in values.yaml for which services are safe at N>1
+       and which are not); global.defaultReplicas is the floor, and it is 1.
+
+       When an HPA manages this Deployment the field is OMITTED ENTIRELY rather
+       than set to 1. A Deployment that keeps a hardcoded replica count while an
+       HPA scales it fights the HPA on every `helm upgrade` — the visible symptom
+       is an autoscaler that "randomly" resets the pod count back to 1 mid-load.
+       hpa.yaml and this branch read the SAME helper so they cannot disagree.
+       ------------------------------------------------------------------- */}}
+  {{- if not (include "gmepay.autoscalingEnabled" (dict "svc" $svc "root" $root)) }}
   replicas: {{ $svc.replicas | default $root.Values.global.defaultReplicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "gmepay.selectorLabels" $ctx | nindent 6 }}

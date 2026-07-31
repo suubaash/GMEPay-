@@ -13,6 +13,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,14 +63,13 @@ class KafkaListenerConcurrencyWiringGuardTest {
      * outside it ignores the property AND when a file inside it has been fixed without being removed.
      * An entry can therefore only ever be deleted, never quietly accumulate.
      *
-     * <p>{@code ops-partner-bff} is owned by a concurrent change at the time of writing, so editing it
-     * here would collide. The fix is one line, identical to the other three — add
-     * {@code @Value("${spring.kafka.listener.concurrency:3}") int concurrency} to
-     * {@code opsAlertKafkaListenerContainerFactory} and
-     * {@code factory.setConcurrency(Math.max(1, concurrency))} before the return.
+     * <p><b>It is now EMPTY, and that is the point.</b> The last entry —
+     * {@code ops-partner-bff}'s {@code OpsAlertKafkaConsumerConfig} — was deleted together with its
+     * fix. A guard that keeps an allowlist for the one file it exists to protect is a guard that
+     * excuses the defect instead of closing it, so the entry and the defect had to go in one change.
+     * Nothing may be added back here: a new offender is a fix to write, not a line to append.
      */
-    private static final Set<String> KNOWN_UNFIXED = Set.of(
-            "services/ops-partner-bff/src/main/java/com/gme/pay/bff/alert/OpsAlertKafkaConsumerConfig.java");
+    private static final Set<String> KNOWN_UNFIXED = Set.of();
 
     @Test
     @DisplayName("every hand-built Kafka listener container factory in the fleet sets its concurrency")
@@ -115,7 +116,7 @@ class KafkaListenerConcurrencyWiringGuardTest {
     }
 
     @Test
-    @DisplayName("the three fixed factories are all covered by a service-level concurrency test")
+    @DisplayName("all four fixed factories are covered by a service-level concurrency test")
     void eachFixedFactoryHasItsOwnBehaviouralTest() {
         Path root = repositoryRoot();
         // The source scan above cannot tell setConcurrency(3) from setConcurrency(configuredValue).
@@ -127,11 +128,65 @@ class KafkaListenerConcurrencyWiringGuardTest {
                 "services/revenue-ledger/src/test/java/com/gme/pay/ledger/consumer/"
                         + "RevenueLedgerKafkaConcurrencyTest.java",
                 "services/prefunding/src/test/java/com/gme/pay/prefunding/consumer/"
-                        + "PrefundingKafkaConcurrencyTest.java");
+                        + "PrefundingKafkaConcurrencyTest.java",
+                "services/ops-partner-bff/src/test/java/com/gme/pay/bff/alert/"
+                        + "OpsAlertKafkaConcurrencyTest.java");
         List<String> missing = expected.stream().filter(p -> !Files.exists(root.resolve(p))).toList();
         assertEquals(List.of(), missing,
                 "a Kafka consumer factory was fixed without the test that proves the property is "
                         + "actually read back: " + missing);
+    }
+
+    @Test
+    @DisplayName("every consumer's default concurrency equals the broker's KAFKA_NUM_PARTITIONS")
+    void defaultConcurrencyMatchesTheBrokersPartitionCount() {
+        Path root = repositoryRoot();
+        int partitions = composePartitionCount(root);
+
+        // Kafka assigns WHOLE PARTITIONS to consumers, so the two numbers are not independent knobs:
+        // concurrency above the partition count leaves threads permanently idle (and hides the fact
+        // that adding replicas achieves nothing), while concurrency below it leaves partitions
+        // unconsumed by this replica. Reading the partition count from compose rather than restating
+        // it means re-partitioning the broker without re-aligning the consumers fails HERE, instead of
+        // becoming a silently under- or over-threaded fleet nobody re-checks.
+        List<String> misaligned = new ArrayList<>();
+        for (Path file : javaSourcesUnder(root.resolve("services"))) {
+            String source = read(file);
+            if (!source.contains(FACTORY_CONSTRUCTION)) {
+                continue;
+            }
+            Matcher matcher = Pattern
+                    .compile("\\$\\{spring\\.kafka\\.listener\\.concurrency:(\\d+)}")
+                    .matcher(source);
+            if (!matcher.find()) {
+                // Covered by the test above, which reports it with the right message.
+                continue;
+            }
+            int declared = Integer.parseInt(matcher.group(1));
+            if (declared != partitions) {
+                misaligned.add(relativise(root, file) + " defaults to " + declared);
+            }
+        }
+
+        assertEquals(List.of(), misaligned,
+                "these consumers default to a concurrency that does not match docker-compose.yml's "
+                        + "KAFKA_NUM_PARTITIONS=" + partitions + ", so threads sit idle or partitions "
+                        + "go unread: " + misaligned);
+    }
+
+    /**
+     * The broker's default partition count for auto-created topics. Compose sets
+     * {@code KAFKA_AUTO_CREATE_TOPICS_ENABLE: true}, so this value — not any explicit topic
+     * declaration — is what the {@code gmepay.*} topics are actually created with.
+     */
+    private static int composePartitionCount(Path root) {
+        String compose = read(root.resolve("docker-compose.yml"));
+        Matcher matcher = Pattern.compile("KAFKA_NUM_PARTITIONS:\\s*\"?(\\d+)\"?").matcher(compose);
+        assertTrue(matcher.find(),
+                "docker-compose.yml no longer sets KAFKA_NUM_PARTITIONS. Unset means the BROKER "
+                        + "DEFAULT OF 1, under which every added consumer thread and every added "
+                        + "replica is idle — the T3-11 defect 4 finding.");
+        return Integer.parseInt(matcher.group(1));
     }
 
     /** Walks up from the module directory to the directory holding {@code settings.gradle}. */

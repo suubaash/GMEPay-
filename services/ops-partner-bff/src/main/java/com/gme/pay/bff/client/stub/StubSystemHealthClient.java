@@ -20,8 +20,7 @@ import java.util.List;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.system-health.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubSystemHealthClient implements SystemHealthClient {
 
     /** Service ids (matches {@code docs/SERVICE_MAP.md}). */

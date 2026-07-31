@@ -25,6 +25,33 @@ import java.util.UUID;
  *
  * <p>Thread-safe via coarse synchronization; this client backs dev boots and
  * unit tests, not production load.
+ *
+ * <h2>Per-JVM state — INCORRECT above one replica, not merely volatile</h2>
+ *
+ * <p>Its own javadoc used to warn only about restart loss. The multi-replica failure is worse and
+ * quieter: {@link #objects} is one heap map, so a document stored through pod A is
+ * {@code "no vault object at …"} from pod B, and the version number at {@code store(..)} is derived
+ * by counting the keys <em>this JVM</em> holds under the {@code (partnerCode, docType)} prefix — so
+ * two pods both mint {@code v1} for two different uploads of the same document type. Version is how
+ * a reviewer tells the superseded KYB document from the current one; a missing object is an obvious
+ * error, two different {@code v1}s is not.
+ *
+ * <p><b>Verdict: harmless in every deployed environment, and not fixed here.</b>
+ * {@link InMemoryVaultAutoConfiguration} registers this bean under
+ * {@code @ConditionalOnMissingBean}, and {@code GMEPAY_VAULT_ENDPOINT} is set in
+ * {@code docker-compose.yml} and in all four Helm values files, so {@link MinioVaultClient} owns the
+ * port everywhere it matters and this class is reachable only on a laptop that pointed at no vault.
+ * Sharing the map would mean building an object store, which is what the S3/MinIO client already is.
+ * The startup WARN now names the N&gt;1 consequence so the fallback cannot be mistaken for a
+ * replica-safe one.
+ *
+ * <p><b>A related defect that IS in the production path, recorded rather than fixed here:</b>
+ * {@link MinioVaultClient} derives its version the same way (count the objects under the prefix,
+ * add one), which is a read-modify-write against the bucket with no compare-and-set. Two concurrent
+ * uploads of the same {@code (partnerCode, docType)} — from one pod or several — can both read the
+ * same count and both write {@code vN}. That is a genuine multi-writer defect in the real client and
+ * needs a monotonic source (the {@code partner_document} row's own sequence, or a conditional put),
+ * not a comment.
  */
 public class InMemoryVaultClient implements VaultClient {
 

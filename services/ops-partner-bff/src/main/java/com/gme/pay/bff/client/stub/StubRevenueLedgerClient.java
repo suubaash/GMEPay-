@@ -25,8 +25,7 @@ import java.util.Map;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.revenue-ledger.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubRevenueLedgerClient implements RevenueLedgerClient {
 
     /** The fixed daily revenue triple used by both summary variants. */

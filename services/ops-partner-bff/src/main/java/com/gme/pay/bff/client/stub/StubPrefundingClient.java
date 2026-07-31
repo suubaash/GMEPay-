@@ -2,6 +2,7 @@ package com.gme.pay.bff.client.stub;
 
 import com.gme.pay.bff.client.PrefundingClient;
 import com.gme.pay.contracts.BalanceAlertView;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -21,6 +22,7 @@ import java.util.Map;
  * {@code getAdminBalance} derivation over {@link #getBalance(String)}.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.prefunding.client", havingValue = "stub")
 public class StubPrefundingClient implements PrefundingClient {
 
     private static final Map<String, BalanceView> STORE = Map.of(

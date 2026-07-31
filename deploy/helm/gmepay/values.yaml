@@ -348,6 +348,80 @@ ipnIngress:
   tls: []
   extraAnnotations: {}
 
+# ---------------------------------------------------------------------------
+# HORIZONTAL SCALING — the chart is now CAPABLE of it, and ships it OFF.
+#
+# Until the replica-ceiling work, N>1 was not a capacity choice but a
+# CORRECTNESS defect. Concretely, at two replicas:
+#   * api-gateway enforced 2x the configured rate limit and accepted a captured
+#     signed request once per replica (an integrity defect, not a perf one);
+#   * transaction-mgmt's idempotency window was per-JVM, so ONE partner retry
+#     created TWO transactions;
+#   * ops-partner-bff minted colliding ops-alert ids, served a different alert
+#     list per replica, and paged a human once per replica;
+#   * six services ran duplicate scheduled jobs — including ones that transmit
+#     settlement files to a scheme and release partner float.
+# All of those now use shared state (Redis / per-service PostgreSQL tables) or a
+# ShedLock lease, so the chart may finally offer scaling at all.
+#
+# OFFERING IS NOT TURNING ON. `global.defaultReplicas` stays 1, every service
+# stays at 1, and templates/hpa.yaml renders NOTHING until someone opts in.
+# How many replicas to run is a cost decision that belongs to the owner; this
+# repository has no basis to pick one, and a plausible-looking default would be
+# read as an engineering position. Enabling autoscaling without supplying
+# maxReplicas and a metric FAILS the template rather than inventing either.
+#
+# ---- SAFE AT N>1 (correctness-wise; still a cost decision) ----------------
+#   api-gateway              needs Redis (SPRING_DATA_REDIS_HOST is set in the
+#                            ABI ConfigMap; gateway.shared-state.store=auto).
+#                            With store=memory it is capped at 1 again.
+#   transaction-mgmt         idempotency claims + the partner_txn_ref unique
+#                            index live in its own database.
+#   payment-executor, settlement-reconciliation, notification-webhook,
+#   scheme-adapter-zeropay, revenue-ledger, prefunding
+#                            every @Scheduled job holds a uniquely-named
+#                            ShedLock lease, and the pools are sized.
+#   ops-partner-bff          SAFE ONLY BECAUSE its ops-alert store, alert ids and
+#                            operator acks moved into its OWN `bff` database.
+#                            *** THAT DATABASE IS NOT PROVISIONED IN ANY REAL
+#                            ENVIRONMENT YET *** — the AWS/Azure overlays point at
+#                            placeholder managed instances. Until it exists, this
+#                            service must not be scaled (and in fact will fail at
+#                            Flyway on deploy, which is the correct failure).
+#
+# ---- NOT ASSESSED — do NOT read the absence of a warning as approval -------
+#   auth-identity, config-registry, rate-fx, smart-router, qr-service,
+#   merchant-qr-data, reporting-compliance, kyb-adapter,
+#   scheme-adapter-{sendmn,ninepay,nepal}, admin-ui, partner-portal-ui.
+#   These were never swept for per-JVM request/money state. reporting-compliance
+#   additionally writes generated filing files to an emptyDir (see its entry), so
+#   a second replica holds a different set of files.
+#
+# ---- KAFKA CONSUMERS: a caveat that is not about state --------------------
+#   Kafka assigns WHOLE partitions to consumers, so a topic still created with one
+#   partition gains nothing from a second replica OR from
+#   SPRING_KAFKA_LISTENER_CONCURRENCY. Repartitioning is an operational migration,
+#   not a values edit (MSK: set num.partitions BEFORE the gmepay.* topics are
+#   auto-created; Azure Event Hubs Standard: partition count is fixed at creation).
+#
+# Per-service schema (see templates/hpa.yaml):
+#   services.<svc>.replicas                      int, default global.defaultReplicas (1)
+#   services.<svc>.autoscaling.enabled           bool, default autoscaling.enabled
+#   services.<svc>.autoscaling.minReplicas       int, default 1
+#   services.<svc>.autoscaling.maxReplicas       int, REQUIRED when enabled
+#   services.<svc>.autoscaling.targetCPUUtilizationPercentage      \ at least one
+#   services.<svc>.autoscaling.targetMemoryUtilizationPercentage   / REQUIRED
+#   services.<svc>.autoscaling.metrics           raw autoscaling/v2 list (wins)
+#   services.<svc>.autoscaling.behavior          raw autoscaling/v2 behaviour
+# When an HPA is enabled for a service the Deployment omits spec.replicas, so the
+# two cannot fight each other on `helm upgrade`.
+# ---------------------------------------------------------------------------
+autoscaling:
+  # Fleet-wide master switch. A per-service `autoscaling.enabled` overrides it in
+  # BOTH directions (explicitly — a per-service `false` is honoured even if this
+  # is true). Left false: see the block above.
+  enabled: false
+
 # ===========================================================================
 # SERVICES MAP — the single source of deployables. deployments.yaml ranges
 # over this and renders one Deployment + Service per entry via _deployment.tpl.
@@ -790,6 +864,14 @@ services:
   ops-partner-bff:
     image: ops-partner-bff
     probe: { type: tcp }
+    # Pinned explicitly rather than inherited from global.defaultReplicas, because for
+    # THIS service the 1 is not only a cost decision. Its ops-alert list, the alert IDs
+    # the ack endpoint addresses, and the operator acks themselves are only fleet-wide
+    # because they moved into the `bff` database configured below — and that database is
+    # a placeholder in the AWS/Azure overlays and does not exist in any real environment
+    # yet. Raise this (or set autoscaling.enabled) only after `bff` is provisioned; see
+    # the `autoscaling:` block above.
+    replicas: 1
     envSecretKeys: [
                     # T0-5: the gated prefunding balance/alerts reads (RestPrefundingClient).
                     GMEPAY_INTERNAL_AUTH_SECRET,

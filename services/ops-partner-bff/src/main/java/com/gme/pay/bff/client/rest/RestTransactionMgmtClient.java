@@ -64,7 +64,7 @@ import java.util.List;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest", matchIfMissing = true)
 public class RestTransactionMgmtClient implements TransactionMgmtClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestTransactionMgmtClient.class);

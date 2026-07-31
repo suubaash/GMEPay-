@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  * V005 refund tiers; mutations echo a decided shape back.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub", matchIfMissing = true)
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "stub")
 public class StubApprovalQueueClient implements ApprovalQueueClient {
 
     private static ApprovalSummary pending(long id, String ref, String amount, String tier, int steps, int cur) {

@@ -3,6 +3,7 @@ package com.gme.pay.bff.client.stub;
 import com.gme.pay.bff.client.StatementClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -31,6 +32,7 @@ import java.time.LocalDate;
  * with no rows, not a broken file.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "stub")
 public class StubStatementClient implements StatementClient {
 
     private static final Logger log = LoggerFactory.getLogger(StubStatementClient.class);

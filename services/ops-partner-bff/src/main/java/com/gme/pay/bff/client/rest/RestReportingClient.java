@@ -46,7 +46,7 @@ import java.util.Map;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.reporting-compliance.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.reporting-compliance.client", havingValue = "rest", matchIfMissing = true)
 public class RestReportingClient implements ReportingClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestReportingClient.class);

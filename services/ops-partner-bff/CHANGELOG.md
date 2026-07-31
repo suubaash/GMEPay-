@@ -2,6 +2,71 @@
 
 All notable changes to the Ops/Partner BFF. Newest first.
 
+## 2026-07-31 - Stub clients stop winning by default, and the last bare Kafka factory reads its concurrency
+
+Three selectors (`gmepay.reporting-compliance.client`, `gmepay.system-health.client`,
+`gmepay.webhook-ops.client`) were set in NO compose service, NO Helm values file and nothing else,
+while their stubs carried `matchIfMissing = true`. So in every environment the Reports page served
+fixtures instead of BOK FX1014/FX1015 rows, the System Health page reported all 17 services UP
+whether or not any of them were running, and the webhook-secret panel reported zero endpoints -
+which is why T5-8's "every deploy target must set rest" was never actioned: nothing failed when it
+wasn't. This is the T1-1 defect class, third instance, and it is closed here as a class.
+
+### Changed
+- **Every `gmepay.*.client` selector now defaults to `rest`**, not `stub`. `matchIfMissing = true`
+  moved from the 12 `Stub*` beans onto their 17 `Rest*` counterparts. The one deliberate exception
+  is `gmepay.operator-action-audit.client`, which stays `db`: no service exposes
+  `POST /v1/audit/operator-actions`, so making its REST client the fallback would fail-close every
+  audited operator action. All three newly-inverted endpoints were verified to exist FIRST
+  (`GET /v1/reports`; `/actuator/health` fleet-wide; notification-webhook's
+  `/v1/webhooks/{deliveries,endpoints}/**`) - that check is what stopped the operator-audit
+  inversion, and it is the step that makes an inversion safe rather than optimistic.
+- **Five stubs that were bare `@Component`s are now gated** `havingValue = "stub"`:
+  `StubApiKeyClient`, `StubPlatformSettingsClient`, `StubPortalWebhookClient`,
+  `StubPrefundingClient`, `StubStatementClient`. They used to be CONSTRUCTED in every environment
+  and merely displaced at injection time by the real client's `@Primary` - i.e. one removed
+  annotation away from being live. `StubPlatformSettingsClient` served `wallet.fee.krw` and the
+  prefunding alert tiers, so that distance mattered.
+- **An unrecognised selector value leaves no bean**, so the controller that requires the port fails
+  context refresh and the service refuses to start rather than resolving to something that looks
+  functional.
+- **Running standalone with no upstreams is now a deliberate act**: set
+  `GMEPAY_<UPSTREAM>_CLIENT=stub` for the ones you want faked. `BffSecurityFilterChainTest` does
+  exactly that, in the annotation, with the reason.
+- **`OpsAlertKafkaConsumerConfig` reads `spring.kafka.listener.concurrency`** (default 3 =
+  `KAFKA_NUM_PARTITIONS`, clamped at 1). It was the last hand-built factory in the fleet that did
+  not: Boot binds that property only onto its own auto-configured factory, so on this one it was
+  settable, visible in `/actuator/env`, and inert. `0` from a typo would have meant no consumer
+  threads at all - ops alerts silently stopped being stored and paged on.
+
+### Added
+- **`client/StubClientSelectionWarner`** - one startup banner naming every stub this JVM actually
+  wired, with the selector that would replace it. Enumerating the container cannot forget a bean,
+  which a per-class WARN can; and two stubs have no real counterpart at all
+  (`StubAuditClient`, `StubRatesClient`), so nothing else would ever say so. Logs INFO when no stub
+  is wired, because "no warning" has to be a positive statement rather than silence.
+- **`client/StubClientSelectorInversionTest`** - fails the build on a new `:stub` default, a new
+  `matchIfMissing` stub, an ungated stub that has a real counterpart, a `Rest*` bean that does not
+  win when the selector is absent, and on any of the three decision tables breaking.
+- **`alert/OpsAlertKafkaConcurrencyTest`** - reads the concurrency back off the built factory (the
+  only way to distinguish "unset" from "unreadable"), pins the default at the partition count, and
+  pins the clamp. The fleet guard's `KNOWN_UNFIXED` entry for this service was deleted in the same
+  change; that baseline is now empty.
+
+### Documented, not fixed
+- `StubAuditClient` fabricates 25 audit rows for `GET /v1/admin/audit` and has no real counterpart
+  and no selector - it cannot be switched to the truth. The real surfaces already exist
+  (config-registry's hash-chained `audit_log` via `AuditTrailClient`; this service's own
+  `operator_action_audit`). Retiring the page onto one of them changes an Admin UI contract, so it
+  is recorded rather than done here.
+- `StubRatesClient` computes the right shape from a hardcoded treasury table and a flat 1%/1%
+  margin, i.e. plausible and wrong, with no `rate-fx` adapter to switch to.
+- The per-JVM state in `StubOpsControlClient` / `StubConfigRegistryClient` /
+  `StubPlatformSettingsClient` / `StubSandboxKeyClient` is NOT moved to shared state, deliberately:
+  each imitates a system that already is shared and durable, so sharing the imitation would build
+  the wrong thing twice. Each javadoc now states its exact N>1 failure instead.
+
+
 ## 2026-07-30 - The BFF gains a datastore, and the last single-replica ceiling in the platform is gone
 
 `OpsAlertStore` was a 200-entry per-JVM `ArrayDeque` with a per-JVM `AtomicLong` minting the alert

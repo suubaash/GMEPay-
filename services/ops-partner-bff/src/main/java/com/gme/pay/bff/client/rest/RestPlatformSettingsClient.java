@@ -36,7 +36,7 @@ import org.springframework.web.client.RestClient;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest", matchIfMissing = true)
 public class RestPlatformSettingsClient implements PlatformSettingsClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestPlatformSettingsClient.class);

@@ -8,18 +8,30 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Phase-1 in-memory stub of {@link PlatformSettingsClient}. Lets the BFF boot and be
  * exercised without config-registry running. Seeds the same real tunables config-registry
- * V039 seeds so the Admin UI settings editor shows consistent content in local dev. The
- * production {@link com.gme.pay.bff.client.rest.RestPlatformSettingsClient} (marked
- * {@code @Primary}, {@code gmepay.config-registry.client=rest}) takes over without removing
- * this bean.
+ * V039 seeds so the Admin UI settings editor shows consistent content in local dev.
+ *
+ * <p><b>OPT-IN ONLY.</b> This class used to be a bare {@code @Component} with no condition at all:
+ * it was constructed in every environment and merely <em>displaced</em> at injection time by
+ * {@link com.gme.pay.bff.client.rest.RestPlatformSettingsClient}'s {@code @Primary}. That is one
+ * removed annotation away from being live, on a bean that serves money-affecting settings, so it is
+ * now gated on {@code gmepay.config-registry.client=stub} and is not created otherwise.
+ *
+ * <p><b>Per-JVM state — INCORRECT above one replica.</b> {@link #update} writes into this object's
+ * own map. At N&gt;1 an operator edit to {@code fx.quote.ttl.seconds},
+ * {@code prefunding.alert.tier{1,2,3}.pct} or {@code wallet.fee.krw} lands on whichever replica
+ * served the request: reads become non-deterministic and writes are silently lost. Not fixed by
+ * sharing the map — a settings store that persists is exactly what config-registry already is, and
+ * selecting the real client is the whole answer.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "stub")
 public class StubPlatformSettingsClient implements PlatformSettingsClient {
 
     private final Map<String, PlatformSettingView> store = new LinkedHashMap<>();

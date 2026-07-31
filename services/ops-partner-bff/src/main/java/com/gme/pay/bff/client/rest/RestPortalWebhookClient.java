@@ -53,7 +53,7 @@ import java.util.Optional;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.notification-webhook.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.notification-webhook.client", havingValue = "rest", matchIfMissing = true)
 public class RestPortalWebhookClient implements PortalWebhookClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestPortalWebhookClient.class);

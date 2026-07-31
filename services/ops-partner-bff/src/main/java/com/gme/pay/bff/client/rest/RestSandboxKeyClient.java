@@ -68,7 +68,7 @@ import java.util.Map;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest", matchIfMissing = true)
 public class RestSandboxKeyClient implements SandboxKeyClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestSandboxKeyClient.class);

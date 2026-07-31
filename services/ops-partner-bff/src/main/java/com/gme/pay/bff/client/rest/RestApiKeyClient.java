@@ -75,7 +75,7 @@ import java.util.Optional;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.auth-identity.client", havingValue = "rest", matchIfMissing = true)
 public class RestApiKeyClient implements ApiKeyClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestApiKeyClient.class);

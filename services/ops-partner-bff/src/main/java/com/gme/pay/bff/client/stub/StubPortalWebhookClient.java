@@ -4,6 +4,7 @@ import com.gme.pay.bff.client.PortalWebhookClient;
 import com.gme.pay.bff.web.dto.WebhookConfigView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -28,6 +29,7 @@ import java.util.List;
  * on every deploy target.
  */
 @Component
+@ConditionalOnProperty(name = "gmepay.notification-webhook.client", havingValue = "stub")
 public class StubPortalWebhookClient implements PortalWebhookClient {
 
     private static final Logger log = LoggerFactory.getLogger(StubPortalWebhookClient.class);

@@ -28,7 +28,7 @@ import java.util.List;
  * naming this stub, and the channel board reports all three lanes dark.
  */
 @Component
-@ConditionalOnProperty(name = "gmepay.reporting-compliance.client", havingValue = "stub", matchIfMissing = true)
+@ConditionalOnProperty(name = "gmepay.reporting-compliance.client", havingValue = "stub")
 public class StubReportingClient implements ReportingClient {
 
     private static final String GENERATED_AT = "2026-06-01T01:30:00Z";

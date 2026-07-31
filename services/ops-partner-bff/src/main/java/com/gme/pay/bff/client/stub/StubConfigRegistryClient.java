@@ -27,16 +27,30 @@ import java.util.concurrent.atomic.AtomicLong;
  * create or rounding-mode update without booting config-registry.
  */
 /**
- * Default unless {@code gmepay.config-registry.client=rest} (then
- * {@link com.gme.pay.bff.client.rest.RestConfigRegistryClient} wins). Keeping
- * the stub on the classpath lets the BFF and its unit slices boot without
- * config-registry being up.
+ * <b>OPT-IN ONLY since the selector inversion.</b>
+ * {@link com.gme.pay.bff.client.rest.RestConfigRegistryClient} is the default; this bean exists
+ * only when {@code gmepay.config-registry.client=stub} is set deliberately, and an unrecognised
+ * value leaves no bean so the service refuses to start. It used to carry
+ * {@code matchIfMissing = true} — i.e. it was the live partner registry in any environment that
+ * forgot the selector.
+ *
+ * <p><b>Per-JVM state — INCORRECT above one replica, and the largest instance in the service.</b>
+ * Every {@code LinkedHashMap} below (partners, drafts, contacts, KYB, bank accounts, settlement,
+ * prefunding, rules, commission, contracts, documents, credentials, webhooks) and every
+ * {@link AtomicLong} id minter is per-JVM. At N&gt;1: a partner POSTed to replica A is a 404 on B,
+ * uploaded document bytes exist only where they were uploaded, and — the worse half — the twelve
+ * id sequences all restart from the same seed on every replica and every restart, so surrogate
+ * partner ids, document ids and credential ids <b>collide across replicas</b> while looking
+ * perfectly ordinary.
+ *
+ * <p>Deliberately NOT fixed by moving the state anywhere. A durable, shared, id-minting partner
+ * registry is precisely what config-registry is; building a second one here would be building the
+ * wrong thing twice. The fix is the real client, which is now the default.
  */
 @Component
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
         name = "gmepay.config-registry.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubConfigRegistryClient implements ConfigRegistryClient {
 
     private final Map<String, PartnerSummary> store = new LinkedHashMap<>();

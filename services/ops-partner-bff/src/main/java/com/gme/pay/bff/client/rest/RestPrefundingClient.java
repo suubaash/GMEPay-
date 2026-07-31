@@ -49,7 +49,7 @@ import java.util.List;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.prefunding.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.prefunding.client", havingValue = "rest", matchIfMissing = true)
 public class RestPrefundingClient implements PrefundingClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestPrefundingClient.class);

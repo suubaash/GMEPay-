@@ -48,7 +48,7 @@ import java.util.List;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.webhook-ops.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.webhook-ops.client", havingValue = "rest", matchIfMissing = true)
 public class RestWebhookOpsClient implements WebhookOpsClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestWebhookOpsClient.class);

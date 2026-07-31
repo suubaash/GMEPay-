@@ -47,7 +47,7 @@ import java.util.List;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.config-registry.client", havingValue = "rest", matchIfMissing = true)
 public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestConfigRegistryClient.class);

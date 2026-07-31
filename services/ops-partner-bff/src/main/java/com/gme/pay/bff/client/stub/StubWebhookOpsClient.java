@@ -21,8 +21,7 @@ import java.util.List;
 @Component
 @ConditionalOnProperty(
         name = "gmepay.webhook-ops.client",
-        havingValue = "stub",
-        matchIfMissing = true)
+        havingValue = "stub")
 public class StubWebhookOpsClient implements WebhookOpsClient {
 
     private static final Logger log = LoggerFactory.getLogger(StubWebhookOpsClient.class);

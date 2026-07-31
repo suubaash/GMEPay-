@@ -29,7 +29,7 @@ import java.util.Map;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.ops-control.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.ops-control.client", havingValue = "rest", matchIfMissing = true)
 public class RestOpsControlClient implements OpsControlClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestOpsControlClient.class);

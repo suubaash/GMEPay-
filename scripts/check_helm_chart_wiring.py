@@ -402,6 +402,95 @@ for path in ([os.path.join(HELM, "values.yaml")] + [os.path.join(HELM, o) for o 
           ", ".join(found))
 
 # ---------------------------------------------------------------------------
+# 8. docker-compose.yml - host-port uniqueness
+# ---------------------------------------------------------------------------
+# Not a chart check, but the same class of defect: a manifest that cannot deploy what the code
+# needs. A duplicate host port is silent in review and fatal at `up` (the second bind loses), and
+# it survived here for months. Asserted globally rather than per profile - see the module docstring.
+print("\n-- 8. docker-compose host-port uniqueness ---------------------------------")
+COMPOSE = os.path.join(ROOT, "docker-compose.yml")
+compose = yaml.safe_load(read(COMPOSE)) or {}
+compose_services = compose.get("services") or {}
+check(isinstance(compose_services, dict) and bool(compose_services),
+      "docker-compose.yml parses and declares services (PyYAML)")
+
+claims: dict[int, list[str]] = {}
+for svc in sorted(compose_services if isinstance(compose_services, dict) else {}):
+    block = compose_services[svc]
+    if not isinstance(block, dict):
+        continue
+    entries = block.get("ports") or []
+    if not isinstance(entries, list):
+        check(False, f"compose: {svc} 'ports' is a list", f"got {type(entries).__name__}")
+        continue
+    for entry in entries:
+        ports, err = host_ports(entry)
+        if err is not None:
+            check(False, f"compose: {svc} ports entry is a form this guard can read", err)
+        for port in ports:
+            claims.setdefault(port, []).append(svc)
+
+collisions = {p: s for p, s in sorted(claims.items()) if len(s) > 1}
+check(not collisions,
+      "compose: no host port is published by two services (`docker compose up` would fail)",
+      "; ".join(f"{p} <- {', '.join(s)}" for p, s in collisions.items()))
+check(bool(claims), "compose: the guard actually read some published host ports",
+      "parsed zero host ports - the ports syntax changed and this check went blind")
+
+# ---------------------------------------------------------------------------
+# 8b. Horizontal scaling: the chart is CAPABLE of it and ships it OFF
+# ---------------------------------------------------------------------------
+# The replica-ceiling work made N>1 correct (shared rate-limit / replay / idempotency / ops-alert
+# state, ShedLock on every scheduled job). This section asserts the chart now *offers* scaling
+# without *choosing* it: how many replicas to run is a cost decision belonging to the owner, and a
+# plausible-looking maxReplicas / CPU target committed here would be read as an engineering
+# position. So: the template exists, nothing is enabled anywhere in git, every service still
+# resolves to one replica, and the Deployment yields spec.replicas to an HPA when one exists (a
+# hardcoded replica count under an HPA fights it on every `helm upgrade`).
+print("\n-- 8b. horizontal scaling: capable, and shipped OFF -----------------------")
+HPA_TPL = os.path.join(HELM, "templates", "hpa.yaml")
+check(os.path.exists(HPA_TPL), "chart: templates/hpa.yaml exists (scaling is expressible at all)")
+if os.path.exists(HPA_TPL):
+    hpa_tpl = read(HPA_TPL)
+    check("kind: HorizontalPodAutoscaler" in hpa_tpl and "autoscaling/v2" in hpa_tpl,
+          "hpa.yaml: renders an autoscaling/v2 HorizontalPodAutoscaler")
+    check(hpa_tpl.count("{{- fail ") >= 2,
+          "hpa.yaml: enabling autoscaling without maxReplicas or a metric FAILS the template",
+          "without the fail guards the chart would have to invent a ceiling and a CPU target")
+    check("gmepay.autoscalingEnabled" in hpa_tpl,
+          "hpa.yaml: uses the shared enablement helper (so it cannot disagree with the Deployment)")
+
+check('include "gmepay.autoscalingEnabled"' in deployment_tpl
+      and "replicas: {{ $svc.replicas" in deployment_tpl,
+      "_deployment.tpl: spec.replicas is OMITTED when an HPA manages the Deployment",
+      "a hardcoded replica count under an HPA is reset on every helm upgrade")
+check('define "gmepay.autoscalingEnabled"' in read(os.path.join(HELM, "templates", "_helpers.tpl")),
+      "_helpers.tpl: defines gmepay.autoscalingEnabled")
+
+for path in [os.path.join(HELM, "values.yaml")] + [os.path.join(HELM, o) for o in OVERLAYS]:
+    name = os.path.basename(path)
+    doc = yaml.safe_load(read(path)) or {}
+    auto = doc.get("autoscaling")
+    if auto is not None:
+        check(auto.get("enabled") is False,
+              f"{name}: autoscaling ships DISABLED (replica count is an owner's cost decision)",
+              f"got enabled={auto.get('enabled')!r}")
+    svcs = doc.get("services") or {}
+    for svc_name, entry in sorted(svcs.items()):
+        if not isinstance(entry, dict):
+            continue
+        per_svc = entry.get("autoscaling") or {}
+        check(not per_svc.get("enabled"),
+              f"{name}: services.{svc_name} does not enable autoscaling in git")
+        replicas = entry.get("replicas")
+        check(replicas is None or int(replicas) == 1,
+              f"{name}: services.{svc_name} ships 1 replica",
+              f"got replicas={replicas!r} - turning scaling ON is a deliberate operator act")
+
+check(int(((base.get("global") or {}).get("defaultReplicas", 0))) == 1,
+      "values.yaml: global.defaultReplicas is 1 (the floor stays 1 until an owner raises it)")
+
+# ---------------------------------------------------------------------------
 for ok, label, detail in checks:
     print(("ok   " if ok else "FAIL ") + label + ("" if ok or not detail else " - " + detail))
 

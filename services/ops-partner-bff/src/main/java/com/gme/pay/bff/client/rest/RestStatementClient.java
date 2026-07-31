@@ -52,7 +52,7 @@ import java.util.Objects;
  */
 @Component
 @Primary
-@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest")
+@ConditionalOnProperty(name = "gmepay.transaction-mgmt.client", havingValue = "rest", matchIfMissing = true)
 public class RestStatementClient implements StatementClient {
 
     private static final Logger log = LoggerFactory.getLogger(RestStatementClient.class);
