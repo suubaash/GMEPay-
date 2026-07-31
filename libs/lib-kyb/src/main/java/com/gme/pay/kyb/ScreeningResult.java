@@ -41,6 +41,19 @@ import java.util.List;
  * sanctions screening" that no screening provider produced. Conservative
  * dispositions ({@link Status#HIT}, {@link Status#NEEDS_REVIEW}) are preserved
  * as-is: they fail closed already, and a stub-staged HIT is useful in demos.
+ *
+ * <h2>A manual screening never flattens to a bare CLEAR (gap T1-4, owner decision)</h2>
+ *
+ * <p>The second coercion is the mirror image of the first and exists for the same reason. When the
+ * provenance is an attested manual screening ({@link ScreeningProvenance#manuallyAttested()}), a
+ * {@link Status#CLEAR} is coerced <b>up</b> to {@link Status#CLEAR_MANUAL_ATTESTATION}. So the
+ * distinction between "a vendor screened this against sanctions lists" and "a compliance officer
+ * screened it by hand under SOP X v3" survives every hop that only carries the status string — the
+ * database column, the wire DTO, the compliance board, the wizard chip — without any consumer
+ * having to remember to look at a provenance field. Conversely a
+ * {@code CLEAR_MANUAL_ATTESTATION} whose provenance is NOT an attested manual screening is coerced
+ * <b>down</b> to {@link Status#NOT_SCREENED_NO_PROVIDER}: the honest status cannot be borrowed by a
+ * producer that has no attestation to back it.
  */
 public record ScreeningResult(
         Status status,
@@ -56,6 +69,16 @@ public record ScreeningResult(
          * provenance — see the class javadoc.
          */
         CLEAR,
+        /**
+         * No matches were found by a MANUAL screening a named human performed under a
+         * compliance-signed SOP (gap T1-4). A satisfied sanctions pre-condition — and
+         * deliberately a DIFFERENT value from {@link #CLEAR} so that "a vendor screened this"
+         * and "a person screened this by hand" are never the same string anywhere downstream.
+         *
+         * <p>Reachable ONLY with {@link ScreeningProvenance#manuallyAttested()} provenance; any
+         * other producer using this value is coerced to {@link #NOT_SCREENED_NO_PROVIDER}.
+         */
+        CLEAR_MANUAL_ATTESTATION,
         /** At least one confident list match — compliance must review before any activation. */
         HIT,
         /** Fuzzy / partial matches requiring analyst disposition. */
@@ -75,6 +98,14 @@ public record ScreeningResult(
             provenance = ScreeningProvenance.unknown();
         }
         if (status == Status.CLEAR && !provenance.authoritative()) {
+            status = Status.NOT_SCREENED_NO_PROVIDER;
+        }
+        // T1-4 manual authority: keep the provenance visible in the status itself, in both
+        // directions. Order matters — the coercion above runs first, so a non-authoritative CLEAR
+        // is already honest and cannot be promoted here.
+        if (status == Status.CLEAR && provenance.manuallyAttested()) {
+            status = Status.CLEAR_MANUAL_ATTESTATION;
+        } else if (status == Status.CLEAR_MANUAL_ATTESTATION && !provenance.manuallyAttested()) {
             status = Status.NOT_SCREENED_NO_PROVIDER;
         }
     }
@@ -126,5 +157,20 @@ public record ScreeningResult(
     /** The provenance caveat, or {@code null} on an authoritative run. */
     public String caveat() {
         return provenance == null ? ScreeningProvenance.UNKNOWN_CAVEAT : provenance.caveat();
+    }
+
+    /**
+     * {@code true} when this verdict rests on an attested MANUAL screening (T1-4) rather than a
+     * vendor. Consumers that must present the two differently should key off this (or off
+     * {@link Status#CLEAR_MANUAL_ATTESTATION}) — never off {@link #authoritative()} alone, which
+     * is true for both.
+     */
+    public boolean manuallyAttested() {
+        return provenance != null && provenance.manuallyAttested();
+    }
+
+    /** The human attestation backing a manual run, or {@code null} for every other producer. */
+    public ManualScreeningAttestation attestation() {
+        return provenance == null ? null : provenance.attestation();
     }
 }

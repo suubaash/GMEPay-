@@ -1407,9 +1407,19 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
     /**
      * Deterministic in-memory screening mirroring {@code StubKybAdapter}
      * (lib-kyb): any screened name containing {@code SANCTIONED} → HIT,
-     * otherwise containing {@code REVIEW} → NEEDS_REVIEW, else CLEAR. Names
-     * screened = the draft's legal names + every declared UBO name — same
-     * subject assembly as config-registry's {@code KybService.runScreening}.
+     * otherwise containing {@code REVIEW} → NEEDS_REVIEW, else
+     * <b>{@code NOT_SCREENED_NO_PROVIDER}</b>. Names screened = the draft's legal
+     * names + every declared UBO name — same subject assembly as config-registry's
+     * {@code KybService.runScreening}.
+     *
+     * <p><b>The clean branch is no longer called {@code CLEAR} (gap T1-4).</b> This method
+     * consults no sanctions, PEP or adverse-media source — it matches the subject's own names
+     * against two hard-coded tokens — so a {@code CLEAR} from here was a clean sanctions
+     * screening that nobody performed, three hops from the compliance board that renders it
+     * green. lib-kyb's {@code ScreeningResult} and config-registry's V042 CHECK closed that hole
+     * on the real path; this fallback was the last place in the platform that could still mint
+     * one, and it is closed here for the same reason. The keyword rules themselves are
+     * deliberately unchanged: a smarter fake would be a worse fake.
      */
     @Override
     public synchronized com.gme.pay.contracts.KybView runKybScreening(String partnerCode) {
@@ -1437,7 +1447,7 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
         }
         String upper = names.toString().toUpperCase(java.util.Locale.ROOT);
         String status = upper.contains("SANCTIONED") ? "HIT"
-                : upper.contains("REVIEW") ? "NEEDS_REVIEW" : "CLEAR";
+                : upper.contains("REVIEW") ? "NEEDS_REVIEW" : "NOT_SCREENED_NO_PROVIDER";
 
         Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         com.gme.pay.contracts.KybView screened = new com.gme.pay.contracts.KybView(
@@ -1459,6 +1469,124 @@ public class StubConfigRegistryClient implements ConfigRegistryClient {
                 now);
         kybStore.put(partnerCode, screened);
         return screened;
+    }
+
+    /** T1-4 (V045): the manual attestation this stub holds per partner, or {@code null}. */
+    private final Map<String, KybScreeningProvenance.ManualAttestationDetail> manualAttestations =
+            new LinkedHashMap<>();
+
+    /**
+     * In-memory MANUAL screening attestation (gap T1-4, owner decision 2026-07-28), mirroring
+     * config-registry's own rules so a BFF-only stack behaves the same way rather than a laxer way:
+     * the outcome roster is enforced, the SOP reference / version / sources are mandatory, the typed
+     * assertion must be verbatim, and a clean outcome is stored as {@code CLEAR_MANUAL_ATTESTATION}
+     * — never a bare {@code CLEAR}.
+     *
+     * <p>The one thing this stub cannot reproduce is the identity check: it has no credential to
+     * verify, so a blank actor is refused and anything else is taken at face value. That difference
+     * is stated rather than papered over — the real gate is upstream, and this path exists so the
+     * SPA is developable without config-registry, not so it can be relied on as a control.
+     */
+    @Override
+    public synchronized com.gme.pay.contracts.KybView recordManualKybAttestation(
+            String partnerCode, ManualKybAttestationRequest request, String actor) {
+        PartnerView draft = draftStore.get(partnerCode);
+        if (draft == null && !store.containsKey(partnerCode)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.NOT_FOUND,
+                    "no partner '" + partnerCode + "'");
+        }
+        if (request == null) {
+            throw badRequest("request body required");
+        }
+        if (actor == null || actor.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "a manual screening attestation must be made by a verified human operator");
+        }
+        String outcome = request.outcome() == null
+                ? "" : request.outcome().trim().toUpperCase(java.util.Locale.ROOT);
+        if (!java.util.Set.of("CLEAR", "HIT", "NEEDS_REVIEW").contains(outcome)) {
+            throw badRequest("outcome must be one of [CLEAR, HIT, NEEDS_REVIEW], was: "
+                    + request.outcome());
+        }
+        requireText(request.sopDocumentRef(), "sopDocumentRef");
+        requireText(request.sopVersion(), "sopVersion");
+        requireText(request.sourcesConsulted(), "sourcesConsulted");
+        if (!MANUAL_ATTESTATION_ASSERTION.equals(
+                request.attestation() == null ? null : request.attestation().trim())) {
+            throw badRequest("the attestation field must be exactly: \""
+                    + MANUAL_ATTESTATION_ASSERTION + "\"");
+        }
+
+        String status = "CLEAR".equals(outcome) ? "CLEAR_MANUAL_ATTESTATION" : outcome;
+        Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        com.gme.pay.contracts.KybView prior = kybStore.get(partnerCode);
+        com.gme.pay.contracts.KybView attested = new com.gme.pay.contracts.KybView(
+                kybSeq.getAndIncrement(),
+                prior == null ? null : prior.riskRating(),
+                prior == null ? null : prior.riskRationale(),
+                prior == null ? null : prior.nextReviewDate(),
+                prior == null ? null : prior.licenseType(),
+                prior == null ? null : prior.licenseNumber(),
+                prior == null ? null : prior.licenseAuthority(),
+                prior == null ? null : prior.licenseExpiry(),
+                prior == null ? null : prior.uboList(),
+                prior == null ? null : prior.cbddqDocId(),
+                status,
+                "manual-sop:" + request.sopDocumentRef().trim() + "@" + request.sopVersion().trim(),
+                now,
+                prior == null ? now : prior.validFrom(),
+                null,
+                now);
+        kybStore.put(partnerCode, attested);
+        manualAttestations.put(partnerCode,
+                new KybScreeningProvenance.ManualAttestationDetail(
+                        actor, now, request.sopDocumentRef().trim(), request.sopVersion().trim(),
+                        request.sourcesConsulted().trim(), true));
+        return attested;
+    }
+
+    @Override
+    public synchronized KybScreeningProvenance getKybScreeningProvenance(String partnerCode) {
+        com.gme.pay.contracts.KybView view = getKyb(partnerCode);
+        var attestation = manualAttestations.get(partnerCode);
+        boolean manual = attestation != null;
+        String status = view.screeningStatus();
+        boolean notScreened = status == null || "NOT_SCREENED_NO_PROVIDER".equals(status);
+        return new KybScreeningProvenance(
+                status,
+                manual ? "manual-sop" : "stub",
+                manual,
+                manual ? null : STUB_SCREENING_CAVEAT,
+                view.screenedAt(),
+                view.screeningProviderRef(),
+                manual,
+                attestation,
+                manual && !notScreened,
+                manual
+                        ? "Screened MANUALLY by " + attestation.attesterActorId() + " under SOP "
+                                + attestation.sopDocumentRef() + " " + attestation.sopVersion()
+                                + ". This is a human control under a compliance-signed procedure,"
+                                + " NOT a vendor screening against automated list feeds."
+                        : "NOTHING WAS SCREENED. " + STUB_SCREENING_CAVEAT);
+    }
+
+    /** The assertion an attester must send verbatim (mirrors config-registry's constant). */
+    private static final String MANUAL_ATTESTATION_ASSERTION =
+            "I performed this sanctions and PEP screening myself, following the SOP named above,"
+            + " and I am accountable for the result.";
+
+    /** Why nothing this stub produces is a screening. */
+    private static final String STUB_SCREENING_CAVEAT =
+            "NOT A SANCTIONS SCREENING: produced in-process by the ops-partner-bff fallback client,"
+            + " which keyword-matches the subject's own names. No sanctions, PEP or adverse-media"
+            + " source was consulted (no KYB vendor is configured — ADR-014).";
+
+    private static void requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw badRequest(field + " is required on a manual screening attestation");
+        }
     }
 
     // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------

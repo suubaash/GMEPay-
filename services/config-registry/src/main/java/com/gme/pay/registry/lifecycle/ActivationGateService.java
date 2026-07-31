@@ -83,10 +83,37 @@ import org.springframework.transaction.annotation.Transactional;
  * {@code risk_rationale} note: a documented rationale can explain why a real
  * HIT is acceptable, but no note can substitute for a screening that never ran.
  *
+ * <h2>The two screening authorities (gap T1-4, owner decision 2026-07-28)</h2>
+ *
+ * <p>The gate accepts a screening from either of exactly two authorities, and refuses
+ * everything else:
+ *
+ * <ol>
+ *   <li>a <b>vendor</b> screening — {@code screening_status = CLEAR} with
+ *       {@code screening_authoritative = TRUE} (unreachable today: the ADR-014 vendor has
+ *       never been available and {@code OctaKybAdapter} still throws);</li>
+ *   <li>an <b>attested manual</b> screening —
+ *       {@code screening_status = CLEAR_MANUAL_ATTESTATION} plus a complete V045 attestation
+ *       naming the verified human who performed it, when, which compliance-signed SOP document
+ *       and version they followed, and what they consulted. That is the owner's chosen interim
+ *       control, and it is a real one: a person opened the named sources, searched the subject
+ *       and is personally accountable, which is a different thing in kind from the stub's
+ *       keyword match against nothing.</li>
+ * </ol>
+ *
+ * <p>What has NOT changed: a stub result still cannot satisfy anything (lib-kyb coerces its
+ * clean branch to {@code NOT_SCREENED_NO_PROVIDER}), an attestation that is missing its
+ * attester or its SOP reference is refused with
+ * {@link #SANCTIONS_MANUAL_ATTESTATION_INCOMPLETE}, and neither refusal is overridable by
+ * {@code risk_rationale}. The two authorities also stay DISTINGUISHABLE — they are different
+ * status values, so nothing downstream can present a human attestation as a vendor screening.
+ *
  * <p>Local / dev onboarding would otherwise be impossible (there is no vendor to
  * screen with — ADR-014). The single escape hatch is
  * {@code gmepay.activation.allow-unscreened-kyb=true}, which is <b>false by
- * default and must never be true in production</b>. When it is on the gate still
+ * default, must never be true in production, and is NOT the path the owner chose</b> — a manual
+ * attestation is; the hatch remains only for automated/local runs that cannot involve a human.
+ * When it is on the gate still
  * refuses to call the partner screened: it passes the condition but returns a
  * non-null {@link ActivationGateResult#unscreenedBasis()}, which
  * {@code PartnerLifecycleChangeRequestApplier} writes to the ADR-007 audit log as
@@ -108,6 +135,20 @@ public class ActivationGateService {
      * something). Deliberately not satisfiable by an operator override note.
      */
     public static final String SANCTIONS_NOT_SCREENED = "SANCTIONS_NOT_SCREENED";
+
+    /**
+     * The stored verdict claims a MANUAL screening (T1-4 owner decision) but the attestation
+     * behind it is incomplete — it does not name the attester, the instant, the SOP document,
+     * its version, or what was consulted. Distinct from
+     * {@link #SANCTIONS_NOT_SCREENED} because the remedy is different: something WAS done, and
+     * the record of it must be completed rather than the screening re-run.
+     *
+     * <p>Like {@link #SANCTIONS_NOT_SCREENED}, deliberately <b>not</b> satisfiable by the
+     * {@code risk_rationale} override. An attestation that names nobody is not a control, and a
+     * rationale explaining why that is acceptable would be a rationale for having no control.
+     */
+    public static final String SANCTIONS_MANUAL_ATTESTATION_INCOMPLETE =
+            "SANCTIONS_MANUAL_ATTESTATION_INCOMPLETE";
     public static final String BANK_ACCOUNT_UNVERIFIED = "BANK_ACCOUNT_UNVERIFIED";
     public static final String CONTRACT_MISSING = "CONTRACT_MISSING";
     public static final String CONTRACT_NOT_SIGNED = "CONTRACT_NOT_SIGNED";
@@ -286,14 +327,56 @@ public class ActivationGateService {
                     + " (a non-production setting). This partner's sanctions status is UNKNOWN.";
         }
 
+        // ---- A MANUAL screening: is the attestation actually complete? (T1-4) ---
+        // The V045 CHECKs make an incomplete attestation unrepresentable, and this check is
+        // still not redundant: a row written before V045, restored from an older dump, or
+        // produced by a future migration can carry the status without the evidence, and the
+        // failure mode of trusting the constraint is a partner going LIVE on an attestation
+        // that names nobody. Re-derived from the columns, never from a flag.
+        if (kyb.isManuallyAttestedScreening() && !kyb.hasCompleteManualAttestation()) {
+            unmet.add(new UnmetCondition(SANCTIONS_MANUAL_ATTESTATION_INCOMPLETE,
+                    "this partner's sanctions screening claims a MANUAL attestation but the"
+                            + " attestation is incomplete (" + describeMissingAttestation(kyb)
+                            + "). No operator override can satisfy this condition — an attestation"
+                            + " that names nobody accountable, or no SOP, is not a control."
+                            + " Record the manual screening attestation again in full via"
+                            + " POST /v1/partners/{code}/kyb/manual-screening-attestation."));
+            return null;
+        }
+
         // ---- A screening ran: is it clear, or overridden? ----------------------
-        boolean sanctionsClear = "CLEAR".equals(kyb.getScreeningStatus()) || hasOverrideNote;
+        // Both authorities count as clear: a vendor CLEAR and an attested manual
+        // CLEAR_MANUAL_ATTESTATION. They remain DIFFERENT values in the column and on every
+        // wire so downstream can tell them apart — the gate is simply indifferent between a
+        // real vendor screening and a real human one, which is precisely the owner's decision.
+        boolean sanctionsClear = kyb.screeningIsClear() || hasOverrideNote;
         if (!sanctionsClear) {
             unmet.add(new UnmetCondition(SANCTIONS_NOT_CLEAR,
                     "sanctions screening status is " + kyb.getScreeningStatus()
                             + " without an operator override note (risk_rationale)"));
         }
         return null;
+    }
+
+    /** Name the missing attestation fields, so the operator fixes the right one. */
+    private static String describeMissingAttestation(KybEntity kyb) {
+        List<String> missing = new ArrayList<>(5);
+        if (isBlank(kyb.getManualAttesterActorId())) {
+            missing.add("attester");
+        }
+        if (kyb.getManualAttestedAt() == null) {
+            missing.add("attestation instant");
+        }
+        if (isBlank(kyb.getManualSopDocumentRef())) {
+            missing.add("SOP document reference");
+        }
+        if (isBlank(kyb.getManualSopVersion())) {
+            missing.add("SOP version");
+        }
+        if (isBlank(kyb.getManualSourcesConsulted())) {
+            missing.add("sources consulted");
+        }
+        return missing.isEmpty() ? "no fields missing" : "missing: " + String.join(", ", missing);
     }
 
     /** One line naming exactly what is missing, for the checklist and the audit row. */

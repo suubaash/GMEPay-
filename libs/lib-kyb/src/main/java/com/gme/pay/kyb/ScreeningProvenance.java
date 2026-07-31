@@ -32,11 +32,20 @@ package com.gme.pay.kyb;
  *                    {@code null} when it is {@code true} (a real screening has
  *                    nothing to caveat). Carried through to the persisted row and
  *                    the API response so the limitation travels with the verdict.
+ * @param attestation the human attestation backing a {@value #MANUAL_ATTESTATION_PROVIDER_ID}
+ *                    run (gap T1-4, owner decision 2026-07-28) — mandatory for that
+ *                    provider id and mandatorily {@code null} for every other. This is
+ *                    what makes the manual authority real rather than a second way to
+ *                    claim authority: the only way to construct a provenance that says
+ *                    "a human screened this" is to supply the evidence of who, when and
+ *                    under which SOP. {@code null} on every vendor / stub / absent-provider
+ *                    provenance.
  */
 public record ScreeningProvenance(
         String providerId,
         boolean authoritative,
-        String caveat) {
+        String caveat,
+        ManualScreeningAttestation attestation) {
 
     /** Producer id of lib-kyb's in-process {@link StubKybAdapter}. */
     public static final String STUB_PROVIDER_ID = "stub";
@@ -50,6 +59,14 @@ public record ScreeningProvenance(
      * something ran but did not say what it was.
      */
     public static final String NO_PROVIDER_ID = "none";
+
+    /**
+     * Producer id of an <b>attested manual screening</b> performed by a human under a
+     * compliance-signed SOP (gap T1-4 owner decision). Authoritative, but only ever
+     * constructible together with a {@link ManualScreeningAttestation} — see the
+     * {@code attestation} component and {@link #manualAttestation(ManualScreeningAttestation)}.
+     */
+    public static final String MANUAL_ATTESTATION_PROVIDER_ID = "manual-sop";
 
     /** The stub's standing caveat — the exact sentence that must reach the operator. */
     public static final String STUB_CAVEAT =
@@ -83,6 +100,38 @@ public record ScreeningProvenance(
         if (authoritative) {
             caveat = null;
         }
+        // ---- The manual-attestation authority (T1-4) is evidence-bound, both ways -----------
+        if (MANUAL_ATTESTATION_PROVIDER_ID.equals(providerId)) {
+            if (attestation == null) {
+                throw new IllegalArgumentException(
+                        "the '" + MANUAL_ATTESTATION_PROVIDER_ID + "' provider may only be used"
+                                + " together with a ManualScreeningAttestation — an unattested"
+                                + " manual screening is exactly the unfalsifiable claim gap T1-4"
+                                + " removed, so it cannot be constructed");
+            }
+            if (!authoritative) {
+                throw new IllegalArgumentException(
+                        "a manual screening backed by an attestation IS authoritative; a"
+                                + " non-authoritative one would be a contradiction. Use"
+                                + " nonAuthoritative(providerId, caveat) with a different provider"
+                                + " id to record a degraded run.");
+            }
+        } else if (attestation != null) {
+            throw new IllegalArgumentException(
+                    "a ManualScreeningAttestation may only accompany provider id '"
+                            + MANUAL_ATTESTATION_PROVIDER_ID + "', was: " + providerId
+                            + " — attaching human attestation evidence to a machine run would make"
+                            + " the two indistinguishable downstream");
+        }
+    }
+
+    /**
+     * Three-component form for every provenance that carries no human attestation (the stub, an
+     * undeclared producer, an absent provider, a vendor). Retained as the natural constructor so
+     * the T1-4 call sites and any 3-field JSON payload keep working unchanged.
+     */
+    public ScreeningProvenance(String providerId, boolean authoritative, String caveat) {
+        this(providerId, authoritative, caveat, null);
     }
 
     /** Provenance of a {@link StubKybAdapter} run — never authoritative. */
@@ -93,6 +142,28 @@ public record ScreeningProvenance(
     /** Provenance of a result that arrived without any — never authoritative. */
     public static ScreeningProvenance unknown() {
         return new ScreeningProvenance(UNKNOWN_PROVIDER_ID, false, UNKNOWN_CAVEAT);
+    }
+
+    /**
+     * Provenance of a sanctions / PEP screening a named human performed by hand under a
+     * compliance-signed SOP (gap T1-4). Authoritative — and the ONLY way to mint that authority
+     * is to hand over the evidence, because the compact constructor rejects
+     * {@value #MANUAL_ATTESTATION_PROVIDER_ID} without it.
+     *
+     * <p>Note what this does <b>not</b> do: it does not weaken the stub coercion, it does not make
+     * {@link ScreeningResult.Status#CLEAR} reachable for a manual run (that is coerced to
+     * {@link ScreeningResult.Status#CLEAR_MANUAL_ATTESTATION} so the provenance survives every
+     * downstream hop), and it does not claim parity with a vendor.
+     *
+     * @throws IllegalArgumentException when {@code attestation} is {@code null}.
+     */
+    public static ScreeningProvenance manualAttestation(ManualScreeningAttestation attestation) {
+        return new ScreeningProvenance(MANUAL_ATTESTATION_PROVIDER_ID, true, null, attestation);
+    }
+
+    /** {@code true} when this provenance is an attested manual screening (T1-4). */
+    public boolean manuallyAttested() {
+        return MANUAL_ATTESTATION_PROVIDER_ID.equals(providerId) && attestation != null;
     }
 
     /**
@@ -117,6 +188,13 @@ public record ScreeningProvenance(
             throw new IllegalArgumentException(
                     "'" + providerId + "' is a reserved non-authoritative provider id");
         }
+        if (MANUAL_ATTESTATION_PROVIDER_ID.equals(providerId)) {
+            // Otherwise this would be the back door: a "vendor" called manual-sop, authoritative,
+            // with no attestation behind it — i.e. the whole control bypassed by a string.
+            throw new IllegalArgumentException(
+                    "'" + MANUAL_ATTESTATION_PROVIDER_ID + "' is reserved for an attested manual"
+                            + " screening — use manualAttestation(attestation)");
+        }
         return new ScreeningProvenance(providerId, true, null);
     }
 
@@ -125,6 +203,12 @@ public record ScreeningProvenance(
      * that answered from a degraded/cached path). Requires a caveat.
      */
     public static ScreeningProvenance nonAuthoritative(String providerId, String caveat) {
+        if (MANUAL_ATTESTATION_PROVIDER_ID.equals(providerId)) {
+            throw new IllegalArgumentException(
+                    "'" + MANUAL_ATTESTATION_PROVIDER_ID + "' is reserved for an attested manual"
+                            + " screening, which is authoritative by construction — a"
+                            + " non-authoritative one cannot exist");
+        }
         return new ScreeningProvenance(providerId, false, caveat);
     }
 }

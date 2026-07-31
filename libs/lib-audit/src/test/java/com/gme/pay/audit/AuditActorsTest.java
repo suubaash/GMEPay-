@@ -127,6 +127,45 @@ class AuditActorsTest {
     }
 
     @Test
+    @DisplayName("only an attested human may make a compliance assertion (T1-4 manual KYB SOP)")
+    void onlyAnAttestedHumanCanAttest() {
+        String alice = AuditActors.attested("compliance.officer@gme.com");
+        assertThat(AuditActors.isAttestedHuman(alice)).isTrue();
+        assertThat(AuditActors.requireAttestedHuman(alice)).isEqualTo(alice);
+
+        // Everything else in the vocabulary is refused — including the two values that ARE
+        // attributable principals. "Attributable" and "a person who can be held to this" are
+        // different questions, which is why this is a separate check and not a stricter mode of
+        // requireAttributable.
+        for (String notAPerson : new String[] {
+                AuditActors.system("migration-v045"),
+                AuditActors.service("internal-caller"),
+                AuditActors.unverified("compliance.officer@gme.com"),
+                AuditActors.UNATTRIBUTED,
+                AuditActors.LEGACY_SYSTEM,
+                "SYSTEM",
+                null,
+                "   "}) {
+            assertThat(AuditActors.isAttestedHuman(notAPerson))
+                    .as("%s must not read as an attested human", notAPerson)
+                    .isFalse();
+            assertThatThrownBy(() -> AuditActors.requireAttestedHuman(notAPerson))
+                    .as("%s must not be able to attest", notAPerson)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("verified human");
+        }
+
+        // The two attributable-but-not-human cases must say WHICH they are, so an operator can
+        // tell "nobody authenticated" from "the BFF called without forwarding the human".
+        assertThatThrownBy(() -> AuditActors.requireAttestedHuman(
+                AuditActors.service("internal-caller")))
+                .hasMessageContaining("without forwarding the human principal");
+        assertThatThrownBy(() -> AuditActors.requireAttestedHuman(
+                AuditActors.unverified("mallory")))
+                .hasMessageContaining("no credential proved it");
+    }
+
+    @Test
     @DisplayName("truncation keeps the provenance prefix, never the tail")
     void clampPreservesTheProvenance() {
         String longName = "a".repeat(120);

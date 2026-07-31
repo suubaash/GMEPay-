@@ -369,9 +369,14 @@ export const adminApi = {
    * KybView: { partnerCode, riskRating, riskRationale, nextReviewDate,
    *   licenseType, licenseNumber, licenseAuthority, licenseExpiry,
    *   uboList:[{name,ownershipPct,isPep,country}], cbddqDocId,
-   *   screeningStatus:'CLEAR'|'NEEDS_REVIEW'|'HIT'|null,
+   *   screeningStatus:'CLEAR'|'CLEAR_MANUAL_ATTESTATION'|'NEEDS_REVIEW'|'HIT'
+   *     |'NOT_SCREENED_NO_PROVIDER'|null,
    *   screeningProviderRef:string|null, screenedAt:ISO|null,
    *   screeningHits:[{name,matchScore,matchType,source}]|null }
+   *
+   * `CLEAR` and `CLEAR_MANUAL_ATTESTATION` are distinct on purpose (GAP T1-4) — vendor
+   * screening vs. a human's attested manual screening under a compliance-signed SOP. Render
+   * both through `screeningStatusMeta` in `@/api/screeningStatus`, never as a bare "Clear".
    */
   getKyb: (partnerCode) =>
     request(`/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb`),
@@ -379,12 +384,56 @@ export const adminApi = {
   /**
    * POST /v1/admin/partners/{code}/kyb/screen -> KybView (refreshed)
    * Triggers AML/PEP screening via the KybProvider port (ADR-009).
-   * Stubbed until Octa Solution sandbox creds arrive (ADR-014).
+   * No vendor is connected (ADR-014, Octa sandbox creds pending), so a clean run comes back as
+   * `NOT_SCREENED_NO_PROVIDER` — nothing was screened. Returns 409 when the partner already
+   * carries a manual attestation this run would replace with "nothing was screened".
    */
   runKybScreening: (partnerCode) =>
     request(
       `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screen`,
       { method: 'POST', body: JSON.stringify({}) },
+    ),
+
+  /**
+   * POST /v1/admin/partners/{code}/kyb/manual-screening-attestation -> KybView (refreshed)
+   *
+   * Records a MANUAL sanctions/PEP screening attestation (GAP T1-4, owner decision
+   * 2026-07-28): a named compliance officer certifies that they performed the screening by hand
+   * under a compliance-signed SOP. That attestation is the platform's interim screening
+   * AUTHORITY — it satisfies the activation sanctions pre-condition, and a clean outcome is
+   * stored as `CLEAR_MANUAL_ATTESTATION` so it stays distinguishable from a vendor `CLEAR`.
+   *
+   * Body: { outcome:'CLEAR'|'HIT'|'NEEDS_REVIEW', sopDocumentRef, sopVersion,
+   *         sourcesConsulted, attestation }
+   *
+   * The attester is NOT sent — it is the verified token subject, derived server-side, so an
+   * operator cannot attest in someone else's name. `attestation` must be the exact assertion
+   * sentence (see MANUAL_ATTESTATION_ASSERTION below): the operator has to send what they are
+   * asserting, so a client cannot default it.
+   *
+   * 400 on a missing SOP reference / version / sources / assertion; 403 when the caller's
+   * identity is not verified or lacks `ops:operate`; 404 unknown partner.
+   */
+  recordKybManualAttestation: (partnerCode, body) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/manual-screening-attestation`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+
+  /**
+   * GET /v1/admin/partners/{code}/kyb/screening-provenance -> KybScreeningProvenance
+   *
+   * { screeningStatus, providerId, authoritative, caveat, screenedAt, providerRef,
+   *   manuallyAttested, satisfiesActivation, interpretation,
+   *   manualAttestation: { attesterActorId, attestedAt, sopDocumentRef, sopVersion,
+   *                        sourcesConsulted, complete } | null }
+   *
+   * The detail behind the screening status: which authority produced it and, for a manual run,
+   * who attested under which SOP version. Exists because `KybView` cannot carry these fields.
+   */
+  getKybScreeningProvenance: (partnerCode) =>
+    request(
+      `/v1/admin/partners/${encodeURIComponent(partnerCode)}/kyb/screening-provenance`,
     ),
 
   // ---------- Schemes ----------

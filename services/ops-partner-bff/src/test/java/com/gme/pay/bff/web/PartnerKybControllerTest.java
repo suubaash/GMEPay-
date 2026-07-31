@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gme.pay.bff.client.stub.StubConfigRegistryClient;
+import com.gme.pay.bff.security.TestTokens;
 import com.gme.pay.contracts.PartnerCommand;
 import com.gme.pay.domain.PartnerType;
 import java.math.RoundingMode;
@@ -42,9 +43,16 @@ class PartnerKybControllerTest {
         ObjectMapper om = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        mvc = standaloneSetup(new PartnerKybController(configRegistry))
+        // enforce=false: the pass-through tests below are about the KYB round-trip, not RBAC. The
+        // attestation endpoint's own gate is covered separately with enforce=true.
+        mvc = standaloneSetup(new PartnerKybController(configRegistry, new OpsRbacGuard(false)))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearAuthentication() {
+        TestTokens.clear();
     }
 
     /** Seed a draft straight through the stub (the draft endpoints live on another controller). */
@@ -129,14 +137,127 @@ class PartnerKybControllerTest {
     }
 
     @Test
-    @DisplayName("screening a clean draft returns CLEAR even without a prior step-3 save")
-    void screen_cleanDraft_isClear() throws Exception {
+    @DisplayName("T1-4: screening a clean draft through the stub reports NOTHING SCREENED, not CLEAR")
+    void screen_cleanDraft_isNotScreened() throws Exception {
+        // Was `CLEAR` until 2026-07-28. The BFF fallback client consults no sanctions, PEP or
+        // adverse-media source — it matches the subject's own names against two tokens — so a
+        // `CLEAR` here was a clean screening nobody performed, and it was the last place in the
+        // platform that could still mint one (lib-kyb + V042 closed the real path).
         createDraft("kyb_partner_004", "Totally Clean GmbH");
 
         mvc.perform(post("/v1/admin/partners/{code}/kyb/screen", "kyb_partner_004"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.screeningStatus").value("CLEAR"))
+                .andExpect(jsonPath("$.screeningStatus").value("NOT_SCREENED_NO_PROVIDER"))
                 .andExpect(jsonPath("$.riskRating").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    // ------------------------------ T1-4: manual KYB SOP attestation ------------------------
+
+    private static final String ATTEST_BODY = """
+            {
+              "outcome": "CLEAR",
+              "sopDocumentRef": "GME-COMP-SOP-014 Manual sanctions screening",
+              "sopVersion": "v3",
+              "sourcesConsulted": "UN consolidated list + the SOP §4 jurisdiction lists, searched by\
+             romanized and local legal name plus every declared UBO",
+              "attestation": "I performed this sanctions and PEP screening myself, following the SOP\
+             named above, and I am accountable for the result."
+            }
+            """;
+
+    @Test
+    @DisplayName("an attested manual screening is recorded as CLEAR_MANUAL_ATTESTATION, not CLEAR")
+    void manualAttestation_isDistinguishableFromAVendorClear() throws Exception {
+        createDraft("kyb_partner_008", "Totally Clean GmbH");
+        TestTokens.hubOperator("ops:operate");
+
+        mvc.perform(post("/v1/admin/partners/{code}/kyb/manual-screening-attestation",
+                        "kyb_partner_008")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(ATTEST_BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.screeningStatus").value("CLEAR_MANUAL_ATTESTATION"))
+                .andExpect(jsonPath("$.screeningProviderRef").value(
+                        org.hamcrest.Matchers.containsString("manual-sop")));
+
+        // ...and the provenance read carries the detail behind that distinction.
+        mvc.perform(get("/v1/admin/partners/{code}/kyb/screening-provenance", "kyb_partner_008"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.screeningStatus").value("CLEAR_MANUAL_ATTESTATION"))
+                .andExpect(jsonPath("$.providerId").value("manual-sop"))
+                .andExpect(jsonPath("$.manuallyAttested").value(true))
+                .andExpect(jsonPath("$.satisfiesActivation").value(true))
+                .andExpect(jsonPath("$.manualAttestation.attesterActorId")
+                        .value(TestTokens.DEFAULT_SUBJECT))
+                .andExpect(jsonPath("$.manualAttestation.sopVersion").value("v3"))
+                .andExpect(jsonPath("$.manualAttestation.complete").value(true))
+                .andExpect(jsonPath("$.interpretation").value(
+                        org.hamcrest.Matchers.containsString("NOT a vendor screening")));
+    }
+
+    @Test
+    @DisplayName("an unscreened partner's provenance says nothing was screened and does not activate")
+    void unscreenedProvenanceIsExplicit() throws Exception {
+        createDraft("kyb_partner_009", "Totally Clean GmbH");
+        mvc.perform(post("/v1/admin/partners/{code}/kyb/screen", "kyb_partner_009"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/v1/admin/partners/{code}/kyb/screening-provenance", "kyb_partner_009"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.manuallyAttested").value(false))
+                .andExpect(jsonPath("$.authoritative").value(false))
+                .andExpect(jsonPath("$.satisfiesActivation").value(false))
+                .andExpect(jsonPath("$.manualAttestation").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.interpretation").value(
+                        org.hamcrest.Matchers.containsString("NOTHING WAS SCREENED")));
+    }
+
+    @Test
+    @DisplayName("recording an attestation requires ops:operate — an onboarding-write token is not enough")
+    void manualAttestation_requiresOpsOperate() throws Exception {
+        createDraft("kyb_partner_010", "Totally Clean GmbH");
+        MockMvc enforcing = standaloneSetup(
+                new PartnerKybController(configRegistry, new OpsRbacGuard(true)))
+                .setMessageConverters(new MappingJackson2HttpMessageConverter(
+                        new ObjectMapper().registerModule(new JavaTimeModule())))
+                .build();
+
+        // A token that may edit partners but is not an ops operator.
+        TestTokens.hubOperator("partner.view");
+        enforcing.perform(post("/v1/admin/partners/{code}/kyb/manual-screening-attestation",
+                        "kyb_partner_010")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(ATTEST_BODY))
+                .andExpect(status().isForbidden());
+
+        // No permissions at all: still refused when enforcing.
+        TestTokens.clear();
+        enforcing.perform(post("/v1/admin/partners/{code}/kyb/manual-screening-attestation",
+                        "kyb_partner_010")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(ATTEST_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("an attestation missing its SOP reference, version, sources or assertion is 400")
+    void manualAttestation_requiresTheEvidence() throws Exception {
+        createDraft("kyb_partner_011", "Totally Clean GmbH");
+        TestTokens.hubOperator("ops:operate");
+
+        for (String body : new String[] {
+                ATTEST_BODY.replace("\"GME-COMP-SOP-014 Manual sanctions screening\"", "\"\""),
+                ATTEST_BODY.replace("\"v3\"", "\"  \""),
+                ATTEST_BODY.replaceAll("\"sourcesConsulted\": \"[^\"]*\"",
+                        "\"sourcesConsulted\": \"\""),
+                ATTEST_BODY.replaceAll("\"attestation\": \"[^\"]*\"", "\"attestation\": \"yes\""),
+                ATTEST_BODY.replace("\"CLEAR\"", "\"NOT_SCREENED_NO_PROVIDER\"")}) {
+            mvc.perform(post("/v1/admin/partners/{code}/kyb/manual-screening-attestation",
+                            "kyb_partner_011")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+        }
     }
 
     @Test

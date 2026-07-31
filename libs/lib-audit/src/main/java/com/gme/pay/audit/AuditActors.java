@@ -219,6 +219,65 @@ public final class AuditActors {
     }
 
     /**
+     * True only for an <b>attested human</b> — the bare, unprefixed shape minted by
+     * {@link #attested(String)}. Every other value in the vocabulary is false, including the
+     * ones {@link #isAttributable(String)} accepts: {@code system:<component>} and
+     * {@code svc:<name>} are attributable principals but they are not people.
+     *
+     * <p>Most audited writes do not need this distinction — a scheduler rotating a credential is
+     * a perfectly good actor. It matters where the recorded act is a person <i>assuming
+     * liability</i> rather than a person <i>making a change</i>. The motivating case is gap
+     * T1-4's manual-KYB-SOP attestation (see {@code ManualScreeningAttestation}): a compliance
+     * officer states that they personally performed a sanctions screening per a signed
+     * procedure. A scheduler cannot make that statement, a shared service identity cannot make
+     * it, and an unverified name is precisely the forgery T5-1 removed.
+     */
+    public static boolean isAttestedHuman(String actorId) {
+        String a = trimToNull(actorId);
+        return a != null && !isReserved(a);
+    }
+
+    /**
+     * Require an {@link #isAttestedHuman(String) attested human} actor, for the small set of
+     * writes that record a person taking personal responsibility for a compliance assertion.
+     *
+     * <p>Deliberately a separate check from {@link #requireAttributable(String)} rather than a
+     * stricter mode of it: the platform must keep being able to audit system actions, and the
+     * two questions ("is this attributable at all" / "is this a person who can be held to it")
+     * have different answers for the same row.
+     *
+     * @return the trimmed actor id, when it is an attested human.
+     * @throws IllegalArgumentException on null/blank, on any reserved namespace
+     *         ({@code system:}, {@code svc:}, {@code unverified:}, {@link #UNATTRIBUTED}) and on
+     *         the bare legacy {@code "system"} literal. The message names the value class it
+     *         rejected so the caller can tell "nobody was authenticated" from "a service called
+     *         this without forwarding a human".
+     */
+    public static String requireAttestedHuman(String actorId) {
+        String a = trimToNull(actorId);
+        if (a == null) {
+            throw new IllegalArgumentException(
+                    "this action must be attributed to a verified human operator, and no actor was "
+                            + "resolved at all — use AuditActors.attested(verifiedSubject)");
+        }
+        if (!isAttestedHuman(a)) {
+            throw new IllegalArgumentException(
+                    "this action must be attributed to a verified human operator, but the resolved "
+                            + "actor is '" + a + "'. "
+                            + (a.startsWith(UNVERIFIED_PREFIX)
+                                    ? "The name was claimed on the wire but no credential proved it"
+                                    : a.equals(UNATTRIBUTED)
+                                            ? "Nothing was claimed and nothing was proven"
+                                            : a.startsWith(SERVICE_PREFIX)
+                                                    ? "A trusted service called in without "
+                                                            + "forwarding the human principal"
+                                                    : "That is a platform principal, not a person")
+                            + " — a person cannot be held to an assertion nobody can name.");
+        }
+        return a;
+    }
+
+    /**
      * Validate an actor id at the point of sealing. This is the single choke point that makes
      * the bare {@code "system"} literal unmintable.
      *

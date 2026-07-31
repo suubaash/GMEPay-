@@ -30,6 +30,8 @@ import { theme } from '@/theme/theme';
 const patchDraftStepMock = vi.fn();
 const getKybMock = vi.fn();
 const runKybScreeningMock = vi.fn();
+const recordKybManualAttestationMock = vi.fn();
+const getKybScreeningProvenanceMock = vi.fn();
 
 vi.mock('@/api/client', () => ({
   __esModule: true,
@@ -44,6 +46,8 @@ vi.mock('@/api/client', () => ({
     patchDraftStep: (...args) => patchDraftStepMock(...args),
     getKyb: (...args) => getKybMock(...args),
     runKybScreening: (...args) => runKybScreeningMock(...args),
+    recordKybManualAttestation: (...args) => recordKybManualAttestationMock(...args),
+    getKybScreeningProvenance: (...args) => getKybScreeningProvenanceMock(...args),
   },
 }));
 
@@ -57,6 +61,7 @@ vi.mock('@/components/DocumentVault', () => ({
 const snackSuccess = vi.fn();
 const snackError = vi.fn();
 const snackInfo = vi.fn();
+const snackWarning = vi.fn();
 vi.mock('@/components/SnackbarProvider', () => ({
   __esModule: true,
   default: ({ children }) => <>{children}</>,
@@ -64,27 +69,38 @@ vi.mock('@/components/SnackbarProvider', () => ({
     success: snackSuccess,
     error: snackError,
     info: snackInfo,
-    warning: vi.fn(),
+    warning: snackWarning,
   }),
 }));
 
 import KybForm from '../KybForm';
+import { MANUAL_ATTESTATION_ASSERTION } from '../ManualAttestationDialog';
 
-function buildStore(kybPreload) {
+function buildStore(kybPreload, provenancePreload) {
   return configureStore({
     reducer: {
       drafts: draftsReducer,
       kyb: kybReducer,
       auth: authReducer,
     },
-    preloadedState: kybPreload
-      ? { kyb: { kybByCode: kybPreload, kybLoading: false, kybError: null } }
+    preloadedState: (kybPreload || provenancePreload)
+      ? {
+        kyb: {
+          kybByCode: kybPreload ?? {},
+          provenanceByCode: provenancePreload ?? {},
+          kybLoading: false,
+          attesting: false,
+          kybError: null,
+        },
+      }
       : undefined,
   });
 }
 
-function renderForm({ draft, partnerCode = 'GME_KR_001', onSaved, kybPreload } = {}) {
-  const store = buildStore(kybPreload);
+function renderForm({
+  draft, partnerCode = 'GME_KR_001', onSaved, kybPreload, provenancePreload,
+} = {}) {
+  const store = buildStore(kybPreload, provenancePreload);
   return {
     store,
     ...render(
@@ -141,11 +157,16 @@ describe('KybForm', () => {
     patchDraftStepMock.mockReset();
     getKybMock.mockReset();
     runKybScreeningMock.mockReset();
+    recordKybManualAttestationMock.mockReset();
+    getKybScreeningProvenanceMock.mockReset();
     snackSuccess.mockReset();
     snackError.mockReset();
     snackInfo.mockReset();
+    snackWarning.mockReset();
     // Default: getKyb returns 404-like rejection (new draft, no KYB data yet).
     getKybMock.mockRejectedValue(new Error('Not found'));
+    // Same for the provenance read — a brand-new draft has no KYB row to describe.
+    getKybScreeningProvenanceMock.mockRejectedValue(new Error('Not found'));
   });
 
   it('renders with a single empty UBO row on a blank draft', () => {
@@ -374,5 +395,174 @@ describe('KybForm', () => {
     renderForm();
     expect(screen.getByTestId('vault-License scan')).toBeInTheDocument();
     expect(screen.getByTestId('vault-CBDDQ')).toBeInTheDocument();
+  });
+
+  // ─── GAP T1-4: manual KYB SOP attestation ─────────────────────────────────────
+
+  it('shows NOT_SCREENED_NO_PROVIDER as "nothing was checked", not as a neutral unknown', () => {
+    renderForm({
+      kybPreload: {
+        GME_KR_001: {
+          partnerCode: 'GME_KR_001',
+          screeningStatus: 'NOT_SCREENED_NO_PROVIDER',
+          screenedAt: '2026-07-28T10:00:00Z',
+          screeningHits: [],
+        },
+      },
+    });
+
+    expect(screen.getByLabelText('screening-status-NOT_SCREENED_NO_PROVIDER')).toBeInTheDocument();
+    expect(screen.getByText(/NOT SCREENED — nothing was checked/)).toBeInTheDocument();
+    expect(screen.getByLabelText('screening-not-performed-alert')).toBeInTheDocument();
+  });
+
+  it('renders a manual attestation distinguishably from a vendor CLEAR, naming attester + SOP', () => {
+    renderForm({
+      kybPreload: {
+        GME_KR_001: {
+          partnerCode: 'GME_KR_001',
+          screeningStatus: 'CLEAR_MANUAL_ATTESTATION',
+          screeningProviderRef: 'manual-sop:GME-COMP-SOP-014@v3',
+          screenedAt: '2026-07-28T10:00:00Z',
+          screeningHits: [],
+        },
+      },
+      provenancePreload: {
+        GME_KR_001: {
+          screeningStatus: 'CLEAR_MANUAL_ATTESTATION',
+          providerId: 'manual-sop',
+          authoritative: true,
+          manuallyAttested: true,
+          satisfiesActivation: true,
+          manualAttestation: {
+            attesterActorId: 'compliance.officer@gme.com',
+            attestedAt: '2026-07-28T10:00:00Z',
+            sopDocumentRef: 'GME-COMP-SOP-014',
+            sopVersion: 'v3',
+            sourcesConsulted: 'UN consolidated list + SOP §4 jurisdiction lists',
+            complete: true,
+          },
+        },
+      },
+    });
+
+    // Never a bare "Clear".
+    expect(screen.getByLabelText('screening-status-CLEAR_MANUAL_ATTESTATION')).toBeInTheDocument();
+    expect(screen.getByText(/Clear — manual SOP attestation/)).toBeInTheDocument();
+    // ...and the provenance says whose attestation activation would rest on.
+    const provenance = screen.getByLabelText('manual-attestation-provenance');
+    expect(provenance).toBeInTheDocument();
+    expect(provenance).toHaveTextContent('compliance.officer@gme.com');
+    expect(provenance).toHaveTextContent('GME-COMP-SOP-014');
+    expect(provenance).toHaveTextContent('v3');
+    expect(provenance).toHaveTextContent('UN consolidated list');
+    expect(screen.queryByLabelText('screening-not-performed-alert')).not.toBeInTheDocument();
+  });
+
+  it('flags an INCOMPLETE manual attestation rather than showing it as valid with blanks', () => {
+    renderForm({
+      kybPreload: {
+        GME_KR_001: {
+          partnerCode: 'GME_KR_001',
+          screeningStatus: 'CLEAR_MANUAL_ATTESTATION',
+          screenedAt: '2026-07-28T10:00:00Z',
+        },
+      },
+      provenancePreload: {
+        GME_KR_001: {
+          manuallyAttested: true,
+          satisfiesActivation: false,
+          manualAttestation: {
+            attesterActorId: 'compliance.officer@gme.com',
+            attestedAt: '2026-07-28T10:00:00Z',
+            sopDocumentRef: 'GME-COMP-SOP-014',
+            sopVersion: null,
+            sourcesConsulted: 'UN consolidated list',
+            complete: false,
+          },
+        },
+      },
+    });
+
+    expect(screen.getByLabelText('manual-attestation-provenance'))
+      .toHaveTextContent(/INCOMPLETE/);
+  });
+
+  it('warns instead of claiming success when a screening run screened nothing', async () => {
+    runKybScreeningMock.mockResolvedValueOnce({
+      screeningStatus: 'NOT_SCREENED_NO_PROVIDER',
+      screenedAt: '2026-07-28T10:00:00Z',
+    });
+
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(screen.getByLabelText('run-screening'));
+
+    await waitFor(() => {
+      expect(snackWarning).toHaveBeenCalledWith(
+        expect.stringContaining('consulted no sanctions source'),
+      );
+    });
+    expect(snackSuccess).not.toHaveBeenCalled();
+  });
+
+  it('the attestation dialog refuses to submit without SOP ref, version, sources and the assertion',
+    async () => {
+      const user = userEvent.setup();
+      renderForm();
+
+      await user.click(screen.getByLabelText('record-manual-attestation'));
+      expect(await screen.findByLabelText('manual-attestation-dialog')).toBeInTheDocument();
+      // The copy must state plainly what the operator is asserting.
+      expect(screen.getByLabelText('manual-attestation-warning'))
+        .toHaveTextContent(/carried out the sanctions and PEP screening/);
+
+      const submit = screen.getByLabelText('attestation-submit');
+      expect(submit).toBeDisabled();
+
+      // Ticking the assertion alone is not enough — the evidence is mandatory.
+      await user.click(screen.getByLabelText('attestation-confirm'));
+      expect(screen.getByLabelText('attestation-submit')).toBeDisabled();
+
+      await user.type(screen.getByLabelText('attestation-sop-document-ref'), 'GME-COMP-SOP-014');
+      expect(screen.getByLabelText('attestation-submit')).toBeDisabled();
+      await user.type(screen.getByLabelText('attestation-sop-version'), 'v3');
+      expect(screen.getByLabelText('attestation-submit')).toBeDisabled();
+      await user.type(screen.getByLabelText('attestation-sources-consulted'), 'UN list');
+      expect(screen.getByLabelText('attestation-submit')).toBeEnabled();
+    });
+
+  it('submits the attestation with the verbatim assertion and no attester field', async () => {
+    recordKybManualAttestationMock.mockResolvedValueOnce({
+      screeningStatus: 'CLEAR_MANUAL_ATTESTATION',
+      screenedAt: '2026-07-28T10:00:00Z',
+    });
+
+    const user = userEvent.setup();
+    renderForm();
+
+    await user.click(screen.getByLabelText('record-manual-attestation'));
+    await screen.findByLabelText('manual-attestation-dialog');
+    await user.type(screen.getByLabelText('attestation-sop-document-ref'), 'GME-COMP-SOP-014');
+    await user.type(screen.getByLabelText('attestation-sop-version'), 'v3');
+    await user.type(screen.getByLabelText('attestation-sources-consulted'), 'UN consolidated list');
+    await user.click(screen.getByLabelText('attestation-confirm'));
+    await user.click(screen.getByLabelText('attestation-submit'));
+
+    await waitFor(() => {
+      expect(recordKybManualAttestationMock).toHaveBeenCalledWith('GME_KR_001', {
+        outcome: 'CLEAR',
+        sopDocumentRef: 'GME-COMP-SOP-014',
+        sopVersion: 'v3',
+        sourcesConsulted: 'UN consolidated list',
+        attestation: MANUAL_ATTESTATION_ASSERTION,
+      });
+    });
+    // The attester is derived from the verified token server-side; sending one would let an
+    // operator attest in someone else's name.
+    const [, body] = recordKybManualAttestationMock.mock.calls[0];
+    expect(body).not.toHaveProperty('attester');
+    expect(body).not.toHaveProperty('attesterActorId');
+    expect(body).not.toHaveProperty('attestedAt');
   });
 });

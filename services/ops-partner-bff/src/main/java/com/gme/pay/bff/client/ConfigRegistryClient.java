@@ -212,6 +212,112 @@ public interface ConfigRegistryClient {
                 "runKybScreening is not implemented by " + getClass().getName());
     }
 
+    /**
+     * Record a MANUAL sanctions/PEP screening attestation for a partner (gap T1-4, owner decision
+     * 2026-07-28). Routes to
+     * {@code POST /v1/partners/{partnerCode}/kyb/manual-screening-attestation}.
+     *
+     * <p>The {@code actor} is not a courtesy field here as it is on the lifecycle calls — upstream
+     * REFUSES the write (403) unless the actor is a verified human, so the caller must forward the
+     * token subject AND the client must present the internal-auth token. That is why this method
+     * takes the actor explicitly rather than reading it from a header the SPA supplies.
+     *
+     * @param request wire payload: outcome, SOP document reference, SOP version, sources consulted
+     *                and the typed assertion.
+     * @param actor   the verified operator subject from the access token.
+     */
+    default com.gme.pay.contracts.KybView recordManualKybAttestation(
+            String partnerCode, ManualKybAttestationRequest request, String actor) {
+        throw new UnsupportedOperationException(
+                "recordManualKybAttestation is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Full screening PROVENANCE for a partner — which authority produced the stored verdict and,
+     * for a manual run, the attestation behind it. Routes to
+     * {@code GET /v1/partners/{partnerCode}/kyb/screening-provenance}.
+     *
+     * <p>Exists because {@code KybView} cannot carry these fields (lib-api-contracts). The status
+     * value alone already keeps a manual clearance distinguishable from a vendor one; this read is
+     * the detail behind that distinction.
+     */
+    default KybScreeningProvenance getKybScreeningProvenance(String partnerCode) {
+        throw new UnsupportedOperationException(
+                "getKybScreeningProvenance is not implemented by " + getClass().getName());
+    }
+
+    /**
+     * Wire payload for {@link #recordManualKybAttestation}. Mirrors config-registry's
+     * {@code ManualAttestationCommand} — deliberately NOT carrying an attester or an instant: both
+     * are derived upstream from the proven identity and the server clock, so neither can be forged
+     * or back-dated.
+     *
+     * @param outcome          {@code CLEAR} | {@code HIT} | {@code NEEDS_REVIEW}.
+     * @param sopDocumentRef   the compliance-signed SOP document that was followed.
+     * @param sopVersion       its revision.
+     * @param sourcesConsulted which lists / registers / sources were consulted (free text).
+     * @param attestation      the attester's assertion, sent verbatim.
+     */
+    record ManualKybAttestationRequest(
+            String outcome,
+            String sopDocumentRef,
+            String sopVersion,
+            String sourcesConsulted,
+            String attestation) {
+    }
+
+    /**
+     * Screening provenance as it comes back from config-registry. A BFF-side mirror rather than a
+     * shared contract type, matching how the BFF treats every other config-registry read model it
+     * does not own.
+     *
+     * @param screeningStatus     the stored verdict, verbatim — {@code CLEAR} (vendor) and
+     *                            {@code CLEAR_MANUAL_ATTESTATION} (human, under SOP) are distinct
+     *                            values and must never be flattened together.
+     * @param providerId          who produced it.
+     * @param authoritative       whether that producer may satisfy the activation pre-condition.
+     * @param caveat              why not, when it may not.
+     * @param screenedAt          provider-side completion instant.
+     * @param providerRef         the producer's own reference.
+     * @param manuallyAttested    whether the authority is an attested manual screening.
+     * @param manualAttestation   the attestation detail, {@code null} for a non-manual run.
+     * @param satisfiesActivation whether the row as stored satisfies the sanctions pre-condition.
+     * @param interpretation      one sentence on what this does and does not mean.
+     */
+    record KybScreeningProvenance(
+            String screeningStatus,
+            String providerId,
+            boolean authoritative,
+            String caveat,
+            java.time.Instant screenedAt,
+            String providerRef,
+            boolean manuallyAttested,
+            ManualAttestationDetail manualAttestation,
+            boolean satisfiesActivation,
+            String interpretation) {
+
+        /**
+         * The persisted manual-SOP attestation.
+         *
+         * @param attesterActorId  the verified human who performed the screening.
+         * @param attestedAt       when they attested.
+         * @param sopDocumentRef   the SOP document followed.
+         * @param sopVersion       its revision.
+         * @param sourcesConsulted what they say they checked.
+         * @param complete         whether all five fields are present — surfaced rather than
+         *                         assumed, so an incomplete attestation reads as incomplete
+         *                         instead of as a valid one with blanks.
+         */
+        public record ManualAttestationDetail(
+                String attesterActorId,
+                java.time.Instant attestedAt,
+                String sopDocumentRef,
+                String sopVersion,
+                String sourcesConsulted,
+                boolean complete) {
+        }
+    }
+
     // -------- Slice 3 (3A.1) document vault endpoints (ADR-006) ---------------
     //
     // Defaults follow the established convention: list degrades to empty,

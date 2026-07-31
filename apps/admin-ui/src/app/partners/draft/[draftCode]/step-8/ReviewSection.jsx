@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import { useRouter, useParams } from 'next/navigation';
 import { useAppSelector } from '@/store';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 
 /**
  * Step labels and the route segment for each step in the wizard.
@@ -108,6 +109,9 @@ export function ReviewSection({ draft, partnerCode }) {
   // KYB from kyb slice
   const kybByCode = useAppSelector((s) => s.kyb?.kybByCode ?? {});
   const kyb = kybByCode[partnerCode] ?? null;
+  // GAP T1-4: which authority produced the screening verdict (loaded by KybForm on step 3).
+  const kybProvenanceByCode = useAppSelector((s) => s.kyb?.provenanceByCode ?? {});
+  const kybProvenance = kybProvenanceByCode[partnerCode] ?? null;
 
   // Bank accounts
   const accountsByCode = useAppSelector((s) => s.bankAccounts?.accountsByCode ?? {});
@@ -187,7 +191,35 @@ export function ReviewSection({ draft, partnerCode }) {
           <FieldRow label="License type" value={kyb?.licenseType} empty={isEmpty(kyb?.licenseType)} />
           <FieldRow label="License number" value={kyb?.licenseNumber} empty={isEmpty(kyb?.licenseNumber)} />
           <FieldRow label="License authority" value={kyb?.licenseAuthority} empty={isEmpty(kyb?.licenseAuthority)} />
-          <FieldRow label="Screening status" value={kyb?.screeningStatus} empty={isEmpty(kyb?.screeningStatus)} />
+          {/*
+            GAP T1-4: the raw enum string used to be printed here, so on the pre-activation review
+            page a vendor CLEAR, a manual SOP attestation and "nothing was screened" were three
+            equally plain values. This is the last screen before an operator proposes activation,
+            which makes it the worst place for that ambiguity — the shared vocabulary is used
+            instead, and the manual case says whose attestation the activation will rest on.
+          */}
+          <FieldRow
+            label="Screening status"
+            value={
+              isEmpty(kyb?.screeningStatus)
+                ? null
+                : screeningStatusMeta(kyb.screeningStatus).label
+            }
+            empty={isEmpty(kyb?.screeningStatus)}
+          />
+          {screeningStatusMeta(kyb?.screeningStatus).manual && (
+            <FieldRow
+              label="Manual attestation"
+              value={
+                kybProvenance?.manualAttestation
+                  ? `${kybProvenance.manualAttestation.attesterActorId} — SOP `
+                    + `${kybProvenance.manualAttestation.sopDocumentRef} `
+                    + `${kybProvenance.manualAttestation.sopVersion}`
+                  : 'attester and SOP not loaded'
+              }
+              empty={!kybProvenance?.manualAttestation}
+            />
+          )}
         </StepGroup>
 
         {/* Step 4 — Banking */}

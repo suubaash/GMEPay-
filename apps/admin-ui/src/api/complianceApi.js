@@ -16,8 +16,16 @@
  *     -> ComplianceRow[] where ComplianceRow = {
  *          partnerCode:     string,
  *          partnerName:     string,
- *          kybStatus:       'APPROVED' | 'PENDING' | 'REVIEW' | 'HIT',
- *          sanctionsResult: 'CLEAR' | 'NEEDS_REVIEW' | 'HIT' | null,
+ *          kybStatus:       'APPROVED' | 'APPROVED_MANUAL_ATTESTATION' | 'PENDING' | 'REVIEW'
+ *                           | 'HIT' | 'NOT_SCREENED' | 'UNKNOWN',
+ *            APPROVED_MANUAL_ATTESTATION = a human screened the partner under a compliance-signed
+ *            SOP rather than a vendor doing it (GAP T1-4) — deliberately NOT collapsed into
+ *            APPROVED. NOT_SCREENED = a run completed and screened nothing; it is not "pending".
+ *          sanctionsResult: 'CLEAR' | 'CLEAR_MANUAL_ATTESTATION' | 'NEEDS_REVIEW' | 'HIT'
+ *                           | 'NOT_SCREENED_NO_PROVIDER' | null,
+ *            The KYB screeningStatus verbatim. Render it through `screeningStatusMeta` in
+ *            `@/api/screeningStatus` — never as a bare label — so a vendor clearance, a manual
+ *            SOP attestation and "nothing was screened" stay distinguishable.
  *          regulatoryConfig: {
  *            bokSet:        boolean,
  *            hometaxSet:    boolean,
@@ -184,6 +192,27 @@ export const FIXTURE_OVERVIEW = [
     sanctionsResult: 'CLEAR',
     regulatoryConfig: { bokSet: true, hometaxSet: false, kofiuSet: true, travelRuleSet: true },
     lifecycleStatus: 'LIVE',
+  },
+  // GAP T1-4: the two states that actually occur on this platform today. No KYB vendor is
+  // connected (ADR-014), so a screening run screens NOTHING and the only way a partner becomes
+  // activatable is a compliance officer's manual attestation under a signed SOP. A fixture set
+  // that showed only vendor CLEARs would present the board as something the platform cannot
+  // currently produce.
+  {
+    partnerCode: 'GME_MN_005',
+    partnerName: 'GME Mongolia LLC',
+    kybStatus: 'APPROVED_MANUAL_ATTESTATION',
+    sanctionsResult: 'CLEAR_MANUAL_ATTESTATION',
+    regulatoryConfig: { bokSet: true, hometaxSet: false, kofiuSet: false, travelRuleSet: false },
+    lifecycleStatus: 'LIVE',
+  },
+  {
+    partnerCode: 'GME_NP_006',
+    partnerName: 'GME Nepal Pvt. Ltd.',
+    kybStatus: 'NOT_SCREENED',
+    sanctionsResult: 'NOT_SCREENED_NO_PROVIDER',
+    regulatoryConfig: { bokSet: false, hometaxSet: false, kofiuSet: false, travelRuleSet: false },
+    lifecycleStatus: 'ONBOARDING',
   },
 ];
 

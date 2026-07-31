@@ -48,6 +48,7 @@ import {
   clearOverviewError,
   clearAuditError,
 } from '@/store/complianceSlice';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 import ErrorAlert from '@/components/ErrorAlert';
 import FilingChannelBoard from '@/components/FilingChannelBoard';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
@@ -81,23 +82,26 @@ export function toKst(iso) {
   }
 }
 
-/** Map KYB/sanctions/lifecycle status strings to MUI Chip colors. */
+/**
+ * Map the BFF's derived `kybStatus` to a MUI Chip colour.
+ *
+ * GAP T1-4: two arms are new and both exist to stop this board reading better than the truth.
+ * `APPROVED_MANUAL_ATTESTATION` is a real screening but a HUMAN one under an SOP, so it is `info`
+ * rather than green — a compliance reviewer looking at this board is specifically there to see
+ * which partners rest on the manual control. `NOT_SCREENED` is `warning`: it used to arrive as
+ * `PENDING` (amber, reading "not finished yet") when in fact a run completed and screened nothing.
+ * An unrecognised value is `warning`, never resolved upward.
+ */
 function kybColor(status) {
   switch (status) {
     case 'APPROVED': return 'success';
+    case 'APPROVED_MANUAL_ATTESTATION': return 'info';
     case 'PENDING': return 'warning';
     case 'REVIEW': return 'info';
     case 'HIT': return 'error';
-    default: return 'default';
-  }
-}
-
-function sanctionsColor(status) {
-  switch (status) {
-    case 'CLEAR': return 'success';
-    case 'NEEDS_REVIEW': return 'warning';
-    case 'HIT': return 'error';
-    default: return 'default';
+    case 'NOT_SCREENED': return 'warning';
+    case 'UNKNOWN': return 'warning';
+    default: return 'warning';
   }
 }
 
@@ -289,10 +293,14 @@ export default function CompliancePage() {
                 inputProps={{ 'aria-label': 'Filter by KYB status' }}
               >
                 <MenuItem value="ALL">All</MenuItem>
-                <MenuItem value="APPROVED">Approved</MenuItem>
+                <MenuItem value="APPROVED">Approved (vendor screening)</MenuItem>
+                <MenuItem value="APPROVED_MANUAL_ATTESTATION">
+                  Approved (manual SOP attestation)
+                </MenuItem>
                 <MenuItem value="PENDING">Pending</MenuItem>
                 <MenuItem value="REVIEW">Review</MenuItem>
                 <MenuItem value="HIT">Hit</MenuItem>
+                <MenuItem value="NOT_SCREENED">Not screened</MenuItem>
               </Select>
             </FormControl>
 
@@ -306,9 +314,13 @@ export default function CompliancePage() {
                 inputProps={{ 'aria-label': 'Filter by sanctions result' }}
               >
                 <MenuItem value="ALL">All</MenuItem>
-                <MenuItem value="CLEAR">Clear</MenuItem>
+                <MenuItem value="CLEAR">Clear — vendor screening</MenuItem>
+                <MenuItem value="CLEAR_MANUAL_ATTESTATION">
+                  Clear — manual SOP attestation
+                </MenuItem>
                 <MenuItem value="NEEDS_REVIEW">Needs review</MenuItem>
                 <MenuItem value="HIT">Hit</MenuItem>
+                <MenuItem value="NOT_SCREENED_NO_PROVIDER">Not screened</MenuItem>
               </Select>
             </FormControl>
 
@@ -392,11 +404,29 @@ export default function CompliancePage() {
                         />
                       </TableCell>
                       <TableCell>
-                        <Chip
-                          size="small"
-                          label={row.sanctionsResult ?? '—'}
-                          color={sanctionsColor(row.sanctionsResult)}
-                        />
+                        {/*
+                          GAP T1-4: the raw status string with a three-value colour map used to be
+                          printed here, so CLEAR_MANUAL_ATTESTATION and NOT_SCREENED_NO_PROVIDER
+                          would both have rendered grey with the enum name showing. The shared
+                          vocabulary keeps a vendor clearance, a human attestation and "nothing was
+                          screened" visibly different on the board a reviewer reads.
+                        */}
+                        <Tooltip title={screeningStatusMeta(row.sanctionsResult).description}>
+                          <Chip
+                            size="small"
+                            label={
+                              row.sanctionsResult == null
+                                ? '—'
+                                : screeningStatusMeta(row.sanctionsResult).label
+                            }
+                            color={
+                              row.sanctionsResult == null
+                                ? 'default'
+                                : screeningStatusMeta(row.sanctionsResult).color
+                            }
+                            variant={screeningStatusMeta(row.sanctionsResult).variant}
+                          />
+                        </Tooltip>
                       </TableCell>
                       <TableCell>
                         <ConfigBadge set={row.regulatoryConfig?.bokSet} lane="BOK" />

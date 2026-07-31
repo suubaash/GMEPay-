@@ -12,11 +12,13 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { useAppSelector } from '@/store';
 import ErrorAlert from '@/components/ErrorAlert';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 import { toKst } from './page';
 
 /**
@@ -223,14 +225,23 @@ function LabelValue({ label, value }) {
   );
 }
 
+/**
+ * Sanctions-screening chip. Wording and colour come from `@/api/screeningStatus` (GAP T1-4) —
+ * this component used to carry its own three-value colour map and print the raw enum name, so a
+ * partner cleared by a MANUAL SOP attestation and one cleared by a vendor would have looked the
+ * same, and a run that screened NOTHING rendered as a grey unremarkable value.
+ */
 function ScreeningChip({ status }) {
-  const colorMap = { CLEAR: 'success', NEEDS_REVIEW: 'warning', HIT: 'error' };
+  const meta = screeningStatusMeta(status);
   return (
-    <Chip
-      size="small"
-      label={status ?? '—'}
-      color={colorMap[status] ?? 'default'}
-    />
+    <Tooltip title={meta.description}>
+      <Chip
+        size="small"
+        label={status == null ? '—' : meta.label}
+        color={status == null ? 'default' : meta.color}
+        variant={meta.variant}
+      />
+    </Tooltip>
   );
 }
 

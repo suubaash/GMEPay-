@@ -6,6 +6,7 @@ import { yupResolver } from '@hookform/resolvers/yup';
 import { DATE_FLOOR, yearsFromTodayISO } from '@/components/DateField';
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Checkbox,
@@ -28,11 +29,19 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import SearchIcon from '@mui/icons-material/Search';
+import HistoryEduIcon from '@mui/icons-material/HistoryEdu';
 import { useAppDispatch, useAppSelector } from '@/store';
 import { patchStep3 } from '@/store/draftsSlice';
-import { fetchKyb, runScreening } from '@/store/kybSlice';
+import {
+  fetchKyb,
+  fetchScreeningProvenance,
+  recordManualAttestation,
+  runScreening,
+} from '@/store/kybSlice';
 import { useSnackbar } from '@/components/SnackbarProvider';
 import DocumentVault from '@/components/DocumentVault';
+import ManualAttestationDialog from './ManualAttestationDialog';
+import { screeningStatusMeta } from '@/api/screeningStatus';
 import partnerStep3Schema, {
   RISK_RATINGS,
   RISK_RATING_LABELS,
@@ -69,11 +78,16 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
   const dispatch = useAppDispatch();
   const snackbar = useSnackbar();
   const { saving } = useAppSelector((s) => s.drafts);
-  const { kybByCode, kybLoading } = useAppSelector((s) => s.kyb);
+  const { kybByCode, kybLoading, attesting, provenanceByCode } = useAppSelector((s) => s.kyb);
   const kyb = kybByCode[partnerCode] ?? null;
+  const provenance = provenanceByCode?.[partnerCode] ?? null;
 
   // cbddqDocId managed outside RHF so DocumentVault can update it.
   const [cbddqDocId, setCbddqDocId] = useState(kyb?.cbddqDocId ?? null);
+
+  // GAP T1-4: recording a manual screening attestation is a privileged, irreversible act, so it
+  // goes through an explicit dialog rather than a button on the form.
+  const [attestOpen, setAttestOpen] = useState(false);
 
   const defaults = useMemo(() => defaultsFromKyb(kyb), [kyb]);
 
@@ -102,6 +116,9 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
       dispatch(fetchKyb(partnerCode)).catch(() => {
         // 404 is expected for brand-new drafts — form starts blank.
       });
+      // GAP T1-4: which authority produced the stored verdict. 404s for a brand-new draft; the
+      // slice clears rather than caches on failure, so the panel never shows a stale attester.
+      dispatch(fetchScreeningProvenance(partnerCode)).catch(() => {});
     }
   }, [partnerCode, dispatch]);
 
@@ -154,11 +171,33 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
   const handleRunScreening = async () => {
     if (!partnerCode) return;
     try {
-      await dispatch(runScreening(partnerCode)).unwrap();
-      snackbar.success('Screening complete');
+      const view = await dispatch(runScreening(partnerCode)).unwrap();
+      // "Screening complete" was a lie whenever the run screened nothing, which is every run
+      // today (no vendor is connected — ADR-014). Report what actually came back.
+      const meta = screeningStatusMeta(view?.screeningStatus);
+      if (meta.screened) {
+        snackbar.success(`Screening complete — ${meta.label}`);
+      } else {
+        snackbar.warning('The screening run consulted no sanctions source, so nothing was '
+          + 'screened. Record a manual screening attestation instead.');
+      }
+      dispatch(fetchScreeningProvenance(partnerCode)).catch(() => {});
     } catch (e) {
       const message = e?.message ?? 'Screening request failed';
       snackbar.error(message);
+    }
+  };
+
+  const handleRecordAttestation = async (payload) => {
+    if (!partnerCode) return;
+    try {
+      await dispatch(recordManualAttestation({ partnerCode, ...payload })).unwrap();
+      setAttestOpen(false);
+      snackbar.success('Manual screening attestation recorded against your operator identity.');
+      dispatch(fetchScreeningProvenance(partnerCode)).catch(() => {});
+    } catch (e) {
+      // Left open on failure: the operator's typed evidence must not be discarded by an error.
+      snackbar.error(e?.message ?? 'Recording the attestation failed');
     }
   };
 
@@ -387,6 +426,23 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
             >
               Run screening
             </Button>
+            <Button
+              type="button"
+              variant="outlined"
+              color="warning"
+              startIcon={
+                attesting ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : (
+                  <HistoryEduIcon />
+                )
+              }
+              onClick={() => setAttestOpen(true)}
+              disabled={attesting}
+              aria-label="record-manual-attestation"
+            >
+              Record manual attestation
+            </Button>
             {kyb?.screenedAt && (
               <Typography variant="caption" color="text.secondary">
                 Last screened: {new Date(kyb.screenedAt).toLocaleString()}
@@ -395,9 +451,17 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
           </Stack>
 
           {kyb?.screeningStatus && (
-            <ScreeningResultPanel kyb={kyb} />
+            <ScreeningResultPanel kyb={kyb} provenance={provenance} />
           )}
         </Box>
+
+        <ManualAttestationDialog
+          open={attestOpen}
+          partnerCode={partnerCode}
+          busy={attesting}
+          onSubmit={handleRecordAttestation}
+          onCancel={() => setAttestOpen(false)}
+        />
 
         {/* ── Document vault ── */}
         <Box>
@@ -438,35 +502,77 @@ export default function KybForm({ draft, partnerCode, onSaved }) {
 }
 
 /**
- * Screening result panel — status chip + hits list.
+ * Screening result panel — status chip, provenance, and hits list.
+ *
+ * <p>GAP T1-4: the chip comes from `screeningStatusMeta`, the one place this app decides how a
+ * screening verdict is worded, so a manual SOP attestation can never be drawn as a vendor
+ * "Clear" and `NOT_SCREENED_NO_PROVIDER` can never be drawn as a neutral "pending". The
+ * provenance block underneath names the authority — for a manual run, who attested and under
+ * which SOP version.
  *
  * @param {object} props
  * @param {object} props.kyb KybView from the store.
+ * @param {object|null} [props.provenance] KybScreeningProvenance, when loaded.
  */
-function ScreeningResultPanel({ kyb }) {
-  const chipProps = SCREENING_CHIP_PROPS[kyb.screeningStatus] ?? {
-    label: kyb.screeningStatus,
-    color: 'default',
-  };
+function ScreeningResultPanel({ kyb, provenance }) {
+  const meta = screeningStatusMeta(kyb.screeningStatus);
+  const attestation = provenance?.manualAttestation ?? null;
 
   return (
     <Stack spacing={1} aria-label="screening-result-panel">
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
           Status:
         </Typography>
-        <Chip
-          label={chipProps.label}
-          color={chipProps.color}
-          size="small"
-          aria-label={`screening-status-${kyb.screeningStatus}`}
-        />
+        <Tooltip title={meta.description}>
+          <Chip
+            label={meta.label}
+            color={meta.color}
+            variant={meta.variant}
+            size="small"
+            aria-label={`screening-status-${kyb.screeningStatus}`}
+          />
+        </Tooltip>
         {kyb.screeningProviderRef && (
           <Typography variant="caption" color="text.secondary">
             Ref: {kyb.screeningProviderRef}
           </Typography>
         )}
       </Box>
+
+      {!meta.screened && (
+        <Alert severity="warning" variant="outlined" aria-label="screening-not-performed-alert">
+          {meta.description}
+        </Alert>
+      )}
+
+      {meta.manual && (
+        <Alert severity="info" variant="outlined" aria-label="manual-attestation-provenance">
+          <AlertTitle>Cleared by a manual screening attestation, not by a vendor</AlertTitle>
+          {attestation ? (
+            <>
+              Attested by <strong>{attestation.attesterActorId}</strong>
+              {attestation.attestedAt
+                && <> on {new Date(attestation.attestedAt).toLocaleString()}</>} under SOP{' '}
+              <strong>{attestation.sopDocumentRef} {attestation.sopVersion}</strong>.
+              <Typography variant="caption" component="div" sx={{ mt: 1 }}>
+                Sources consulted: {attestation.sourcesConsulted}
+              </Typography>
+              {attestation.complete === false && (
+                <Typography variant="caption" component="div" sx={{ mt: 1, fontWeight: 600 }}>
+                  This attestation is INCOMPLETE and will not satisfy activation — record it again
+                  in full.
+                </Typography>
+              )}
+            </>
+          ) : (
+            <>
+              The attestation detail could not be loaded, so the attester and SOP version are not
+              shown here. The verdict still rests on a manual screening, not a vendor one.
+            </>
+          )}
+        </Alert>
+      )}
 
       {Array.isArray(kyb.screeningHits) && kyb.screeningHits.length > 0 && (
         <Box>
@@ -511,15 +617,11 @@ function ScreeningResultPanel({ kyb }) {
   );
 }
 
-/**
- * Chip appearance by screening status.
- * CLEAR = green, NEEDS_REVIEW = amber, HIT = red.
- */
-const SCREENING_CHIP_PROPS = {
-  CLEAR: { label: 'Clear', color: 'success' },
-  NEEDS_REVIEW: { label: 'Needs review', color: 'warning' },
-  HIT: { label: 'Hit', color: 'error' },
-};
+// The local SCREENING_CHIP_PROPS map is gone (GAP T1-4). It knew only CLEAR / NEEDS_REVIEW / HIT,
+// so `NOT_SCREENED_NO_PROVIDER` fell through to a grey chip printing the raw enum name — a run that
+// screened nothing rendered as an unremarkable unknown — and `CLEAR_MANUAL_ATTESTATION` would have
+// done the same. Wording and colour now come from `@/api/screeningStatus`, which every screening
+// chip in the app shares so the vocabulary cannot drift between screens.
 
 /**
  * A single UBO row with name, ownership %, PEP toggle, and country.

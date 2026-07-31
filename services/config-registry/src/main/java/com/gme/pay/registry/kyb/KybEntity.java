@@ -84,13 +84,20 @@ public class KybEntity {
     private Long cbddqDocId;
 
     /**
-     * CLEAR | HIT | NEEDS_REVIEW | NOT_SCREENED_NO_PROVIDER (V042 CHECK); NULL
-     * before the first screening run.
+     * CLEAR | CLEAR_MANUAL_ATTESTATION | HIT | NEEDS_REVIEW |
+     * NOT_SCREENED_NO_PROVIDER (V045 CHECK); NULL before the first screening run.
      *
      * <p>T1-4: {@code CLEAR} is reachable only alongside
      * {@link #screeningAuthoritative} TRUE — enforced by lib-kyb's
      * {@code ScreeningResult} on the write path and by the V042 CHECK
      * {@code ck_partner_kyb_clear_requires_authority} in the database.
+     *
+     * <p>T1-4 (owner decision): {@code CLEAR_MANUAL_ATTESTATION} is the clean verdict
+     * of a MANUAL screening a named human performed under a compliance-signed SOP.
+     * It is a distinct value from {@code CLEAR} so the two authorities stay
+     * distinguishable at every hop that carries only this string, and it is
+     * reachable only alongside a COMPLETE attestation (V045
+     * {@code ck_partner_kyb_manual_clear_requires_attestation}).
      */
     @Column(name = "screening_status", length = 32)
     private String screeningStatus;
@@ -117,6 +124,31 @@ public class KybEntity {
     /** V042: why the run is not authoritative; NULL on an authoritative run. */
     @Column(name = "screening_caveat", length = 512)
     private String screeningCaveat;
+
+    /**
+     * V045 (T1-4 manual KYB SOP): the verified human who performed the manual
+     * screening, in the T5-1 {@code AuditActors} vocabulary — the SAME value as the
+     * {@code actor_id} of the accompanying {@code PARTNER_KYB_MANUAL_SCREENING_ATTESTED}
+     * audit row. NULL on every non-manual run.
+     */
+    @Column(name = "manual_attester_actor_id", length = 64)
+    private String manualAttesterActorId;
+
+    /** V045: when the attestation was made (MICROS-truncated). NULL on a non-manual run. */
+    @Column(name = "manual_attested_at")
+    private Instant manualAttestedAt;
+
+    /** V045: the compliance-signed SOP document the attester followed. */
+    @Column(name = "manual_sop_document_ref", length = 128)
+    private String manualSopDocumentRef;
+
+    /** V045: the revision of that SOP document. */
+    @Column(name = "manual_sop_version", length = 32)
+    private String manualSopVersion;
+
+    /** V045: which lists / registers / sources were consulted, in the attester's own words. */
+    @Column(name = "manual_sources_consulted", length = 2000)
+    private String manualSourcesConsulted;
 
     /**
      * Wave-3 (V036): the collapsed KYB-verify verdict from kyb-adapter
@@ -319,11 +351,56 @@ public class KybEntity {
         this.screeningCaveat = screeningCaveat;
     }
 
+    public String getManualAttesterActorId() {
+        return manualAttesterActorId;
+    }
+
+    public void setManualAttesterActorId(String manualAttesterActorId) {
+        this.manualAttesterActorId = manualAttesterActorId;
+    }
+
+    public Instant getManualAttestedAt() {
+        return manualAttestedAt;
+    }
+
+    public void setManualAttestedAt(Instant manualAttestedAt) {
+        this.manualAttestedAt = manualAttestedAt;
+    }
+
+    public String getManualSopDocumentRef() {
+        return manualSopDocumentRef;
+    }
+
+    public void setManualSopDocumentRef(String manualSopDocumentRef) {
+        this.manualSopDocumentRef = manualSopDocumentRef;
+    }
+
+    public String getManualSopVersion() {
+        return manualSopVersion;
+    }
+
+    public void setManualSopVersion(String manualSopVersion) {
+        this.manualSopVersion = manualSopVersion;
+    }
+
+    public String getManualSourcesConsulted() {
+        return manualSourcesConsulted;
+    }
+
+    public void setManualSourcesConsulted(String manualSourcesConsulted) {
+        this.manualSourcesConsulted = manualSourcesConsulted;
+    }
+
     /**
      * {@code true} only when this row's screening verdict came from a provider
      * that actually screened (T1-4). The single predicate the activation gate and
      * every reader should use — never {@code "CLEAR".equals(screeningStatus)}
      * alone, and never merely "not HIT".
+     *
+     * <p>True for both authorities: a vendor screening and an attested manual one.
+     * Callers that must PRESENT the two differently use
+     * {@link #isManuallyAttestedScreening()}; callers deciding whether a screening
+     * happened at all use this.
      */
     public boolean hasAuthoritativeScreening() {
         return Boolean.TRUE.equals(screeningAuthoritative)
@@ -333,6 +410,64 @@ public class KybEntity {
 
     /** The honest status a non-authoritative provider records instead of CLEAR (lib-kyb roster). */
     public static final String SCREENING_NOT_PERFORMED = "NOT_SCREENED_NO_PROVIDER";
+
+    /**
+     * The clean verdict of an attested MANUAL screening (V045, T1-4 owner decision).
+     * Never collapsed into {@link #SCREENING_CLEAR}: downstream must be able to tell a
+     * vendor screening from a human one.
+     */
+    public static final String SCREENING_CLEAR_MANUAL_ATTESTATION = "CLEAR_MANUAL_ATTESTATION";
+
+    /** The clean verdict of a real vendor screening. */
+    public static final String SCREENING_CLEAR = "CLEAR";
+
+    /** Provider id of an attested manual screening (mirrors lib-kyb's ScreeningProvenance). */
+    public static final String MANUAL_ATTESTATION_PROVIDER_ID = "manual-sop";
+
+    /**
+     * {@code true} when this row's verdict rests on a MANUAL screening rather than a
+     * vendor — i.e. the provenance names the manual-SOP authority. Says nothing about
+     * whether the attestation behind it is complete; see
+     * {@link #hasCompleteManualAttestation()}.
+     */
+    public boolean isManuallyAttestedScreening() {
+        return MANUAL_ATTESTATION_PROVIDER_ID.equals(screeningProviderId)
+                || SCREENING_CLEAR_MANUAL_ATTESTATION.equals(screeningStatus);
+    }
+
+    /**
+     * {@code true} when every field a manual attestation must carry is present: who
+     * attested, when, which SOP document, which version of it, and what was checked.
+     *
+     * <p>The activation gate tests this separately from
+     * {@link #hasAuthoritativeScreening()} on purpose. The V045 CHECKs make an
+     * incomplete attestation unrepresentable at the database, but a gate that trusted
+     * the constraint would report "screened" for a row written before V045, restored
+     * from an older dump, or produced by a future migration — and the failure mode of
+     * trusting it is a partner going LIVE on an attestation that names nobody.
+     */
+    public boolean hasCompleteManualAttestation() {
+        return notBlank(manualAttesterActorId)
+                && manualAttestedAt != null
+                && notBlank(manualSopDocumentRef)
+                && notBlank(manualSopVersion)
+                && notBlank(manualSourcesConsulted);
+    }
+
+    /**
+     * {@code true} when the stored screening reports no matches — under either
+     * authority. The activation gate's sanctions-clearance check keys off this so a
+     * manual clean verdict is honoured without {@code CLEAR_MANUAL_ATTESTATION} having
+     * to be string-matched at every call site.
+     */
+    public boolean screeningIsClear() {
+        return SCREENING_CLEAR.equals(screeningStatus)
+                || SCREENING_CLEAR_MANUAL_ATTESTATION.equals(screeningStatus);
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
+    }
 
     public String getVerificationDecision() {
         return verificationDecision;

@@ -54,21 +54,38 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
 
     private final RestClient restClient;
 
+    /**
+     * The platform's shared internal-auth secret, presented ONLY on
+     * {@link #recordManualKybAttestation} (gap T1-4). It is not a default header on this client:
+     * config-registry's operator surface is not behind the internal gate, and arming every call
+     * would silently promote all 28 operator writes from {@code unverified:<name>} to attested —
+     * a T5-1 change owned elsewhere. Blank in local dev, which that one method refuses on rather
+     * than sending a request upstream will 403.
+     */
+    private final String internalSecret;
+
     @Autowired
     public RestConfigRegistryClient(
             RestClient.Builder builder,
-            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl) {
+            @Value("${gmepay.config-registry.base-url:http://config-registry:8080}") String baseUrl,
+            @Value("${gmepay.internal-auth.secret:}") String internalSecret) {
         // Build from the Spring-autoconfigured RestClient.Builder (not the static
         // RestClient.builder()) so the RestClientCustomizer in ClientBeans applies —
         // it swaps the request factory to JdkClientHttpRequestFactory, which supports
         // the PATCH verb the partner draft-save flow (patchDraftStep1..8) depends on.
         // The default HttpURLConnection-backed factory throws ProtocolException on PATCH.
-        this(builder.baseUrl(baseUrl).build());
+        this(builder.baseUrl(baseUrl).build(), internalSecret);
     }
 
     /** Package-private constructor for tests to inject a pre-built RestClient. */
     RestConfigRegistryClient(RestClient restClient) {
+        this(restClient, "");
+    }
+
+    /** Package-private constructor for tests that need the internal-auth secret armed. */
+    RestConfigRegistryClient(RestClient restClient, String internalSecret) {
         this.restClient = restClient;
+        this.internalSecret = internalSecret == null ? "" : internalSecret.trim();
     }
 
     @Override
@@ -742,6 +759,64 @@ public class RestConfigRegistryClient implements ConfigRegistryClient {
             // Includes upstream 502 when config-registry could not reach
             // kyb-adapter — a screening run is an explicit operator action, so
             // the failure must surface, never collapse to null.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    /**
+     * Record a MANUAL screening attestation (gap T1-4). The ONLY call in this client that presents
+     * the internal-auth token, and it must:
+     *
+     * <p>config-registry cannot authenticate an operator itself (it has no resource server — see
+     * {@code AuditActorResolver}), so it treats a forwarded {@code X-Actor} as ATTESTED only when
+     * the caller proves itself with the shared internal secret. Without the token the name lands as
+     * {@code unverified:<subject>} and the attestation endpoint refuses with 403 — correctly, since
+     * an attestation under an unproven name attests to nothing. So the two headers are sent
+     * together or the write cannot succeed.
+     *
+     * <p>Widening this to the other partner/scheme calls is the outstanding T5-1(i) follow-up and is
+     * deliberately NOT done here: flipping every operator write onto the attested path at once is a
+     * behaviour change across 28 endpoints, whereas this endpoint is new and fails closed by design.
+     */
+    @Override
+    public com.gme.pay.contracts.KybView recordManualKybAttestation(
+            String partnerCode, ManualKybAttestationRequest request, String actor) {
+        if (internalSecret.isEmpty()) {
+            // Fail loudly rather than send an unattested request that upstream will 403: the
+            // operator would otherwise see "not a verified human" for a deployment problem.
+            throw new ResponseStatusException(HttpStatusCode.valueOf(503),
+                    "gmepay.internal-auth.secret is not configured on this BFF, so config-registry"
+                            + " cannot verify the operator identity and will refuse the"
+                            + " attestation. Set GMEPAY_INTERNAL_AUTH_SECRET.");
+        }
+        try {
+            return restClient.post()
+                    .uri("/v1/partners/{partnerCode}/kyb/manual-screening-attestation", partnerCode)
+                    .header(com.gme.pay.internalauth.InternalAuthHeaders.INTERNAL_TOKEN,
+                            internalSecret)
+                    .header("X-Actor", actor == null ? "" : actor)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(com.gme.pay.contracts.KybView.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 400 (missing SOP ref / version / sources / assertion), 403 (unverified actor),
+            // 404 (unknown partner) all pass through with the upstream message — each one tells
+            // the operator exactly what to fix, and paraphrasing them would lose that.
+            throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
+        }
+    }
+
+    @Override
+    public KybScreeningProvenance getKybScreeningProvenance(String partnerCode) {
+        try {
+            return restClient.get()
+                    .uri("/v1/partners/{partnerCode}/kyb/screening-provenance", partnerCode)
+                    .retrieve()
+                    .body(KybScreeningProvenance.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            // 404 = unknown partner or no KYB row. Propagated, never collapsed to a null that a
+            // UI would render as "no caveat".
             throw new ResponseStatusException(e.getStatusCode(), extractUpstreamMessage(e));
         }
     }
