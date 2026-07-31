@@ -11,8 +11,19 @@ build/
 # Per-app Claude Preview launch configs (machine-specific)
 apps/*/.claude/launch.json
 
-# local whole-platform smoke evidence
-.smoke/
+# local whole-platform smoke EVIDENCE (generated: json/txt/logs/pids/screenshots).
+# The scripts that live alongside it are SOURCE and are negated below — they were
+# silently untracked, so fixes to them could never propagate. Two real examples:
+# `.smoke/infra-up.sh` creates Kafka topics (its `--partitions 1` re-imposed the
+# ceiling the T3-11 work removed, and three separate reports filed that follow-up
+# without noticing the file was untracked), and `.smoke/trace-console.js` carries
+# the trace tap edges added for the SendMN/9Pay scheme work.
+.smoke/*
+.smoke/logs/
+.smoke/shots/
+.smoke/extracted/
+!.smoke/*.sh
+!.smoke/*.js
 
 # docx generator deps (not source)
 outputs/docgen/node_modules/
