@@ -15,7 +15,7 @@ dependencies {
     // control without anyone choosing that. The store is now the module's own idempotency_keys
     // table (V013), so the dependency is gone: it would otherwise also re-add a Redis health
     // indicator that could mark this service unready over infrastructure it does not use.
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
     implementation 'org.flywaydb:flyway-core'
     // ShedLock: distributed lock so a @Scheduled method fires on at most one replica per tick
     // (the sweepers + outbox drain must not double-fire across horizontally-scaled instances).
