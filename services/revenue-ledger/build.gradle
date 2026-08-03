@@ -38,8 +38,8 @@ dependencies {
     // Same coordinates as payment-executor / settlement-reconciliation / notification-webhook /
     // scheme-adapter-zeropay / prefunding / transaction-mgmt — one version across the fleet, because
     // subtly different lock implementations are how one of them ends up wrong.
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:7.7.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:7.7.0'
 
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'com.h2database:h2'
