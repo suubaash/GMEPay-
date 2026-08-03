@@ -17,7 +17,7 @@ plugins {
 dependencies {
     // Spring surface for the trace auto-config — compileOnly so nothing leaks to consumers
     // (web services already bring these via spring-boot-starter-web / spring-kafka).
-    compileOnly platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
     compileOnly 'org.springframework.boot:spring-boot-autoconfigure'
     compileOnly 'org.springframework.boot:spring-boot'
     compileOnly 'org.springframework:spring-context'
@@ -39,7 +39,7 @@ dependencies {
     compileOnly 'org.springframework.kafka:spring-kafka'
     compileOnly 'org.apache.kafka:kafka-clients'
 
-    testImplementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    testImplementation platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // T3-11: the scheduler-lag gauges are asserted against a real SimpleMeterRegistry, so the
     // Micrometer surface that is compileOnly above has to be on the TEST classpath too. Test-scoped

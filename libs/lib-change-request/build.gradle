@@ -10,7 +10,7 @@ plugins {
 
 dependencies {
     api 'org.springframework.statemachine:spring-statemachine-core:4.0.0'
-    implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
+    implementation platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
     implementation 'org.springframework:spring-context'
 
     testImplementation platform('org.junit:junit-bom:5.10.2')
