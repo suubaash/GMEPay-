@@ -20,5 +20,5 @@ dependencies {
     testImplementation 'org.testcontainers:kafka'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.springframework.kafka:spring-kafka-test'
-    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.18'
 }
