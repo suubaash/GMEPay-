@@ -41,7 +41,7 @@ dependencies {
 
     // Docker-backed integration tests: @Tag("docker") classes are excluded from the
     // local `test` task (no Docker on dev boxes) and run via `integrationTest` in CI.
-    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation platform('org.testcontainers:testcontainers-bom:2.0.5')
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
 }

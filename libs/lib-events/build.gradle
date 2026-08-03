@@ -2,6 +2,6 @@
 // Stays Spring-free: any Spring wiring lives in the consuming service.
 dependencies {
     implementation 'org.slf4j:slf4j-api:2.0.16'
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.3'
+    testImplementation 'org.junit.jupiter:junit-jupiter:6.1.2'
     testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
 }

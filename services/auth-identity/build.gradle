@@ -33,7 +33,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     // Docker-backed PostgreSQL 16 ITs (@Tag("docker")) — excluded from the local
     // `test` task, run by `integrationTest` on CI ubuntu runners (17.2-G09).
-    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation platform('org.testcontainers:testcontainers-bom:2.0.5')
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
 }
