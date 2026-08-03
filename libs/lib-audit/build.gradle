@@ -41,7 +41,7 @@ dependencies {
     testImplementation 'org.springframework:spring-jdbc'
     // Flyway needed at test time to run the lib-audit migration
     testImplementation 'org.flywaydb:flyway-core'
-    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.18'
     // Spring Kafka test support for KafkaAuditPublisher gating test
     testImplementation 'org.springframework.kafka:spring-kafka'
     testImplementation 'org.springframework.boot:spring-boot-autoconfigure'
