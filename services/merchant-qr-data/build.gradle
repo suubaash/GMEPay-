@@ -18,7 +18,7 @@ dependencies {
 
     // Docker-backed integration tests (@Tag("docker") — excluded from the local
     // `test` task, run via `integrationTest` on CI runners that have Docker).
-    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation platform('org.testcontainers:testcontainers-bom:2.0.5')
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:mongodb'
 }

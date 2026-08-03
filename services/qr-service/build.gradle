@@ -27,7 +27,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 
     // Docker-backed PostgreSQL 16 ITs (@Tag("docker")) — run in CI via `integrationTest` only.
-    testImplementation platform('org.testcontainers:testcontainers-bom:1.20.1')
+    testImplementation platform('org.testcontainers:testcontainers-bom:2.0.5')
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:junit-jupiter'
 }

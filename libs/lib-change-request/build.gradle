@@ -13,7 +13,7 @@ dependencies {
     implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     implementation 'org.springframework:spring-context'
 
-    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation platform('org.junit:junit-bom:6.1.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.springframework.statemachine:spring-statemachine-test:4.0.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
