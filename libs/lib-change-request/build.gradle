@@ -9,12 +9,12 @@ plugins {
 }
 
 dependencies {
-    api 'org.springframework.statemachine:spring-statemachine-core:4.0.0'
+    api 'org.springframework.statemachine:spring-statemachine-core:4.0.2'
     implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.4')
     implementation 'org.springframework:spring-context'
 
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
-    testImplementation 'org.springframework.statemachine:spring-statemachine-test:4.0.0'
+    testImplementation 'org.springframework.statemachine:spring-statemachine-test:4.0.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
