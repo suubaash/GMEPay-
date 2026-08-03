@@ -12,7 +12,7 @@ dependencies {
     // Actuator for /actuator/health (liveness/readiness, DB health) — used by the
     // docker-compose healthcheck and standalone smoke verification.
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
     implementation 'org.flywaydb:flyway-core'
     // Flyway 10.x ships PostgreSQL support as a separate module (flyway-core alone
     // only covers H2 here). Required for the postgres:16 ITs and production PG.
