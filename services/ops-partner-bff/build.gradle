@@ -65,8 +65,8 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     // ShedLock for the ops_alerts retention sweeper only. The paging ESCALATION sweep is
     // deliberately unlocked -- a lock there could only ever silence a page (V003, T3-11).
-    implementation 'net.javacrumbs.shedlock:shedlock-spring:5.13.0'
-    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.13.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-spring:7.7.0'
+    implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:7.7.0'
 
     runtimeOnly 'org.postgresql:postgresql'
     // Flyway 10 ships PostgreSQL support as a separate artifact; required when the migrations run
